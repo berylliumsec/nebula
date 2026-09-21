@@ -440,6 +440,101 @@ def test_reimport_keeps_a_changed_program_enabled_only_when_trusted(tmp_path):
     assert profile.arguments == ["local-mcp@2"]
 
 
+def test_descriptions_import_update_and_export(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    credentials = CredentialStore(MemoryKeyring())
+    config = copy.deepcopy(CLAUDE_CONFIG)
+    config["mcpServers"]["remote"]["description"] = "  Tenant API: users and billing. "
+    config["mcpServers"]["burp"]["description"] = "x" * 600
+
+    created = _import(store, credentials, config, dry_run=False)
+
+    assert created.created == 2
+    burp_entry, remote_entry = created.entries
+    assert "description: shortened to 500 characters" in burp_entry.warnings
+    assert not any("description" in item for item in remote_entry.warnings)
+    saved = {item.name: item for item in store.list_entities(McpServerProfile)}
+    assert saved["remote"].description == "Tenant API: users and billing."
+    assert saved["burp"].description == "x" * 500
+
+    # A file without a description keeps the one written in Nebula.
+    remote = saved["remote"]
+    store.update(
+        McpServerProfile,
+        remote.id,
+        {"description": "Written in Nebula."},
+        expected_revision=remote.revision,
+    )
+    silent = _import(store, credentials, CLAUDE_CONFIG, dry_run=False)
+    assert silent.entries[1].action == "unchanged"
+    assert store.get(McpServerProfile, remote.id).description == "Written in Nebula."
+
+    # A file that describes the server replaces it, and the preview says so.
+    config["mcpServers"]["remote"]["description"] = "Tenant API, read-only."
+    preview = _import(store, credentials, config)
+    assert [(c.field, c.before, c.after) for c in preview.entries[1].changes] == [
+        ("description", "Written in Nebula.", "Tenant API, read-only.")
+    ]
+    _import(store, credentials, config, dry_run=False)
+    assert store.get(McpServerProfile, remote.id).description == (
+        "Tenant API, read-only."
+    )
+
+    exported = export_mcp_config(store.list_entities(McpServerProfile))
+    assert exported.config["mcpServers"]["remote"]["description"] == (
+        "Tenant API, read-only."
+    )
+    target = NebulaStore(tmp_path / "target.db")
+    _import(target, CredentialStore(UntrustedKeyring()), exported.config, dry_run=False)
+    copied = {item.name: item for item in target.list_entities(McpServerProfile)}
+    assert copied["remote"].description == "Tenant API, read-only."
+
+    wrong = copy.deepcopy(CLAUDE_CONFIG)
+    wrong["mcpServers"]["remote"]["description"] = ["not", "text"]
+    invalid = _import(store, credentials, wrong)
+    assert invalid.entries[1].action == "invalid"
+    assert "description must be a string" in invalid.entries[1].error
+
+
+def test_api_saves_and_edits_a_server_description(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    client = TestClient(
+        create_app(
+            store,
+            auth_token="test-token",
+            credential_store=CredentialStore(MemoryKeyring()),
+        )
+    )
+    auth = {"Authorization": "Bearer test-token"}
+    server = {
+        "name": "tracker",
+        "transport": "streamable_http",
+        "url": "https://mcp.example.test/mcp",
+        "description": "Bugs for the web app.",
+    }
+
+    with client:
+        created = client.post("/api/v1/mcp-servers", headers=auth, json=server)
+        assert created.status_code in (200, 201), created.text
+        assert created.json()["description"] == "Bugs for the web app."
+        edited = client.patch(
+            f"/api/v1/mcp-servers/{created.json()['id']}",
+            headers=auth,
+            json={
+                "changes": {"description": "  Bugs and releases.  "},
+                "expected_revision": created.json()["revision"],
+            },
+        )
+        assert edited.status_code == 200, edited.text
+        assert edited.json()["description"] == "Bugs and releases."
+        too_long = client.post(
+            "/api/v1/mcp-servers",
+            headers=auth,
+            json={**server, "name": "other", "description": "x" * 501},
+        )
+        assert too_long.status_code == 422
+
+
 def test_export_round_trips_without_leaking_stored_credentials(tmp_path):
     store = NebulaStore(tmp_path / "source.db")
     credentials = CredentialStore(MemoryKeyring())

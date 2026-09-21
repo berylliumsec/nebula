@@ -1521,6 +1521,7 @@ interface WireHarnessInteraction extends WireEntity {
 
 interface WireMcpServerProfile extends WireEntity {
   name: string;
+  description?: string | null;
   transport: McpServerProfile["transport"];
   command?: string | null;
   arguments?: string[];
@@ -3694,6 +3695,7 @@ function mapMcpServer(value: WireMcpServerProfile): McpServerProfile {
   return {
     id: value.id,
     name: value.name,
+    description: value.description || undefined,
     transport: value.transport,
     command: value.command ?? undefined,
     arguments: value.arguments ?? [],

@@ -2112,6 +2112,7 @@ describe("ApiClient", () => {
         ...entity,
         id: "mcp-1",
         name: "workspace",
+        description: "Shared project files.",
         transport: "streamable_http",
         url: "https://mcp.example.test/mcp",
         auth_mode: "none",
@@ -2194,7 +2195,7 @@ describe("ApiClient", () => {
         subagents: true,
       },
     });
-    expect(server).toMatchObject({ required: true, tools: [{ name: "read_file", readOnly: true }] });
+    expect(server).toMatchObject({ description: "Shared project files.", required: true, tools: [{ name: "read_file", readOnly: true }] });
     expect(session).toMatchObject({ harnessProfileId: "harness-1", mcpServerIds: ["mcp-1"], reasoningEffort: "high", serviceTier: "fast" });
     expect(activity).toMatchObject({ sessionId: "session-1", busy: true, live: true, turnId: "turn-1", turnStatus: "running" });
     expect(run).toMatchObject({ backend: "harness", harnessSessionId: "session-1" });

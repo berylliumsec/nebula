@@ -86,10 +86,13 @@ def _jev_answers(
     }
 
 
-def _mcp_profile(identifier: str, name: str, *, instructions=None, tools=()):
+def _mcp_profile(
+    identifier: str, name: str, *, description="", instructions=None, tools=()
+):
     return SimpleNamespace(
         id=identifier,
         name=name,
+        description=description,
         capabilities=SimpleNamespace(
             instructions=instructions,
             tools=[SimpleNamespace(name=item) for item in tools],
@@ -237,8 +240,8 @@ def test_servers_are_described_by_their_handshake_instructions():
     assert sources["mcp:tracker"].description == (
         "Issue tracker. Search, file and close bugs."
     )
-    # An McpServerProfile has no description field, so a server that sent no
-    # handshake instructions is described by the tools it exposes.
+    # A server with neither an operator description nor handshake
+    # instructions is described by the tools it exposes.
     assert sources["mcp:vault"].description == ""
 
     questions = build_questions(
@@ -254,6 +257,29 @@ def test_servers_are_described_by_their_handshake_instructions():
         "mcp:vault": "secrets. Tools: mcp.vault.read_secret",
         NONE_OPTION: "None of the listed sources can help with operator_request.",
     }
+
+
+def test_the_operators_description_wins_over_handshake_instructions():
+    sources = mcp_sources(
+        [
+            _mcp_profile(
+                "tracker",
+                "issue-tracker",
+                description=" Bugs for the web app:\n search, file, and close them. ",
+                instructions="Generic tracker server. Call list_projects first.",
+            )
+        ]
+    )
+
+    assert sources["mcp:tracker"].description == (
+        "Bugs for the web app: search, file, and close them."
+    )
+    questions = build_questions(
+        [_spec(MCP_TOOL, "Search tracker issues.")], sources=sources
+    )
+    assert questions["sources_0"]["criteria"]["mcp:tracker"] == (
+        "issue-tracker. Bugs for the web app: search, file, and close them."
+    )
 
 
 def test_the_server_ranking_decides_between_equally_rated_tools():
@@ -288,6 +314,7 @@ def test_the_server_ranking_decides_between_equally_rated_tools():
     assert receipt.preloaded == [tracker_tool]
     assert receipt.suggested == [vault_tool]
     assert receipt.sources == ["issue-tracker"]
+    assert receipt.source_ids == ["mcp:tracker"]
     assert receipt.source_probabilities == {"mcp:tracker": 0.9, "mcp:vault": 0.05}
 
 
@@ -707,6 +734,57 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
     assert '"issue-tracker"' in instructions
     # The ranking is kept, so a retry of this request would not ask again.
     assert len(service.suggestion_cache) == 1
+
+
+def test_a_picked_servers_description_reaches_jev_and_then_the_model(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json=_jev_answers({MCP_TOOL: 0.3}, sources={"mcp:tracker": 0.9}),
+        )
+
+    service, request = _mcp_service(tmp_path, monkeypatch, lambda: _client(handler))
+    tracker = service.store.get(McpServerProfile, "tracker")
+    service.store.update(
+        McpServerProfile,
+        tracker.id,
+        {"description": "Bugs for the web app: search, file, and close them."},
+        expected_revision=tracker.revision,
+    )
+
+    prepared = service.prepare(request)
+
+    # Jev ranks the server by what the operator wrote, not its handshake text.
+    criteria = calls[0]["questions"]["sources_0"]["criteria"]
+    assert criteria["mcp:tracker"] == (
+        "issue-tracker. Bugs for the web app: search, file, and close them."
+    )
+    assert prepared.turn.request_snapshot["tool_suggestions"]["source_ids"] == [
+        "mcp:tracker"
+    ]
+    catalog = prepared.turn.request_snapshot["tool_catalog"]
+    assert catalog["suggested"] == [MCP_TOOL]
+    assert catalog["sources"] == [
+        {
+            "id": "mcp:tracker",
+            "name": "issue-tracker",
+            "description": "Bugs for the web app: search, file, and close them.",
+        }
+    ]
+    # The model is told which server the hint comes from and what it is for;
+    # the server's own handshake instructions never reach it.
+    instructions = catalog_instructions(catalog, prepared.tool_components.specs)
+    assert f'[{{"name":"{MCP_TOOL}","source":"issue-tracker"}}]' in instructions
+    assert (
+        'described them (JSON data): [{"name":"issue-tracker","description":'
+        '"Bugs for the web app: search, file, and close them."}]'
+    ) in instructions
+    assert "Issue tracker for this codebase" not in instructions
 
 
 def test_prepare_sends_the_selected_skill_instructions(tmp_path, monkeypatch):

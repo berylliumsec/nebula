@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import nebula.v3.chat as chat_module
 from nebula.v3.api import create_app
+from nebula.v3.chat import ChatRequestMessage
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     ChatTurn,
@@ -30,6 +31,7 @@ from nebula.v3.tool_catalog import (
     CATALOG_LOAD,
     CATALOG_SEARCH,
     MAX_CATALOG_CALLS_PER_TURN,
+    CatalogReceipt,
     ToolCatalogBroker,
     catalog_components,
     catalog_instructions,
@@ -37,7 +39,9 @@ from nebula.v3.tool_catalog import (
     fingerprint,
     index_document,
     loaded_tool_names,
+    mcp_catalog_sources,
     on_demand_enabled,
+    picked_sources,
     rank_for_request,
     unwrap_call,
 )
@@ -221,8 +225,94 @@ def test_catalog_instructions_carry_preloaded_schemas_as_data():
     assert "On-demand tools: 3 tools" in text
     assert f'"name":"{CREDENTIAL_TOOL}"' in text
     assert '"input_schema"' in text
-    assert f'not loaded: ["{MCP_TOOL}"]' in text
+    assert f'not loaded: [{{"name":"{MCP_TOOL}"}}]' in text
+    # A receipt from before sources were recorded names no servers.
+    assert '"source"' not in text and "What these sources are for" not in text
     assert catalog_instructions({"deferred": []}, specs) == ""
+
+
+def test_catalog_instructions_name_each_picks_server_and_describe_it():
+    specs = {
+        MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues by keyword."),
+        CREDENTIAL_TOOL: _spec(
+            CREDENTIAL_TOOL, "Rotate a stored credential.", source="mcp:vault"
+        ),
+        DATABASE_TOOL: _spec(
+            DATABASE_TOOL, "Run a read-only query.", source="mcp:warehouse"
+        ),
+    }
+    text = catalog_instructions(
+        {
+            "deferred": sorted(specs),
+            "preloaded": [CREDENTIAL_TOOL],
+            "suggested": [MCP_TOOL],
+            "source_hints": ["issue-tracker"],
+            "sources": [
+                {
+                    "id": "mcp:tracker",
+                    "name": "issue-tracker",
+                    "description": "Bugs for the web app.",
+                },
+                {"id": "mcp:vault", "name": "secrets", "description": ""},
+            ],
+        },
+        specs,
+    )
+
+    assert f'{{"name":"{CREDENTIAL_TOOL}","source":"secrets",' in text
+    assert f'not loaded: [{{"name":"{MCP_TOOL}","source":"issue-tracker"}}]' in text
+    # Only servers the operator described get a description line entry.
+    assert text.count("What these sources are for") == 1
+    assert (
+        'as the operator described them (JSON data): [{"name":"issue-tracker",'
+        '"description":"Bugs for the web app."}]'
+    ) in text
+    assert "warehouse" not in text
+
+
+def test_picked_sources_lists_ranked_servers_then_the_owners_of_picks():
+    specs = {
+        MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues by keyword."),
+        CREDENTIAL_TOOL: _spec(
+            CREDENTIAL_TOOL, "Rotate a stored credential.", source="mcp:vault"
+        ),
+        DATABASE_TOOL: _spec(
+            DATABASE_TOOL, "Run a read-only query.", source="mcp:warehouse"
+        ),
+    }
+    sources = mcp_catalog_sources(
+        [
+            McpServerProfile(
+                id=identifier,
+                name=name,
+                description=description,
+                transport="stdio",
+                command="/usr/bin/server",
+            )
+            for identifier, name, description in [
+                ("tracker", "issue-tracker", "Bugs for\n  the web app."),
+                ("vault", "secrets", ""),
+                ("warehouse", "warehouse", "Sales data."),
+                ("notes", "notes", "Saved notes."),
+            ]
+        ]
+    )
+    receipt = CatalogReceipt(
+        deferred=sorted(specs), preloaded=[CREDENTIAL_TOOL], suggested=[MCP_TOOL]
+    )
+
+    picked = picked_sources(
+        receipt, specs, sources, ranked=["mcp:warehouse", "mcp:tracker", "mcp:gone"]
+    )
+
+    # Jev's ranked servers come first, then the owners of the picked tools;
+    # each appears once, and a server that is no longer offered is dropped.
+    assert [item.id for item in picked] == ["mcp:warehouse", "mcp:tracker", "mcp:vault"]
+    assert picked[1].description == "Bugs for the web app."
+    assert picked_sources(receipt, specs, sources) == [
+        sources["mcp:vault"],
+        sources["mcp:tracker"],
+    ]
 
 
 @pytest.mark.parametrize(
@@ -543,6 +633,45 @@ def test_prepare_defers_by_default_and_ranks_locally(tmp_path, monkeypatch):
     # the other one's tool is on demand.
     assert service.tool_platform.calls == [["notes", "tracker"]]
     assert index.warmed.wait(5)
+
+
+def test_local_picks_tell_the_model_which_server_they_come_from(tmp_path, monkeypatch):
+    def fail(_):
+        raise AssertionError("Jev must not be called")
+
+    service, request = _mcp_service(
+        tmp_path, monkeypatch, lambda: fail(None), scope={"tool_suggestions": False}
+    )
+    tracker = service.store.get(McpServerProfile, "tracker")
+    service.store.update(
+        McpServerProfile,
+        tracker.id,
+        {"description": "Bugs for the web app."},
+        expected_revision=tracker.revision,
+    )
+    service.knowledge_index = FakeIndex({}, state="required")
+    request = request.model_copy(
+        update={
+            "messages": [
+                ChatRequestMessage(role="user", content="search tracker issues")
+            ]
+        }
+    )
+
+    prepared = service.prepare(request)
+
+    catalog = prepared.turn.request_snapshot["tool_catalog"]
+    assert catalog["ranker"] == "keyword" and catalog["suggested"] == [MCP_TOOL]
+    assert catalog["sources"] == [
+        {
+            "id": "mcp:tracker",
+            "name": "issue-tracker",
+            "description": "Bugs for the web app.",
+        }
+    ]
+    instructions = catalog_instructions(catalog, prepared.tool_components.specs)
+    assert f'{{"name":"{MCP_TOOL}","source":"issue-tracker"}}' in instructions
+    assert '"description":"Bugs for the web app."' in instructions
 
 
 def test_prepare_sends_only_selected_servers_when_on_demand_loading_is_off(

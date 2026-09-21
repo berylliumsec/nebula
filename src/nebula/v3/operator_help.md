@@ -317,7 +317,7 @@ that Nebula 3 does not provide.
 
 ## mcp-servers | Add, import, or troubleshoot MCP servers
 
-Keywords: mcp, mcp server, mcpServers, mcp.json, claude_desktop_config.json, cursor, vscode, import mcp, export mcp, mcp json format, probe failed, trust local program, stdio, streamable http, on-demand tools, tool search, tool_catalog
+Keywords: mcp, mcp server, mcpServers, mcp.json, claude_desktop_config.json, cursor, vscode, import mcp, export mcp, mcp json format, probe failed, trust local program, stdio, streamable http, on-demand tools, tool search, tool_catalog, mcp server description
 
 Sources: docs/MCP-SERVERS.md, src/nebula/v3/mcp_import.py:import_mcp_config, src/nebula/v3/mcp.py:McpProbeService, src/nebula/v3/tool_catalog.py:rank_for_request
 
@@ -364,6 +364,10 @@ Nebula host using the same embedding model as project documents, and uses
 keyword matching until that model is ready. Loading on demand is on for every
 project; a client can turn it off per project by setting `on_demand_tools` to
 false on the project scope, which sends every tool with every request again.
+Give a server a short description of what it is for (Edit, or `description`
+in an imported file): Jev ranks servers by it, and when one of the server's
+tools is picked for a turn the assistant is told which server it comes from and
+what that description says.
 
 ## release-boundary | Requested feature is not in the initial Nebula 3 release
 

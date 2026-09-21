@@ -148,7 +148,9 @@ from .tool_catalog import (
     deferrable_specs,
     discovery_calls,
     loaded_tool_names,
+    mcp_catalog_sources,
     on_demand_enabled,
+    picked_sources,
     rank_for_request,
     unwrap_call,
 )
@@ -2562,6 +2564,7 @@ class ChatService:
                 ]
                 tool_index = self._tool_index()
                 catalog_receipt: CatalogReceipt | None = None
+                ranked_sources: list[str] = []
                 if suggestions_enabled(tool_components.scope):
                     receipt = await suggest_tools(
                         self.tool_suggestion_client(),
@@ -2580,6 +2583,7 @@ class ChatService:
                             source_hints=receipt.sources,
                             ranker="jev",
                         )
+                        ranked_sources = receipt.source_ids
                 if catalog_receipt is None:
                     # Local ranking; also the fallback when Jev is unavailable.
                     catalog_receipt = await asyncio.to_thread(
@@ -2595,6 +2599,14 @@ class ChatService:
                             "",
                         ),
                     )
+                # The model is told which server each pick comes from and what
+                # the operator says that server is for.
+                catalog_receipt.sources = picked_sources(
+                    catalog_receipt,
+                    deferred_specs,
+                    mcp_catalog_sources(catalog_profiles),
+                    ranked=ranked_sources,
+                )
                 catalog = catalog_components(
                     tool_components,
                     deferred=catalog_receipt.deferred,

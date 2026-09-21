@@ -122,6 +122,10 @@
           },
           "description": "Request headers, all treated as secrets. Authorization: Bearer ... becomes bearer auth. Use ${NAME} or ${env:NAME} for a variable of the Nebula Core process."
         },
+        "description": {
+          "type": "string",
+          "description": "What the server is for. Jev reads it when ranking servers, and the model sees it when this server's tools are suggested. Up to 500 characters are kept."
+        },
         "nebula": {
           "$ref": "#/$defs/NebulaOptions"
         },
@@ -139,9 +143,6 @@
         },
         "envFile": {
           "description": "Not imported: env files are not read; reference variables with ${NAME}."
-        },
-        "description": {
-          "description": "Not imported: ignored."
         }
       },
       "anyOf": [

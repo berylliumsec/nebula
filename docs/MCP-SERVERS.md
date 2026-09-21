@@ -205,16 +205,34 @@ Jev is asked once per turn, and a ranking is reused when the request that
 produced it recurs: the cache key covers the operator's message, the selected
 skills, the tool list and the source descriptions, so a retried turn or a
 repeated question against an unchanged catalog costs nothing, while the next
-message, a new MCP server or a re-probed description asks again. The cache
+message, a new MCP server or a changed server description asks again. The cache
 holds the newest 64 rankings in the Core process, records nothing on disk, and
 never stores a failed call; a turn answered from it is marked `cached` in its
 snapshot and reports no input tokens.
 
-A server profile carries no description of its own, so the text describing it
-is the `instructions` string the server returned at the MCP handshake, stored
-in its capability snapshot. A server that sent none is described to Jev by its
-tool names. Like tool descriptions, that text is written by the server, so it
-steers a ranking and nothing else.
+### Server descriptions
+
+A server can carry a description of what it is for, up to 500 characters. Set
+it in the server's Edit dialog, with a `description` field in an imported file,
+or through the API:
+
+```jsonc
+"linear": {
+  "url": "https://mcp.linear.app/mcp",
+  "description": "Issue tracker for the web app: search, file, and close bugs."
+}
+```
+
+Jev ranks a server by its description. A server without one is described by the
+`instructions` string it returned at the MCP handshake, stored in its capability
+snapshot, and a server with neither by its tool names. Handshake instructions are
+written by the server, so like tool descriptions they steer a ranking and
+nothing else.
+
+Once tools are picked for a turn, by Jev or by the local ranking, the model is
+told which server each pick comes from, and it gets the description of every
+server behind a pick or ranked by Jev, as JSON data. Handshake instructions are
+never sent to the model.
 
 ## Fields that are not imported
 
@@ -269,6 +287,8 @@ nothing.
   server.
 - Settings made in Nebula (enabled state, approvals, tool overrides, timeouts)
   are kept unless the server's `nebula` block sets them.
+- A `description` in the file replaces the saved one; a file without one keeps
+  the description written in Nebula.
 - A literal secret that matches the stored one keeps the stored credential; a
   different value is stored and the old one is deleted.
 - If the `command`, `args`, `env`, or `cwd` of a trusted local program changes,

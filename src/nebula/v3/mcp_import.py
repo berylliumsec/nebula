@@ -38,6 +38,7 @@ from pydantic import Field, SecretStr, ValidationError
 from .diagnostics import record_caught_exception
 from .credentials import CredentialCreateRequest, CredentialError, CredentialStore
 from .domain import (
+    MCP_DESCRIPTION_MAX_CHARS,
     McpApprovalMode,
     McpAuthMode,
     McpCapabilitySnapshot,
@@ -82,7 +83,6 @@ _IGNORED_FIELDS = {
     "autoApprove": "tool approvals were not imported; review them in Nebula",
     "timeout": "use nebula.tool_timeout_seconds for tool timeouts",
     "envFile": "env files are not read; reference variables with ${NAME}",
-    "description": None,
 }
 _PLACEHOLDER_REF = "vault:" + "0" * 32
 
@@ -344,6 +344,8 @@ def export_mcp_config(profiles: list[McpServerProfile]) -> McpExportReport:
 
     for profile in profiles:
         entry: dict[str, Any] = {}
+        if profile.description:
+            entry["description"] = profile.description
         if profile.transport == McpTransport.STDIO:
             entry["type"] = "stdio"
             entry["command"] = profile.command
@@ -457,6 +459,14 @@ def mcp_config_json_schema() -> dict[str, Any]:
                     f"Authorization: Bearer ... becomes bearer auth. {reference}"
                 ),
             },
+            "description": {
+                "type": "string",
+                "description": (
+                    "What the server is for. Jev reads it when ranking servers, "
+                    "and the model sees it when this server's tools are "
+                    f"suggested. Up to {MCP_DESCRIPTION_MAX_CHARS} characters are kept."
+                ),
+            },
             "nebula": {"$ref": "#/$defs/NebulaOptions"},
             **{
                 name: {"description": f"Not imported: {note or 'ignored'}."}
@@ -557,7 +567,17 @@ def _draft(
     if name != source_name:
         entry.warnings.append(f"renamed to {name!r} to fit Nebula server names")
 
-    known = {"type", "transport", "command", "args", "env", "cwd", "url", "headers"}
+    known = {
+        "type",
+        "transport",
+        "command",
+        "args",
+        "env",
+        "cwd",
+        "url",
+        "headers",
+        "description",
+    }
     for key in raw:
         if key in known or key == "nebula":
             continue
@@ -699,6 +719,17 @@ def _draft(
     for key, value in options.model_dump(exclude_none=True).items():
         if value or key in {"required"}:
             fields[key] = value
+    description = raw.get("description")
+    if description is not None:
+        if not isinstance(description, str):
+            raise McpImportError("description must be a string")
+        description = description.strip()
+        if len(description) > MCP_DESCRIPTION_MAX_CHARS:
+            description = description[:MCP_DESCRIPTION_MAX_CHARS].rstrip()
+            entry.warnings.append(
+                f"description: shortened to {MCP_DESCRIPTION_MAX_CHARS} characters"
+            )
+        fields["description"] = description
     # Validate now so the preview reports the same errors an apply would.
     McpServerProfile.model_validate(fields)
     return _Draft(
@@ -776,6 +807,10 @@ def _plan_update(
     for key in _CONNECTION_FIELDS:
         merged[key] = draft.fields[key] if key in draft.fields else reset[key]
     merged.update(draft.options)
+    # A file that describes the server replaces its description; one that does
+    # not keeps whatever the operator wrote in Nebula.
+    if "description" in draft.fields:
+        merged["description"] = draft.fields["description"]
     changes = _changes(current.model_dump(), merged)
     entry.enabled = current.enabled
     entry.default_approval = merged["default_approval"]
@@ -874,6 +909,7 @@ def _describe(values: Mapping[str, Any]) -> dict[str, str]:
 
     transport = McpTransport(values["transport"])
     fields: dict[str, str | None] = {
+        "description": values.get("description") or None,
         "type": "stdio" if transport == McpTransport.STDIO else "http",
         "command": values.get("command"),
         "args": shlex.join(values.get("arguments") or []) or None,
