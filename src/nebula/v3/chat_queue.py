@@ -178,7 +178,13 @@ class ChatQueueService:
                 if session.backend == ChatBackend.HARNESS
                 else request.provider_id
             )
-            if actual_profile != expected_profile or request.model != session.model:
+            # A harness follow-up carries the model picked for its own turn and
+            # Core moves the vendor session over when it differs. A provider
+            # conversation switches model on its own, before anything is queued.
+            if actual_profile != expected_profile or (
+                session.backend != ChatBackend.HARNESS
+                and request.model != session.model
+            ):
                 raise HTTPException(
                     422, "Follow-up cannot change the conversation runtime"
                 )
@@ -497,6 +503,27 @@ class ChatQueueService:
         self._inflight.add(item["id"])
         try:
             request = self.authorization_valid(item)
+            if request.backend == ChatBackend.PROVIDER:
+                # Model and effort are conversation settings the operator can
+                # change while earlier work runs; the follow-up is the next turn,
+                # so it uses the current ones. Another provider is a different
+                # authorization, which the operator reviews instead.
+                session = self.store.get(ChatSession, queue.session_id)
+                if session.provider_profile_id != request.provider_id:
+                    self.review(
+                        queue,
+                        item["id"],
+                        "The conversation moved to another provider after this message was queued. Review it before sending",
+                    )
+                    return
+                request = request.model_copy(
+                    update={
+                        "model": session.model,
+                        "reasoning_effort": session.metadata.get(
+                            "reasoning_effort", request.reasoning_effort
+                        ),
+                    }
+                )
             items = [dict(row) for row in queue.items]
             next(row for row in items if row["id"] == item["id"])["status"] = "claiming"
             claimed = self.store.update(

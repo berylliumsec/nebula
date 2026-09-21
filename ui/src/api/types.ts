@@ -2416,8 +2416,10 @@ export interface ChatSessionRenameRequest {
 }
 
 export interface ChatSessionAssistantSettingsRequest {
-  mcpServerIds: Identifier[];
-  hookIds: Identifier[];
+  // Omitted selections are left as they are; the effort alone can change
+  // while a response runs.
+  mcpServerIds?: Identifier[];
+  hookIds?: Identifier[];
   reasoningEffort?: ReasoningEffort;
   useModelReasoningDefault?: boolean;
   expectedRevision?: number;

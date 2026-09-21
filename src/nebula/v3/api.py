@@ -155,6 +155,7 @@ from .chat import (
     ChatResponseMessage,
     ChatRuntimeSwitchPreflight,
     ChatRuntimeSwitchPreflightRequest,
+    ChatRuntimeSwitchRequest,
     ChatService,
     unarchive_chat_session,
 )
@@ -9881,6 +9882,17 @@ def create_app(
     ) -> ChatRuntimeSwitchPreflight:
         return chat_service().runtime_switch_preflight(session_id, request)
 
+    @app.post(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/runtime-switch",
+        response_model=ChatSession,
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def apply_chat_runtime_switch(
+        session_id: str, request: ChatRuntimeSwitchRequest
+    ) -> ChatSession:
+        return chat_service().apply_runtime_switch(session_id, request)
+
     @app.patch(
         f"{API_PREFIX}/chat-sessions/{{session_id}}",
         response_model=ChatSession,
@@ -9891,7 +9903,14 @@ def create_app(
         session_id: str, request: ChatSessionUpdateRequest
     ) -> ChatSession:
         current = store.get(ChatSession, session_id)
-        if chat_service().pending_turn(session_id) is not None:
+        # Reasoning effort is read when a turn starts, so changing it while a
+        # response runs is safe and applies to the next turn.
+        if chat_service().pending_turn(session_id) is not None and (
+            request.title is not None
+            or request.archived is not None
+            or request.mcp_server_ids is not None
+            or request.hook_ids is not None
+        ):
             raise ConflictError(
                 "conversation cannot be changed while a response is active"
             )

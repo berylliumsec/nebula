@@ -4664,6 +4664,7 @@ test("assistant upgrade provider model switch keeps the saved model until compac
   };
   let switched = false;
   let submitted: Record<string, unknown> | undefined;
+  let applied: Record<string, unknown> | undefined;
   await page.route("**/api/v1/**", async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -4700,9 +4701,17 @@ test("assistant upgrade provider model switch keeps the saved model until compac
       target_context_window: 8000, target_input_tokens: 4500, target_max_output_tokens: 2000,
       metadata_revision: "catalog-switch-1",
     } });
+    if (path.endsWith("/chat/sessions/switch-chat/runtime-switch") && request.method() === "POST") {
+      applied = request.postDataJSON() as Record<string, unknown>;
+      switched = true;
+      return route.fulfill({ json: {
+        ...entity, revision: 2, id: "switch-chat", engagement_id: "scratch-project",
+        title: "Model switch review", backend: "provider", provider_profile_id: provider.id,
+        model: "small-model", metadata: {},
+      } });
+    }
     if (path.endsWith("/chat/completions") && request.method() === "POST") {
       submitted = request.postDataJSON() as Record<string, unknown>;
-      switched = true;
       return route.fulfill({ contentType: "text/event-stream", body: `event: done\ndata: ${JSON.stringify({
         type: "done", session_id: "switch-chat", turn_id: "switch-turn", provider_id: provider.id,
         model: "small-model", message: { id: "switch-answer", role: "assistant", content: "Switched safely." },
@@ -4728,6 +4737,7 @@ test("assistant upgrade provider model switch keeps the saved model until compac
   }
   await expect(model).toHaveValue("large-model");
   await expect(page.getByRole("status").filter({ hasText: "saved model remains selected" })).toBeVisible();
+  expect(applied).toBeUndefined();
 
   await model.selectOption("small-model");
   const confirmation = page.getByRole("dialog", { name: "Switch model and compact context?" });
@@ -4741,7 +4751,10 @@ test("assistant upgrade provider model switch keeps the saved model until compac
   await page.getByPlaceholder("Ask about this project…").fill("Continue with the smaller model.");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByText("Switched safely.")).toBeVisible();
-  expect(submitted?.runtime_switch_confirmation).toBe("c".repeat(64));
+  // The confirmed switch is saved on the conversation, so the next turn uses
+  // it whoever starts that turn; the message just carries the saved model.
+  expect(applied).toMatchObject({ provider_id: provider.id, model: "small-model", expected_session_revision: 1, confirmation_token: "c".repeat(64) });
+  expect(submitted?.runtime_switch_confirmation).toBeUndefined();
   expect(submitted?.model).toBe("small-model");
 });
 
@@ -4835,6 +4848,11 @@ test("assistant upgrade switching to an unverified model verifies it instead of 
         metadata_revision: "catalog-verify-1",
       } });
     }
+    if (path.endsWith("/chat/sessions/verify-chat/runtime-switch") && request.method() === "POST") return route.fulfill({ json: {
+      ...entity, revision: 2, id: "verify-chat", engagement_id: "scratch-project",
+      title: "Unverified model switch", backend: "provider", provider_profile_id: provider.id,
+      model: "fresh-model", metadata: { tools_enabled: true },
+    } });
     return route.fallback();
   });
 
@@ -4847,6 +4865,105 @@ test("assistant upgrade switching to an unverified model verifies it instead of 
   await expect(model).toHaveValue("fresh-model");
   await expect(page.getByRole("status").filter({ hasText: "Applies to your next message" })).toBeVisible();
   expect(verifyCalls).toBe(1);
+});
+
+test("assistant upgrade model and effort stay editable while a response runs", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "mobile-chromium", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent provider-switch matrix.");
+  const pageErrors: Error[] = [];
+  page.on("pageerror", error => pageErrors.push(error));
+  const provider = {
+    ...entity,
+    id: "provider-live",
+    name: "Live provider",
+    provider_type: "vllm",
+    endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true,
+    is_local: true,
+    secret_ref: null,
+    model_allowlist: ["large-model", "small-model"],
+    capabilities: { streaming: true },
+    capability_verifications: {},
+    privacy: { local_only: true, permits_sensitive_data: true, residency: [] },
+    metadata: { default_model: "large-model" },
+  };
+  let revision = 1;
+  let model = "large-model";
+  let effort: string | null = null;
+  const session = () => ({
+    ...entity, revision, id: "live-chat", engagement_id: "scratch-project",
+    title: "Goal still running", backend: "provider", provider_profile_id: provider.id,
+    model, metadata: { reasoning_effort: effort },
+  });
+  const effortSaves: Record<string, unknown>[] = [];
+  const preflights: Record<string, unknown>[] = [];
+  const applies: Record<string, unknown>[] = [];
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({ json: [provider] });
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: [session()] });
+    if (path.endsWith("/chat/sessions/live-chat/messages")) return route.fulfill({ json: [] });
+    if (path.endsWith("/chat/sessions/live-chat/pending-turn")) return route.fulfill({ json: null });
+    if (path.endsWith("/chat/sessions/live-chat/goal")) return route.fulfill({ status: 404, json: { detail: "No goal" } });
+    if (path.endsWith("/chat/sessions/live-chat/state")) return route.fulfill({ json: {
+      schema: "nebula.session-state/v1", session_id: "live-chat", revision: 1,
+      turn_id: "live-turn", harness_turn_id: null, execution: "running", busy: true,
+      detail: "Working on the goal.", connection: "connected", actions: ["check_status", "stop"],
+      pending: [], decisions: [],
+    } });
+    if (path.endsWith("/chat-sessions/live-chat") && request.method() === "PATCH") {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      effortSaves.push(body);
+      effort = body.reasoning_effort as string | null;
+      revision += 1;
+      return route.fulfill({ json: session() });
+    }
+    if (path.endsWith("/chat/sessions/live-chat/runtime-switch/preflight")) {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      preflights.push(body);
+      if (body.expected_session_revision !== revision) return route.fulfill({ status: 409, json: { detail: "conversation changed; reload it before changing provider or model" } });
+      return route.fulfill({ json: {
+        session_id: "live-chat", session_revision: revision,
+        current_provider_id: provider.id, current_model: model,
+        target_provider_id: provider.id, target_model: "small-model", compatible: true,
+        requires_compaction_confirmation: false, estimated_active_input_tokens: 900,
+        target_context_window: 8000, target_input_tokens: 4500, target_max_output_tokens: 2000,
+      } });
+    }
+    if (path.endsWith("/chat/sessions/live-chat/runtime-switch") && request.method() === "POST") {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      applies.push(body);
+      model = String(body.model);
+      revision += 1;
+      return route.fulfill({ json: session() });
+    }
+    return route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=live-chat", "Workbench");
+  await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Assistant settings" });
+  await expect(settings).toContainText("The running response keeps its model and effort.");
+  // Core moved the revision when the next goal step started, which this page
+  // never heard about: its first switch attempt is refused as stale.
+  revision = 2;
+
+  const modelPicker = page.getByRole("combobox", { name: "Chat model" });
+  await expect(modelPicker).toBeEnabled();
+  await modelPicker.selectOption("small-model");
+  await expect(settings.getByRole("status").filter({ hasText: "the next turn uses small-model" })).toBeVisible();
+  await expect(modelPicker).toHaveValue("small-model");
+  expect(preflights.map(body => body.expected_session_revision)).toEqual([1, 2]);
+  expect(applies).toEqual([expect.objectContaining({ provider_id: provider.id, model: "small-model", expected_session_revision: 2 })]);
+
+  const effortPicker = page.getByRole("combobox", { name: "Reasoning effort" });
+  await expect(effortPicker).toBeEnabled();
+  await effortPicker.selectOption("high");
+  await expect(settings.getByRole("status").filter({ hasText: "the next turn uses the new one" })).toBeVisible();
+  // Only the effort changes mid-response; the rest of the conversation waits.
+  expect(effortSaves).toEqual([{ reasoning_effort: "high" }]);
+  await expect(modelPicker).toHaveValue("small-model");
+  expect(pageErrors).toEqual([]);
 });
 
 test("AI writing submits the visible supported model", async ({ page }, testInfo) => {

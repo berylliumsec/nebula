@@ -198,6 +198,34 @@ describe("ApiClient", () => {
     });
   });
 
+  it("saves a reviewed runtime switch on the conversation", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z",
+      revision: 5, id: "session-1", engagement_id: "engagement-1", title: "Scope review",
+      provider_profile_id: "provider-1", model: "small-model", metadata: {},
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.applyChatRuntimeSwitch("session-1", {
+      providerId: "provider-1",
+      model: "small-model",
+      toolsEnabled: true,
+      expectedSessionRevision: 4,
+      confirmationToken: "b".repeat(64),
+    })).resolves.toMatchObject({ id: "session-1", model: "small-model", revision: 5 });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://127.0.0.1:8765/api/v1/chat/sessions/session-1/runtime-switch",
+    );
+    expect(fetchMock.mock.calls[0][1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      provider_id: "provider-1",
+      model: "small-model",
+      tools_enabled: true,
+      expected_session_revision: 4,
+      confirmation_token: "b".repeat(64),
+    });
+  });
+
   it("loads native skills from the engagement-scoped Nebula catalog", async () => {
     const skills = [{
       name: "review",
@@ -1883,6 +1911,21 @@ describe("ApiClient", () => {
       method: "PATCH",
       body: JSON.stringify({ mcp_server_ids: ["mcp-1"], hook_ids: ["audit"], reasoning_effort: "high", expected_revision: 3 }),
     });
+  });
+
+  it("saves the reasoning effort alone so it can change while a response runs", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify({
+      created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z",
+      revision: 5, id: "session-1", engagement_id: "engagement-1", title: "Scope review",
+      provider_profile_id: "provider-1", model: "model-1", metadata: { reasoning_effort: "low" },
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.updateChatSessionAssistantSettings("session-1", { reasoningEffort: "low" }))
+      .resolves.toMatchObject({ reasoningEffort: "low", revision: 5 });
+    await client.updateChatSessionAssistantSettings("session-1", { useModelReasoningDefault: true });
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ reasoning_effort: "low" });
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ reasoning_effort: null });
   });
 
   it("maps provenance-backed chat and mission context status", async () => {

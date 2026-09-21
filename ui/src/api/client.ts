@@ -8900,6 +8900,34 @@ export class ApiClient {
     ).then(mapContextStatus);
   }
 
+  /** Make a reviewed provider/model the conversation's runtime from its next turn. */
+  applyChatRuntimeSwitch(
+    sessionId: string,
+    body: {
+      providerId: string;
+      model: string;
+      toolsEnabled: boolean;
+      maxOutputTokens?: number;
+      expectedSessionRevision: number;
+      confirmationToken?: string;
+    },
+  ): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/runtime-switch`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          provider_id: body.providerId,
+          model: body.model,
+          tools_enabled: body.toolsEnabled,
+          max_output_tokens: body.maxOutputTokens,
+          expected_session_revision: body.expectedSessionRevision,
+          confirmation_token: body.confirmationToken,
+        }),
+      },
+    ).then(mapChatSession);
+  }
+
   preflightChatRuntimeSwitch(
     sessionId: string,
     body: {

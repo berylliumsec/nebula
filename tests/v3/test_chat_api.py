@@ -747,6 +747,81 @@ def test_chat_delete_rejects_an_active_response(tmp_path):
     assert store.get(ChatSession, session.id).id == session.id
 
 
+def test_model_and_effort_change_while_a_response_is_active(tmp_path):
+    store = NebulaStore(tmp_path / "active-runtime-switch.db")
+    engagement = store.create(Engagement(name="Active chat"))
+    profile = store.create(
+        ProviderProfile(
+            name="Local provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a", "model-b"],
+        )
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Switch next turn",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    effort = client.patch(
+        f"/api/v1/chat-sessions/{session.id}",
+        headers=_auth(),
+        json={"reasoning_effort": "high"},
+    )
+    assert effort.status_code == 200, effort.text
+    assert effort.json()["metadata"]["reasoning_effort"] == "high"
+    # Everything else about the conversation still waits for the response.
+    selections = client.patch(
+        f"/api/v1/chat-sessions/{session.id}",
+        headers=_auth(),
+        json={"reasoning_effort": "low", "mcp_server_ids": []},
+    )
+    assert selections.status_code == 409
+    assert "response is active" in selections.json()["detail"]
+
+    revision = effort.json()["revision"]
+    switch = {"provider_id": profile.id, "model": "model-b"}
+    preflight = client.post(
+        f"/api/v1/chat/sessions/{session.id}/runtime-switch/preflight",
+        headers=_auth(),
+        json={**switch, "expected_session_revision": revision},
+    )
+    assert preflight.status_code == 200, preflight.text
+    assert preflight.json()["compatible"] is True
+    stale = client.post(
+        f"/api/v1/chat/sessions/{session.id}/runtime-switch",
+        headers=_auth(),
+        json={**switch, "expected_session_revision": session.revision},
+    )
+    assert stale.status_code == 409
+    switched = client.post(
+        f"/api/v1/chat/sessions/{session.id}/runtime-switch",
+        headers=_auth(),
+        json={**switch, "expected_session_revision": revision},
+    )
+    assert switched.status_code == 200, switched.text
+    assert switched.json()["model"] == "model-b"
+
+    stored = store.get(ChatSession, session.id)
+    assert stored.model == "model-b"
+    assert stored.metadata["reasoning_effort"] == "high"
+    # The running response keeps the runtime it started with.
+    assert store.get(ChatTurn, turn.id).model == "model-a"
+
+
 def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
     store = NebulaStore(tmp_path / "chat-session-activity.db")
     engagement = store.create(Engagement(name="Activity states"))
