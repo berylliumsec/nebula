@@ -1,9 +1,14 @@
 {
-  "change_digest": "047b53c5801567358ff418136aae763609cb0adda8c5f7c1c61529d9eddc90ec",
+  "change_digest": "6516a463fca9ac112238b8dd27656b35263c4f6d5e6d3e48d4ab354c4c9b9117",
   "reviewed_by": "Claude review of harness-stopped-turns",
   "reason": "A harness chat turn that stopped without an error event (operator Stop while the POST stream is attached, Codex turn/completed interrupted or cancelled, ACP stopReason cancelled) ended its SSE stream with the internal 'harness turn completed without a durable message' error at error level and dropped the text streamed so far, including completed Codex /goal answers. harness_events and the /chat/turns/{id}/events follower now end such turns with the existing cancelled frame (a turn Core abandoned after restart keeps its error frame), non-streamed requests get a 409, stream_turn saves the partial answer as an assistant message with finish_reason interrupted before the turn goes terminal and on operator stop, and the UI keeps that saved message marked Stopped after reload. stream_turn also left the delta coalescer unclosed, so every interrupted or error-terminated turn logged an unretrieved StopAsyncIteration; it now closes the coalescer last in its finally and the coalescer retrieves a finished read. test_harness_stopped_turns.py drives the real API with create_app and TestClient (six of its seven tests fail on main; the restart guard passes on both); the selected existing tests cover stop/cancel, restart interruption, mid-stream failure, the successful harness stream, the Codex goal stop and the follow endpoint; the vitest case covers the reload state.",
   "exclusions": "Full test_harnesses.py (93), test_harness_adapters.py (70), test_chat_reconnection.py (5), test_chat_api.py (25) and the App/client vitest files (120) were run locally and pass, but are not selected per CI scoping. Playwright is limited to the narrowest assistant entry (desktop mock) because SessionsPage.tsx changed by one mapping line; the other assistant projects and the real-Core journey do not exercise stopped-turn reloads. No native tests: no Tauri or Rust change. No full suites.",
-  "expected_tests": {"python": 15, "frontend": 8, "native": 0, "playwright": 55},
+  "expected_tests": {
+    "python": 15,
+    "frontend": 8,
+    "native": 0,
+    "playwright": 55
+  },
   "python": [
     "tests/v3/test_harness_stopped_turns.py",
     "tests/v3/test_harnesses.py::test_explicit_stop_cancels_detached_work_without_completing_it",
@@ -13,7 +18,11 @@
     "tests/v3/test_harness_adapters.py::test_codex_stop_between_goal_turns_pauses_the_goal",
     "tests/v3/test_chat_reconnection.py::test_chat_follow_is_read_only_and_returns_saved_completion"
   ],
-  "frontend": ["ui/src/pages/chatMessageReconciliation.test.ts"],
+  "frontend": [
+    "ui/src/pages/chatMessageReconciliation.test.ts"
+  ],
   "native": [],
-  "playwright": ["entry:assistant/desktop"]
+  "playwright": [
+    "entry:assistant/desktop"
+  ]
 }
