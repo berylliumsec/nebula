@@ -67,6 +67,7 @@ from .chat_subagents import (
     HARNESS_WAIT_MAX_SECONDS,
     SubagentService,
     harness_subagent_instructions,
+    subagent_limit,
 )
 from .automation_runtime import AutomationRuntimeUnavailable
 from .credentials import CredentialError, CredentialStore
@@ -400,7 +401,7 @@ def _gateway_subagent_tools(
                     "subagent_ids": {
                         "type": "array",
                         "items": {"type": "string", "maxLength": 200},
-                        "maxItems": 20,
+                        "maxItems": 200,
                     },
                     "mode": {
                         "type": "string",
@@ -450,7 +451,7 @@ def _is_gateway_subagent_tool(name: str | None) -> bool:
     }
 
 
-def _session_provider_subagent(session: HarnessSession) -> dict[str, str] | None:
+def _session_provider_subagent(session: HarnessSession) -> dict[str, Any] | None:
     setting = session.metadata.get("provider_subagent")
     if not isinstance(setting, dict):
         return None
@@ -458,7 +459,12 @@ def _session_provider_subagent(session: HarnessSession) -> dict[str, str] | None
     model = setting.get("model")
     if not isinstance(provider_id, str) or not isinstance(model, str):
         return None
-    return {"provider_profile_id": provider_id, "model": model}
+    limit = subagent_limit(setting.get("max_active"))
+    return {
+        "provider_profile_id": provider_id,
+        "model": model,
+        **({"max_active": limit} if limit is not None else {}),
+    }
 
 
 def _container_only_native_capabilities(
@@ -592,6 +598,7 @@ def _harness_developer_instructions(
             harness_subagent_instructions(
                 provider_subagent["model"],
                 _subagent_wait_limits(_VENDOR_HARNESS_KINDS.get(vendor))[0],
+                provider_subagent.get("max_active"),
             )
             if provider_subagent
             and any(
@@ -7005,13 +7012,13 @@ class HarnessRuntimeService:
         harness_reasoning_effort: str | None = None,
         harness_service_tier: str | None = None,
         content_blocks: list[ChatContentBlock] | None = None,
-        provider_subagent: dict[str, str] | None = None,
+        provider_subagent: dict[str, Any] | None = None,
     ) -> tuple[ChatSession, ChatTurn, HarnessTurn]:
         clean_prompt = prompt.strip()
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
         profile = self.store.get(HarnessProfile, profile_id)
-        subagent_setting: dict[str, str] | None = None
+        subagent_setting: dict[str, Any] | None = None
         if provider_subagent is not None:
             if self.provider_subagents is None:
                 raise HarnessConfigurationError(
@@ -7021,6 +7028,7 @@ class HarnessRuntimeService:
                 engagement_id,
                 str(provider_subagent.get("provider_profile_id") or ""),
                 str(provider_subagent.get("model") or ""),
+                provider_subagent.get("max_active"),
             )
         # Standing profile consent stands in for the per-turn confirmation.
         allow_remote_mcp = allow_remote_mcp or profile.privacy.auto_share_tool_results
@@ -7512,7 +7520,7 @@ class HarnessRuntimeService:
         return chat, chat_turn, harness_turn
 
     def _bind_session_provider_subagent(
-        self, session: HarnessSession, setting: dict[str, str] | None
+        self, session: HarnessSession, setting: dict[str, Any] | None
     ) -> HarnessSession:
         """Record the provider subagent model the session's catalog offers.
 
@@ -7539,7 +7547,7 @@ class HarnessRuntimeService:
         )
 
     def _remember_chat_provider_subagent(
-        self, chat: ChatSession, setting: dict[str, str] | None
+        self, chat: ChatSession, setting: dict[str, Any] | None
     ) -> ChatSession:
         """Keep the operator's choice with the conversation for the composer."""
 
@@ -11236,7 +11244,11 @@ class HarnessRuntimeService:
         return connection
 
     def _subagent_binding(self, session: HarnessSession) -> str | None:
-        """The provider subagent model this session's vendor catalog carries."""
+        """The provider subagent model and limit this session's vendor carries.
+
+        The limit is part of the developer instructions, so changing it
+        reopens the connection like a model change does.
+        """
 
         setting = _session_provider_subagent(session)
         if (
@@ -11245,7 +11257,10 @@ class HarnessRuntimeService:
             or session.metadata.get("analysis_only")
         ):
             return None
-        return f"{setting['provider_profile_id']}\0{setting['model']}"
+        return (
+            f"{setting['provider_profile_id']}\0{setting['model']}"
+            f"\0{setting.get('max_active') or ''}"
+        )
 
     async def _request_permission(
         self,
