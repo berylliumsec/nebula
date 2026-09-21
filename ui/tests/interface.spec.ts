@@ -4193,17 +4193,20 @@ test("assistant upgrade names a provider turn that thinks without answering and 
   await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Reply with FLASH_OK.");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   const reply = page.locator(".chat-message.assistant").last();
-  await expect(page.getByRole("button", { name: "Retry final answer" })).toBeVisible();
+  // A turn that thought and did not write is unfinished, not broken: nothing
+  // was lost, so it reads as a status with one way forward, not an error.
+  const unfinished = page.getByRole("status").filter({ hasText: "The model stopped without finishing this reply." });
+  await expect(unfinished).toBeVisible();
+  await expect(unfinished).toContainText("Everything it did is saved");
+  await expect(page.getByRole("button", { name: "Reload conversation" })).toHaveCount(0);
   const thinking = reply.getByLabel("Thinking");
   await thinking.locator("summary").click();
   // Every step's thinking is kept, in the order the model had it.
   await expect(thinking).toContainText("The read is bounded, so run it first.");
   await expect(thinking).toContainText("The budget ran out before the answer.");
-  await page.getByRole("button", { name: "Reload conversation" }).click();
-  await expect(page.getByRole("button", { name: "Retry final answer" })).toBeVisible();
-  await page.getByRole("button", { name: "Retry final answer" }).click();
+  await page.getByRole("button", { name: "Finish the answer" }).click();
   await expect(reply.locator(".chat-message-body > .assistant-markdown")).toHaveText("FLASH_OK");
-  await expect(page.getByRole("button", { name: "Retry final answer" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Finish the answer" })).toHaveCount(0);
   expect(await page.evaluate(() => (globalThis as typeof globalThis & { __finalAnswerCalls?: { completion: number; resume: number } }).__finalAnswerCalls)).toEqual({ completion: 1, resume: 1 });
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
@@ -9525,6 +9528,12 @@ test("stabilization continue as mission moves to the conversation actions menu",
   const item = page.getByRole("menuitem", { name: /Continue as mission/ });
   await expect(item).toBeVisible();
   await expect(item).toBeEnabled();
+  // It joins the keyboard order without taking the first place, which stays
+  // the same in every conversation.
+  await expect(page.getByRole("menuitem", { name: "Copy link" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  await expect(item).toBeFocused();
 });
 
 test("stabilization the Agent view floats over the conversation, minimizes and docks", async ({ page }, testInfo) => {
