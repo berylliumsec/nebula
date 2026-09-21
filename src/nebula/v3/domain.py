@@ -3085,9 +3085,15 @@ class SshEnvironment(Entity):
         return self.display_name.strip() or self.alias
 
 
+MCP_DESCRIPTION_MAX_CHARS = 500
+
+
 class McpServerProfile(Entity):
     entity_kind: ClassVar[str] = "mcp_servers"
     name: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._-]+$")
+    # What the server is for, in the operator's words. Jev ranks servers by it,
+    # and the model reads it when one of the server's tools is suggested.
+    description: str = Field(default="", max_length=MCP_DESCRIPTION_MAX_CHARS)
     transport: McpTransport
     command: str | None = Field(default=None, max_length=4096)
     arguments: list[str] = Field(default_factory=list, max_length=128)

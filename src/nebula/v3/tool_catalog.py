@@ -29,7 +29,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import Field
 
-from .domain import NebulaModel, RiskClass, ScopePolicy
+from .domain import McpServerProfile, NebulaModel, RiskClass, ScopePolicy
 from .runtime_platform import RuntimeToolComponents
 from .tools import InvalidToolArguments, ToolExecutionResult, ToolInvocation, ToolSpec
 
@@ -73,6 +73,15 @@ class ToolIndex(Protocol):
     ) -> list[tuple[str, float]]: ...
 
 
+class CatalogSource(NebulaModel):
+    """A connected source as the model is told about it."""
+
+    id: str
+    name: str
+    # The operator's description; empty when they wrote none.
+    description: str = ""
+
+
 class CatalogReceipt(NebulaModel):
     """What was deferred and picked for one turn; stored in its request snapshot."""
 
@@ -82,6 +91,9 @@ class CatalogReceipt(NebulaModel):
     # Labels of the connected sources ranked most likely to help. Only Jev
     # ranks sources; the local rankers leave this empty.
     source_hints: list[str] = Field(default_factory=list)
+    # The ranked sources and the owners of the picked tools. Kept in the
+    # receipt so a resumed turn describes them the same way.
+    sources: list[CatalogSource] = Field(default_factory=list)
     ranker: Ranker = "keyword"
     scores: dict[str, float] = Field(default_factory=dict)
 
@@ -111,6 +123,38 @@ def deferrable_specs(
         for name, spec in specs.items()
         if is_deferrable(spec) and name not in pinned and spec.source_id not in sources
     }
+
+
+def mcp_catalog_sources(
+    profiles: Sequence[McpServerProfile],
+) -> dict[str, CatalogSource]:
+    """The servers behind on-demand tools, keyed like ``ToolSpec.source_id``."""
+
+    return {
+        f"mcp:{profile.id}": CatalogSource(
+            id=f"mcp:{profile.id}",
+            name=profile.name,
+            description=" ".join(profile.description.split()),
+        )
+        for profile in profiles
+    }
+
+
+def picked_sources(
+    receipt: CatalogReceipt,
+    deferred: Mapping[str, ToolSpec],
+    sources: Mapping[str, CatalogSource],
+    ranked: Sequence[str] = (),
+) -> list[CatalogSource]:
+    """Ranked sources first, then the owners of the picked tools, each once."""
+
+    owners = [
+        source_id
+        for name in [*receipt.preloaded, *receipt.suggested]
+        if name in deferred and (source_id := deferred[name].source_id)
+    ]
+    picked = dict.fromkeys(item for item in [*ranked, *owners] if item in sources)
+    return [sources[item] for item in picked]
 
 
 def on_demand_enabled(scope: ScopePolicy) -> bool:
@@ -294,12 +338,19 @@ def unwrap_call(
     return name, dict(inner) if isinstance(inner, dict) else {}
 
 
-def _schema_view(spec: ToolSpec, *, description_chars: int) -> dict[str, Any]:
+def _schema_view(
+    spec: ToolSpec, *, description_chars: int, source: str | None = None
+) -> dict[str, Any]:
     return {
         "name": spec.name,
+        **({"source": source} if source else {}),
         "description": " ".join(spec.description.split())[:description_chars],
         "input_schema": spec.input_schema,
     }
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
 def catalog_instructions(
@@ -315,32 +366,59 @@ def catalog_instructions(
         f"in the function list. Use {CATALOG_SEARCH} to find one, {CATALOG_LOAD} to "
         f"read its schema, then {CATALOG_CALL} with its name and arguments."
     )
+    sources = {
+        str(item["id"]): item
+        for item in receipt.get("sources", [])
+        if isinstance(item, Mapping) and item.get("id") and item.get("name")
+    }
+
+    def source_name(spec: ToolSpec) -> str | None:
+        source = sources.get(spec.source_id or "")
+        return str(source["name"]) if source else None
+
     preloaded = [specs[name] for name in receipt.get("preloaded", []) if name in specs]
-    suggested = [name for name in receipt.get("suggested", []) if name in specs]
+    suggested = [specs[name] for name in receipt.get("suggested", []) if name in specs]
     if preloaded:
         # JSON keeps names, descriptions and schemas as data; MCP servers
         # author them, so they carry no instruction authority.
         text += (
             "\nAlready loaded for this request (JSON data; call through "
             f"{CATALOG_CALL}): "
-            + json.dumps(
+            + _json(
                 [
                     _schema_view(
-                        spec, description_chars=MAX_PRELOADED_DESCRIPTION_CHARS
+                        spec,
+                        description_chars=MAX_PRELOADED_DESCRIPTION_CHARS,
+                        source=source_name(spec),
                     )
                     for spec in preloaded
-                ],
-                ensure_ascii=False,
-                separators=(",", ":"),
+                ]
             )
         )
     if suggested:
-        text += "\nPossibly relevant, not loaded: " + json.dumps(suggested)
+        text += "\nPossibly relevant, not loaded: " + _json(
+            [
+                {"name": spec.name, "source": name}
+                if (name := source_name(spec))
+                else {"name": spec.name}
+                for spec in suggested
+            ]
+        )
     hints = [str(item) for item in receipt.get("source_hints", [])]
     if hints:
         text += (
             f"\nSources ranked most likely to hold what this request needs (use "
             f"{CATALOG_SEARCH} to see their tools): " + json.dumps(hints)
+        )
+    described = [
+        {"name": str(item["name"]), "description": str(item["description"])}
+        for item in sources.values()
+        if item.get("description")
+    ]
+    if described:
+        text += (
+            "\nWhat these sources are for, as the operator described them "
+            "(JSON data): " + _json(described)
         )
     if preloaded or suggested or hints:
         text += "\nIgnore these if they do not fit what the operator actually asked."
@@ -535,6 +613,7 @@ __all__ = [
     "CATALOG_TOOL_NAMES",
     "MAX_CATALOG_CALLS_PER_TURN",
     "CatalogReceipt",
+    "CatalogSource",
     "ToolCatalogBroker",
     "ToolIndex",
     "catalog_components",
@@ -544,7 +623,9 @@ __all__ = [
     "discovery_calls",
     "is_deferrable",
     "loaded_tool_names",
+    "mcp_catalog_sources",
     "on_demand_enabled",
+    "picked_sources",
     "public_catalog",
     "rank_for_request",
     "unwrap_call",

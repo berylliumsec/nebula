@@ -16,9 +16,10 @@ carries a "none of these" option, so a listed tool has to look more useful than
 Jev receives only redacted operator messages, the expanded instructions of the
 skills the operator selected for the turn, source labels and descriptions, and
 tool names and descriptions. It never receives tool output, which may be
-controlled by an assessed target. Source descriptions come from the MCP
-handshake, so like tool descriptions they are third-party text: they steer a
-ranking, never an action.
+controlled by an assessed target. A source is described by what the operator
+wrote for it or, failing that, by its MCP handshake instructions, which like
+tool descriptions are third-party text: either way they steer a ranking, never
+an action.
 """
 
 from __future__ import annotations
@@ -77,8 +78,8 @@ MAX_PICKS = 3
 # server's tools keep their full probability and the bottom-ranked keep half.
 # Tools whose source Jev did not rank are left at full weight.
 SOURCE_PRIOR_FLOOR = 0.5
-# A server has no description of its own, so its criterion is its name plus the
-# instructions it returned at the MCP handshake, or its tool names instead.
+# A server's criterion is its name plus the operator's description, else the
+# instructions it returned at the MCP handshake, else its tool names.
 MAX_SOURCE_CRITERION_CHARS = 600
 MAX_SOURCE_TOOL_NAMES = 12
 
@@ -118,18 +119,20 @@ class ToolSource:
 
 
 def mcp_sources(profiles: Sequence[McpServerProfile]) -> dict[str, ToolSource]:
-    """Describe the selected MCP servers, keyed like ``ToolSpec.source_id``.
+    """Describe the on-demand MCP servers, keyed like ``ToolSpec.source_id``.
 
-    An ``McpServerProfile`` carries no description field, so the instructions a
-    server returned at the handshake are the only prose describing it. Servers
-    that returned none fall back to their tool names in ``source_criteria``.
+    The operator's description wins; without one, the instructions the server
+    returned at the handshake describe it. Servers with neither fall back to
+    their tool names in ``source_criteria``.
     """
 
     return {
         f"mcp:{profile.id}": ToolSource(
             id=f"mcp:{profile.id}",
             label=profile.name,
-            description=" ".join((profile.capabilities.instructions or "").split()),
+            description=" ".join(
+                (profile.description or profile.capabilities.instructions or "").split()
+            ),
         )
         for profile in profiles
     }
@@ -149,8 +152,10 @@ class ToolSuggestionReceipt(NebulaModel):
     skills: list[str] = Field(default_factory=list, max_length=MAX_STATE_SKILLS)
     preloaded: list[str] = Field(default_factory=list)
     suggested: list[str] = Field(default_factory=list)
-    # Labels of the connected sources Jev ranked highest, best first.
+    # Labels of the connected sources Jev ranked highest, best first, and
+    # their ids in the same order.
     sources: list[str] = Field(default_factory=list, max_length=MAX_PICKS)
+    source_ids: list[str] = Field(default_factory=list, max_length=MAX_PICKS)
     probabilities: dict[str, float] = Field(default_factory=dict)
     source_probabilities: dict[str, float] = Field(default_factory=dict)
     model: str | None = None
@@ -185,8 +190,9 @@ class SuggestionCache:
     The catalog alone cannot be the key: a ranking answers one operator
     request, so a cached answer is only reusable when the request, the selected
     skills, the tools and the source descriptions are all unchanged. The key
-    covers the whole payload, so adding an MCP server, re-probing one into a
-    new description, or simply moving on to the next message all miss.
+    covers the whole payload, so adding an MCP server, describing one anew
+    (by hand or by a re-probe), or simply moving on to the next message all
+    miss.
 
     Entries live in this process, hold no operator text (the key is a digest),
     and are bounded. Two identical requests in flight at once both miss; the
@@ -432,8 +438,8 @@ def rank(
     return preloaded, suggested
 
 
-def ranked_sources(ranking: JevRanking, sources: Mapping[str, ToolSource]) -> list[str]:
-    """Labels of the sources worth naming in the turn's instructions."""
+def ranked_source_ids(ranking: JevRanking) -> list[str]:
+    """Ids of the sources worth naming in the turn's instructions, best first."""
 
     ordered = sorted(
         (
@@ -442,9 +448,15 @@ def ranked_sources(ranking: JevRanking, sources: Mapping[str, ToolSource]) -> li
             if probability >= SUGGEST_THRESHOLD
         )
     )
+    return [source_id for _, source_id in ordered[:MAX_PICKS]]
+
+
+def ranked_sources(ranking: JevRanking, sources: Mapping[str, ToolSource]) -> list[str]:
+    """Labels of the sources worth naming in the turn's instructions."""
+
     return [
         sources[source_id].label if source_id in sources else source_id
-        for _, source_id in ordered[:MAX_PICKS]
+        for source_id in ranked_source_ids(ranking)
     ]
 
 
@@ -562,6 +574,7 @@ async def suggest_tools(
         preloaded=preloaded,
         suggested=suggested,
         sources=ranked_sources(ranking, sources or {}),
+        source_ids=ranked_source_ids(ranking),
         probabilities=ranking.tools,
         source_probabilities=ranking.sources,
         model=str(body.get("model") or JEV_MODEL),
