@@ -1073,6 +1073,37 @@ def _routing_thoughts(response: ModelResponse) -> str:
     return _joined_reasoning(response.reasoning, commentary)
 
 
+# How a reply ends when nothing stopped it: Chat Completions and Gemini "stop",
+# Anthropic and Bedrock "end_turn" or "stop_sequence", Responses "completed".
+_ANSWER_FINISH_REASONS = frozenset(
+    {"stop", "end", "end_turn", "stop_sequence", "completed"}
+)
+
+
+def _is_routing_answer(response: ModelResponse) -> bool:
+    """Whether a routing reply without a tool call answered the operator.
+
+    A route that treats tool_choice=required as auto (Z.ai serves GLM that
+    way) answers in plain text when no tool is needed, without calling
+    finish_response. opencode, Codex, the AI SDK, Cline and pi-mono all end
+    the loop on a reply with no tool calls and use its text as the answer.
+    The text must have ended normally and pass the checks a synthesis answer
+    gets: text cut off by the output limit, stopped for another reason, or
+    holding a call Core could not read is not an answer.
+    """
+
+    finish_reason = (response.finish_reason or "").lower()
+    return (
+        not response.tool_calls
+        and (not finish_reason or finish_reason in _ANSWER_FINISH_REASONS)
+        # A DSML tag anywhere starts a call Core could not read. The answer
+        # written before it may be a preamble to that call, so it goes to
+        # synthesis rather than ending the turn.
+        and dsml_frame_start(response.text) is None
+        and _final_answer_problem(response) is None
+    )
+
+
 def _rejects_required_tool_choice(exc: ProviderError) -> bool:
     """A route that refuses tool_choice=required, such as an older vLLM."""
 
@@ -3892,9 +3923,10 @@ class ChatService:
                                 "model_id": prepared.resolved_model,
                             },
                         )
-                        # A reply without a call is safe now: it ends routing
-                        # through synthesis. The rest of the turn routes the
-                        # same way instead of being refused at every step.
+                        # A reply without a call is safe now: it ends routing,
+                        # as the answer or through synthesis. The rest of the
+                        # turn routes the same way instead of being refused at
+                        # every step.
                         auto_routing = True
                         routing = routing.model_copy(
                             update={"tool_choice": ToolChoice.AUTO}
@@ -3921,6 +3953,32 @@ class ChatService:
                                 "delta": thought,
                             },
                         )
+                    if _is_routing_answer(response):
+                        # The model answered instead of calling a tool: that
+                        # text is the answer, as in every loop harness, not a
+                        # reason for a second full-context synthesis request.
+                        # It is written, so a goal budget it spent does not
+                        # discard it; no tool runs after it.
+                        record_diagnostic(
+                            "debug",
+                            "chat",
+                            "chat.routing.answered_without_tool_call",
+                            "A routing reply answered without a tool call and "
+                            "completed the turn.",
+                            outcome="success",
+                            stage="routing",
+                            metadata={
+                                "provider": prepared.provider_profile.id,
+                                "model_id": prepared.resolved_model,
+                                "finish_reason": response.finish_reason or "",
+                                "tool_steps": len(turn.tool_history),
+                            },
+                        )
+                        async for item in self._answer_from_routing(
+                            prepared, turn, response
+                        ):
+                            yield item
+                        return
                     if (
                         turn.goal_id is not None
                         and self.store.get(ChatGoal, turn.goal_id).status
@@ -3931,10 +3989,11 @@ class ChatService:
                         )
                     if response.text.strip():
                         # Text beside a call narrates it and joined the step's
-                        # thinking above. Text instead of a call, or a frame
-                        # Core could not read, ends routing like an empty
-                        # reply. Neither fails the turn; the exact response
-                        # stays available as protected detail.
+                        # thinking above. Text instead of a call that is not an
+                        # answer (cut off, or a frame Core could not read) ends
+                        # routing like an empty reply. Neither fails the turn;
+                        # the exact response stays available as protected
+                        # detail.
                         record_diagnostic(
                             "warning",
                             "chat",
@@ -4614,6 +4673,53 @@ class ChatService:
             },
             strict=True,
         )
+
+    async def _answer_from_routing(
+        self, prepared: PreparedChat, turn: ChatTurn, response: ModelResponse
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        """Complete a tool turn with the answer its routing reply wrote.
+
+        The reply's usage and thinking are already on the turn. The answer is
+        stored and the turn completed exactly as a final synthesis completes
+        it, so a change to how a tool turn ends belongs in both.
+        """
+
+        prepared.turn = turn
+        completion = self._completion(prepared, response)
+        yield (
+            "delta",
+            {
+                "type": "delta",
+                "turn_id": turn.id,
+                "provider_id": prepared.provider_profile.id,
+                "model": prepared.resolved_model,
+                "delta": completion.message.content,
+            },
+        )
+        await self._run_native_hooks(
+            prepared,
+            "chat.turn.completed",
+            _turn_end_hook_payload(completion.finish_reason or "stop", None),
+        )
+        self._persist(prepared, completion)
+        turn = prepared.turn or turn
+        self.start_optional_naming(
+            self._name_initial_session(prepared, completion.message.content)
+        )
+        prepared.turn = self.store.update(
+            ChatTurn,
+            turn.id,
+            {
+                "status": ChatTurnStatus.COMPLETE,
+                "final_message_id": completion.message.id,
+                "usage": turn.usage,
+            },
+            expected_revision=turn.revision,
+        )
+        self._release_execution(prepared)
+        payload = completion.model_dump(mode="json")
+        payload["type"] = "done"
+        yield "done", payload
 
     @staticmethod
     def _ensure_request_capacity(
