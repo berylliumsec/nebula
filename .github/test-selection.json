@@ -1,13 +1,13 @@
 {
   "change_digest": "55e797ac4246fd4a2571dcfaed591cc5c1aed048371b7b80a61f5c0e9f239155",
   "reviewed_by": "Claude review of the settings legacy-hash test",
-  "reason": "App.test.tsx 'keeps diagnostics out of the advanced view while preserving legacy hashes' failed on origin/main whenever the file ran. #407 (0244d71) made the router location own the SettingsPage section, but the test still planted #security-settings with window.history.replaceState and rendered a MemoryRouter at a bare /settings, so the router effect correctly settled on Setup. Under BrowserRouter the router hash is the address-bar hash, so that state cannot occur in the app; the test now passes the legacy hash through the router. It passed alone only because the lazy SettingsPage seeded its first render from window.location.hash and findByRole read the DOM before the router effect ran; the initial section and advanced group now come from the router location, so the first paint agrees with the effect (the old test now fails deterministically alone too). Frontend: App.test.tsx carries the fixed test; SettingsPage.test.tsx and SettingsLens.test.tsx cover section routing from the router, tab/group hash rewrites and the embedded lens path that keeps using embeddedTarget. Playwright: appearance-settings deep-links /settings#appearance-settings and asserts Advanced is aria-current (the production legacy-hash path); settings-search covers catalog routes into sections; critical-workspaces desktop/compact screenshot /settings on first paint.",
-  "exclusions": "No Python or native changes. entry:critical-workspaces/narrow is not selected: its 'critical workspaces remain visually stable' and 'Light preserves each critical workspace hierarchy' fail on pristine origin/main (a20c6ea) at the Project screenshot (project-narrow-narrow / project-light-narrow, 15434 and 12222 px) because the Project tab bar now wraps 'Results' onto a second line at narrow width, with identical pixel counts with and without this change; the loop stops before Settings, so the narrow Settings screenshots (Zero Dark and Light) were run locally with the loop limited to Settings and pass. The whole ui vitest suite (159 files, 1042 tests) was run locally and passes. Other areas SettingsPage.tsx falls back to (desktop-interface, mobile-layout) are broad fallbacks; the section-state change is covered by the selected areas.",
+  "reason": "App.test.tsx 'keeps diagnostics out of the advanced view while preserving legacy hashes' failed on origin/main whenever the file ran. #407 (0244d71) made the router location own the SettingsPage section, but the test still planted #security-settings with window.history.replaceState and rendered a MemoryRouter at a bare /settings, so the router effect correctly settled on Setup. Under BrowserRouter the router hash is the address-bar hash, so that state cannot occur in the app; the test now passes the legacy hash through the router. It passed alone only because the lazy SettingsPage seeded its first render from window.location.hash and findByRole read the DOM before the router effect ran; the initial section and advanced group now come from the router location, so the first paint agrees with the effect (the old test now fails deterministically alone too). Frontend: App.test.tsx carries the fixed test; SettingsPage.test.tsx and SettingsLens.test.tsx cover section routing from the router, tab/group hash rewrites and the embedded lens path that keeps using embeddedTarget. Playwright: appearance-settings deep-links /settings#appearance-settings and asserts Advanced is aria-current (the production legacy-hash path); settings-search covers catalog routes into sections; critical-workspaces screenshots /settings on first paint at desktop, compact and narrow.",
+  "exclusions": "No Python or native changes. The whole ui vitest suite (159 files, 1042 tests) was run locally and passes. After merging main (#471 refreshed the narrow Project baselines), area:critical-workspaces was run locally on narrow and all 7 pass, including the Settings screenshots the loop previously never reached. Other areas SettingsPage.tsx falls back to (desktop-interface, mobile-layout) are broad fallbacks; the section-state change is covered by the selected areas.",
   "expected_tests": {
     "python": 0,
     "frontend": 46,
     "native": 0,
-    "playwright": 18
+    "playwright": 25
   },
   "python": [],
   "frontend": [
@@ -19,7 +19,6 @@
   "playwright": [
     "area:appearance-settings",
     "area:settings-search",
-    "entry:critical-workspaces/desktop",
-    "entry:critical-workspaces/compact"
+    "area:critical-workspaces"
   ]
 }
