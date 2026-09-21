@@ -1,17 +1,25 @@
 {
-  "change_digest": "d38fb7b084e8ffad829bdf7d584c7053f244701e2ef70e0a787f4114b425eccc",
-  "reviewed_by": "Claude review of specialist-routing-tolerance",
-  "reason": "The mission specialist loop (BrokeredToolSpecialist in agent_tooling.py) raised MissionError when a model deviated slightly in a required routing step: prose beside or instead of a call, an empty reply, a tool it was not offered or whose budget was spent, a reused provider call id, or finish_task with extra fields. The orchestrator then retried the turn and failed the task, and a call cut off by the output limit ran with truncated arguments because finish_reason was never checked. The routing batch is now classified call by call: a call Core will not run is answered with a failed observation (no broker call, no slot) that the next turn replays as an is_error tool result, the valid calls still run, prose is kept as bounded commentary with a warning diagnostic, a no-call reply is asked again through the routing prompt, finish ignores extra fields, output-limited calls are answered with a re-issue observation, a reused id runs under a deterministic nine-alphanumeric Core id (Gemini synthetic ids stay synthetic) while an identical repeat is answered 'already ran', and three consecutive turns that ran nothing stop the task as blocked. The finish unresolved-result guard, the unchanged-failed-invocation guard and the history failure selection ignore these Core-answered records. tests/v3/test_specialist_routing_tolerance.py (16 new tests, all failing on origin/main, including an end-to-end MissionRuntime run with max_retries=0) and tests/v3/test_specialist_tool_batches.py (two tests updated from the old hard failures, eight unchanged) prove it.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through agent_tooling.py) does not exercise mission specialist routing deviations, which need a scripted provider; the Python tests drive the specialist and MissionRuntime directly. test_orchestration.py, test_automation_runtime.py, test_browser_automation.py and test_process_results_webhook.py were run locally and pass but are not selected. No full suites.",
+  "change_digest": "6908784eb7be7d02ba50e8a1dc990be157acf93da128a08e9774743e99800d99",
+  "reviewed_by": "Claude review of native-adapter-requests",
+  "reason": "The native Anthropic, Bedrock, Gemini and OpenAI Responses adapters sent requests current vendors reject or mishandle. Anthropic and Bedrock forwarded temperature to Claude models that 400 on sampling parameters (Opus 4.7+, Sonnet 5, Fable, Mythos), forced tool_choice any on Fable 5.1 / Mythos 5.1, which reject it, and on Bedrock sent a forced choice to Sonnet 5 / Opus 5 without disabling their default thinking; Gemini declared tools as the OpenAPI-subset parameters field; the non-streaming complete() calls were capped at the 120 s default and botocore silently re-sent Converse five times; HTTP 529 overloaded_error and Bedrock throttling/unavailability errors were not retryable; Responses always sent text.format.strict=true and never store=false; Bedrock passed consecutive same-role messages through. The adapters now gate temperature and forced tool choice by Claude model id, send thinking disabled beside a forced Bedrock toolChoice, use parametersJsonSchema, read a profile request_timeout_seconds option (default 600 s, connect 10 s) for native calls and the botocore Config (retries max_attempts 1), retry 529 and the five Bedrock transient codes through Nebula's retry policy, send strict only for strict-acceptable schemas and store=false, and merge adjacent Bedrock roles; the capability probe accepts a structured call beside prose for auto-only models. tests/v3/test_native_adapter_requests.py covers every change (36 of its 51 cases fail on main). The selected existing node ids are the edited Gemini tool-definition test and the tests that directly drive the changed adapter payload builders, Bedrock error typing and the capability probe.",
+  "exclusions": "Scoped per the CI-scoping rule: whole existing files are not listed; test_providers.py, test_provider_contracts.py, test_provider_verification.py, test_context.py, test_credentials.py, test_exporter.py and the provider/probe tests in test_api.py were run locally (all pass) and are reported in the PR body. No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: native vendor request payloads need a real Anthropic, Bedrock, Gemini or OpenAI account and the real-Core journeys do not exercise them; the Python tests drive each adapter's wire payload and the capability probe directly. No full suites.",
   "expected_tests": {
-    "python": 26,
+    "python": 61,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_specialist_routing_tolerance.py",
-    "tests/v3/test_specialist_tool_batches.py"
+    "tests/v3/test_native_adapter_requests.py",
+    "tests/v3/test_providers.py::test_native_providers_translate_tool_definitions",
+    "tests/v3/test_providers.py::test_openai_responses_translates_flattened_tools_and_parses_calls",
+    "tests/v3/test_providers.py::test_bedrock_reports_the_client_error_code_and_message",
+    "tests/v3/test_providers.py::test_bedrock_context_window_rejection_is_typed",
+    "tests/v3/test_provider_contracts.py::test_responses_required_tool_choice_and_paired_history_wire_contract",
+    "tests/v3/test_provider_contracts.py::test_anthropic_and_gemini_required_tool_wire_contracts",
+    "tests/v3/test_provider_contracts.py::test_batched_tool_calls_reach_each_adapter_wire_contract",
+    "tests/v3/test_provider_contracts.py::test_bedrock_required_tool_wire_contract",
+    "tests/v3/test_api.py::test_exact_model_capability_probe_persists_and_runtime_edit_requires_reverification"
   ],
   "frontend": [],
   "native": [],

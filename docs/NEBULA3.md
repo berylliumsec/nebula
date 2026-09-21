@@ -173,6 +173,15 @@ Tune this per provider profile with the `retry_attempts` and
 `NEBULA_PROVIDER_RETRY_ATTEMPTS` and `NEBULA_PROVIDER_RETRY_BACKOFF_SECONDS`.
 A single attempt disables automatic retries.
 
+Native Anthropic, OpenAI Responses, Gemini and Bedrock profiles receive each
+answer as one response, so their read timeout bounds the whole generation:
+600 seconds by default, with 10 seconds to open the connection. Tune it per
+provider profile with the `request_timeout_seconds` option (up to 3600), or per
+deployment with `NEBULA_PROVIDER_REQUEST_TIMEOUT_SECONDS`. A read timeout is
+reported and never resent, because the provider may already have produced the
+answer. Bedrock throttling and service-unavailable errors are retried like the
+HTTP statuses above.
+
 ## Import and export
 
 ```bash
