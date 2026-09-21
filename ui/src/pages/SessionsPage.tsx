@@ -830,7 +830,7 @@ export function SessionsPage() {
   const previewOwnerRef = useRef("");
   const restoredScrollRef = useRef<{scrollTop: number; followBottom: boolean} | undefined>(undefined);
   const [reloadingConversation, setReloadingConversation] = useState(false);
-  const [chatError, setChatError] = useState<string>();
+  const [chatError, setChatError] = useState<unknown>();
   const [chatReconnecting, setChatReconnecting] = useState(false);
   const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false);
   useGuideAction("open-assistant-settings", () => setAssistantSettingsOpen(true));
@@ -1938,7 +1938,13 @@ export function SessionsPage() {
     setDeletingSessionId(session.id);
     setChatError(undefined);
     try {
-      await api.deleteChatSession(session.id);
+      try {
+        await api.deleteChatSession(session.id);
+      } catch (error) {
+        if (!(error instanceof ApiError && error.status === 404)) throw error;
+        // Core is authoritative. A conversation that disappeared before this
+        // request is already in the operator's requested end state.
+      }
       chatPreviews.delete(session.id);
       if (engagement) {
         clearChatDraft(sessionStorage, chatDraftStorageKey(engagement.id, session.id));
@@ -1970,7 +1976,14 @@ export function SessionsPage() {
     setDeletingAllSessions(true);
     setChatError(undefined);
     const results = await Promise.allSettled(targets.map((session) => api.deleteChatSession(session.id)));
-    const deletedIds = new Set(targets.filter((_, index) => results[index]?.status === "fulfilled").map((session) => session.id));
+    const failures = targets.flatMap((session, index) => {
+      const result = results[index];
+      if (!result || result.status === "fulfilled") return [];
+      if (result.reason instanceof ApiError && result.reason.status === 404) return [];
+      return [{ session, error: result.reason }];
+    });
+    const failedIds = new Set(failures.map(({ session }) => session.id));
+    const deletedIds = new Set(targets.filter((session) => !failedIds.has(session.id)).map((session) => session.id));
     deletedIds.forEach(id => chatPreviews.delete(id));
     if (engagement) {
       for (const deletedId of deletedIds) {
@@ -1978,19 +1991,46 @@ export function SessionsPage() {
         clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, deletedId));
       }
     }
-    const failures = results.filter((result) => result.status === "rejected");
-    setSessions((current) => current.filter((session) => !deletedIds.has(session.id)));
-    if (deletedIds.has(sessionId)) {
+    let authoritativeSessions: ChatSessionSummary[] | undefined;
+    try {
+      if (engagement) {
+        const page = await api.listChatSessions(engagement.id);
+        authoritativeSessions = page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        setSessions(authoritativeSessions);
+      } else {
+        setSessions((current) => current.filter((session) => !deletedIds.has(session.id)));
+      }
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.bulk_delete_refresh_failed", "The conversation list could not be refreshed after bulk deletion.", error, "sessions_page");
+      setSessions((current) => current.filter((session) => !deletedIds.has(session.id)));
+      if (!failures.length) setChatError(error instanceof Error ? error.message : "Conversations were deleted, but the list could not be refreshed.");
+    }
+    const selectedConversationStillExists = authoritativeSessions
+      ? authoritativeSessions.some((session) => session.id === sessionId)
+      : !deletedIds.has(sessionId);
+    if (sessionId && !selectedConversationStillExists) {
       resetConversation(false, { discardDraft: true });
       openUnattachedChatView();
     }
     if (failures.length) {
       for (const failure of failures) {
-        if (failure.status === "rejected") {
-          void logCaughtDiagnostic("interface.sessions_page.caught_failure_21", "One conversation could not be deleted during a bulk delete.", failure.reason, "sessions_page");
-        }
+        void logCaughtDiagnostic("interface.sessions_page.caught_failure_21", "One conversation could not be deleted during a bulk delete.", failure.error, "sessions_page");
       }
-      setChatError(`${failures.length} of ${targets.length} conversations could not be deleted. A conversation with an active response must finish before it can be deleted.`);
+      const primary = failures[0];
+      const primaryError = primary.error;
+      const detail = primaryError instanceof Error ? primaryError.message : "Core rejected the delete request.";
+      setChatError({
+        message: `${failures.length} of ${targets.length} conversations could not be deleted. ${primary.session.title}: ${detail.replace(/\s*Reference:\s*(?:err|req)_[A-Za-z0-9._:-]+\.?\s*$/i, "")}`,
+        errorId: primaryError instanceof ApiError ? primaryError.errorId : undefined,
+        requestId: primaryError instanceof ApiError ? primaryError.requestId : undefined,
+        retryable: primaryError instanceof ApiError ? primaryError.retryable : undefined,
+        code: primaryError instanceof ApiError ? primaryError.code : undefined,
+        reasonCode: primaryError instanceof ApiError ? primaryError.reasonCode : undefined,
+        operatorDetail: primaryError instanceof ApiError ? primaryError.operatorDetail : undefined,
+        impact: primaryError instanceof ApiError ? primaryError.impact : undefined,
+        recoveryAction: primaryError instanceof ApiError ? primaryError.recoveryAction : undefined,
+        recoveryDestination: primaryError instanceof ApiError ? primaryError.recoveryDestination : undefined,
+      });
     }
     setDeletingAllSessions(false);
   };
@@ -4664,7 +4704,7 @@ export function SessionsPage() {
               </div>}
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatReconnecting && <p role="status" className="chat-recovery-notice">Connection lost. Reconnecting to the existing turn…</p>}
-              {chatError && (failedProviderRecovery
+              {chatError !== undefined && (failedProviderRecovery
                 ? // The turn is resumable and needs nothing decided: its tool
                   // results, reasoning and partial state are all preserved and
                   // only the prose is missing. That is not an error to alarm

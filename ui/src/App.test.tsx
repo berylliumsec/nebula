@@ -1152,6 +1152,89 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("menuitem", { name: "Delete all conversations" })).toBeDisabled();
   });
 
+  it("reconciles already-deleted conversations with Core during bulk delete", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const chats = [
+      { ...entity, id: "session-1", engagement_id: "engagement-1", title: "Stale first conversation", provider_profile_id: null, model: null, metadata: {} },
+      { ...entity, id: "session-2", engagement_id: "engagement-1", title: "Stale second conversation", provider_profile_id: null, model: null, metadata: {} },
+    ];
+    let listedChats = true;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Stale chat review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (/\/chat-sessions\/session-[12]$/.test(path) && init?.method === "DELETE") {
+        listedChats = false;
+        return new Response(JSON.stringify({ detail: "chat_sessions entity not found", error_id: "err_already_deleted", retryable: false }), { status: 404 });
+      }
+      if (path.endsWith("/chat-sessions")) return new Response(JSON.stringify(listedChats ? chats : []), { status: 200 });
+      return unmatchedCoreResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/sessions");
+
+    await user.click(await screen.findByRole("button", { name: "Show conversations" }));
+    const conversationPanel = await screen.findByLabelText("Conversations");
+    expect(within(conversationPanel).getByText("Stale first conversation")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "More conversation actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete all conversations" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Delete all conversations?" })).getByRole("button", { name: "Delete all conversations" }));
+
+    await waitFor(() => expect(screen.queryByText("Stale first conversation")).not.toBeInTheDocument());
+    expect(screen.queryByText("Stale second conversation")).not.toBeInTheDocument();
+    expect(screen.queryByText(/conversations could not be deleted/)).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input, request]) => /\/chat-sessions\/session-[12]$/.test(new URL(String(input)).pathname) && request?.method === "DELETE")).toHaveLength(2);
+  });
+
+  it("keeps the exact Core diagnostic when a bulk delete is genuinely blocked", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const active = { ...entity, id: "session-1", engagement_id: "engagement-1", title: "Active investigation", provider_profile_id: null, model: null, metadata: {} };
+    const stale = { ...entity, id: "session-2", engagement_id: "engagement-1", title: "Already removed", provider_profile_id: null, model: null, metadata: {} };
+    let firstList = true;
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Blocked delete review", description: "", status: "active", tags: [], metadata: {} }]), { status: 200 });
+      if (path.endsWith("/chat-sessions/session-1") && init?.method === "DELETE") return new Response(JSON.stringify({
+        detail: "conversation cannot be deleted while a harness turn is active",
+        error_id: "err_active_harness_turn",
+        retryable: true,
+        reason_code: "state_conflict",
+        operator_detail: "A harness turn is still running for this conversation.",
+        impact: "The conversation was preserved.",
+        recovery_action: "Stop the response and retry",
+        recovery_destination: "/sessions?session=session-1",
+      }), { status: 409 });
+      if (path.endsWith("/chat-sessions/session-2") && init?.method === "DELETE") return new Response(JSON.stringify({ detail: "chat_sessions entity not found", error_id: "err_already_deleted", retryable: false }), { status: 404 });
+      if (path.endsWith("/chat-sessions")) {
+        const response = firstList ? [active, stale] : [active];
+        firstList = false;
+        return new Response(JSON.stringify(response), { status: 200 });
+      }
+      return unmatchedCoreResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/sessions");
+
+    await user.click(await screen.findByRole("button", { name: "Show conversations" }));
+    const conversationPanel = await screen.findByLabelText("Conversations");
+    expect(within(conversationPanel).getByText("Already removed")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "More conversation actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete all conversations" }));
+    await user.click(within(screen.getByRole("dialog", { name: "Delete all conversations?" })).getByRole("button", { name: "Delete all conversations" }));
+
+    await waitFor(() => expect(screen.queryByText("Already removed")).not.toBeInTheDocument());
+    expect(within(conversationPanel).getByText("Active investigation")).toBeVisible();
+    expect(screen.getByText(/1 of 2 conversations could not be deleted.*harness turn is active/)).toBeVisible();
+    expect(screen.getByText("Reference: err_active_harness_turn · state conflict")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Stop the response and retry" })).toHaveAttribute("href", "/sessions?session=session-1");
+    const deleteNotice = screen.getByText(/1 of 2 conversations could not be deleted/).closest(".diagnostic-error-notice");
+    expect(deleteNotice).not.toBeNull();
+    expect(within(deleteNotice as HTMLElement).queryByText("Reference: pending local diagnostic")).not.toBeInTheDocument();
+  });
+
   it("starts Terminal automatically inside the reviewed container boundary", async () => {
     const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {

@@ -2303,6 +2303,71 @@ test("stabilization conversations sidebar icon reveals the left pane", async ({ 
   await page.screenshot({path: testInfo.outputPath("conversations-sidebar.png")});
 });
 
+test("stabilization conversation bulk delete reconciles stale rows and preserves the blocking diagnostic", async ({ page }, testInfo) => {
+  let deleteStarted = false;
+  const active = { ...entity, id: "conversation-active", engagement_id: "scratch-project", title: "Active investigation", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
+  const stale = { ...entity, id: "conversation-stale", engagement_id: "scratch-project", title: "Already removed", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/chat/session-activity")) {
+      await route.fulfill({ json: [{ session_id: active.id, state: "idle", turn_id: null }] });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ json: deleteStarted ? [active] : [active, stale] });
+      return;
+    }
+    if (path.endsWith(`/chat-sessions/${active.id}`) && request.method() === "DELETE") {
+      deleteStarted = true;
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({
+          detail: "conversation cannot be deleted while a harness turn is active",
+          error_id: "err_active_harness_turn",
+          retryable: true,
+          reason_code: "state_conflict",
+          operator_detail: "A harness turn is still running for this conversation.",
+          impact: "The conversation was preserved.",
+          recovery_action: "Stop the response and retry",
+          recovery_destination: `/?view=chat&session=${active.id}`,
+        }),
+      });
+      return;
+    }
+    if (path.endsWith(`/chat-sessions/${stale.id}`) && request.method() === "DELETE") {
+      deleteStarted = true;
+      await route.fulfill({ status: 404, json: { detail: "chat_sessions entity not found", error_id: "err_already_deleted", retryable: false } });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  await page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations", exact: true }).click();
+  const conversations = page.getByRole("complementary", { name: "Conversations" });
+  await expect(conversations.getByText("Active investigation", { exact: true })).toBeVisible();
+  await expect(conversations.getByText("Already removed", { exact: true })).toBeVisible();
+  await conversations.getByRole("button", { name: "More conversation actions" }).click();
+  await page.getByRole("menuitem", { name: "Delete all conversations" }).click();
+  await page.getByRole("dialog", { name: "Delete all conversations?" }).getByRole("button", { name: "Delete all conversations" }).click();
+
+  await expect(conversations.getByText("Already removed", { exact: true })).toHaveCount(0);
+  await expect(conversations.getByText("Active investigation", { exact: true })).toBeVisible();
+  const notice = page.getByRole("alert").filter({ hasText: "1 of 2 conversations could not be deleted" });
+  await expect(notice).toContainText("conversation cannot be deleted while a harness turn is active");
+  await expect(notice).toContainText("Reference: err_active_harness_turn · state conflict");
+  await expect(notice.getByRole("link", { name: "Stop the response and retry" })).toHaveAttribute("href", `/?view=chat&session=${active.id}`);
+  await expect(notice.getByText("Reference: pending local diagnostic")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await testInfo.attach("conversation-delete-reconciliation", {
+    body: JSON.stringify({ viewport: page.viewportSize(), staleRemoved: true, activePreserved: true, reference: "err_active_harness_turn" }),
+    contentType: "application/json",
+  });
+});
+
 test("conversation pane defaults closed and restores its device preference without changing URL identity", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 1440) <= 760, "Desktop conversation-pane contract");
   await openWorkspace(page, "/?view=chat", "Workbench");
