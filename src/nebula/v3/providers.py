@@ -436,12 +436,65 @@ class ToolDefinition(BaseModel):
         return value
 
 
+# Opaque state a route needs back on later steps: thinking signatures and
+# encrypted reasoning. Bounded so one response cannot bloat a turn record; a
+# response over the bound is replayed without it, as before it was kept.
+_REASONING_STATE_MAX_BYTES = 256 * 1024
+_CALL_METADATA_MAX_BYTES = 32 * 1024
+
+
+def _bounded_replay_state(
+    value: dict[str, Any] | None, limit: int, *, field: str
+) -> dict[str, Any] | None:
+    if not value:
+        return None
+    try:
+        size = len(json.dumps(value, ensure_ascii=False))
+    except (TypeError, ValueError) as exc:
+        record_caught_exception(
+            "providers",
+            "providers.replay_state.unserializable",
+            "Provider replay state could not be serialized; it is not kept.",
+            exc,
+            stage="providers",
+            metadata={"field": field},
+        )
+        return None
+    if size > limit:
+        record_diagnostic(
+            "warning",
+            "providers",
+            "providers.replay_state.oversized",
+            "Provider replay state exceeded its bound; the step is replayed "
+            "without it.",
+            outcome="fallback",
+            stage="providers",
+            retryable=False,
+            metadata={"field": field, "bytes": size, "limit": limit},
+        )
+        return None
+    return value
+
+
 class ModelToolResult(BaseModel):
     call_id: str
     name: str
     arguments: dict[str, Any] = Field(default_factory=dict)
     output: dict[str, Any] | str
     is_error: bool = False
+    # Calls one routing response issued share a group, and a replay sends them
+    # back as the single assistant message that issued them. ``None`` (history
+    # recorded before groups were) replays the call as a message of its own.
+    response_group: str | None = None
+    # The issuing response's ``ModelResponse.reasoning_state``, on the first
+    # result of its group.
+    reasoning_state: dict[str, Any] | None = None
+    # The call's own ``ToolCall.provider_metadata``.
+    provider_metadata: dict[str, Any] | None = None
+    # Content the tool produced for the model to see, such as a browser
+    # screenshot, delivered with this result (``ModelMessage`` part format).
+    # Kept out of dumps: an image is not text to count or log.
+    attachments: list[dict[str, Any]] = Field(default_factory=list, exclude=True)
 
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
@@ -504,6 +557,19 @@ class ToolCall(BaseModel):
     invalid_reason: str | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    # Opaque per-call state the route must get back when the call is
+    # replayed: a Gemini ``thought_signature``, or the ``extra_content`` an
+    # OpenAI-compatible route attached to the call. Never shown or logged.
+    provider_metadata: dict[str, Any] | None = Field(
+        default=None, exclude=True, repr=False
+    )
+
+    @field_validator("provider_metadata")
+    @classmethod
+    def _bounded_metadata(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        return _bounded_replay_state(
+            value, _CALL_METADATA_MAX_BYTES, field="tool_call.provider_metadata"
+        )
 
 
 class ModelUsage(BaseModel):
@@ -523,6 +589,24 @@ class ModelResponse(BaseModel):
     provider_request_id: str | None = None
     raw: dict[str, Any] | None = Field(default=None, exclude=True)
     raw_body: bytes | None = Field(default=None, exclude=True, repr=False)
+    # What the route needs back when this response's calls are replayed:
+    # ``reasoning_content``/``reasoning`` text and raw ``reasoning_details``
+    # (OpenAI-compatible), Anthropic ``thinking_blocks``, Responses
+    # ``reasoning_items``. ``provider_id`` and ``model`` name the route that
+    # produced it; signatures are only valid for that route and model. It
+    # changes nothing that is displayed.
+    reasoning_state: dict[str, Any] | None = Field(
+        default=None, exclude=True, repr=False
+    )
+
+    @field_validator("reasoning_state")
+    @classmethod
+    def _bounded_reasoning_state(
+        cls, value: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        return _bounded_replay_state(
+            value, _REASONING_STATE_MAX_BYTES, field="response.reasoning_state"
+        )
 
     @model_validator(mode="after")
     def _recover_serialized_tool_calls(self) -> "ModelResponse":
@@ -1975,7 +2059,8 @@ def _merge_tool_call_deltas(call_parts: dict[int, dict[str, str]], items: Any) -
     must never merge into one. ``id`` and ``name`` are taken once, because
     vendors that resend them on every fragment would otherwise yield
     ``call_1call_1``. Arguments sent as an object are the whole arguments so
-    far, so they replace rather than extend what arrived before.
+    far, so they replace rather than extend what arrived before. A call's
+    ``extra_content`` (a Gemini signature) is kept with it as JSON text.
     """
 
     if not isinstance(items, list):
@@ -2006,6 +2091,9 @@ def _merge_tool_call_deltas(call_parts: dict[int, dict[str, str]], items: Any) -
         current = call_parts[key]
         current["id"] = current["id"] or call_id
         current["name"] = current["name"] or name
+        extra = item.get("extra_content")
+        if isinstance(extra, dict):
+            current["extra_content"] = json.dumps(extra)
         arguments = function.get("arguments")
         if isinstance(arguments, dict):
             current["arguments"] = json.dumps(arguments)
@@ -2079,6 +2167,11 @@ def _assembled_tool_calls(
             name=part["name"],
             arguments=part["arguments"],
             diagnostic_metadata=diagnostic_metadata,
+            provider_metadata=(
+                {"extra_content": json.loads(part["extra_content"])}
+                if part.get("extra_content")
+                else None
+            ),
         )
         for part in kept
     ]
@@ -2220,6 +2313,219 @@ def _openai_message_text(message: dict[str, Any]) -> str:
     return _openai_message_content(message)
 
 
+def _reasoning_state(
+    provider_id: str,
+    model: str,
+    fields: dict[str, Any],
+    calls: Iterable[ToolCall] = (),
+) -> dict[str, Any] | None:
+    """Stamp a response's replay state with the route and model that made it.
+
+    A response whose only state is per call (a Gemini signature) is stamped
+    too: the stamp is what later proves the signature belongs to the model it
+    is sent back to.
+    """
+
+    if not fields and not any(call.provider_metadata for call in calls):
+        return None
+    return {"provider_id": provider_id, "model": model, **fields}
+
+
+def _replayed_batches(
+    request: ModelRequest, provider_id: str, model: str
+) -> list[tuple[list[ModelToolResult], dict[str, Any] | None]]:
+    """``request.tool_results`` regrouped into the responses that issued them.
+
+    Consecutive results of one ``response_group`` came from one routing
+    response and go back as one assistant message. A batch carries its
+    reasoning state only when this route and model produced it: a signature
+    or an encrypted blob is valid for that model alone (pi-mono
+    ``transformMessages`` drops them across models the same way).
+    """
+
+    batches: list[list[ModelToolResult]] = []
+    for result in request.tool_results:
+        if (
+            batches
+            and result.response_group is not None
+            and batches[-1][-1].response_group == result.response_group
+        ):
+            batches[-1].append(result)
+        else:
+            batches.append([result])
+    replayed: list[tuple[list[ModelToolResult], dict[str, Any] | None]] = []
+    for batch in batches:
+        state = next(
+            (result.reasoning_state for result in batch if result.reasoning_state),
+            None,
+        )
+        if state is not None and (
+            state.get("provider_id") != provider_id or state.get("model") != model
+        ):
+            state = None
+        replayed.append((batch, state))
+    return replayed
+
+
+def _call_metadata(
+    result: ModelToolResult, state: dict[str, Any] | None, key: str
+) -> Any:
+    """One call's replay metadata, only when its batch's route is this one."""
+
+    if state is None or not result.provider_metadata:
+        return None
+    return result.provider_metadata.get(key)
+
+
+def _result_text(result: ModelToolResult) -> str:
+    return (
+        json.dumps(result.output, sort_keys=True)
+        if isinstance(result.output, dict)
+        else result.output
+    )
+
+
+def _openai_reasoning_fields(
+    message: dict[str, Any], *, openrouter: bool
+) -> dict[str, Any]:
+    """The reasoning a Chat Completions route may need back on a later step."""
+
+    fields: dict[str, Any] = {}
+    content = message.get("reasoning_content")
+    if isinstance(content, str):
+        fields["reasoning_content"] = content
+    if openrouter:
+        text = message.get("reasoning")
+        if isinstance(text, str) and text:
+            fields["reasoning"] = text
+        details = message.get("reasoning_details")
+        # OpenRouter's SDK keeps ``[]`` when a route sent none; DeepSeek V4
+        # returns ``[]`` itself and fails a follow-up that omits it.
+        fields["reasoning_details"] = details if isinstance(details, list) else []
+    return fields
+
+
+def _merge_reasoning_details(accumulated: list[Any], fragments: list[Any]) -> None:
+    """Fold streamed ``reasoning_details`` fragments into whole entries.
+
+    As OpenRouter's SDK does: consecutive text (or summary) fragments form one
+    entry, keeping the first signature and format seen; encrypted and other
+    entries are discrete and kept as they arrive.
+    """
+
+    for detail in fragments:
+        if not isinstance(detail, dict):
+            continue
+        kind = detail.get("type")
+        field = {"reasoning.text": "text", "reasoning.summary": "summary"}.get(
+            str(kind)
+        )
+        last = accumulated[-1] if accumulated else None
+        if field is not None and isinstance(last, dict) and last.get("type") == kind:
+            last[field] = str(last.get(field) or "") + str(detail.get(field) or "")
+            for key in ("signature", "format"):
+                if not last.get(key) and detail.get(key):
+                    last[key] = detail[key]
+            continue
+        accumulated.append(dict(detail))
+
+
+# Reasoning in these formats is signed; an entry that lost its signature is
+# rejected upstream ("Invalid signature in thinking block"). OpenRouter's SDK
+# treats an entry without a format as Anthropic's.
+_OPENROUTER_SIGNED_FORMATS = frozenset({"anthropic-claude-v1", "google-gemini-v1"})
+
+
+def _openrouter_replay_details(details: list[Any]) -> list[Any]:
+    """``reasoning_details`` as OpenRouter's own SDK sends them back.
+
+    Echoed as received, an empty list included. Only reasoning text in a
+    signed format without its signature is dropped
+    (``convert-to-openrouter-chat-messages.ts``).
+    """
+
+    return [
+        detail
+        for detail in details
+        if not (
+            isinstance(detail, dict)
+            and detail.get("type") == "reasoning.text"
+            and (detail.get("format") or "anthropic-claude-v1")
+            in _OPENROUTER_SIGNED_FORMATS
+            and not detail.get("signature")
+        )
+    ]
+
+
+def _model_name(model: str) -> str:
+    return model.casefold().rsplit("/", 1)[-1]
+
+
+def _deepseek_model(model: str) -> bool:
+    return "deepseek" in _model_name(model)
+
+
+def _deepseek_v4_model(model: str) -> bool:
+    """DeepSeek V4 ids, versioned or aliased (Vercel ``isDeepSeekV4Model``)."""
+
+    name = _model_name(model)
+    return "deepseek-v4" in name or name.startswith(("deepseek-flash", "deepseek-pro"))
+
+
+def _replay_reasoning(
+    payload: dict[str, Any],
+    replayed: list[tuple[dict[str, Any], dict[str, Any] | None]],
+    flavor: ProviderFlavor,
+    model: str,
+) -> None:
+    """Give each replayed assistant message the reasoning its route expects.
+
+    ``replayed`` pairs each replayed tool-call message with its batch's
+    reasoning state (``None`` when there is none from this route and model).
+    """
+
+    if flavor == ProviderFlavor.OPENROUTER:
+        for message, state in replayed:
+            details = state.get("reasoning_details") if state else None
+            if not isinstance(details, list):
+                continue
+            kept = _openrouter_replay_details(details)
+            message["reasoning_details"] = kept
+            text = state.get("reasoning") if state else None
+            # Reasoning text without its details would reach the upstream as
+            # a thinking block with no signature.
+            if kept and isinstance(text, str) and text:
+                message["reasoning"] = text
+        if _deepseek_v4_model(model):
+            # V4 wants reasoning on every assistant message, and answers
+            # ``[]`` itself when it had none to show.
+            for message in payload["messages"]:
+                if message.get("role") == "assistant":
+                    message.setdefault("reasoning_details", [])
+        return
+    thinking = payload.get("thinking")
+    # Z.ai uses replayed reasoning only when it is told to keep it.
+    preserved = isinstance(thinking, dict) and thinking.get("clear_thinking") is False
+    if (
+        not preserved
+        and flavor != ProviderFlavor.DEEPSEEK
+        and not _deepseek_model(model)
+    ):
+        return
+    for message, state in replayed:
+        text = state.get("reasoning_content") if state else None
+        if isinstance(text, str):
+            message["reasoning_content"] = text
+    if _deepseek_v4_model(model):
+        # V4 requires the field on every assistant turn, earlier plain answers
+        # included; an empty string is the documented back-fill (Vercel,
+        # pi-mono and opencode all send ""). Earlier DeepSeek models must not
+        # be sent reasoning for past turns, so nothing is back-filled there.
+        for message in payload["messages"]:
+            if message.get("role") == "assistant":
+                message.setdefault("reasoning_content", "")
+
+
 def _vllm_grammar_schema(value: Any) -> Any:
     """Remove validation-only keywords unsupported by vLLM's grammar compiler.
 
@@ -2316,26 +2622,38 @@ class OpenAIResponsesProvider(ModelProvider):
             # engagement data is not kept server-side by default.
             "store": False,
         }
-        for result in request.tool_results:
+        for batch, state in _replayed_batches(request, self.config.id, model):
+            # Encrypted reasoning goes back ahead of the calls it led to; with
+            # nothing stored server-side it is the only copy (Codex, Vercel).
+            items = state.get("reasoning_items") if state else None
+            payload["input"].extend(items if isinstance(items, list) else [])
             payload["input"].extend(
-                [
-                    {
-                        "type": "function_call",
-                        "call_id": result.call_id,
-                        "name": wire_names.get(result.name, result.name),
-                        "arguments": json.dumps(result.arguments, sort_keys=True),
-                    },
+                {
+                    "type": "function_call",
+                    "call_id": result.call_id,
+                    "name": wire_names.get(result.name, result.name),
+                    "arguments": json.dumps(result.arguments, sort_keys=True),
+                }
+                for result in batch
+            )
+            for result in batch:
+                output: str | list[dict[str, Any]] = _result_text(result)
+                if result.attachments:
+                    output = [
+                        {"type": "input_text", "text": output},
+                        *_openai_responses_message(
+                            ModelMessage(role="user", content=result.attachments)
+                        )["content"],
+                    ]
+                payload["input"].append(
                     {
                         "type": "function_call_output",
                         "call_id": result.call_id,
-                        "output": (
-                            json.dumps(result.output, sort_keys=True)
-                            if isinstance(result.output, dict)
-                            else result.output
-                        ),
-                    },
-                ]
-            )
+                        "output": output,
+                    }
+                )
+        if _openai_reasoning_model(model):
+            payload["include"] = ["reasoning.encrypted_content"]
         if request.instructions:
             payload["instructions"] = request.instructions
         if request.max_output_tokens:
@@ -2394,8 +2712,25 @@ class OpenAIResponsesProvider(ModelProvider):
         commentary: list[str] = []
         refused = False
         calls: list[ToolCall] = []
+        reasoning_items: list[dict[str, Any]] = []
         for item in data.get("output", []):
-            if item.get("type") == "function_call":
+            if item.get("type") == "reasoning" and isinstance(
+                item.get("encrypted_content"), str
+            ):
+                # Only an encrypted item can be sent back: nothing is stored.
+                reasoning_items.append(
+                    {
+                        "type": "reasoning",
+                        **(
+                            {"id": item["id"]}
+                            if isinstance(item.get("id"), str)
+                            else {}
+                        ),
+                        "summary": item.get("summary") or [],
+                        "encrypted_content": item["encrypted_content"],
+                    }
+                )
+            elif item.get("type") == "function_call":
                 if item.get("status") == "incomplete":
                     # Cut off by the output limit, which finish_reason reports;
                     # its arguments were never finished.
@@ -2451,6 +2786,11 @@ class OpenAIResponsesProvider(ModelProvider):
             provider_request_id=data.get("id"),
             raw=data,
             raw_body=response.content,
+            reasoning_state=_reasoning_state(
+                self.config.id,
+                model,
+                {"reasoning_items": reasoning_items} if reasoning_items else {},
+            ),
         )
 
     async def health(self) -> ProviderHealth:
@@ -2543,6 +2883,7 @@ def _tool_call(
     name: Any,
     arguments: Any,
     diagnostic_metadata: dict[str, Any] | None = None,
+    provider_metadata: dict[str, Any] | None = None,
 ) -> ToolCall:
     """Read one provider tool call; a defect in it never fails the response.
 
@@ -2609,8 +2950,14 @@ def _tool_call(
             name=decoded if usable_name else INVALID_TOOL_CALL_NAME,
             arguments={},
             invalid_reason="; ".join(reasons),
+            provider_metadata=provider_metadata,
         )
-    return ToolCall(id=identity, name=decoded, arguments=parsed)
+    return ToolCall(
+        id=identity,
+        name=decoded,
+        arguments=parsed,
+        provider_metadata=provider_metadata,
+    )
 
 
 # Mistral AI model families, served by Mistral itself or by any runtime that
@@ -2862,36 +3209,46 @@ class OpenAICompatibleProvider(ModelProvider):
             "model": model,
             "messages": [_openai_chat_message(message) for message in request.messages],
         }
-        for result in request.tool_results:
+        # Each routing response goes back as the one message that issued its
+        # calls; its reasoning is attached per flavor once the payload is built.
+        replayed: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+        for batch, state in _replayed_batches(request, self.config.id, model):
+            assistant: dict[str, Any] = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [],
+            }
+            for result in batch:
+                call: dict[str, Any] = {
+                    "id": result.call_id,
+                    "type": "function",
+                    "function": {
+                        "name": wire_names.get(result.name, result.name),
+                        "arguments": json.dumps(result.arguments, sort_keys=True),
+                    },
+                }
+                extra = _call_metadata(result, state, "extra_content")
+                if isinstance(extra, dict):
+                    # Gemini's OpenAI-compatible endpoint signs calls here.
+                    call["extra_content"] = extra
+                assistant["tool_calls"].append(call)
+            payload["messages"].append(assistant)
+            replayed.append((assistant, state))
             payload["messages"].extend(
-                [
-                    {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": result.call_id,
-                                "type": "function",
-                                "function": {
-                                    "name": wire_names.get(result.name, result.name),
-                                    "arguments": json.dumps(
-                                        result.arguments, sort_keys=True
-                                    ),
-                                },
-                            }
-                        ],
-                    },
-                    {
-                        "role": "tool",
-                        "tool_call_id": result.call_id,
-                        "content": (
-                            json.dumps(result.output, sort_keys=True)
-                            if isinstance(result.output, dict)
-                            else result.output
-                        ),
-                    },
-                ]
+                {
+                    "role": "tool",
+                    "tool_call_id": result.call_id,
+                    "content": _result_text(result),
+                }
+                for result in batch
             )
+            attachments = [part for result in batch for part in result.attachments]
+            if attachments:
+                # Tool messages carry text only, so what a tool showed the
+                # model follows the batch's results, not the calls' request.
+                payload["messages"].append(
+                    _openai_chat_message(ModelMessage(role="user", content=attachments))
+                )
         instructions = request.instructions
         if json_object and request.response_schema:
             # JSON mode has no schema field, so the schema travels with the
@@ -3029,6 +3386,7 @@ class OpenAICompatibleProvider(ModelProvider):
                     )
                     if "response_format" in payload and not structured <= supported:
                         payload.pop("response_format")
+        _replay_reasoning(payload, replayed, self.config.flavor, model)
         if self.config.flavor == ProviderFlavor.MISTRAL or _MISTRAL_MODEL.search(model):
             _mistral_tool_call_ids(payload["messages"])
         return payload
@@ -3102,6 +3460,7 @@ class OpenAICompatibleProvider(ModelProvider):
             function = item.get("function")
             if not isinstance(function, dict):
                 function = {}
+            extra = item.get("extra_content")
             calls.append(
                 _tool_call(
                     request,
@@ -3115,6 +3474,9 @@ class OpenAICompatibleProvider(ModelProvider):
                         "status": choice.get("finish_reason"),
                         "vendor_request_id": data.get("id"),
                     },
+                    provider_metadata=(
+                        {"extra_content": extra} if isinstance(extra, dict) else None
+                    ),
                 )
             )
         legacy = message.get("function_call")
@@ -3153,6 +3515,15 @@ class OpenAICompatibleProvider(ModelProvider):
             provider_request_id=data.get("id"),
             raw=data,
             raw_body=response.content,
+            reasoning_state=_reasoning_state(
+                self.config.id,
+                model,
+                _openai_reasoning_fields(
+                    message,
+                    openrouter=self.config.flavor == ProviderFlavor.OPENROUTER,
+                ),
+                calls,
+            ),
         )
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:
@@ -3509,6 +3880,10 @@ async def _stream_openai_compatible(
     # A runtime without a reasoning parser leaves the thought in the reply.
     splitter = ReplySplitter(template_opened=template_opens_thinking(model))
     call_parts: dict[int, dict[str, str]] = {}
+    openrouter = provider.config.flavor == ProviderFlavor.OPENROUTER
+    # The reasoning channels as the route sent them, for a later replay.
+    replay_message: dict[str, Any] = {}
+    replay_details: list[Any] = []
     legacy_call = {"name": "", "arguments": ""}
     usage = ModelUsage()
     finish_reason: str | None = None
@@ -3571,6 +3946,15 @@ async def _stream_openai_compatible(
                         yield ModelStreamEvent(
                             type=StreamEventType.REASONING_DELTA, delta=reasoning
                         )
+                    for channel in ("reasoning_content", "reasoning"):
+                        fragment = delta.get(channel)
+                        if isinstance(fragment, str):
+                            replay_message[channel] = (
+                                replay_message.get(channel, "") + fragment
+                            )
+                    details = delta.get("reasoning_details")
+                    if isinstance(details, list):
+                        _merge_reasoning_details(replay_details, details)
                     content = _openai_message_content(delta) or _openai_refusal(delta)
                     if content:
                         for event in _reply_piece_events(
@@ -3618,6 +4002,7 @@ async def _stream_openai_compatible(
             )
         for call in calls:
             yield ModelStreamEvent(type=StreamEventType.TOOL_CALL, tool_call=call)
+        replay_message["reasoning_details"] = replay_details
         final = ModelResponse(
             provider_id=provider.config.id,
             model=response_model,
@@ -3627,6 +4012,12 @@ async def _stream_openai_compatible(
             usage=usage,
             finish_reason=finish_reason,
             provider_request_id=response_id,
+            reasoning_state=_reasoning_state(
+                provider.config.id,
+                model,
+                _openai_reasoning_fields(replay_message, openrouter=openrouter),
+                calls,
+            ),
         )
         yield ModelStreamEvent(type=StreamEventType.COMPLETED, response=final)
     except asyncio.CancelledError as caught_error:
@@ -3744,35 +4135,47 @@ class AnthropicProvider(ModelProvider):
                 if message.role != "system"
             ],
         }
-        for result in request.tool_results:
+        for batch, state in _replayed_batches(request, self.config.id, model):
+            # Thinking goes back unchanged ahead of the calls it led to, and
+            # all of a batch's results in one user message: split results
+            # teach Claude to stop making parallel calls.
+            thinking = state.get("thinking_blocks") if state else None
+            results: list[dict[str, Any]] = []
+            for result in batch:
+                content: str | list[dict[str, Any]] = _result_text(result)
+                if result.attachments:
+                    content = [
+                        {"type": "text", "text": content},
+                        *_anthropic_message(
+                            ModelMessage(role="user", content=result.attachments)
+                        )["content"],
+                    ]
+                results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": result.call_id,
+                        "content": content,
+                        "is_error": result.is_error,
+                    }
+                )
             payload["messages"].extend(
                 [
                     {
                         "role": "assistant",
                         "content": [
-                            {
-                                "type": "tool_use",
-                                "id": result.call_id,
-                                "name": wire_names.get(result.name, result.name),
-                                "input": result.arguments,
-                            }
+                            *(thinking if isinstance(thinking, list) else []),
+                            *(
+                                {
+                                    "type": "tool_use",
+                                    "id": result.call_id,
+                                    "name": wire_names.get(result.name, result.name),
+                                    "input": result.arguments,
+                                }
+                                for result in batch
+                            ),
                         ],
                     },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": result.call_id,
-                                "content": (
-                                    json.dumps(result.output, sort_keys=True)
-                                    if isinstance(result.output, dict)
-                                    else result.output
-                                ),
-                                "is_error": result.is_error,
-                            }
-                        ],
-                    },
+                    {"role": "user", "content": results},
                 ]
             )
         systems = [m.content for m in request.messages if m.role == "system"]
@@ -3812,9 +4215,13 @@ class AnthropicProvider(ModelProvider):
             raise _context_window_stop(_CONTEXT_WINDOW_STOP_REASON)
         text_parts: list[str] = []
         calls: list[ToolCall] = []
+        thinking_blocks: list[dict[str, Any]] = []
         for block in data.get("content", []):
             if block.get("type") == "text":
                 text_parts.append(block.get("text", ""))
+            elif block.get("type") in {"thinking", "redacted_thinking"}:
+                # Kept exactly as sent: an edited block fails its signature.
+                thinking_blocks.append(block)
             elif block.get("type") == "tool_use":
                 calls.append(
                     _tool_call(
@@ -3852,6 +4259,11 @@ class AnthropicProvider(ModelProvider):
             finish_reason=data.get("stop_reason"),
             provider_request_id=data.get("id"),
             raw=data,
+            reasoning_state=_reasoning_state(
+                self.config.id,
+                model,
+                {"thinking_blocks": thinking_blocks} if thinking_blocks else {},
+            ),
         )
 
     async def health(self) -> ProviderHealth:
@@ -3931,6 +4343,53 @@ def _gemini_call_identity(call_id: str) -> dict[str, str]:
     return {"id": call_id}
 
 
+# Google's documented value for replaying a function call whose signature the
+# client does not have (a step Core ran itself, or older history); without a
+# signature Gemini 3 rejects the request with HTTP 400.
+_GEMINI_SKIP_SIGNATURE = "skip_thought_signature_validator"
+_GEMINI_UNSIGNED_MODEL = re.compile(
+    r"^gemini-(?:1|2)(?:[.-]|$)|^gemini-pro(?:-vision)?$"
+    r"|^gemini-robotics-er-1\.5(?:[.-]|$)"
+)
+
+
+def _gemini_validates_signatures(model: str) -> bool:
+    """Gemini 3 and later; unknown Gemini ids get the newest behavior (Vercel)."""
+
+    name = _model_name(model)
+    return name.startswith("gemini-") and _GEMINI_UNSIGNED_MODEL.match(name) is None
+
+
+def _gemini_call_parts(
+    batch: list[ModelToolResult], state: dict[str, Any] | None, model: str
+) -> list[dict[str, Any]]:
+    """One model turn's function calls, each with the signature it came with.
+
+    Gemini signs only the first call of a parallel batch, so a later call
+    without one is correct as it is; a batch with no signature at all gets
+    the sentinel on Gemini 3.
+    """
+
+    parts: list[dict[str, Any]] = []
+    signed = False
+    for result in batch:
+        part: dict[str, Any] = {
+            "functionCall": {
+                **_gemini_call_identity(result.call_id),
+                "name": result.name,
+                "args": result.arguments,
+            }
+        }
+        signature = _call_metadata(result, state, "thought_signature")
+        if isinstance(signature, str) and signature:
+            part["thoughtSignature"] = signature
+            signed = True
+        elif not signed and _gemini_validates_signatures(model):
+            part["thoughtSignature"] = _GEMINI_SKIP_SIGNATURE
+        parts.append(part)
+    return parts
+
+
 class GeminiProvider(ModelProvider):
     def _headers(self) -> dict[str, str]:
         key = self.config.resolve_api_key()
@@ -3968,37 +4427,32 @@ class GeminiProvider(ModelProvider):
             role = "model" if message.role == "assistant" else "user"
             parts = _gemini_parts(message.content)
             contents.append({"role": role, "parts": parts})
-        for result in request.tool_results:
+        for batch, state in _replayed_batches(request, self.config.id, model):
+            # One model turn with every call of the batch, then one user turn
+            # with every response; a screenshot follows its own response.
+            responses: list[dict[str, Any]] = []
+            for result in batch:
+                responses.append(
+                    {
+                        "functionResponse": {
+                            **_gemini_call_identity(result.call_id),
+                            "name": result.name,
+                            "response": (
+                                result.output
+                                if isinstance(result.output, dict)
+                                else {"output": result.output}
+                            ),
+                        }
+                    }
+                )
+                responses.extend(_gemini_parts(result.attachments))
             contents.extend(
                 [
                     {
                         "role": "model",
-                        "parts": [
-                            {
-                                "functionCall": {
-                                    **_gemini_call_identity(result.call_id),
-                                    "name": result.name,
-                                    "args": result.arguments,
-                                }
-                            }
-                        ],
+                        "parts": _gemini_call_parts(batch, state, model),
                     },
-                    {
-                        "role": "user",
-                        "parts": [
-                            {
-                                "functionResponse": {
-                                    **_gemini_call_identity(result.call_id),
-                                    "name": result.name,
-                                    "response": (
-                                        result.output
-                                        if isinstance(result.output, dict)
-                                        else {"output": result.output}
-                                    ),
-                                }
-                            }
-                        ],
-                    },
+                    {"role": "user", "parts": responses},
                 ]
             )
         payload: dict[str, Any] = {"contents": contents}
@@ -4078,6 +4532,12 @@ class GeminiProvider(ModelProvider):
                         "status": candidate.get("finishReason"),
                         "vendor_request_id": data.get("responseId"),
                     },
+                    provider_metadata=(
+                        {"thought_signature": part["thoughtSignature"]}
+                        if isinstance(part.get("thoughtSignature"), str)
+                        and part["thoughtSignature"]
+                        else None
+                    ),
                 )
             )
         usage = data.get("usageMetadata") or {}
@@ -4094,6 +4554,7 @@ class GeminiProvider(ModelProvider):
             finish_reason=candidate.get("finishReason"),
             provider_request_id=data.get("responseId"),
             raw=data,
+            reasoning_state=_reasoning_state(self.config.id, model, {}, calls),
         )
 
     async def health(self) -> ProviderHealth:
@@ -4233,7 +4694,9 @@ class BedrockProvider(ModelProvider):
                 if msg.role != "system"
             ],
         }
-        for result in request.tool_results:
+        for batch, _state in _replayed_batches(request, self.config.id, model):
+            # One assistant message with the batch's calls, then one user
+            # message with all of their results.
             kwargs["messages"].extend(
                 [
                     {
@@ -4246,6 +4709,7 @@ class BedrockProvider(ModelProvider):
                                     "input": result.arguments,
                                 }
                             }
+                            for result in batch
                         ],
                     },
                     {
@@ -4259,11 +4723,13 @@ class BedrockProvider(ModelProvider):
                                             {"json": result.output}
                                             if isinstance(result.output, dict)
                                             else {"text": result.output}
-                                        )
+                                        ),
+                                        *_bedrock_content(result.attachments),
                                     ],
                                     "status": "error" if result.is_error else "success",
                                 }
                             }
+                            for result in batch
                         ],
                     },
                 ]
