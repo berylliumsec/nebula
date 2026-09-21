@@ -23,6 +23,11 @@ interface ChatSubagentPaneProps {
   onChanged: () => void;
   /** The narrow sheet shows one row per child instead of open cards. */
   compact?: boolean;
+  /**
+   * A harness chat delegates to a provider model other than its own; name it.
+   * Absent for provider chats, whose children share the chat's model.
+   */
+  harnessDelegation?: { harnessName: string; providerName?: string; model?: string };
 }
 
 function statusIcon(status: string) {
@@ -38,7 +43,7 @@ function statusIcon(status: string) {
  * their lifecycle; nothing here starts work.
  */
 export function ChatSubagentPane({
-  api, sessionId, subagents, error, onClose, onOpenConversation, onChanged, compact = false,
+  api, sessionId, subagents, error, onClose, onOpenConversation, onChanged, compact = false, harnessDelegation,
 }: ChatSubagentPaneProps) {
   const [expanded, setExpanded] = useState<string[]>([]);
   const [busy, setBusy] = useState<string>();
@@ -46,6 +51,10 @@ export function ChatSubagentPane({
 
   const active = subagents.filter((item) => ACTIVE_STATUSES.has(item.status));
   const tokens = subagents.reduce((total, item) => total + item.usage.totalTokens, 0);
+  const delegateModel = harnessDelegation
+    ? harnessDelegation.model ?? [...subagents].reverse().find((item) => item.model)?.model
+    : undefined;
+  const delegateTarget = [harnessDelegation?.providerName, delegateModel].filter(Boolean).join(" · ");
 
   const decide = async (subagent: ChatSubagentView, decision: "approve" | "reject") => {
     if (!subagent.approval || busy) return;
@@ -92,7 +101,7 @@ export function ChatSubagentPane({
     </header>
 
     <p className="chat-subagent-slots">
-      {active.length} of {SUBAGENT_SLOTS} slots active · {compactTokens(tokens)} tokens
+      {active.length} of {SUBAGENT_SLOTS} slots active{delegateModel ? ` · ${delegateModel}` : ""} · {compactTokens(tokens)} tokens
       <span className="chat-subagent-slot-bar" aria-hidden="true">
         <span style={{ width: `${Math.min(100, (active.length / SUBAGENT_SLOTS) * 100)}%` }} />
       </span>
@@ -104,7 +113,9 @@ export function ChatSubagentPane({
     {subagents.length === 0 && <StandardEmptyState
       compact
       title="Nothing delegated yet"
-      explanation="With subagents allowed, the assistant can split independent work across parallel children on this model. They appear here as it does."
+      explanation={harnessDelegation
+        ? `With provider subagents on, ${harnessDelegation.harnessName} can split independent work across parallel children on ${delegateModel ?? "the chosen provider model"}. They appear here as it does.`
+        : "With subagents allowed, the assistant can split independent work across parallel children on this model. They appear here as it does."}
     />}
 
     <ol className="chat-subagent-list">
@@ -174,7 +185,9 @@ export function ChatSubagentPane({
     </button>}
 
     <p className="chat-subagent-note">
-      Subagents use this conversation's model, tools and approval policy. They cannot start their own subagents.
+      {harnessDelegation
+        ? `Subagents run on ${delegateTarget || "the chosen provider model"} with this project's tools and approval policy. Their tool outputs go to ${harnessDelegation.providerName ?? "that provider"}. They cannot start their own subagents.`
+        : "Subagents use this conversation's model, tools and approval policy. They cannot start their own subagents."}
     </p>
   </section>;
 }

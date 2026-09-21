@@ -3807,14 +3807,24 @@ CHAT_SUBAGENT_TERMINAL_STATUSES = frozenset(
 
 
 class ChatSubagent(Entity):
-    """A provider-chat child conversation delegated by a parent turn."""
+    """A provider-chat child conversation delegated by a parent turn.
+
+    The parent is a provider chat (children share its model) or a harness chat
+    (children run on the provider model the operator picked for that chat).
+    """
 
     entity_kind: ClassVar[str] = "chat_subagents"
     engagement_id: str
     parent_session_id: str = Field(min_length=1, max_length=200)
     parent_turn_id: str = Field(min_length=1, max_length=200)
+    parent_backend: ChatBackend = ChatBackend.PROVIDER
     child_session_id: str = Field(min_length=1, max_length=200)
     child_turn_id: str | None = Field(default=None, max_length=200)
+    provider_profile_id: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=500)
+    # When a harness parent received the report, through subagent.wait or at
+    # the start of its next turn. Provider parents read reports from history.
+    reported_at: datetime | None = None
     name: str = Field(min_length=1, max_length=120)
     task: str = Field(min_length=1, max_length=20_000)
     status: ChatSubagentStatus = ChatSubagentStatus.RUNNING

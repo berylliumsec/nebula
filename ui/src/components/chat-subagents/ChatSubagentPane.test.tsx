@@ -23,6 +23,7 @@ function subagent(overrides: Partial<ChatSubagentView>): ChatSubagentView {
     status: "running",
     parentSessionId: "parent",
     parentTurnId: "turn",
+    parentBackend: "provider",
     childSessionId: "child-1",
     stepCount: 6,
     recentSteps: [
@@ -148,6 +149,36 @@ describe("the subagents an operator can see and act on", () => {
     />);
     expect(screen.getByText("Subagent stopped")).toBeInTheDocument();
     expect(screen.getByText("The provider ended the turn.")).toBeInTheDocument();
+  });
+
+  it("names the provider model a harness chat delegates to", () => {
+    render(<ChatSubagentPane
+      {...paneProps}
+      subagents={[subagent({ parentBackend: "harness", providerProfileId: "openrouter", model: "deepseek/deepseek-v3.2" })]}
+      harnessDelegation={{ harnessName: "Codex", providerName: "OpenRouter", model: "deepseek/deepseek-v3.2" }}
+    />);
+    expect(screen.getByText(/1 of 3 slots active · deepseek\/deepseek-v3.2 · 6.2k tokens/)).toBeInTheDocument();
+    // Where the tool outputs go is stated, not implied.
+    expect(screen.getByText(/run on OpenRouter · deepseek\/deepseek-v3.2 .* Their tool outputs go to OpenRouter/)).toBeInTheDocument();
+  });
+
+  it("explains harness delegation before anything has been delegated", () => {
+    render(<ChatSubagentPane {...paneProps} subagents={[]} harnessDelegation={{ harnessName: "Codex", providerName: "OpenRouter", model: "deepseek/deepseek-v3.2" }} />);
+    expect(screen.getByText(/Codex can split independent work across parallel children on deepseek\/deepseek-v3.2/)).toBeInTheDocument();
+  });
+
+  it("labels a harness child's report with the model that wrote it", () => {
+    const { rerender } = render(<ChatSubagentResultCard
+      onOpenConversation={vi.fn()}
+      subagent={subagent({ status: "completed", finishedAt: "x", result: "Done.", elapsedSeconds: 112, parentBackend: "harness", model: "deepseek/deepseek-v3.2" })}
+    />);
+    expect(screen.getByText(/deepseek-v3.2 ·/)).toBeInTheDocument();
+    // A provider chat's children share its model, so the card does not repeat it.
+    rerender(<ChatSubagentResultCard
+      onOpenConversation={vi.fn()}
+      subagent={subagent({ status: "completed", finishedAt: "x", result: "Done.", model: "model-a" })}
+    />);
+    expect(screen.queryByText(/model-a/)).not.toBeInTheDocument();
   });
 
   it("formats the counts the assistant already uses", () => {

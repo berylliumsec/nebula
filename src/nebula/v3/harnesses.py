@@ -56,10 +56,17 @@ from packaging.version import InvalidVersion, Version
 from pydantic import Field, StringConstraints, field_validator
 
 from .chat import (
+    ChatError,
     ChatPrivacyError,
     ChatRequestMessage,
     HarnessKnowledgeSearchResult,
     resolve_chat_model_content,
+)
+from .chat_subagents import (
+    HARNESS_WAIT_DEFAULT_SECONDS,
+    HARNESS_WAIT_MAX_SECONDS,
+    SubagentService,
+    harness_subagent_instructions,
 )
 from .automation_runtime import AutomationRuntimeUnavailable
 from .credentials import CredentialError, CredentialStore
@@ -139,6 +146,7 @@ from .tool_results import (
 )
 from .tools import (
     ApprovalRequired,
+    InvalidToolArguments,
     PolicyDenied,
     StoreToolEvidenceRecorder,
     StoreToolLedger,
@@ -324,6 +332,135 @@ _GATEWAY_KNOWLEDGE_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 
+# Provider subagents: a harness chat delegates to the provider model the
+# operator picked for it. Offered only while that chat has them turned on.
+_GATEWAY_SUBAGENT_NAMES = (
+    "subagent.start",
+    "subagent.wait",
+    "subagent.list",
+    "subagent.stop",
+)
+
+
+def _subagent_wait_limits(kind: HarnessKind | None) -> tuple[int, int]:
+    """Default and longest subagent.wait for a harness, below its tool timeout.
+
+    Codex gives the Nebula server 900 s per call and Claude's SDK waits far
+    longer. Nebula does not know Grok's limit, so it waits briefly there and
+    lets the model call again.
+    """
+
+    if kind in {HarnessKind.CODEX_APP_SERVER, HarnessKind.CLAUDE_AGENT_SDK}:
+        return HARNESS_WAIT_DEFAULT_SECONDS, HARNESS_WAIT_MAX_SECONDS
+    return 60, 120
+
+
+def _gateway_subagent_tools(
+    kind: HarnessKind,
+) -> dict[str, tuple[str, dict[str, Any]]]:
+    wait_default, wait_max = _subagent_wait_limits(kind)
+    return {
+        "subagent.start": (
+            "Delegate one independent, multi-step task to a parallel subagent on the "
+            "Nebula provider model chosen for this conversation. It uses this "
+            "project's command runtime and MCP servers, cannot see this "
+            "conversation, and returns immediately with its id.",
+            {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 20_000,
+                        "description": "Complete, self-contained instructions and the expected report.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "maxLength": 120,
+                        "description": "Short label shown to the operator, e.g. 'Map API routes'.",
+                    },
+                    "context": {
+                        "type": "string",
+                        "maxLength": 40_000,
+                        "description": "Facts from this conversation the subagent needs.",
+                    },
+                },
+                "required": ["task"],
+                "additionalProperties": False,
+            },
+        ),
+        "subagent.wait": (
+            "Wait for subagents to finish and return their reports. Omit "
+            "subagent_ids to wait for every running subagent. Waits at most "
+            f"timeout_seconds (default {wait_default}); anything unfinished is "
+            "listed in still_running, so call it again if you need those reports.",
+            {
+                "type": "object",
+                "properties": {
+                    "subagent_ids": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 200},
+                        "maxItems": 20,
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["all", "any"],
+                        "description": "all (default) waits for every listed subagent; any returns on the first.",
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": wait_max,
+                    },
+                },
+                "additionalProperties": False,
+            },
+        ),
+        "subagent.list": (
+            "List this conversation's provider subagents and their status.",
+            {"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        "subagent.stop": (
+            "Stop a running provider subagent.",
+            {
+                "type": "object",
+                "properties": {"subagent_id": {"type": "string", "maxLength": 200}},
+                "required": ["subagent_id"],
+                "additionalProperties": False,
+            },
+        ),
+    }
+
+
+_VENDOR_HARNESS_KINDS = {
+    "Codex": HarnessKind.CODEX_APP_SERVER,
+    "Grok": HarnessKind.GROK_ACP,
+    "Claude": HarnessKind.CLAUDE_AGENT_SDK,
+}
+
+
+def _is_gateway_subagent_tool(name: str | None) -> bool:
+    """Match subagent gateway tools under their plain or Grok-portable names."""
+
+    if not name:
+        return False
+    stem = name.rsplit("__", 1)[-1]
+    return stem in _GATEWAY_SUBAGENT_NAMES or stem in {
+        _portable_gateway_tool_name(item) for item in _GATEWAY_SUBAGENT_NAMES
+    }
+
+
+def _session_provider_subagent(session: HarnessSession) -> dict[str, str] | None:
+    setting = session.metadata.get("provider_subagent")
+    if not isinstance(setting, dict):
+        return None
+    provider_id = setting.get("provider_profile_id")
+    model = setting.get("model")
+    if not isinstance(provider_id, str) or not isinstance(model, str):
+        return None
+    return {"provider_profile_id": provider_id, "model": model}
+
+
 def _container_only_native_capabilities(
     capabilities: HarnessNativeCapabilities,
 ) -> HarnessNativeCapabilities:
@@ -438,10 +575,10 @@ def _harness_developer_instructions(
     vendor: str,
     gateway_tools: tuple[dict[str, Any], ...] = (),
 ) -> str:
-    del session
     tool_names = ", ".join(
         str(item.get("name") or "")[:100] for item in gateway_tools[:64]
     )
+    provider_subagent = _session_provider_subagent(session)
     native_workspace = capabilities.workspace_access != HarnessWorkspaceAccess.NONE
     return (
         f"Nebula {vendor} session. "
@@ -451,6 +588,17 @@ def _harness_developer_instructions(
             else "The process cwd is private scratch, not the project workspace. Project operations use the supplied Nebula tools; their project root is cwd '.'. "
         )
         + (f"Available Nebula tools: {tool_names}. " if tool_names else "")
+        + (
+            harness_subagent_instructions(
+                provider_subagent["model"],
+                _subagent_wait_limits(_VENDOR_HARNESS_KINDS.get(vendor))[0],
+            )
+            if provider_subagent
+            and any(
+                _is_gateway_subagent_tool(item.get("name")) for item in gateway_tools
+            )
+            else ""
+        )
         + (
             "The knowledge capability state governs only knowledge.list and knowledge.search; it does not constrain explicitly invoked installed skills. "
             if capabilities.skills
@@ -5633,6 +5781,8 @@ class HarnessRuntimeService:
         self.shutdown_timeout_seconds = shutdown_timeout_seconds
         self._connections: dict[str, HarnessConnection] = {}
         self._connection_browser_bindings: dict[str, str | None] = {}
+        self._connection_subagent_bindings: dict[str, str | None] = {}
+        self.provider_subagents: SubagentService | None = None
         self._gateways: dict[str, McpGatewaySession] = {}
         self._gateway_tool_maps: dict[
             str, dict[str, tuple[McpServerProfile, McpToolSnapshot]]
@@ -5666,6 +5816,16 @@ class HarnessRuntimeService:
                 "harness runtime is already bound to a knowledge retriever"
             )
         self.knowledge_retriever = retriever
+
+    def bind_provider_subagents(self, service: SubagentService) -> None:
+        """Bind the provider-chat subagent service harness chats delegate to."""
+
+        if (
+            self.provider_subagents is not None
+            and self.provider_subagents is not service
+        ):
+            raise ValueError("harness runtime is already bound to a subagent service")
+        self.provider_subagents = service
 
     def bind_tool_platform(self, platform: RuntimePlatform) -> None:
         """Bind the Core-owned OCI runtime used by the session gateway."""
@@ -6803,6 +6963,7 @@ class HarnessRuntimeService:
             )
         connection = self._connections.pop(session_id, None)
         self._connection_browser_bindings.pop(session_id, None)
+        self._connection_subagent_bindings.pop(session_id, None)
         if connection is not None:
             await connection.close()
         gateway = self._gateways.pop(session_id, None)
@@ -6844,11 +7005,23 @@ class HarnessRuntimeService:
         harness_reasoning_effort: str | None = None,
         harness_service_tier: str | None = None,
         content_blocks: list[ChatContentBlock] | None = None,
+        provider_subagent: dict[str, str] | None = None,
     ) -> tuple[ChatSession, ChatTurn, HarnessTurn]:
         clean_prompt = prompt.strip()
         if not clean_prompt:
             raise HarnessConfigurationError("chat prompt cannot be empty")
         profile = self.store.get(HarnessProfile, profile_id)
+        subagent_setting: dict[str, str] | None = None
+        if provider_subagent is not None:
+            if self.provider_subagents is None:
+                raise HarnessConfigurationError(
+                    "provider subagents are unavailable in this Core"
+                )
+            subagent_setting = self.provider_subagents.validate_harness_setting(
+                engagement_id,
+                str(provider_subagent.get("provider_profile_id") or ""),
+                str(provider_subagent.get("model") or ""),
+            )
         # Standing profile consent stands in for the per-turn confirmation.
         allow_remote_mcp = allow_remote_mcp or profile.privacy.auto_share_tool_results
         image_blocks = [
@@ -7202,6 +7375,17 @@ class HarnessRuntimeService:
             forked_from_session_id = previous_session_id
             session_rollover_reason = "command_runtime_changed"
             oci_components = self._ensure_oci_components(session)
+        session = self._bind_session_provider_subagent(session, subagent_setting)
+        chat = self._remember_chat_provider_subagent(chat, subagent_setting)
+        subagent_reports = (
+            self.provider_subagents.unreported_harness_reports(chat.id)
+            if self.provider_subagents is not None
+            else []
+        )
+        if subagent_reports:
+            runtime_context = (
+                runtime_context or ""
+            ) + SubagentService.harness_report_context(subagent_reports)
         oci_snapshot = session.metadata.get("command_runtime_snapshot")
         if not isinstance(oci_snapshot, dict) and oci_components is not None:
             oci_snapshot = self._oci_snapshot(oci_components)
@@ -7230,6 +7414,7 @@ class HarnessRuntimeService:
                 or oci_tool_names
                 or _native_capability_names(native_capabilities)
                 or knowledge_access
+                or subagent_setting
             ),
             max_artifact_queries=max_artifact_queries,
             request_snapshot={
@@ -7252,6 +7437,7 @@ class HarnessRuntimeService:
                 "remote_mcp_confirmed": allow_remote_mcp,
                 "knowledge_enabled": knowledge_access,
                 "cloud_knowledge_confirmed": allow_cloud_knowledge,
+                "provider_subagent": subagent_setting,
             },
         )
         harness_turn = HarnessTurn(
@@ -7275,6 +7461,8 @@ class HarnessRuntimeService:
                 ),
                 "knowledge_access": knowledge_access,
                 "cloud_knowledge_confirmed": allow_cloud_knowledge,
+                "provider_subagent": subagent_setting,
+                "subagent_reports_delivered": [item.id for item in subagent_reports],
                 "harness_mode": harness_mode,
                 "harness_skill": (
                     harness_skill.model_dump(mode="json")
@@ -7319,7 +7507,51 @@ class HarnessRuntimeService:
                     },
                 )
             )
+        if subagent_reports and self.provider_subagents is not None:
+            self.provider_subagents.mark_reported(item.id for item in subagent_reports)
         return chat, chat_turn, harness_turn
+
+    def _bind_session_provider_subagent(
+        self, session: HarnessSession, setting: dict[str, str] | None
+    ) -> HarnessSession:
+        """Record the provider subagent model the session's catalog offers.
+
+        The vendor catalog is fixed per connection, so a change reopens the
+        connection at the next turn (``subagent_binding_changed``) while the
+        external thread and its transcript carry on.
+        """
+
+        session = self.store.get(HarnessSession, session.id)
+        if _session_provider_subagent(session) == setting:
+            return session
+        metadata = {
+            key: value
+            for key, value in session.metadata.items()
+            if key != "provider_subagent"
+        }
+        if setting is not None:
+            metadata["provider_subagent"] = dict(setting)
+        return self.store.update(
+            HarnessSession,
+            session.id,
+            {"metadata": metadata},
+            expected_revision=session.revision,
+        )
+
+    def _remember_chat_provider_subagent(
+        self, chat: ChatSession, setting: dict[str, str] | None
+    ) -> ChatSession:
+        """Keep the operator's choice with the conversation for the composer."""
+
+        chat = self.store.get(ChatSession, chat.id)
+        if chat.metadata.get("provider_subagent") == setting:
+            return chat
+        return self.store.update(
+            ChatSession,
+            chat.id,
+            {"metadata": {**chat.metadata, "provider_subagent": setting}},
+            expected_revision=chat.revision,
+        )
 
     def start_chat_turn(self, turn_id: str) -> asyncio.Task[None]:
         """Start a chat harness producer that survives viewer disconnections."""
@@ -7388,6 +7620,35 @@ class HarnessRuntimeService:
                     pass
         finally:
             self._chat_turn_tasks.pop(turn_id, None)
+            await self._settle_provider_subagents(turn_id)
+
+    async def _settle_provider_subagents(self, turn_id: str) -> None:
+        """Stop a stopped turn's children and post finished reports.
+
+        Reports that land while a harness turn runs wait for it to end; this is
+        the point where the conversation is idle again.
+        """
+
+        if self.provider_subagents is None:
+            return
+        try:
+            turn = self.store.get(HarnessTurn, turn_id)
+            if not turn.chat_session_id or not turn.chat_turn_id:
+                return
+            await self.provider_subagents.harness_turn_settled(
+                turn.chat_session_id,
+                turn.chat_turn_id,
+                stopped=turn.status == HarnessTurnStatus.CANCELLED,
+            )
+        except Exception as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.chat.subagent_settle_failed",
+                "Provider subagent reports could not be posted after a harness turn.",
+                exc,
+                stage="subagent-deliver",
+                metadata={"entity_type": "harness_turn", "entity_id": turn_id},
+            )
 
     async def follow_turn(
         self, turn_id: str, *, after_sequence: int = 0
@@ -8568,6 +8829,14 @@ class HarnessRuntimeService:
                         "cloud_knowledge_confirmed", False
                     )
                 ),
+                provider_subagent=(
+                    original_chat_turn.request_snapshot.get("provider_subagent")
+                    if isinstance(
+                        original_chat_turn.request_snapshot.get("provider_subagent"),
+                        dict,
+                    )
+                    else None
+                ),
             )
             replacement = self.store.update(
                 HarnessTurn,
@@ -9499,6 +9768,22 @@ class HarnessRuntimeService:
                         },
                     }
                 )
+        if self._subagent_binding(current) is not None:
+            kind = self.store.get(HarnessProfile, current.harness_profile_id).kind
+            for name, (description, schema) in _gateway_subagent_tools(kind).items():
+                tools.append(
+                    {
+                        "name": name,
+                        "description": description,
+                        "inputSchema": schema,
+                        "annotations": {
+                            "readOnlyHint": name == "subagent.list",
+                            "destructiveHint": False,
+                            "idempotentHint": name == "subagent.list",
+                            "openWorldHint": False,
+                        },
+                    }
+                )
         for name, schema in _GATEWAY_RETRIEVAL_SCHEMAS.items():
             tools.append(
                 {
@@ -9728,8 +10013,177 @@ class HarnessRuntimeService:
             return await self._gateway_knowledge_search(turn, arguments)
         if name in _GATEWAY_RETRIEVAL_SCHEMAS:
             return await self._gateway_retrieval(turn, name, arguments)
+        if name in _GATEWAY_SUBAGENT_NAMES:
+            # Outside the execution gate: a wait must not hold it for minutes.
+            return await self._gateway_subagent(session, turn, name, arguments)
         async with self._gateway_execution_gate(turn):
             return await self._gateway_action_call(session, turn, name, arguments)
+
+    async def _gateway_subagent(
+        self,
+        session: HarnessSession,
+        turn: HarnessTurn,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run a provider-subagent tool for the active harness chat turn."""
+
+        service = self.provider_subagents
+        if (
+            service is None
+            or turn.origin != HarnessTurnOrigin.CHAT
+            or not turn.chat_session_id
+            or not turn.chat_turn_id
+            or not isinstance(turn.metadata.get("provider_subagent"), dict)
+        ):
+            return self._gateway_denial(
+                "Provider subagents are turned off for this conversation."
+            )
+        parent_session_id = turn.chat_session_id
+        call = ToolCall(
+            id=str(uuid4()),
+            engagement_id=turn.engagement_id,
+            run_id=turn.chat_turn_id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=parent_session_id,
+            chat_turn_id=turn.chat_turn_id,
+            tool_name=name,
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.LOCAL_READ,
+            arguments=arguments,
+            started_at=utc_now(),
+            metadata={"harness_turn_id": turn.id, "budget_class": "subagent"},
+        )
+        call = self.store.reserve_tool_call(call)
+        call = self._attach_gateway_tool_call(turn, call.id)
+        kind = self.store.get(HarnessProfile, session.harness_profile_id).kind
+        try:
+            _, schema = _gateway_subagent_tools(kind)[name]
+            if not Draft7Validator(schema).is_valid(arguments):
+                accepted = ", ".join(schema.get("properties", {}))
+                raise InvalidToolArguments(
+                    f"Invalid arguments for {name}. Accepted: {accepted}. "
+                    "Correct the arguments and retry."
+                )
+            if name == "subagent.start":
+                invocation = ToolInvocation(
+                    id=call.id,
+                    engagement_id=turn.engagement_id,
+                    run_id=turn.chat_turn_id,
+                    origin=ToolCallOrigin.CHAT,
+                    chat_session_id=parent_session_id,
+                    chat_turn_id=turn.chat_turn_id,
+                    tool_name=name,
+                    arguments=arguments,
+                    workspace=self.workspace_resolver(turn.engagement_id),
+                    # A vendor retry of the same call reuses the same child.
+                    idempotency_key=f"harness-subagent:{turn.id}:"
+                    + hashlib.sha256(
+                        json.dumps(arguments, sort_keys=True).encode()
+                    ).hexdigest()[:40],
+                    requested_by="harness-gateway",
+                    runtime_session_kind="harness",
+                    runtime_session_id=session.id,
+                )
+                record = await service.start(
+                    invocation,
+                    task=str(arguments.get("task") or ""),
+                    name=arguments.get("name"),
+                    context=arguments.get("context"),
+                )
+                result: dict[str, Any] = {
+                    "subagent_id": record.id,
+                    "name": record.name,
+                    "model": record.model,
+                    "status": "running",
+                    "note": "Running in parallel. Call subagent.wait when you need its report.",
+                }
+            elif name == "subagent.wait":
+                raw_ids = arguments.get("subagent_ids")
+                active_turn_id = turn.id
+
+                def still_waiting() -> bool:
+                    active = self._active.get(session.id)
+                    return active is not None and active.turn_id == active_turn_id
+
+                result = await service.wait_for(
+                    parent_session_id,
+                    [str(item) for item in raw_ids] if raw_ids else None,
+                    "any" if arguments.get("mode") == "any" else "all",
+                    float(
+                        arguments.get("timeout_seconds")
+                        or _subagent_wait_limits(kind)[0]
+                    ),
+                    still_waiting=still_waiting,
+                )
+                if result["still_running"]:
+                    result["note"] = (
+                        "Some subagents are still running. Call subagent.wait again "
+                        "to keep waiting, or continue; late reports reach you at "
+                        "the start of your next turn."
+                    )
+            elif name == "subagent.list":
+                result = {
+                    "subagents": [
+                        service._model_view(item, include_result=False)
+                        for item in service.for_session(parent_session_id)
+                    ]
+                }
+            else:
+                subagent_id = str(arguments.get("subagent_id") or "")
+                try:
+                    record = service.get(subagent_id)
+                except NotFoundError as exc:
+                    raise InvalidToolArguments(
+                        f"unknown subagent id {subagent_id!r}"
+                    ) from exc
+                if record.parent_session_id != parent_session_id:
+                    raise InvalidToolArguments(f"unknown subagent id {subagent_id!r}")
+                record = await service.stop(record.id)
+                result = {"subagent_id": record.id, "status": record.status.value}
+        except (InvalidToolArguments, ChatError) as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.gateway.subagent_refused",
+                "A harness provider-subagent call was refused.",
+                exc,
+                stage="gateway",
+                metadata={"tool_name": name},
+            )
+            self._finish_gateway_call(call.id, error=exc)
+            return self._gateway_denial(str(exc))
+        except Exception as exc:
+            self._finish_gateway_call(call.id, error=exc)
+            raise
+        self._finish_gateway_call(call.id, result=result)
+        serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
+        return {
+            "content": [{"type": "text", "text": serialized}],
+            "structuredContent": result,
+            "isError": False,
+        }
+
+    def _finish_gateway_call(
+        self,
+        call_id: str,
+        *,
+        result: dict[str, Any] | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        latest = self.store.get(ToolCall, call_id)
+        self.store.update(
+            ToolCall,
+            latest.id,
+            {
+                "status": ToolCallStatus.FAILED
+                if error is not None
+                else ToolCallStatus.COMPLETE,
+                **({"error": _safe_error(error)} if error is not None else {}),
+                **({"result": result} if result is not None else {}),
+                "completed_at": utc_now(),
+            },
+            expected_revision=latest.revision,
+        )
 
     async def _gateway_action_call(
         self,
@@ -10559,6 +11013,7 @@ class HarnessRuntimeService:
         if self._connections.get(session_id) is connection:
             self._connections.pop(session_id, None)
             self._connection_browser_bindings.pop(session_id, None)
+            self._connection_subagent_bindings.pop(session_id, None)
         record_diagnostic(
             "info",
             "harnesses",
@@ -10593,6 +11048,7 @@ class HarnessRuntimeService:
         session = self.store.get(HarnessSession, session.id)
         browser_binding = session.metadata.get("browser_companion_session_id")
         browser_binding = browser_binding if isinstance(browser_binding, str) else None
+        subagent_binding = self._subagent_binding(session)
         existing = self._connections.get(session.id)
         if existing is not None:
             stale_reason = (
@@ -10601,6 +11057,11 @@ class HarnessRuntimeService:
                 # keeping the durable conversation and native transcript intact.
                 "browser_binding_changed"
                 if self._connection_browser_bindings.get(session.id) != browser_binding
+                # Provider subagent tools and their instructions change the
+                # catalog the same way.
+                else "subagent_binding_changed"
+                if self._connection_subagent_bindings.get(session.id)
+                != subagent_binding
                 # The vendor process died between turns; writing to it would
                 # fail every later turn on this session.
                 else "disconnected"
@@ -10771,7 +11232,20 @@ class HarnessRuntimeService:
             raise
         self._connections[session.id] = connection
         self._connection_browser_bindings[session.id] = browser_binding
+        self._connection_subagent_bindings[session.id] = subagent_binding
         return connection
+
+    def _subagent_binding(self, session: HarnessSession) -> str | None:
+        """The provider subagent model this session's vendor catalog carries."""
+
+        setting = _session_provider_subagent(session)
+        if (
+            setting is None
+            or self.provider_subagents is None
+            or session.metadata.get("analysis_only")
+        ):
+            return None
+        return f"{setting['provider_profile_id']}\0{setting['model']}"
 
     async def _request_permission(
         self,
@@ -11311,6 +11785,9 @@ class HarnessRuntimeService:
     def _record_tool_event(
         self, turn: HarnessTurn, session: HarnessSession, event: HarnessEvent
     ) -> HarnessEvent:
+        if _is_gateway_subagent_tool(event.tool_name):
+            # Provider subagent calls read as delegated work, like vendor ones.
+            event = event.model_copy(update={"item_kind": "subagent"})
         if event.server_id == "nebula":
             receipt = _find_tool_receipt(event.payload)
             if receipt is None:

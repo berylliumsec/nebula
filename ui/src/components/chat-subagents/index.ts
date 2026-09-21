@@ -1,5 +1,6 @@
 /**
- * Delegated subagents in a provider conversation.
+ * Delegated subagents in a conversation: children on the chat's own model in
+ * a provider chat, or on a chosen provider model in a harness chat.
  *
  * Core starts, runs and finishes them; these surfaces only show what it holds
  * and carry the two decisions an operator has over one — approve the command
@@ -9,6 +10,12 @@
 export { ChatSubagentPane } from "./ChatSubagentPane";
 export { ChatSubagentRail } from "./ChatSubagentRail";
 export { ChatSubagentResultCard } from "./ChatSubagentResultCard";
+export {
+  defaultSubagentChoice,
+  HarnessSubagentSettings,
+  subagentProviders,
+  type HarnessSubagentChoice,
+} from "./HarnessSubagentSettings";
 export {
   ACTIVE_STATUSES,
   compactTokens,

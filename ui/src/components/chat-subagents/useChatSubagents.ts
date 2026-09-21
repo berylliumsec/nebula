@@ -26,11 +26,13 @@ export interface ChatSubagentState {
  *
  * Core owns their lifecycle; this only reads. Polling runs while any child is
  * active and stops when they all finish, so an idle conversation costs nothing.
+ * `live` keeps it polling while a response runs, because that response may
+ * start the first child at any moment.
  */
 export function useChatSubagents(
   api: ApiClient | undefined,
   sessionId: string | undefined,
-  { enabled = true }: { enabled?: boolean } = {},
+  { enabled = true, live = false }: { enabled?: boolean; live?: boolean } = {},
 ): ChatSubagentState {
   const [subagents, setSubagents] = useState<ChatSubagentView[]>([]);
   const [loading, setLoading] = useState(false);
@@ -58,7 +60,7 @@ export function useChatSubagents(
         failures = 0;
         setSubagents(page);
         setError(undefined);
-        keepPolling = page.some((item) => ACTIVE_STATUSES.has(item.status));
+        keepPolling = live || page.some((item) => ACTIVE_STATUSES.has(item.status));
       } catch (caught) {
         if (controller.signal.aborted || stopped) return;
         failures += 1;
@@ -67,8 +69,7 @@ export function useChatSubagents(
         keepPolling = failures < FAILURE_LIMIT;
       } finally {
         if (!stopped) setLoading(false);
-        // An idle conversation stops asking; a new delegation restarts it
-        // through the refresh the parent turn triggers.
+        // An idle conversation stops asking; the next response restarts it.
         if (!stopped && keepPolling) timer = window.setTimeout(() => void read(false), POLL_MS);
       }
     };
@@ -79,7 +80,7 @@ export function useChatSubagents(
       controller.abort();
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [api, enabled, nonce, sessionId]);
+  }, [api, enabled, live, nonce, sessionId]);
 
   const active = useMemo(
     () => subagents.filter((item) => ACTIVE_STATUSES.has(item.status)),
