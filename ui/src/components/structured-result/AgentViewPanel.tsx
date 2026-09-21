@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { ExternalLink, GripHorizontal, Minimize2, MoveDiagonal2, PanelRight, Sparkles, X } from "lucide-react";
+import { ExternalLink, GripHorizontal, Minimize2, MoveDiagonal2, Sparkles, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ApiClient } from "../../api/client";
 import { projectSurface } from "../../resourceRoutes";
@@ -78,15 +78,13 @@ export interface AgentViewPanelProps {
   onMinimize: () => void;
   onRestore: () => void;
   onClose: () => void;
-  onDock: () => void;
 }
 
 /**
  * The Agent view floating over the conversation: moved by its grip, sized by
  * its corner, and remembered on this device. It is not modal, so the
  * transcript and composer stay usable underneath. Minimized, it becomes a
- * launcher that keeps counting new snapshots; docked, the same view lives in
- * the conversation's details instead. On a phone it is a sheet.
+ * launcher that keeps counting new snapshots. On a phone it is a sheet.
  */
 export function AgentViewPanel(props: AgentViewPanelProps) {
   const { minimized } = props;
@@ -103,7 +101,7 @@ export function AgentViewPanel(props: AgentViewPanelProps) {
 }
 
 function FloatingAgentView({
-  api, projectId, sessionId, onMinimize, onClose, onDock, pin, rect, onRect, sheet,
+  api, projectId, sessionId, onMinimize, onClose, pin, rect, onRect, sheet,
 }: AgentViewPanelProps & {
   pin: readonly [string | undefined, (id: string | undefined) => void];
   rect: AgentViewRect;
@@ -188,7 +186,6 @@ function FloatingAgentView({
         <h2 id={titleId}><Sparkles size={14} aria-hidden="true" /> Agent view</h2>
         <small role="status">{agentViewStatus(stream)}</small>
       </div>
-      {!sheet && <IconAction icon={PanelRight} label="Dock in conversation details" onClick={onDock} />}
       <IconAction icon={Minimize2} label="Minimize Agent view" title="Minimize and keep following" onClick={onMinimize} />
       <IconAction icon={X} label="Close Agent view" onClick={onClose} />
     </div>
