@@ -1,20 +1,21 @@
 {
-  "change_digest": "c3aa71fe877a4f5a5dc0b0bae3bb4e9d1044bcc4db1cfc947e2682096ccee49f",
-  "reviewed_by": "Codex review of malformed provider tool-argument diagnostics",
-  "reason": "The OpenAI-compatible adapter previously reduced malformed native tool-call JSON to a generic error, and its detailed JSONDecodeError catch was a warning hidden by the production error-level diagnostic threshold. The selected cases prove that the real durable provider log now records an error with exact decoder coordinates, provider response identity, model, tool, byte count and a one-way fingerprint without retaining argument values; that existing malformed and unidentified calls remain unexecuted; and that valid streamed tool-call assembly still completes.",
-  "exclusions": "No frontend, Playwright, native, production-build, LAN, or physical-device gates apply because the API response, chat failure text, UI, persistence, origin behavior, and executable packaging are unchanged. No live provider call is selected because malformed output is nondeterministic and the diagnostic boundary is fully exercised with the same OpenAI-compatible response shape. Full suites and unrelated provider adapters are excluded.",
+  "change_digest": "9ec0faadfd6b20b924d86a6b41ed744c31927914ac9b6c92297b48561b20cb7d",
+  "reviewed_by": "Claude review of the narrow Project tab bar",
+  "reason": "At phone width the Project tab bar used a fixed four-column grid sized for Overview/Assets/Evidence/Sources. #455 added Results as a fifth tab without changing that grid, so Results wrapped alone onto a second row and pushed every Project surface down 44px. That broke critical-workspaces on narrow at a20c6ea: the capture loops stopped at the Project mismatch and never compared library or settings. The fix is in the max-width 760px rules of components-workbench.css: the grid now sizes its columns from the tabs (grid-auto-flow: column), and each icon sits above its label. Five inline icon+label tabs cannot fit at 390px (70px per tab; icon, gap and 'Overview' need 77px), while stacked labels fit cleanly from 375px up and overflow less than the old layout at 320-360px. Baselines: project-narrow-narrow, project-light-narrow and reports-light-narrow are CI renders, collected with a temporary expect.soft + maxDiffPixels 0 harvest run (workflow_dispatch 35611779031, pixel-identical across both retries). project-light and reports-light also predated the #355 phone top bar (last regenerated in #211); reports-light had passed only inside the 1.5% tolerance. Every other narrow capture, dark and Light, matched CI exactly. area:critical-workspaces reruns the capture loops, axe checks, Zero shell and phone section-navigation journeys on desktop, compact and narrow. The structured-results entries for narrow, mobile-chromium and mobile-webkit run the Results journeys below the tab bar at phone widths.",
+  "exclusions": "No Python, frontend or native tests: only one CSS rule and three PNG baselines changed. structured-results/desktop is not selected: the change sits inside the max-width 760px media query, so desktop renders are unchanged (critical-workspaces/desktop still guards them). The stabilization area is not selected (8 projects, far broader than a single phone-only rule). Its 'stabilization audit every primary workspace view', which checks .project-tabs for horizontal overflow, was run locally with the phone section-navigation journey and the structured-results journeys on narrow, mobile-chromium and mobile-webkit: 8/8 passed on each. Local runs of critical-workspaces pass on desktop, compact and narrow.",
   "expected_tests": {
-    "python": 4,
+    "python": 0,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 39
   },
-  "python": [
-    "tests/v3/test_providers.py::test_openai_compatible_logs_exact_malformed_tool_json_without_its_values",
-    "tests/v3/test_providers.py::test_openai_compatible_rejects_partial_or_unidentified_tool_calls",
-    "tests/v3/test_providers.py::test_streaming_tool_calls_are_keyed_by_index_or_arrival_order"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:critical-workspaces",
+    "entry:structured-results/narrow",
+    "entry:structured-results/mobile-chromium",
+    "entry:structured-results/mobile-webkit"
+  ]
 }
