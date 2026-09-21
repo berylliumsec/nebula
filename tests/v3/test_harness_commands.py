@@ -247,6 +247,53 @@ def test_grok_goal_does_not_continue_terminal_or_attention_states(status):
     asyncio.run(scenario())
 
 
+def test_grok_goal_final_answer_is_not_doubled_by_its_whole_replay():
+    # Live Grok goal mode streamed its answer, then sent it again as one chunk.
+    class ReplayingGoalRpc(Rpc):
+        async def request(self, method, params):
+            if method == "session/prompt":
+                self.calls.append((method, params))
+                updates = [
+                    {
+                        "sessionUpdate": "goal_updated",
+                        "objective": "Add f_to_c",
+                        "status": "complete",
+                    },
+                    *(
+                        {
+                            "sessionUpdate": "agent_message_chunk",
+                            "content": {"type": "text", "text": text},
+                        }
+                        for text in ["Tests ", "pass.", "Tests pass."]
+                    ),
+                ]
+                for update in updates:
+                    await self.events.put(
+                        {"method": "session/update", "params": {"update": update}}
+                    )
+                return {"stopReason": "end_turn"}
+            return await super().request(method, params)
+
+    async def scenario():
+        connection = GrokAcpConnection(
+            ReplayingGoalRpc({}), external_session_id="grok", permission_handler=None
+        )
+        events = [
+            event
+            async for event in _run_harness_command(
+                connection,
+                ("/goal", "Add f_to_c"),
+                model="model",
+                context_prompt="trusted context",
+            )
+        ]
+        streamed = "".join(e.delta for e in events if e.type == "message_delta")
+        assert streamed == "Tests pass."
+        assert events[-1].message.endswith("Grok's last message:\nTests pass.")
+
+    asyncio.run(scenario())
+
+
 def test_grok_goal_outcome_explains_a_bare_verdict():
     # Live Grok ended a blocked goal with the single word its skeptic returned.
     goal = _harness_goal_snapshot(

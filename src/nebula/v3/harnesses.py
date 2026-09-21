@@ -4984,6 +4984,11 @@ class GrokAcpConnection(HarnessConnection):
                     else "completed",
                     title="Thinking",
                 )
+            if len(pending_agent_parts) > 1 and pending_agent_parts[-1] == "".join(
+                pending_agent_parts[:-1]
+            ):
+                # Goal mode streams its final answer, then sends it again whole.
+                pending_agent_parts.pop()
             for delta in pending_agent_parts:
                 message_parts.append(delta)
                 yield HarnessEvent(
