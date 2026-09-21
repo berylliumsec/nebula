@@ -1,21 +1,38 @@
 {
-  "change_digest": "9ec0faadfd6b20b924d86a6b41ed744c31927914ac9b6c92297b48561b20cb7d",
-  "reviewed_by": "Claude review of the narrow Project tab bar",
-  "reason": "At phone width the Project tab bar used a fixed four-column grid sized for Overview/Assets/Evidence/Sources. #455 added Results as a fifth tab without changing that grid, so Results wrapped alone onto a second row and pushed every Project surface down 44px. That broke critical-workspaces on narrow at a20c6ea: the capture loops stopped at the Project mismatch and never compared library or settings. The fix is in the max-width 760px rules of components-workbench.css: the grid now sizes its columns from the tabs (grid-auto-flow: column), and each icon sits above its label. Five inline icon+label tabs cannot fit at 390px (70px per tab; icon, gap and 'Overview' need 77px), while stacked labels fit cleanly from 375px up and overflow less than the old layout at 320-360px. Baselines: project-narrow-narrow, project-light-narrow and reports-light-narrow are CI renders, collected with a temporary expect.soft + maxDiffPixels 0 harvest run (workflow_dispatch 35611779031, pixel-identical across both retries). project-light and reports-light also predated the #355 phone top bar (last regenerated in #211); reports-light had passed only inside the 1.5% tolerance. Every other narrow capture, dark and Light, matched CI exactly. area:critical-workspaces reruns the capture loops, axe checks, Zero shell and phone section-navigation journeys on desktop, compact and narrow. The structured-results entries for narrow, mobile-chromium and mobile-webkit run the Results journeys below the tab bar at phone widths.",
-  "exclusions": "No Python, frontend or native tests: only one CSS rule and three PNG baselines changed. structured-results/desktop is not selected: the change sits inside the max-width 760px media query, so desktop renders are unchanged (critical-workspaces/desktop still guards them). The stabilization area is not selected (8 projects, far broader than a single phone-only rule). Its 'stabilization audit every primary workspace view', which checks .project-tabs for horizontal overflow, was run locally with the phone section-navigation journey and the structured-results journeys on narrow, mobile-chromium and mobile-webkit: 8/8 passed on each. Local runs of critical-workspaces pass on desktop, compact and narrow.",
+  "change_digest": "2df5610cf5d429ceb5601e33fe2fc4f0b4532600510eea81c49744827c215041",
+  "reviewed_by": "Claude review of operator-set subagent limits",
+  "reason": "Subagents lose their fixed caps (3 running per conversation, 6 per parent response). ChatCompletionRequest gains max_active_subagents (1-100, default none); provider chats keep it in the turn request_snapshot and session metadata and pass it through schedules and goal continuations, harness chats keep it as provider_subagent.max_active, which _subagent_binding includes so a change reopens the vendor connection with instructions stating the limit. SubagentService.start refuses a start only at an operator-set limit. The UI adds a shared Running at once field to the harness subagent settings and the provider Subagents toggle, sends the field only when set, reads it back from either metadata shape, and the Subagents pane stops assuming three slots. Selected Python files cover subagent start/limits, harness gateway binding and instructions, schedules, goal continuation, queueing, chat API and the harness instruction builders; frontend files cover the field, pane and client mapping; chat-subagents exercises both settings surfaces end to end, provider-reasoning covers the request builder beside reasoning effort, and the assistant entries cover the SessionsPage settings popover.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust or packaging changed. No real-Core Playwright: the request and metadata contract is covered by the Python chat API and harness tests plus the mocked end-to-end settings flows.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 356,
+    "frontend": 95,
     "native": 0,
-    "playwright": 39
+    "playwright": 165
   },
-  "python": [],
-  "frontend": [],
+  "python": [
+    "tests/v3/test_harness_provider_subagents.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_chat_schedules.py",
+    "tests/v3/test_harnesses.py",
+    "tests/v3/test_harness_adapters.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_queue.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_browser_companion.py",
+    "tests/v3/test_minimal_agent_instructions.py"
+  ],
+  "frontend": [
+    "ui/src/components/chat-subagents/HarnessSubagentSettings.test.tsx",
+    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx",
+    "ui/src/api/client.test.ts"
+  ],
   "native": [],
   "playwright": [
-    "area:critical-workspaces",
-    "entry:structured-results/narrow",
-    "entry:structured-results/mobile-chromium",
-    "entry:structured-results/mobile-webkit"
+    "area:chat-subagents",
+    "area:provider-reasoning",
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit"
   ]
 }
