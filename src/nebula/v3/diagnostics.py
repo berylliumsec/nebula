@@ -130,6 +130,7 @@ _ALLOWED_METADATA_KEYS = frozenset(
         "count",
         "current_revision",
         "decision",
+        "device_id",
         "digest",
         "direction",
         "disk_bytes",

@@ -1,6 +1,7 @@
 import asyncio
 import shlex
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -495,6 +496,37 @@ def test_allowed_host_runs_through_the_broker_and_records_output(tmp_path, monke
     assert result.execution["ssh_alias"] == "lab"
     assert result.execution["cwd"] == str(tmp_path)
     assert result.receipt is not None
+
+
+def test_ssh_start_failure_records_diagnostic_and_returns_failed_receipt(monkeypatch):
+    environment = SshEnvironment(id="ssh:lab", alias="lab", enabled=True)
+    plugin = build_ssh_tool_plugins((environment,))[0]
+    recorded = []
+
+    async def failed_command(*_args, **_kwargs):
+        raise OSError("private remote path /secret/work was unavailable")
+
+    monkeypatch.setattr(environments, "run_remote_command", failed_command)
+    monkeypatch.setattr(
+        environments,
+        "record_caught_exception",
+        lambda *args, **kwargs: recorded.append((args, kwargs)),
+    )
+    result = asyncio.run(
+        plugin.execute(SimpleNamespace(arguments={"command": "true"}), None)
+    )
+
+    assert result.exit_code == 1
+    assert recorded[0][0][:3] == (
+        "runtime",
+        "runtime.ssh.command_start_failed",
+        "An SSH command could not start.",
+    )
+    assert isinstance(recorded[0][0][3], OSError)
+    assert recorded[0][1] == {
+        "stage": "execute",
+        "metadata": {"transport": "ssh", "operation": "run_command"},
+    }
 
 
 def test_ask_host_stops_for_approval_then_runs_once_approved(tmp_path, monkeypatch):

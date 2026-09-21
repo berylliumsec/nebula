@@ -1,24 +1,25 @@
 {
-  "change_digest": "3551e2862d268c3b06439f8a0e4cbc20d74c99837a205035549f54bb23042cd7",
-  "reviewed_by": "Codex focused review of protected failed-provider capture",
-  "reason": "The Core change captures raw failed provider responses or malformed tool arguments only in opt-in protected diagnostic detail. Select exact provider parsing, fail-closed routing, sensitive-store isolation, and existing protected-reveal UI coverage. CI mypy verifies the matching standalone Kali diagnostic signature.",
-  "exclusions": "Full suites, unrelated chat/provider scenarios, native tests, and Playwright are excluded. No UI implementation, API shape, browser-origin behavior, or interaction changed; mocked browser journeys would not prove protected Core capture. The real-Core deployment and authenticated health check are verified separately.",
+  "change_digest": "b563fc78ffd2a7bbf447846ee5fa5c879ceee1939745ffda90e32a044713865b",
+  "reviewed_by": "Codex focused selection review",
+  "reason": "The diagnostics sweep adds structured failure records to SSH, MCP, web search, semantic tool ranking, and local embedding paths, plus safe API route and device context. The selected cases exercise each changed boundary, the diagnostic viewer API contract, and the shared diagnostics sanitizer.",
+  "exclusions": "No frontend or native source changed, and no browser-origin behavior changed, so frontend, native, and Playwright tests are excluded. Unrelated chat, mission, browser, workspace, and full-suite journeys are excluded.",
   "expected_tests": {
     "python": 8,
-    "frontend": 12,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_tool_loop.py::test_malformed_routing_never_reaches_the_tool_broker",
-    "tests/v3/test_chat_tool_loop.py::test_routing_prose_captures_exact_provider_response_only_in_protected_detail",
-    "tests/v3/test_diagnostics.py::test_explicit_sensitive_detail_never_enters_exportable_log",
-    "tests/v3/test_providers.py::test_openai_compatible_uses_chat_completions_shape",
-    "tests/v3/test_providers.py::test_openai_compatible_logs_exact_malformed_tool_json_without_its_values"
+    "tests/v3/test_ssh_environments.py::test_ssh_start_failure_records_diagnostic_and_returns_failed_receipt",
+    "tests/v3/test_knowledge_index.py::test_local_embedding_failure_records_diagnostic_and_failed_status",
+    "tests/v3/test_diagnostics_api.py::test_diagnostics_api_settings_correlation_fault_and_export",
+    "tests/v3/test_diagnostics.py::test_diagnostic_text_is_unredacted_while_payload_metadata_is_excluded",
+    "tests/v3/test_diagnostics.py::test_caught_exception_severity_uses_http_and_integrity_semantics",
+    "tests/v3/test_mcp_probe.py::test_http_tool_timeout_is_reported_as_timed_out",
+    "tests/v3/test_web_search.py::test_execute_turns_a_runtime_failure_into_a_readable_result",
+    "tests/v3/test_tool_catalog.py::test_search_falls_back_to_keywords_when_the_index_is_not_ready"
   ],
-  "frontend": [
-    "ui/src/diagnostics/DiagnosticsPanel.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": []
 }

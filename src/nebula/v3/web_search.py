@@ -763,7 +763,14 @@ class WebSearchTool(ToolPlugin):
                 freshness=freshness,  # type: ignore[arg-type]
             )
         except WebSearchError as exc:
-            # diagnostic-expected: converted to a bounded, readable tool failure
+            record_caught_exception(
+                "knowledge",
+                "knowledge.web_search.failed",
+                "Public web search could not complete.",
+                exc,
+                stage="search",
+                metadata={"operation": "web_search"},
+            )
             return self._failure(started, str(exc))
 
         completed = utc_now()

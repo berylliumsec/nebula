@@ -29,6 +29,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import Field
 
+from .diagnostics import record_caught_exception
 from .domain import McpServerProfile, NebulaModel, RiskClass, ScopePolicy
 from .runtime_platform import RuntimeToolComponents
 from .tools import InvalidToolArguments, ToolExecutionResult, ToolInvocation, ToolSpec
@@ -233,7 +234,15 @@ def semantic_scores(
             {key: index_document(specs[name]) for key, name in by_fingerprint.items()}
         )
         ranked = index.rank_tools(query, list(by_fingerprint), limit=limit)
-    except Exception:  # diagnostic-expected: keyword ranking is the fallback
+    except Exception as exc:
+        record_caught_exception(
+            "knowledge",
+            "knowledge.tool_catalog.semantic_fallback",
+            "Semantic tool ranking failed; keyword ranking remains available.",
+            exc,
+            stage="rank",
+            metadata={"operation": "tool_ranking"},
+        )
         return None
     return {
         by_fingerprint[key]: score for key, score in ranked if key in by_fingerprint

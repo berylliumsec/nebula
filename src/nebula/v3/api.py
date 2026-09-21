@@ -2322,7 +2322,12 @@ def create_app(
                 impact=guidance.impact,
                 remediation_id=guidance.remediation_id,
                 exception=exc,
-                metadata={"http_status": status_code, "code": stable_code},
+                metadata={
+                    "http_status": status_code,
+                    "code": stable_code,
+                    "method": request.method,
+                    "route": getattr(request.scope.get("route"), "path", "unmatched"),
+                },
             )
         request.state.diagnostic_error_recorded = True
         request.state.diagnostic_error_id = recorded_id or error_id
@@ -2389,7 +2394,13 @@ def create_app(
                         duration_ms=(time.monotonic() - started) * 1000,
                         retryable=False,
                         exception=exc,
-                        metadata={"method": request.method, "http_status": 500},
+                        metadata={
+                            "method": request.method,
+                            "route": getattr(
+                                request.scope.get("route"), "path", "unmatched"
+                            ),
+                            "http_status": 500,
+                        },
                     )
                 content: dict[str, Any] = {
                     "detail": "The operation failed unexpectedly. No verified recovery procedure is available.",
@@ -2413,6 +2424,8 @@ def create_app(
             route_template = getattr(route, "path", "unmatched")
             feature = request_feature(request)
             status_code = response.status_code
+            auth_device_id = getattr(request.state, "auth_device_id", None)
+            device_metadata = {"device_id": auth_device_id} if auth_device_id else {}
             if status_code >= 400:
                 emit_diagnostic(
                     "error" if status_code >= 500 else "warning",
@@ -2434,7 +2447,7 @@ def create_app(
                         "method": request.method,
                         "route": route_template,
                         "http_status": status_code,
-                        "device_id": getattr(request.state, "auth_device_id", None),
+                        **device_metadata,
                     },
                 )
             else:
@@ -2450,7 +2463,7 @@ def create_app(
                         "method": request.method,
                         "route": route_template,
                         "http_status": status_code,
-                        "device_id": getattr(request.state, "auth_device_id", None),
+                        **device_metadata,
                     },
                 )
             if feature not in {"api", "diagnostics"}:
@@ -2467,7 +2480,7 @@ def create_app(
                             "method": request.method,
                             "route": route_template,
                             "http_status": status_code,
-                            "device_id": getattr(request.state, "auth_device_id", None),
+                            **device_metadata,
                         },
                     )
                 elif not request.state.diagnostic_error_recorded:
@@ -2486,7 +2499,7 @@ def create_app(
                             "method": request.method,
                             "route": route_template,
                             "http_status": status_code,
-                            "device_id": getattr(request.state, "auth_device_id", None),
+                            **device_metadata,
                         },
                     )
             response.headers["X-Request-ID"] = request_id

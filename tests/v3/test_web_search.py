@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
+from nebula.v3 import web_search
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     Engagement,
@@ -322,12 +323,27 @@ def test_execute_refuses_a_scope_disclosure_before_any_egress():
     assert "Allow queries naming in-scope targets" in result.stderr
 
 
-def test_execute_turns_a_runtime_failure_into_a_readable_result():
+def test_execute_turns_a_runtime_failure_into_a_readable_result(monkeypatch):
     runtime = _StubRuntime(error="the search runtime is not installed")
     tool = WebSearchTool(runtime, _scope(web_search=True))
+    recorded = []
+    monkeypatch.setattr(
+        web_search,
+        "record_caught_exception",
+        lambda *args, **kwargs: recorded.append((args, kwargs)),
+    )
     result = asyncio.run(tool.execute(_invocation(query="anything"), None))
     assert result.exit_code == 1
     assert "not installed" in result.stderr
+    assert recorded[0][0][:3] == (
+        "knowledge",
+        "knowledge.web_search.failed",
+        "Public web search could not complete.",
+    )
+    assert recorded[0][1] == {
+        "stage": "search",
+        "metadata": {"operation": "web_search"},
+    }
 
 
 # -- runtime configuration -------------------------------------------------
