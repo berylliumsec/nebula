@@ -1,12 +1,14 @@
 import type { ProviderHealth } from "../../api/types";
 import { providerModelVerification } from "../../api/providerCapabilities";
 import { providerDefaultModel } from "../../api/runtimeDefaults";
-import { SUBAGENT_SLOTS } from "./useChatSubagents";
+import { SubagentLimitField, subagentLimitLabel } from "./SubagentLimitField";
 
 export interface HarnessSubagentChoice {
   enabled: boolean;
   providerId: string;
   model: string;
+  /** How many subagents may run at once; absent means no limit. */
+  limit?: number;
 }
 
 interface HarnessSubagentSettingsProps {
@@ -31,7 +33,7 @@ function providerModels(provider: ProviderHealth | undefined, current: string): 
 }
 
 /** The first usable provider and its default model, preferring a checked one. */
-export function defaultSubagentChoice(providers: ProviderHealth[]): Omit<HarnessSubagentChoice, "enabled"> {
+export function defaultSubagentChoice(providers: ProviderHealth[]): Pick<HarnessSubagentChoice, "providerId" | "model"> {
   const eligible = subagentProviders(providers);
   const verified = eligible.find((provider) => {
     const model = providerDefaultModel(provider);
@@ -76,7 +78,7 @@ export function HarnessSubagentSettings({ providers, choice, harnessName, disabl
           onChange({ ...choice, ...fallback, enabled: event.target.checked });
         }}
       />
-      <span><strong>Provider subagents</strong><small>Delegate to the model below · {SUBAGENT_SLOTS} at a time</small></span>
+      <span><strong>Provider subagents</strong><small>Delegate to the model below · {subagentLimitLabel(choice.limit)}</small></span>
     </label>
     {choice.enabled && <div className="chat-settings-fields">
       <label>
@@ -107,6 +109,12 @@ export function HarnessSubagentSettings({ providers, choice, harnessName, disabl
         </select>
       </label>
     </div>}
+    {choice.enabled && <SubagentLimitField
+      limit={choice.limit}
+      delegator={harnessName}
+      disabled={disabled}
+      onChange={(limit) => onChange({ ...choice, limit })}
+    />}
     {status && <small className="chat-harness-subagent-status" data-tone={status.tone} role={status.tone === "error" ? "alert" : "status"}>
       {status.tone === "ok" && <span aria-hidden="true">✓ </span>}{status.text}
     </small>}

@@ -1792,6 +1792,8 @@ export interface ChatCompletionRequest {
   subagentProviderId?: Identifier;
   /** Harness chats: the provider model their subagents run on. */
   subagentModel?: string;
+  /** How many subagents may run at once; absent means no limit. */
+  maxActiveSubagents?: number;
   runtimeSwitchConfirmation?: string;
 }
 
@@ -2107,6 +2109,8 @@ export interface ChatSessionSummary {
   /** Harness chats: the provider model their subagents last ran on. */
   subagentProviderId?: Identifier;
   subagentModel?: string;
+  /** The operator's running-at-once subagent limit; absent means no limit. */
+  subagentLimit?: number;
   archivedAt?: string;
   createdAt: string;
   updatedAt: string;

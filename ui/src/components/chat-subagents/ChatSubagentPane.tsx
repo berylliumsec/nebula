@@ -10,7 +10,6 @@ import {
   compactTokens,
   elapsedLabel,
   statusLabel,
-  SUBAGENT_SLOTS,
 } from "./useChatSubagents";
 
 interface ChatSubagentPaneProps {
@@ -28,6 +27,8 @@ interface ChatSubagentPaneProps {
    * Absent for provider chats, whose children share the chat's model.
    */
   harnessDelegation?: { harnessName: string; providerName?: string; model?: string };
+  /** The operator's running-at-once limit; absent means no limit. */
+  limit?: number;
 }
 
 function statusIcon(status: string) {
@@ -43,7 +44,7 @@ function statusIcon(status: string) {
  * their lifecycle; nothing here starts work.
  */
 export function ChatSubagentPane({
-  api, sessionId, subagents, error, onClose, onOpenConversation, onChanged, compact = false, harnessDelegation,
+  api, sessionId, subagents, error, onClose, onOpenConversation, onChanged, compact = false, harnessDelegation, limit,
 }: ChatSubagentPaneProps) {
   const [expanded, setExpanded] = useState<string[]>([]);
   const [busy, setBusy] = useState<string>();
@@ -101,10 +102,11 @@ export function ChatSubagentPane({
     </header>
 
     <p className="chat-subagent-slots">
-      {active.length} of {SUBAGENT_SLOTS} slots active{delegateModel ? ` · ${delegateModel}` : ""} · {compactTokens(tokens)} tokens
-      <span className="chat-subagent-slot-bar" aria-hidden="true">
-        <span style={{ width: `${Math.min(100, (active.length / SUBAGENT_SLOTS) * 100)}%` }} />
-      </span>
+      {limit ? `${active.length} of ${limit} running · limit ${limit}` : `${active.length} running · no limit`}
+      {delegateModel ? ` · ${delegateModel}` : ""} · {compactTokens(tokens)} tokens
+      {limit ? <span className="chat-subagent-slot-bar" aria-hidden="true">
+        <span style={{ width: `${Math.min(100, (active.length / limit) * 100)}%` }} />
+      </span> : null}
     </p>
 
     {error && <p className="chat-subagent-error" role="alert">{error}</p>}
