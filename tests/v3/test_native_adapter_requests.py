@@ -314,9 +314,9 @@ def test_bedrock_auto_tool_choice_keeps_default_thinking(monkeypatch):
     ("model", "status"),
     [
         ("claude-fable-5-1", ProviderVerificationStatus.VERIFIED),
-        # A model that accepts forced tool choice must still answer with the
-        # call alone.
-        ("claude-opus-5", ProviderVerificationStatus.FAILED),
+        # A preamble beside the one structured call is commentary for every
+        # model, as it is in a chat routing step; the call is what is checked.
+        ("claude-opus-5", ProviderVerificationStatus.VERIFIED),
     ],
 )
 def test_capability_probe_verifies_models_that_only_accept_auto_tool_choice(
@@ -368,7 +368,7 @@ def test_capability_probe_verifies_models_that_only_accept_auto_tool_choice(
 
     assert result.verification.status == status, result.verification.failure_detail
     assert "temperature" not in sent[0]
-    expected_choice = "auto" if status == ProviderVerificationStatus.VERIFIED else "any"
+    expected_choice = "auto" if model == "claude-fable-5-1" else "any"
     assert sent[0]["tool_choice"]["type"] == expected_choice
 
 

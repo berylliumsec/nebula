@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .diagnostics import (
     create_diagnostic_task,
+    new_error_id,
     record_caught_exception,
     record_diagnostic,
 )
@@ -120,6 +121,7 @@ from .providers import (
     ModelToolResult,
     ModelUsage,
     ProviderContextLengthError,
+    ProviderError,
     ProviderOverloadedError,
     ProviderResponseError,
     StreamEventType,
@@ -867,6 +869,85 @@ def _normalize_routing_arguments(
 
     del components, spec
     return dict(arguments)
+
+
+# How many routing responses in a row may end with Core answering their calls
+# itself (an unavailable tool, a cut-off call, a replayed call) before the turn
+# stops routing and answers from the results it has, like Cline's mistake
+# counter. Any call that runs resets the count.
+_ROUTING_DEVIATION_LIMIT = 3
+# A call Core answered without running it spends no budget.
+_REFUSED_BUDGET_CLASS = "refused"
+_REPLAYED_CALL_REFUSAL = (
+    "This call already ran; its result is above. Use that result instead of "
+    "calling it again, or use finish_response."
+)
+_TRUNCATED_CALL_REFUSAL = (
+    "Your response was cut off by the output limit before this call was "
+    "complete, so it did not run. Re-issue the call with complete arguments."
+)
+_TOOL_CHOICE_REJECTION = re.compile(r"tool[_ ]?choice", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class _RoutedCall:
+    """One call of a routing response, as Core will handle it."""
+
+    call: ModelToolCall
+    # The tool_catalog.call envelope the model issued for an on-demand tool.
+    provider_call: dict[str, Any] | None = None
+    # Why Core answers the call itself instead of running it.
+    refusal: str | None = None
+    # The provider reused a call id this turn already recorded.
+    repeated_id: bool = False
+
+
+def _routing_thoughts(response: ModelResponse) -> str:
+    """A routing step's thinking, with any prose beside its calls.
+
+    Text next to a tool call narrates the call ("I'll read the value first").
+    The synthesis writes the operator's answer, so the text is commentary: it
+    joins the step's thinking instead of failing the turn. A control frame
+    Core could not read is never shown.
+    """
+
+    commentary = response.text.strip()
+    if (
+        not response.tool_calls
+        or not commentary
+        or _is_provider_control_frame(commentary)
+    ):
+        return response.reasoning
+    return _joined_reasoning(response.reasoning, commentary)
+
+
+def _rejects_required_tool_choice(exc: ProviderError) -> bool:
+    """A route that refuses tool_choice=required, such as an older vLLM."""
+
+    message = str(exc)
+    return (
+        type(exc) is ProviderError
+        and (
+            re.search(r"\bHTTP 400\b", message) is not None
+            or "ValidationException" in message
+        )
+        and _TOOL_CHOICE_REJECTION.search(message) is not None
+    )
+
+
+def _replays_a_run_call(history: Sequence[dict[str, Any]], call: ModelToolCall) -> bool:
+    """Whether a reused provider id carries a call this turn already ran.
+
+    A call Core refused never ran, so issuing it again is a new attempt.
+    """
+
+    return any(
+        str(entry.get("issued_call_id") or entry.get("model_call_id")) == call.id
+        and entry.get("budget_class") != _REFUSED_BUDGET_CLASS
+        and entry.get("name") == call.name
+        and entry.get("arguments") == call.arguments
+        for entry in history
+    )
 
 
 def _decoded_result(value: object) -> dict[str, Any] | None:
@@ -3461,7 +3542,12 @@ class ChatService:
             # queue is deliberately not durable: a pause abandons it, and the
             # model re-issues the calls it still wants, because an abandoned
             # call never executed and never enters the replayed history.
-            batched_calls: list[tuple[ModelToolCall, dict[str, Any] | None]] = []
+            batched_calls: list[_RoutedCall] = []
+            # Routing responses in a row whose calls Core answered itself.
+            deviations = 0
+            route_deviated = False
+            # Set once the route refuses tool_choice=required.
+            auto_routing = False
             while turn.status != ChatTurnStatus.FINALIZING:
                 budgeted_specs = [
                     spec
@@ -3492,6 +3578,31 @@ class ChatService:
                     break
                 budgeted_names = {spec.name for spec in budgeted_specs}
                 if not batched_calls:
+                    if deviations >= _ROUTING_DEVIATION_LIMIT:
+                        # The model keeps reaching for calls Core cannot run.
+                        # Answering from the results the turn has beats
+                        # routing forever or failing the turn.
+                        record_diagnostic(
+                            "warning",
+                            "chat",
+                            "chat.routing.deviation_limit",
+                            "Routing stopped after repeated calls Core could "
+                            "not run; the turn answered from the results it had.",
+                            outcome="fallback",
+                            stage="routing",
+                            retryable=True,
+                            safe_failure_cause=(
+                                "The model repeatedly called unavailable, cut-off "
+                                "or already-run tools."
+                            ),
+                            metadata={
+                                "provider": prepared.provider_profile.id,
+                                "model_id": prepared.resolved_model,
+                                "deviations": deviations,
+                            },
+                        )
+                        break
+                    route_deviated = False
                     # What subagents sent a working parent, or a parent sent a
                     # working subagent, reaches the model before it routes
                     # again, as the result of a step Core adds.
@@ -3539,7 +3650,9 @@ class ChatService:
                                 )
                             ]
                             + [self._finish_tool()],
-                            "tool_choice": ToolChoice.REQUIRED,
+                            "tool_choice": ToolChoice.AUTO
+                            if auto_routing
+                            else ToolChoice.REQUIRED,
                             # A model may batch independent calls into one
                             # routing response. Core still executes them one
                             # at a time, in the requested order, so every
@@ -3553,13 +3666,48 @@ class ChatService:
                     )
                     routing = self._fit_turn_goal_request(prepared, routing)
                     self._ensure_request_capacity(prepared.provider_profile, routing)
-                    response = await self._complete_with_context_recovery(
-                        prepared, routing
-                    )
+                    try:
+                        response = await self._complete_with_context_recovery(
+                            prepared, routing
+                        )
+                    except ProviderError as exc:
+                        if auto_routing or not _rejects_required_tool_choice(exc):
+                            raise
+                        record_diagnostic(
+                            "warning",
+                            "chat",
+                            "chat.routing.required_tool_choice_rejected",
+                            "The provider rejected a required tool choice; "
+                            "routing continued with an automatic tool choice.",
+                            outcome="fallback",
+                            stage="routing",
+                            retryable=True,
+                            safe_failure_cause=(
+                                "The route does not support tool_choice=required."
+                            ),
+                            exception=exc,
+                            metadata={
+                                "provider": prepared.provider_profile.id,
+                                "model_id": prepared.resolved_model,
+                            },
+                        )
+                        # A reply without a call is safe now: it ends routing
+                        # through synthesis. The rest of the turn routes the
+                        # same way instead of being refused at every step.
+                        auto_routing = True
+                        routing = routing.model_copy(
+                            update={"tool_choice": ToolChoice.AUTO}
+                        )
+                        response = await self._complete_with_context_recovery(
+                            prepared, routing
+                        )
                     self._assert_execution_owner(prepared)
                     turn = self._refresh_turn(turn)
-                    thought = _reasoning_step_delta(turn.reasoning, response.reasoning)
-                    turn = self._add_usage(turn, response)
+                    thoughts = _routing_thoughts(response)
+                    thought = _reasoning_step_delta(turn.reasoning, thoughts)
+                    turn = self._add_usage(
+                        turn, response.model_copy(update={"reasoning": thoughts})
+                    )
                     if thought:
                         # The model explains each tool it reaches for. Without
                         # this the transcript shows thinking only for the
@@ -3583,20 +3731,31 @@ class ChatService:
                             "goal token budget was exhausted before tool execution"
                         )
                     if response.text.strip():
-                        failure = ChatError(
-                            "provider returned routing prose instead of a tool call"
-                        )
-                        record_caught_exception(
+                        # Text beside a call narrates it and joined the step's
+                        # thinking above. Text instead of a call, or a frame
+                        # Core could not read, ends routing like an empty
+                        # reply. Neither fails the turn; the exact response
+                        # stays available as protected detail.
+                        record_diagnostic(
+                            "warning",
                             "chat",
                             "chat.routing.prose_with_required_tool",
                             "A provider returned text during a required tool-routing step.",
-                            failure,
+                            error_id=new_error_id(),
+                            outcome="fallback",
                             stage="routing",
+                            retryable=False,
+                            safe_failure_cause=(
+                                "The model wrote text beside or instead of the "
+                                "required tool call."
+                            ),
                             metadata={
                                 "provider": prepared.provider_profile.id,
                                 "model_id": prepared.resolved_model,
                                 "vendor_request_id": response.provider_request_id or "",
-                                "status": "text_with_tool_calls"
+                                "status": "control_frame"
+                                if _is_provider_control_frame(response.text.strip())
+                                else "text_with_tool_calls"
                                 if response.tool_calls
                                 else "text_without_tool_calls",
                             },
@@ -3624,7 +3783,8 @@ class ChatService:
                                 default=str,
                             ),
                         )
-                        raise failure
+                        if not response.tool_calls:
+                            break
                     if not response.tool_calls:
                         # A required tool choice the provider ignored. The
                         # results already gathered are a better answer than a
@@ -3645,15 +3805,22 @@ class ChatService:
                             ),
                         )
                         break
-                    # Every call is validated before any of them executes, so
-                    # a malformed batch never reaches the broker.
+                    # Every call is sorted before any of them executes, so a
+                    # call Core cannot validate never reaches the broker.
                     batched_calls = self._routing_batch(
-                        response, turn, budgeted_names, deferred_names
+                        response,
+                        turn,
+                        budgeted_names,
+                        deferred_names,
+                        set(components.specs),
+                        [spec.name for spec in available_specs],
                     )
-                call, provider_call = batched_calls.pop(0)
+                routed = batched_calls.pop(0)
+                call, provider_call = routed.call, routed.provider_call
                 if call.name == "finish_response":
                     break
-                if call.name not in budgeted_names:
+                refusal = routed.refusal
+                if refusal is None and call.name not in budgeted_names:
                     # An earlier call in the batch consumed this budget class.
                     # Drop the queued remainder and route again with the tools
                     # the turn can still afford; the model re-issues what it
@@ -3661,15 +3828,38 @@ class ChatService:
                     batched_calls = []
                     continue
                 self._assert_execution_owner(prepared)
-                spec = components.specs[call.name]
-                if "cwd" in spec.path_arguments:
-                    call = call.model_copy(
-                        update={"arguments": {**call.arguments, "cwd": "."}}
+                known_spec = components.specs.get(call.name)
+                if known_spec is not None:
+                    if "cwd" in known_spec.path_arguments:
+                        call = call.model_copy(
+                            update={"arguments": {**call.arguments, "cwd": "."}}
+                        )
+                    normalized_arguments = _normalize_routing_arguments(
+                        components, known_spec, call.arguments
                     )
-                normalized_arguments = _normalize_routing_arguments(
-                    components, spec, call.arguments
-                )
-                call = call.model_copy(update={"arguments": normalized_arguments})
+                    call = call.model_copy(update={"arguments": normalized_arguments})
+                issued_call_id: str | None = None
+                if routed.repeated_id:
+                    if refusal is None and _replays_a_run_call(turn.tool_history, call):
+                        refusal = _REPLAYED_CALL_REFUSAL
+                    # Two results under one id are ambiguous to the model and
+                    # to providers, so a reused id continues under one Core
+                    # owns, in the strictest provider format (nine
+                    # alphanumerics).
+                    issued_call_id = call.id
+                    call = call.model_copy(update={"id": f"nbc{turn.next_step:06d}"})
+                if refusal is not None:
+                    turn, refused_events = self._refused_tool_step(
+                        turn, known_spec, call, provider_call, refusal, issued_call_id
+                    )
+                    for refused_event in refused_events:
+                        yield refused_event
+                    if not route_deviated:
+                        route_deviated = True
+                        deviations += 1
+                    continue
+                deviations = 0
+                spec = components.specs[call.name]
                 step = turn.next_step
                 idempotency_key = f"chat:{turn.id}:step:{step}"
                 durable_call_id = str(
@@ -3714,6 +3904,8 @@ class ChatService:
                 }
                 if provider_call is not None:
                     entry["provider_call"] = provider_call
+                if issued_call_id is not None:
+                    entry["issued_call_id"] = issued_call_id
                 try:
                     if (
                         call.name in CATALOG_DISCOVERY_NAMES
@@ -4435,12 +4627,16 @@ class ChatService:
         turn: ChatTurn,
         budgeted_names: set[str],
         deferred_names: set[str],
-    ) -> list[tuple[ModelToolCall, dict[str, Any] | None]]:
-        """Validate a whole routing response before any of it reaches a broker.
+        known_names: set[str],
+        offered_names: Sequence[str],
+    ) -> list[_RoutedCall]:
+        """Sort a whole routing response before any of it reaches a broker.
 
-        A response may carry several independent calls. Rejecting a malformed
-        batch as a unit keeps the old guarantee that a bad routing step never
-        produces a partial effect.
+        A response may carry several independent calls. A call Core cannot run
+        (an unavailable tool, or one the output limit cut off) is answered
+        with an error the model can correct, as Codex, Cline and pi-mono do,
+        while the calls beside it still run. Nothing Core could not validate
+        ever executes.
         """
 
         seen = {
@@ -4448,20 +4644,48 @@ class ChatService:
             for entry in turn.tool_history
             if entry.get("model_call_id")
         }
-        batch: list[tuple[ModelToolCall, dict[str, Any] | None]] = []
+        # Any call in a response the output limit cut off may have lost the
+        # end of its arguments, even when they still parse, so none of them
+        # runs.
+        truncated = (
+            response.finish_reason or ""
+        ).lower() in _OUTPUT_LIMIT_FINISH_REASONS
+        batch: list[_RoutedCall] = []
         for call in response.tool_calls:
-            if call.id in seen:
-                raise ChatError(
-                    "provider repeated a completed tool call id; "
-                    "refusing duplicate execution"
-                )
-            seen.add(call.id)
             if call.name == "finish_response":
+                if truncated and batch:
+                    # Route again, so the model can re-issue the calls it
+                    # lost before the turn finishes.
+                    break
                 if call.arguments:
-                    raise ChatError("finish_response does not accept arguments")
+                    # The finish tool is a control signal with no effect, so
+                    # whatever a lax route let the model put in it carries
+                    # nothing. Only the argument names are recorded: a value
+                    # may be the model's answer.
+                    record_diagnostic(
+                        "warning",
+                        "chat",
+                        "chat.routing.finish_response_arguments_ignored",
+                        "A provider called finish_response with arguments; "
+                        "they were ignored.",
+                        outcome="fallback",
+                        stage="routing",
+                        retryable=False,
+                        safe_failure_cause=(
+                            "The model put arguments in the argument-less finish tool."
+                        ),
+                        metadata={
+                            "argument_keys": sorted(
+                                str(key)[:64] for key in call.arguments
+                            )[:16]
+                        },
+                    )
+                    call = call.model_copy(update={"arguments": {}})
                 # Finishing ends the turn, so calls queued behind it never run.
-                batch.append((call, None))
+                batch.append(_RoutedCall(call))
                 break
+            repeated_id = call.id in seen
+            seen.add(call.id)
             provider_call: dict[str, Any] | None = None
             if call.name == CATALOG_CALL:
                 target = unwrap_call(call.arguments, deferred_names)
@@ -4472,10 +4696,84 @@ class ChatService:
                     call = call.model_copy(
                         update={"name": target[0], "arguments": target[1]}
                     )
-            if call.name not in budgeted_names:
-                raise ChatError(f"provider requested unavailable tool {call.name!r}")
-            batch.append((call, provider_call))
+            refusal: str | None = None
+            if truncated:
+                refusal = _TRUNCATED_CALL_REFUSAL
+            elif call.name not in budgeted_names:
+                refusal = (
+                    f"{call.name!r} cannot run: its budget for this turn is "
+                    "spent. Use finish_response to answer from the results above."
+                    if call.name in known_names
+                    else f"{call.name!r} is not available in this step. Call one "
+                    "of the offered tools, or finish_response when no tool is "
+                    f"needed. Offered tools: {', '.join(offered_names)}."
+                )
+            batch.append(_RoutedCall(call, provider_call, refusal, repeated_id))
         return batch
+
+    def _refused_tool_step(
+        self,
+        turn: ChatTurn,
+        spec: Any,
+        call: ModelToolCall,
+        provider_call: dict[str, Any] | None,
+        detail: str,
+        issued_call_id: str | None,
+    ) -> tuple[ChatTurn, list[tuple[str, dict[str, Any]]]]:
+        """Answer a call Core will not run with an error the model can act on.
+
+        The broker never sees the call and it spends no budget. The model
+        reads the error as that call's result and routes again.
+        """
+
+        step = turn.next_step
+        durable_call_id = str(
+            uuid5(NAMESPACE_URL, f"nebula:{turn.id}:chat:{turn.id}:step:{step}")
+        )
+        provider_result = self._bounded_tool_error("failed", detail)
+        summary = str(json.loads(provider_result)["detail"])
+        display_name = spec.display_name if spec is not None else None
+        entry: dict[str, Any] = {
+            "step": step,
+            "model_call_id": call.id,
+            "tool_call_id": durable_call_id,
+            "name": call.name,
+            "arguments": call.arguments,
+            "budget_class": _REFUSED_BUDGET_CLASS,
+            "status": "failed",
+            "provider_result": provider_result,
+            "result_summary": summary,
+            **({"display_name": display_name} if display_name else {}),
+            **({"provider_call": provider_call} if provider_call is not None else {}),
+            **({"issued_call_id": issued_call_id} if issued_call_id else {}),
+        }
+        turn = self._save_tool_step(turn, entry)
+        common = {
+            "turn_id": turn.id,
+            "tool_call_id": durable_call_id,
+            "capability": call.name,
+            "display_name": display_name,
+            "step": step,
+        }
+        return turn, [
+            (
+                "tool_started",
+                {"type": "tool_started", **common, "arguments": call.arguments},
+            ),
+            (
+                "tool_completed",
+                {
+                    "type": "tool_completed",
+                    **common,
+                    "status": "failed",
+                    "summary": summary,
+                    "evidence_ids": [],
+                    "result_artifact_id": None,
+                    "artifacts": [],
+                    "receipt": _decoded_result(provider_result),
+                },
+            ),
+        ]
 
     @staticmethod
     def _provider_tool_history(turn: ChatTurn) -> list[ModelToolResult]:
@@ -4693,11 +4991,13 @@ class ChatService:
                 "status": status,
                 "next_step": turn.next_step + 1,
                 # A step Core added to deliver subagent messages spends no
-                # budget: the model did not ask for it.
+                # budget: the model did not ask for it. Nor does a call Core
+                # answered without running it.
                 "execution_tool_calls": turn.execution_tool_calls
                 + (
                     1
-                    if entry.get("budget_class") not in {"artifact_query", "delivery"}
+                    if entry.get("budget_class")
+                    not in {"artifact_query", "delivery", _REFUSED_BUDGET_CLASS}
                     else 0
                 ),
                 "artifact_queries": turn.artifact_queries

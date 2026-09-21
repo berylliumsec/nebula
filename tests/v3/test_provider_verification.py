@@ -11,8 +11,9 @@ AUTH = {"Authorization": "Bearer test-token"}
 
 
 class ProbeProvider:
-    def __init__(self, *, valid: bool = True):
+    def __init__(self, *, valid: bool = True, preamble: str = ""):
         self.valid = valid
+        self.preamble = preamble
 
     async def complete(self, request):
         assert request.tool_choice.value == "required"
@@ -20,7 +21,7 @@ class ProbeProvider:
         return ModelResponse(
             provider_id="provider-a",
             model=request.model,
-            text="" if self.valid else "<tool>not structured</tool>",
+            text=self.preamble if self.valid else "<tool>not structured</tool>",
             tool_calls=(
                 [
                     ToolCall(
@@ -131,6 +132,32 @@ def test_probe_fails_closed_and_revision_conflicts(tmp_path, monkeypatch):
     assert verification.status == ProviderVerificationStatus.FAILED
     assert "prose" in (verification.failure_detail or "")
     assert conflict.status_code == 409
+
+
+def test_probe_verifies_a_structured_call_beside_a_preamble(tmp_path, monkeypatch):
+    """A model that narrates its one call still calls tools correctly."""
+
+    store = NebulaStore(tmp_path / "verification-preamble.db")
+    profile = _profile(store)
+    monkeypatch.setattr(
+        api_module,
+        "provider_from_profile",
+        lambda _: ProbeProvider(valid=True, preamble="I'll make the call now."),
+    )
+    app = create_app(store, auth_token="test-token")
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/v1/providers/{profile.id}/capabilities/verify",
+            headers=AUTH,
+            json={"model": "model-a", "expected_revision": profile.revision},
+        )
+
+    assert response.status_code == 200
+    verification = store.get(ProviderProfile, profile.id).capability_verifications[
+        "model-a"
+    ]
+    assert verification.status == ProviderVerificationStatus.VERIFIED
 
 
 def test_compatibility_edit_invalidates_until_explicit_reverification(
