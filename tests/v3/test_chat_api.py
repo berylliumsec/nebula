@@ -783,6 +783,22 @@ def test_model_and_effort_change_while_a_response_is_active(tmp_path):
     )
     assert effort.status_code == 200, effort.text
     assert effort.json()["metadata"]["reasoning_effort"] == "high"
+    delegation = client.patch(
+        f"/api/v1/chat-sessions/{session.id}",
+        headers=_auth(),
+        json={"allow_subagents": True, "max_active_subagents": 3},
+    )
+    assert delegation.status_code == 200, delegation.text
+    assert delegation.json()["metadata"]["allow_subagents"] is True
+    assert delegation.json()["metadata"]["max_active_subagents"] == 3
+    cleared = client.patch(
+        f"/api/v1/chat-sessions/{session.id}",
+        headers=_auth(),
+        json={"allow_subagents": False, "max_active_subagents": None},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["metadata"]["allow_subagents"] is False
+    assert cleared.json()["metadata"]["max_active_subagents"] is None
     # Everything else about the conversation still waits for the response.
     selections = client.patch(
         f"/api/v1/chat-sessions/{session.id}",
@@ -792,7 +808,7 @@ def test_model_and_effort_change_while_a_response_is_active(tmp_path):
     assert selections.status_code == 409
     assert "response is active" in selections.json()["detail"]
 
-    revision = effort.json()["revision"]
+    revision = cleared.json()["revision"]
     switch = {"provider_id": profile.id, "model": "model-b"}
     preflight = client.post(
         f"/api/v1/chat/sessions/{session.id}/runtime-switch/preflight",
@@ -820,6 +836,43 @@ def test_model_and_effort_change_while_a_response_is_active(tmp_path):
     assert stored.metadata["reasoning_effort"] == "high"
     # The running response keeps the runtime it started with.
     assert store.get(ChatTurn, turn.id).model == "model-a"
+
+
+def test_harness_subagent_choice_is_saved_before_model_verification(tmp_path):
+    store = NebulaStore(tmp_path / "harness-subagent-choice.db")
+    engagement = store.create(Engagement(name="Harness chat"))
+    session = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Harness chat",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="codex-profile",
+            harness_session_id="codex-session",
+            model="gpt-5.6",
+        )
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+    path = f"/api/v1/chat-sessions/{session.id}"
+
+    enabled = client.patch(
+        path,
+        headers=_auth(),
+        json={
+            "allow_subagents": True,
+            "subagent_provider_id": "provider-pending-verification",
+            "subagent_model": "model-pending-verification",
+            "max_active_subagents": 2,
+        },
+    )
+    assert enabled.status_code == 200, enabled.text
+    assert enabled.json()["metadata"]["provider_subagent"] == {
+        "provider_profile_id": "provider-pending-verification",
+        "model": "model-pending-verification",
+        "max_active": 2,
+    }
+    disabled = client.patch(path, headers=_auth(), json={"allow_subagents": False})
+    assert disabled.status_code == 200, disabled.text
+    assert "provider_subagent" not in disabled.json()["metadata"]
 
 
 def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):

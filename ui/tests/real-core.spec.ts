@@ -3752,6 +3752,43 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
 });
 
 const reliabilityTest = test.extend({serviceWorkers: "block"});
+reliabilityTest("stabilization real Core keeps the Subagents choice across refresh", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "settings");
+  try {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Subagents settings acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Subagents settings acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await page.getByRole("textbox", {name: "Message the analyst assistant", exact: true}).fill("Save this conversation");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS fixture low", {timeout: 20_000});
+    const sessionId = new URL(page.url()).searchParams.get("session");
+    expect(sessionId).toBeTruthy();
+
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    const toggle = page.getByRole("checkbox", {name: /Provider subagents/});
+    await toggle.check();
+    await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();
+    expect((await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent).toBeTruthy();
+    await page.reload();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await expect(page.getByRole("checkbox", {name: /Provider subagents/})).toBeChecked();
+
+    await toggle.uncheck();
+    await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();
+    expect((await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent).toBeUndefined();
+    await page.reload();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await expect(page.getByRole("checkbox", {name: /Provider subagents/})).not.toBeChecked();
+    await testInfo.attach("subagents-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId}), contentType: "application/json"});
+  } finally {await core.stop();}
+});
+
 reliabilityTest("assistant upgrade conversation bulk delete clears rows already absent from real Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
