@@ -1,21 +1,21 @@
 {
-  "change_digest": "b39f6a5ac49eb39f13325178f565120069d1674bcd1859b6c11177725c4176ca",
-  "reviewed_by": "Claude review of the Context tab declutter",
-  "reason": "The operator asked to remove everything in the conversation-details Context tab below Working context except subagents: Workspace controls (checkpoint files, Save checkpoint, Schedule hourly), Operator context, Recorded prior-turn context and Technical session details. SessionsPage stops rendering them and drops the 'Save as decision' message action that seeded Operator context; ChatDecisions, ChatRecordedContext and ProviderSessionAdvanced are deleted with their unit tests. Goal children (Start child / Delegated children) are kept as ProviderGoalChildren, which renders only while a running goal may delegate or has delegated children. The operator-context and workspace-checkpoints guides are removed with their targets, and the unused checkpoint and schedule client methods go. Core is unchanged: the decisions, checkpoint, schedule and context-sources APIs remain, so real-Core journeys that used the removed editor to seed operator context now write it through PUT chat/sessions/{id}/decisions/{id}. The live Core database holds no chat_decisions entities, so no active operator context becomes invisible.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python or native tests: no Python or Rust changed. Frontend selects the new ProviderGoalChildren tests and the guide catalog tests whose anchor list changed; the deleted component tests go with their components. Playwright selects conversation-details (the drawer) and the assistant entries on desktop, mobile-chromium and mobile-webkit because SessionsPage changed (message actions and the drawer). The real-Core assistant entry is not selected: its edited journeys ('interactive guides reach every assistant control', 'foundation production LAN reads durable conversation') were run locally against a Core from this branch and pass; the deployed-service and live-OpenRouter journeys need external services and skip in CI.",
+  "change_digest": "7ddd245930d6e14deb2f000943274008fe6a9094f15572a3d8f7103fa2b11fce",
+  "reviewed_by": "Claude review of the Agent view drawer removal",
+  "reason": "The operator pointed out that the Agent view already floats over the chat area, so the conversation-details drawer's Agent view tab (Agent view heading, Pop out, Open in Results, the snapshot explorer) is redundant. ChatWorkspaceDrawer now offers Context, Results and Subagents. AgentViewPanel loses its 'Dock in conversation details' button, agentViewGeometry loses the docked/floating placement preference, and ChatResultStream, which only rendered the docked tab, is deleted with its test and its CSS; AgentViewBody keeps the shared .chat-result-stream-body/-detail rules. SessionsPage drops the placement state, the docked effect and the drawer branch; the composer's Agent view button now always toggles the floating panel, and a saved ?drawer=visuals link opens the floating view and removes the parameter (replace navigation).",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python or native tests: no Python or Rust changed. Frontend selects AgentViewPanel.test.tsx, the only structured-result test touching the removed dock and placement code. Playwright selects structured-results (the Agent view journeys, including the rewritten legacy-link, narrowest-view and no-dock tests) and conversation-details (the drawer tabs), and the assistant entries on desktop, mobile-chromium and mobile-webkit because SessionsPage changed; counts overlap where titles match both. No real-Core entry: real-core.spec.ts never referenced the Agent view tab. Locally the assistant desktop run had one failure in 'streaming chat follows the bottom without overriding reader scroll intent', which passed 3/3 on rerun and does not touch this code.",
   "expected_tests": {
     "python": 0,
-    "frontend": 15,
+    "frontend": 12,
     "native": 0,
-    "playwright": 157
+    "playwright": 178
   },
   "python": [],
   "frontend": [
-    "ui/src/components/ProviderGoalChildren.test.tsx",
-    "ui/src/guides/guides.test.tsx"
+    "ui/src/components/structured-result/AgentViewPanel.test.tsx"
   ],
   "native": [],
   "playwright": [
+    "area:structured-results",
     "area:conversation-details",
     "entry:assistant/desktop",
     "entry:assistant/mobile-chromium",
