@@ -2464,6 +2464,8 @@ export interface PersistedChatMessage extends ChatMessage {
   citations: ChatCitation[];
   contextAttachments: ChatContextAttachment[];
   harnessTurnId?: Identifier;
+  /** Set on the note Core saves for a provider turn that failed or stopped without an answer. */
+  outcomeTurnId?: Identifier;
   toolResults?: ChatToolResult[];
   toolSuggestions?: ToolSuggestionSummary;
   /** Set when an in-place edit replaced this turn; it stays readable but leaves the conversation. */

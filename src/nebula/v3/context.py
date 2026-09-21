@@ -931,15 +931,25 @@ class ContextCompactor:
         while attempt < 2:
             messages = [ModelMessage(role="user", content=prompt)]
             if attempt:
-                messages.append(
-                    ModelMessage(
-                        role="user",
-                        content=(
-                            "The previous response failed validation. Repair it and return "
-                            f"only valid JSON. Validation error: {last_error}. Previous "
-                            f"response: {previous_output[:8_000]}"
+                # The rejected output goes back as the model's own turn, so
+                # the repair request alternates roles as strict chat templates
+                # and Bedrock require, and the model sees what it answered.
+                messages.extend(
+                    [
+                        ModelMessage(
+                            role="assistant",
+                            content=previous_output[:8_000].strip()
+                            or "(The previous response contained no text.)",
                         ),
-                    )
+                        ModelMessage(
+                            role="user",
+                            content=(
+                                "The previous response failed validation. Repair it "
+                                "and return only valid JSON. Validation error: "
+                                f"{last_error}."
+                            ),
+                        ),
+                    ]
                 )
             request = ModelRequest(
                 model=model,

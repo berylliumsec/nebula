@@ -20,6 +20,8 @@ export interface ReconciledConversationMessage extends ChatMessage {
   detail?: string;
   sequence?: number;
   harnessTurnId?: string;
+  /** The provider turn whose failed or stopped outcome this saved note records. */
+  outcomeTurnId?: string;
   toolSuggestions?: ToolSuggestionSummary;
 }
 
@@ -41,6 +43,15 @@ interface CompletedAssistantMessage {
 /** A saved answer Core kept from a stopped or interrupted turn still reads as stopped after reload. */
 export function savedAssistantState(finishReason?: string): ConversationMessageState {
   return finishReason === "interrupted" ? "cancelled" : "complete";
+}
+
+/**
+ * Leave out Core's saved outcome note for a turn the page shows as its own
+ * unfinished response, so one failed turn does not read twice. Finishing the
+ * answer replaces the note in Core as well.
+ */
+export function withoutTurnOutcome<T extends ReconciledConversationMessage>(messages: T[], turnId: string): T[] {
+  return messages.filter((message) => message.outcomeTurnId !== turnId);
 }
 
 /** Settles the live response Core reported as stopped, keeping the partial content it streamed. */
