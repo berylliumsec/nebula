@@ -184,6 +184,7 @@ from .chat_subagents import (
     SubagentService,
     SubagentWaitPending,
     is_subagent_session,
+    subagent_child_components,
     subagent_components,
     subagent_limit,
     subagent_routing_instructions,
@@ -2074,9 +2075,13 @@ class ChatService:
         subagents_enabled = bool(
             request.allow_subagents and not subagent_child and engagement_id
         )
+        # Every subagent turn can message the assistant that delegated to it,
+        # so it always routes tools, even when its task has no others.
+        child_messaging = bool(subagent_child and engagement_id)
         switch_tools_enabled = bool(
             request.tools_enabled
             or subagents_enabled
+            or child_messaging
             or request.mcp_server_ids
             or request.ssh_environment_ids
             or any(item.resources for item in skill_snapshots)
@@ -2401,6 +2406,7 @@ class ChatService:
             or model_context
             or skill_resources_selected
             or subagents_enabled
+            or child_messaging
         )
         if tools_enabled:
             if engagement_id is None:
@@ -2476,6 +2482,7 @@ class ChatService:
                     and not model_context
                     and not skill_resources_selected
                     and not subagents_enabled
+                    and not child_messaging
                 ):
                     raise ChatConfigurationError(
                         "no runtime capabilities were selected"
@@ -2521,6 +2528,23 @@ class ChatService:
                     tool_components = combine_tool_components(
                         tool_components,
                         subagent_components(
+                            self.subagents,
+                            engagement_id=engagement_id,
+                            workspace=(
+                                tool_components.workspace
+                                if tool_components is not None
+                                else Path(
+                                    (engagement.workspace_path if engagement else None)
+                                    or "."
+                                ).resolve()
+                            ),
+                            scope=tool_components.scope if tool_components else None,
+                        ),
+                    )
+                if child_messaging:
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        subagent_child_components(
                             self.subagents,
                             engagement_id=engagement_id,
                             workspace=(
@@ -2695,6 +2719,7 @@ class ChatService:
                     "browser_session_id": browser_session_id,
                     "application_model_context": model_context,
                     "allow_subagents": subagents_enabled,
+                    "subagent_child": child_messaging,
                     "max_active_subagents": (
                         request.max_active_subagents if subagents_enabled else None
                     ),
@@ -3467,6 +3492,18 @@ class ChatService:
                     break
                 budgeted_names = {spec.name for spec in budgeted_specs}
                 if not batched_calls:
+                    # What subagents sent a working parent, or a parent sent a
+                    # working subagent, reaches the model before it routes
+                    # again, as the result of a step Core adds.
+                    delivery = self.subagents.routing_delivery(
+                        turn, {spec.name for spec in available_specs}
+                    )
+                    if delivery is not None:
+                        turn, events = self._subagent_delivery_step(
+                            turn, components, *delivery
+                        )
+                        for delivered in events:
+                            yield delivered
                     routing = prepared.model_request.model_copy(
                         update={
                             "instructions": _CHAT_TOOL_INSTRUCTIONS
@@ -3686,18 +3723,11 @@ class ChatService:
                     self._release_execution(prepared)
                     return
                 except SubagentWaitPending as waiting:  # diagnostic-expected: subagent wait is control flow that pauses the turn durably
-                    summary = (
-                        f"Waiting for {len(waiting.subagent_ids)} subagent"
-                        f"{'' if len(waiting.subagent_ids) == 1 else 's'} to report."
-                    )
                     entry.update(
                         {
                             "status": "waiting_callback",
-                            "subagent_wait": {
-                                "ids": waiting.subagent_ids,
-                                "mode": waiting.mode,
-                            },
-                            "result_summary": summary,
+                            "subagent_wait": waiting.wait,
+                            "result_summary": waiting.summary,
                         }
                     )
                     turn = self._save_tool_step(
@@ -3709,8 +3739,8 @@ class ChatService:
                             "type": "callback_required",
                             "turn_id": turn.id,
                             "tool_call_id": durable_call_id,
-                            "subagent_ids": waiting.subagent_ids,
-                            "summary": summary,
+                            "subagent_ids": waiting.wait.get("ids", []),
+                            "summary": waiting.summary,
                         },
                     )
                     prepared.turn = turn
@@ -4550,6 +4580,65 @@ class ChatService:
             expected_revision=goal.revision,
         )
 
+    def _subagent_delivery_step(
+        self,
+        turn: ChatTurn,
+        components: Any,
+        name: str,
+        output: dict[str, Any],
+        summary: str,
+    ) -> tuple[ChatTurn, list[tuple[str, dict[str, Any]]]]:
+        """Record a tool step Core ran on the model's behalf to deliver
+        subagent messages or reports, replayed like any other step."""
+
+        spec = components.specs[name]
+        step = turn.next_step
+        durable_call_id = str(
+            uuid5(NAMESPACE_URL, f"nebula:{turn.id}:chat:{turn.id}:step:{step}")
+        )
+        entry: dict[str, Any] = {
+            "step": step,
+            # Nine alphanumerics: the strictest provider call-id format.
+            "model_call_id": f"nbd{step:06d}"[:9],
+            "tool_call_id": durable_call_id,
+            "name": name,
+            "arguments": {},
+            "budget_class": "delivery",
+            "delivered_by_core": True,
+            "status": "complete",
+            "provider_result": serialize_model_result(output),
+            "trusted_result": True,
+            "result_summary": summary,
+            **({"display_name": spec.display_name} if spec.display_name else {}),
+        }
+        turn = self._save_tool_step(turn, entry)
+        common = {
+            "turn_id": turn.id,
+            "tool_call_id": durable_call_id,
+            "capability": name,
+            "display_name": spec.display_name,
+            "step": step,
+        }
+        return turn, [
+            (
+                "tool_started",
+                {"type": "tool_started", **common, "arguments": {}},
+            ),
+            (
+                "tool_completed",
+                {
+                    "type": "tool_completed",
+                    **common,
+                    "status": "complete",
+                    "summary": summary,
+                    "evidence_ids": [],
+                    "result_artifact_id": None,
+                    "artifacts": [],
+                    "receipt": output,
+                },
+            ),
+        ]
+
     def _save_tool_step(
         self,
         turn: ChatTurn,
@@ -4564,8 +4653,14 @@ class ChatService:
             {
                 "status": status,
                 "next_step": turn.next_step + 1,
+                # A step Core added to deliver subagent messages spends no
+                # budget: the model did not ask for it.
                 "execution_tool_calls": turn.execution_tool_calls
-                + (1 if entry.get("budget_class") != "artifact_query" else 0),
+                + (
+                    1
+                    if entry.get("budget_class") not in {"artifact_query", "delivery"}
+                    else 0
+                ),
                 "artifact_queries": turn.artifact_queries
                 + (1 if entry.get("budget_class") == "artifact_query" else 0),
                 "tool_call_ids": [*turn.tool_call_ids, str(entry["tool_call_id"])],
@@ -4930,31 +5025,26 @@ class ChatService:
         entry: dict[str, Any],
         wait: dict[str, Any],
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        ids = [str(item) for item in wait.get("ids") or []]
-        mode = "any" if wait.get("mode") == "any" else "all"
-        if not self.subagents.wait_satisfied(ids, mode):
+        if not self.subagents.wait_ready(wait):
             yield (
                 "callback_required",
                 {
                     "type": "callback_required",
                     "turn_id": turn.id,
                     "tool_call_id": entry["tool_call_id"],
-                    "subagent_ids": ids,
+                    "subagent_ids": [str(item) for item in wait.get("ids") or []],
                     "summary": entry.get("result_summary")
                     or "Waiting for subagents to report.",
                 },
             )
             return
-        output = self.subagents.wait_output(ids)
-        received = len(ids) - len(output["still_running"])
+        output, summary = self.subagents.wait_result(wait)
         entry.update(
             {
                 "status": "complete",
                 "provider_result": serialize_model_result(output),
                 "trusted_result": True,
-                "result_summary": (
-                    f"{received} subagent report{'' if received == 1 else 's'} received"
-                ),
+                "result_summary": summary,
             }
         )
         turn = self.store.update(
@@ -5256,6 +5346,25 @@ class ChatService:
                         self.subagents,
                         engagement_id=turn.engagement_id,
                         workspace=workspace,
+                        scope=components.scope if components else None,
+                    ),
+                )
+            if turn.request_snapshot.get("subagent_child"):
+                components = combine_tool_components(
+                    components,
+                    subagent_child_components(
+                        self.subagents,
+                        engagement_id=turn.engagement_id,
+                        workspace=(
+                            components.workspace
+                            if components is not None
+                            else Path(
+                                self.store.get(
+                                    Engagement, turn.engagement_id
+                                ).workspace_path
+                                or "."
+                            ).resolve()
+                        ),
                         scope=components.scope if components else None,
                     ),
                 )

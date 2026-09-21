@@ -3824,9 +3824,13 @@ class ChatSubagent(Entity):
     model: str | None = Field(default=None, max_length=500)
     # The reasoning level the child was asked for; None is the model's default.
     reasoning_effort: str | None = Field(default=None, max_length=20)
-    # When a harness parent received the report, through subagent.wait or at
-    # the start of its next turn. Provider parents read reports from history.
+    # When the parent model received the final report: a wait or list
+    # result, an update Core delivered before its next step, a harness's next
+    # prompt, or the result message posted to a provider conversation.
     reported_at: datetime | None = None
+    # A finished subagent the parent messages again runs another round in the
+    # same child conversation; each round ends with its own report.
+    rounds: int = Field(default=1, ge=1)
     name: str = Field(min_length=1, max_length=120)
     task: str = Field(min_length=1, max_length=20_000)
     status: ChatSubagentStatus = ChatSubagentStatus.RUNNING
@@ -3845,6 +3849,55 @@ class ChatSubagent(Entity):
         terminal = self.status in CHAT_SUBAGENT_TERMINAL_STATUSES
         if terminal != (self.finished_at is not None):
             raise ValueError("finished_at is required exactly for finished subagents")
+        return self
+
+
+class ChatSubagentMessageDirection(StringEnum):
+    TO_CHILD = "to_child"
+    TO_PARENT = "to_parent"
+
+
+class ChatSubagentMessageStatus(StringEnum):
+    # Not yet seen by the receiving model.
+    PENDING = "pending"
+    DELIVERED = "delivered"
+    # Could not reach the receiving model; ``note`` says why and the sender
+    # was told.
+    UNDELIVERED = "undelivered"
+
+
+class ChatSubagentMessage(Entity):
+    """One message between a subagent and the assistant that delegated to it."""
+
+    entity_kind: ClassVar[str] = "chat_subagent_messages"
+    engagement_id: str
+    subagent_id: str = Field(min_length=1, max_length=200)
+    parent_session_id: str = Field(min_length=1, max_length=200)
+    direction: ChatSubagentMessageDirection
+    content: str = Field(min_length=1, max_length=20_000)
+    # A child's question that pauses it until the parent answers.
+    expects_reply: bool = False
+    # True while that question is open. A reply clears it; so does a parent
+    # that cannot answer, with ``note`` saying why.
+    awaiting_reply: bool = False
+    status: ChatSubagentMessageStatus = ChatSubagentMessageStatus.PENDING
+    delivered_at: datetime | None = None
+    note: str | None = Field(default=None, max_length=1_000)
+    # The transcript message that shows it in the parent conversation, when
+    # it arrived while that conversation was idle.
+    posted_message_id: str | None = Field(default=None, max_length=200)
+    # A retried tool step sends the same message once.
+    idempotency_key: str | None = Field(default=None, max_length=300)
+
+    @model_validator(mode="after")
+    def reply_state_is_coherent(self) -> "ChatSubagentMessage":
+        if self.awaiting_reply and not self.expects_reply:
+            raise ValueError("only a question can await a reply")
+        if (
+            self.expects_reply
+            and self.direction != ChatSubagentMessageDirection.TO_PARENT
+        ):
+            raise ValueError("only a subagent asks its parent a question")
         return self
 
 
@@ -4632,6 +4685,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatReadCursor,
     ChatTurn,
     ChatSubagent,
+    ChatSubagentMessage,
     NativeCheckpoint,
     ChatSchedule,
     NativeHookExecution,

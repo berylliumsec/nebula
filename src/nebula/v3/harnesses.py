@@ -344,6 +344,7 @@ _GATEWAY_SUBAGENT_NAMES = (
     "subagent.start",
     "subagent.wait",
     "subagent.list",
+    "subagent.message",
     "subagent.stop",
 )
 
@@ -404,7 +405,9 @@ def _gateway_subagent_tools(
             "Wait for subagents to finish and return their reports. Omit "
             "subagent_ids to wait for every running subagent. Waits at most "
             f"timeout_seconds (default {wait_default}); anything unfinished is "
-            "listed in still_running, so call it again if you need those reports.",
+            "listed in still_running, so call it again if you need those reports. "
+            "Returns early when a subagent sends you a message or waits on a "
+            "question.",
             {
                 "type": "object",
                 "properties": {
@@ -428,8 +431,28 @@ def _gateway_subagent_tools(
             },
         ),
         "subagent.list": (
-            "List this conversation's provider subagents and their status.",
+            "List this conversation's provider subagents with their status, their "
+            "messages to you and any report you have not received.",
             {"type": "object", "properties": {}, "additionalProperties": False},
+        ),
+        "subagent.message": (
+            "Send one of your provider subagents a message: new instructions, a "
+            "correction or the answer to its question. A running subagent reads "
+            "it before its next step; a finished one starts another round with it.",
+            {
+                "type": "object",
+                "properties": {
+                    "subagent_id": {"type": "string", "maxLength": 200},
+                    "message": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 20_000,
+                        "description": "What it should know or do. It cannot see this conversation.",
+                    },
+                },
+                "required": ["subagent_id", "message"],
+                "additionalProperties": False,
+            },
         ),
         "subagent.stop": (
             "Stop a running provider subagent.",
@@ -5944,6 +5967,37 @@ class HarnessRuntimeService:
         ):
             raise ValueError("harness runtime is already bound to a subagent service")
         self.provider_subagents = service
+        service.harness_steer = self._steer_subagent_update
+
+    async def _steer_subagent_update(self, chat_session_id: str, text: str) -> bool:
+        """Add a subagent update to the chat's running harness turn.
+
+        Returns False when no turn of that chat is running or the harness
+        cannot take input mid-turn (Grok); the update then reaches it through
+        its subagent tools or at the start of its next turn.
+        """
+
+        for active in list(self._active.values()):
+            try:
+                turn = self.store.get(HarnessTurn, active.turn_id)
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: turn deleted while active; another chat's entry
+                continue
+            if turn.chat_session_id != chat_session_id:
+                continue
+            try:
+                await self.steer_turn(
+                    turn.id,
+                    text,
+                    actor_id="nebula-subagents",
+                    title="Subagent update",
+                    summary="Nebula added subagent messages or reports to the turn.",
+                )
+            except HarnessStateError:  # diagnostic-expected: the harness cannot be steered now; the update stays unread
+                return False
+            return True
+        return False
 
     def bind_tool_platform(self, platform: RuntimePlatform) -> None:
         """Bind the Core-owned OCI runtime used by the session gateway."""
@@ -7496,15 +7550,15 @@ class HarnessRuntimeService:
             oci_components = self._ensure_oci_components(session)
         session = self._bind_session_provider_subagent(session, subagent_setting)
         chat = self._remember_chat_provider_subagent(chat, subagent_setting)
-        subagent_reports = (
-            self.provider_subagents.unreported_harness_reports(chat.id)
+        subagent_update = (
+            self.provider_subagents.harness_update(chat.id)
             if self.provider_subagents is not None
-            else []
+            else None
         )
-        if subagent_reports:
+        if subagent_update:
             runtime_context = (
                 runtime_context or ""
-            ) + SubagentService.harness_report_context(subagent_reports)
+            ) + SubagentService.harness_report_context(subagent_update)
         oci_snapshot = session.metadata.get("command_runtime_snapshot")
         if not isinstance(oci_snapshot, dict) and oci_components is not None:
             oci_snapshot = self._oci_snapshot(oci_components)
@@ -7581,7 +7635,16 @@ class HarnessRuntimeService:
                 "knowledge_access": knowledge_access,
                 "cloud_knowledge_confirmed": allow_cloud_knowledge,
                 "provider_subagent": subagent_setting,
-                "subagent_reports_delivered": [item.id for item in subagent_reports],
+                "subagent_reports_delivered": (
+                    [item.id for item in subagent_update.records]
+                    if subagent_update
+                    else []
+                ),
+                "subagent_messages_delivered": (
+                    [item.id for item in subagent_update.messages]
+                    if subagent_update
+                    else []
+                ),
                 "harness_mode": harness_mode,
                 "harness_skill": (
                     harness_skill.model_dump(mode="json")
@@ -7626,8 +7689,8 @@ class HarnessRuntimeService:
                     },
                 )
             )
-        if subagent_reports and self.provider_subagents is not None:
-            self.provider_subagents.mark_reported(item.id for item in subagent_reports)
+        if subagent_update and self.provider_subagents is not None:
+            self.provider_subagents.mark_delivered(subagent_update)
         return chat, chat_turn, harness_turn
 
     def _bind_session_provider_subagent(
@@ -8846,7 +8909,13 @@ class HarnessRuntimeService:
         return self.store.get(HarnessTurn, active.turn_id)
 
     async def steer_turn(
-        self, turn_id: str, text: str, *, actor_id: str
+        self,
+        turn_id: str,
+        text: str,
+        *,
+        actor_id: str,
+        title: str = "Operator guidance",
+        summary: str = "The operator added guidance to the active harness turn.",
     ) -> HarnessTurn:
         turn = self.store.get(HarnessTurn, turn_id)
         active = self._active.get(turn.harness_session_id)
@@ -8864,8 +8933,8 @@ class HarnessRuntimeService:
             origin=turn.origin,
             harness_session_id=turn.harness_session_id,
             harness_turn_id=turn.id,
-            title="Operator guidance",
-            summary="The operator added guidance to the active harness turn.",
+            title=title,
+            summary=summary,
             payload={"text": _bounded(clean, limit=10_000), "actor_id": actor_id},
         )
         self._persist_activity(turn, session, event)
@@ -10244,24 +10313,31 @@ class HarnessRuntimeService:
                         "the start of your next turn."
                     )
             elif name == "subagent.list":
-                result = {
-                    "subagents": [
-                        service._model_view(item, include_result=False)
-                        for item in service.for_session(parent_session_id)
-                    ]
-                }
+                result = service.list_output(parent_session_id)
+            elif name == "subagent.message":
+                result = await service.send_to_child(
+                    parent_session_id,
+                    str(arguments.get("subagent_id") or ""),
+                    str(arguments.get("message") or ""),
+                    parent_turn_id=turn.chat_turn_id,
+                    idempotency_key=f"harness-subagent-message:{turn.id}:"
+                    + hashlib.sha256(
+                        json.dumps(arguments, sort_keys=True).encode()
+                    ).hexdigest()[:40],
+                )
             else:
-                subagent_id = str(arguments.get("subagent_id") or "")
-                try:
-                    record = service.get(subagent_id)
-                except NotFoundError as exc:
-                    raise InvalidToolArguments(
-                        f"unknown subagent id {subagent_id!r}"
-                    ) from exc
-                if record.parent_session_id != parent_session_id:
-                    raise InvalidToolArguments(f"unknown subagent id {subagent_id!r}")
+                record = service._owned(
+                    parent_session_id, str(arguments.get("subagent_id") or "")
+                )
                 record = await service.stop(record.id)
                 result = {"subagent_id": record.id, "status": record.status.value}
+            if name in {"subagent.start", "subagent.message", "subagent.stop"}:
+                # A harness receives subagent news only through these results,
+                # a steer or its next prompt, so each result carries it.
+                update = service.pending_update(parent_session_id)
+                if update:
+                    result["updates"] = update.views
+                    service.mark_delivered(update)
         except (InvalidToolArguments, ChatError) as exc:
             record_caught_exception(
                 "harnesses",

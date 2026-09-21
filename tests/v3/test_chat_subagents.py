@@ -1,6 +1,7 @@
 import asyncio
 import json
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompletionRequest, ChatService
@@ -9,6 +10,8 @@ from nebula.v3.domain import (
     ChatMessage,
     ChatSession,
     ChatSubagent,
+    ChatSubagentMessage,
+    ChatSubagentMessageStatus,
     ChatSubagentStatus,
     ChatTurn,
     ChatTurnStatus,
@@ -52,10 +55,17 @@ def _finish(call_id: str) -> ModelResponse:
     return _call(call_id, "finish_response")
 
 
-class RoutedProvider(ModelProvider):
-    """Serve parent and subagent requests from separate scripts."""
+Scripted = ModelResponse | Callable[[ModelRequest], Awaitable[ModelResponse]]
 
-    def __init__(self, parent: list[ModelResponse], child: list[ModelResponse]) -> None:
+
+class RoutedProvider(ModelProvider):
+    """Serve parent and subagent requests from separate scripts.
+
+    A script entry is a response, or an async function of the request that
+    returns one, for a step that must wait on or inspect what happened.
+    """
+
+    def __init__(self, parent: list[Scripted], child: list[Scripted]) -> None:
         super().__init__(
             ProviderConfig(
                 id="provider",
@@ -84,14 +94,27 @@ class RoutedProvider(ModelProvider):
                 await self.child_gate.wait()
             if not self.child:
                 raise AssertionError("child script was exhausted")
-            return self.child.pop(0)
+            upcoming = self.child[0]
+            if (
+                request.tools
+                and isinstance(upcoming, ModelResponse)
+                and not upcoming.tool_calls
+            ):
+                # Every subagent routes tools, so a scripted answer first
+                # finishes routing.
+                return _finish(f"child-finish-{len(self.child_requests)}")
+            return await _play(self.child.pop(0), request)
         self.parent_requests.append(request)
         if not self.parent:
             raise AssertionError("parent script was exhausted")
-        return self.parent.pop(0)
+        return await _play(self.parent.pop(0), request)
 
     async def health(self) -> ProviderHealth:
         return ProviderHealth(provider_id="provider", healthy=True, models=["model-a"])
+
+
+async def _play(entry: Scripted, request: ModelRequest) -> ModelResponse:
+    return entry if isinstance(entry, ModelResponse) else await entry(request)
 
 
 def _setup(tmp_path: Path, provider: RoutedProvider):
@@ -168,6 +191,7 @@ def test_subagent_tools_require_opt_in(tmp_path: Path) -> None:
             "start_subagent",
             "wait_subagents",
             "list_subagents",
+            "message_subagent",
             "stop_subagent",
         }
         assert opted_in.turn.request_snapshot["allow_subagents"] is True
@@ -1060,6 +1084,521 @@ def test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level(
             if "Subagent reports are ready" in str(request.messages[-1].content)
         )
         assert continued.reasoning_effort == "high"
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def _sent(store: NebulaStore, direction: str) -> list[ChatSubagentMessage]:
+    return [
+        item
+        for item in store.list_entities(ChatSubagentMessage, limit=100)
+        if item.direction == direction
+    ]
+
+
+def _entries(turn: ChatTurn, name: str) -> list[dict]:
+    return [item for item in turn.tool_history if item["name"] == name]
+
+
+def _result(entry: dict) -> dict:
+    return json.loads(entry["provider_result"])
+
+
+def test_parent_and_subagent_message_each_other_while_both_work(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        store: NebulaStore
+
+        async def instruct_child(request: ModelRequest) -> ModelResponse:
+            await _until(lambda: bool(_sent(store, "to_parent")))
+            (record,) = store.list_entities(ChatSubagent)
+            return _call(
+                "p2",
+                "message_subagent",
+                subagent_id=record.id,
+                message="Also check port 8443.",
+            )
+
+        async def wait_for_report(request: ModelRequest) -> ModelResponse:
+            await _until(
+                lambda: (
+                    store.list_entities(ChatSubagent)[0].status
+                    == ChatSubagentStatus.COMPLETED
+                )
+            )
+            return _finish("p3")
+
+        async def note_progress(request: ModelRequest) -> ModelResponse:
+            await _until(lambda: bool(_sent(store, "to_child")))
+            return _call(
+                "c2", "message_parent", message="Still scanning.", wait_for_reply=None
+            )
+
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Scan the host.",
+                    name="Scan",
+                    context=None,
+                ),
+                instruct_child,
+                wait_for_report,
+                _response(text="The admin panel is exposed on 8443."),
+            ],
+            child=[
+                _call(
+                    "c1",
+                    "message_parent",
+                    message="Found an open admin panel.",
+                    wait_for_reply=None,
+                ),
+                note_progress,
+                _response(text="Port 8443 serves the admin panel."),
+            ],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        prepared = await chat.prepare_async(
+            _request(project, content="Scan it.", allow_subagents=True)
+        )
+        # Every subagent can message its parent, even with no other tools.
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _drain(chat, parent_turn_id)
+        (record,) = store.list_entities(ChatSubagent)
+        await _until(
+            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        )
+
+        # The parent heard from the child before a later step, without asking.
+        parent = store.get(ChatTurn, parent_turn_id)
+        delivered = [
+            item
+            for item in _entries(parent, "list_subagents")
+            if item.get("delivered_by_core")
+        ]
+        assert delivered
+        assert "Found an open admin panel." in delivered[0]["provider_result"]
+        # Core's step spends no tool budget.
+        assert parent.artifact_queries == len(parent.tool_history) - len(delivered)
+
+        # The child read the parent's message before its next step.
+        child = store.get(ChatTurn, record.child_turn_id)
+        inbox = [
+            item
+            for item in _entries(child, "read_parent_messages")
+            if item.get("delivered_by_core")
+        ]
+        assert "Also check port 8443." in inbox[0]["provider_result"]
+        assert {tool.name for tool in provider.child_requests[0].tools} >= {
+            "message_parent",
+            "read_parent_messages",
+        }
+        await _until(
+            lambda: all(
+                item.status == ChatSubagentMessageStatus.DELIVERED
+                for item in store.list_entities(ChatSubagentMessage)
+            )
+        )
+        assert store.get(ChatSubagent, record.id).reported_at is not None
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_subagent_question_pauses_it_until_the_waiting_parent_answers(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        store: NebulaStore
+        seen: dict = {}
+
+        async def answer(request: ModelRequest) -> ModelResponse:
+            waited = request.tool_results[-1]
+            seen["waited"] = waited
+            (record,) = store.list_entities(ChatSubagent)
+            return _call(
+                "p3", "message_subagent", subagent_id=record.id, message="Use staging."
+            )
+
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Check the deploy.",
+                    name="Deploy",
+                    context=None,
+                ),
+                _call("p2", "wait_subagents", subagent_ids=None, mode=None),
+                answer,
+                _call("p4", "wait_subagents", subagent_ids=None, mode=None),
+                _finish("p5"),
+                _response(text="Staging is healthy."),
+            ],
+            child=[
+                _call(
+                    "c1",
+                    "message_parent",
+                    message="Staging or production?",
+                    wait_for_reply=True,
+                ),
+                _response(text="Checked staging: healthy."),
+            ],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        prepared = await chat.prepare_async(
+            _request(project, content="Check the deploy.", allow_subagents=True)
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _until(
+            lambda: (
+                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
+            )
+        )
+        (record,) = store.list_entities(ChatSubagent)
+
+        # The wait ended on the question, which says the child is paused.
+        waited = seen["waited"]
+        assert waited.name == "wait_subagents"
+        assert record.id in str(waited.output)
+        assert "awaiting_your_reply" in str(waited.output)
+        assert "Staging or production?" in str(waited.output)
+
+        parent = store.get(ChatTurn, parent_turn_id)
+        answered = _result(_entries(parent, "message_subagent")[0])
+        assert answered["delivery"] == "answered"
+        final_wait = _entries(parent, "wait_subagents")[-1]
+        assert "Checked staging: healthy." in final_wait["provider_result"]
+
+        # The child resumed with the answer as its tool result.
+        child = store.get(ChatTurn, record.child_turn_id)
+        (asked,) = _entries(child, "message_parent")
+        assert asked["status"] == "complete"
+        assert "Use staging." in asked["provider_result"]
+        (question,) = _sent(store, "to_parent")
+        assert question.expects_reply and not question.awaiting_reply
+        assert question.status == ChatSubagentMessageStatus.DELIVERED
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_idle_parent_releases_a_question_and_it_is_posted(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Rotate the keys.",
+                    name="Keys",
+                    context=None,
+                ),
+                _finish("p2"),
+                _response(text="Started a key rotation."),
+            ],
+            child=[
+                _call(
+                    "c1",
+                    "message_parent",
+                    message="Which account should I use?",
+                    wait_for_reply=True,
+                ),
+                _response(text="Rotated with the default account."),
+            ],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        provider.child_gate = asyncio.Event()
+        prepared = await chat.prepare_async(
+            _request(project, content="Rotate keys.", allow_subagents=True)
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _drain(chat, parent_turn_id)
+        assert store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
+
+        provider.child_gate.set()
+        (record,) = store.list_entities(ChatSubagent)
+        await _until(
+            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        )
+        # Nobody was working to answer, so the child went on and said so.
+        child = store.get(ChatTurn, record.child_turn_id)
+        (asked,) = _entries(child, "message_parent")
+        assert "not working right now" in asked["provider_result"]
+        (question,) = _sent(store, "to_parent")
+        assert not question.awaiting_reply
+        # The question is in the parent conversation for its next turn.
+        messages = _messages(store, prepared.session.id)
+        posted = [
+            item for item in messages if item.metadata.get("kind") == "subagent_message"
+        ]
+        assert posted[0].content.startswith("Question from subagent Keys:")
+        assert "Which account should I use?" in posted[0].content
+        assert "continued without your answer" in posted[0].content
+        assert question.status == ChatSubagentMessageStatus.DELIVERED
+        assert messages[-1].metadata["kind"] == "subagent_result"
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_message_to_a_finished_subagent_starts_another_round(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Check the certificates.",
+                    name="Certs",
+                    context=None,
+                ),
+                _call("p2", "wait_subagents", subagent_ids=None, mode=None),
+                _finish("p3"),
+                _response(text="Certificates are valid."),
+            ],
+            child=[
+                _response(text="All certificates are valid."),
+                _response(text="Backups are encrypted."),
+            ],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        prepared = await chat.prepare_async(
+            _request(project, content="Check certs.", allow_subagents=True)
+        )
+        first_turn_id = chat.start_provider_turn(prepared)
+        await _drain(chat, first_turn_id)
+        (record,) = store.list_entities(ChatSubagent)
+        await _until(
+            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        )
+        first_post = store.get(ChatSubagent, record.id).result_message_id
+
+        provider.parent.extend(
+            [
+                _call(
+                    "p5",
+                    "message_subagent",
+                    subagent_id=record.id,
+                    message="Now check the backups.",
+                ),
+                _call("p6", "wait_subagents", subagent_ids=[record.id], mode=None),
+                _finish("p7"),
+                _response(text="Backups are encrypted too."),
+            ]
+        )
+        follow_up = await chat.prepare_async(
+            _request(
+                project,
+                content="And the backups?",
+                session_id=prepared.session.id,
+                allow_subagents=True,
+            )
+        )
+        second_turn_id = chat.start_provider_turn(follow_up)
+        await _until(
+            lambda: (
+                store.get(ChatTurn, second_turn_id).status == ChatTurnStatus.COMPLETE
+            )
+        )
+        second = store.get(ChatTurn, second_turn_id)
+        sent = _result(_entries(second, "message_subagent")[0])
+        assert sent["delivery"] == "new_round"
+        assert sent["round"] == 2
+        report = _result(_entries(second, "wait_subagents")[0])["subagents"][0]
+        assert report["report"] == "Backups are encrypted."
+        assert report["round"] == 2
+
+        record = store.get(ChatSubagent, record.id)
+        assert record.rounds == 2
+        # The new round follows the parent's current turn.
+        assert record.parent_turn_id == second_turn_id
+        child_messages = _messages(store, record.child_session_id)
+        assert "Now check the backups." in child_messages[-2].content
+        await _until(
+            lambda: (
+                store.get(ChatSubagent, record.id).result_message_id
+                not in {None, first_post}
+            )
+        )
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_failed_subagent_reports_its_error_and_failed_steps(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        async def upstream_down(request: ModelRequest) -> ModelResponse:
+            raise RuntimeError("upstream returned 503")
+
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Fetch the logs.",
+                    name="Logs",
+                    context=None,
+                ),
+                _call("p2", "wait_subagents", subagent_ids=None, mode=None),
+                _finish("p3"),
+                _response(text="The subagent failed."),
+            ],
+            child=[
+                _call("c1", "message_parent", message="   ", wait_for_reply=None),
+                upstream_down,
+            ],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        prepared = await chat.prepare_async(
+            _request(project, content="Get the logs.", allow_subagents=True)
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _until(
+            lambda: (
+                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
+            )
+        )
+        parent = store.get(ChatTurn, parent_turn_id)
+        (report,) = _result(_entries(parent, "wait_subagents")[0])["subagents"]
+        assert report["status"] == "failed"
+        assert "upstream returned 503" in report["error"]
+        (failure,) = report["tool_failures"]
+        assert failure["tool"] == "message_parent"
+        assert failure["status"] == "failed"
+        assert "message must say something" in failure["error"]
+        assert report["last_step"]["tool"] == "message_parent"
+
+        (record,) = store.list_entities(ChatSubagent)
+        await _until(
+            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        )
+        posted = _messages(store, prepared.session.id)[-1]
+        assert posted.content.startswith("Subagent failed: Logs")
+        assert "upstream returned 503" in posted.content
+        assert "Failed step 0: message_parent" in posted.content
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_core_bookkeeping_failure_fails_the_subagent_with_its_cause(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Map the routes.",
+                    name="Routes",
+                    context=None,
+                ),
+                _call("p2", "wait_subagents", subagent_ids=None, mode=None),
+                _finish("p3"),
+                _response(text="Recording the routes failed."),
+            ],
+            child=[_response(text="Found 3 routes.")],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        settle = chat.subagents._child_settled
+
+        async def broken(record: ChatSubagent, turn: ChatTurn) -> None:
+            if turn.status == ChatTurnStatus.COMPLETE:
+                raise RuntimeError("store unavailable")
+            await settle(record, turn)
+
+        chat.subagents._child_settled = broken  # type: ignore[method-assign]
+        prepared = await chat.prepare_async(
+            _request(project, content="Map routes.", allow_subagents=True)
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _until(
+            lambda: (
+                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
+            )
+        )
+        (record,) = store.list_entities(ChatSubagent)
+        assert record.status == ChatSubagentStatus.FAILED
+        assert record.error == (
+            "Nebula could not record this subagent's result (RuntimeError): "
+            "store unavailable"
+        )
+        parent = store.get(ChatTurn, parent_turn_id)
+        assert (
+            "store unavailable"
+            in _entries(parent, "wait_subagents")[0]["provider_result"]
+        )
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_stopped_subagent_reports_messages_it_never_read(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        store: NebulaStore
+        provider: RoutedProvider
+
+        async def instruct(request: ModelRequest) -> ModelResponse:
+            await _until(lambda: bool(provider.child_requests))
+            (record,) = store.list_entities(ChatSubagent)
+            return _call(
+                "p2",
+                "message_subagent",
+                subagent_id=record.id,
+                message="Check the logs too.",
+            )
+
+        async def stop(request: ModelRequest) -> ModelResponse:
+            (record,) = store.list_entities(ChatSubagent)
+            return _call("p3", "stop_subagent", subagent_id=record.id)
+
+        async def wait(request: ModelRequest) -> ModelResponse:
+            (record,) = store.list_entities(ChatSubagent)
+            return _call("p4", "wait_subagents", subagent_ids=[record.id], mode=None)
+
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Audit the host.",
+                    name="Audit",
+                    context=None,
+                ),
+                instruct,
+                stop,
+                wait,
+                _finish("p5"),
+                _response(text="Stopped the audit."),
+            ],
+            child=[],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        provider.child_gate = asyncio.Event()
+        prepared = await chat.prepare_async(
+            _request(project, content="Audit it.", allow_subagents=True)
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _until(
+            lambda: (
+                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
+            )
+        )
+        parent = store.get(ChatTurn, parent_turn_id)
+        queued = _result(_entries(parent, "message_subagent")[0])
+        assert queued["delivery"] == "queued"
+        (report,) = _result(_entries(parent, "wait_subagents")[0])["subagents"]
+        assert report["status"] == "stopped"
+        (unread,) = report["undelivered_messages"]
+        assert unread["content"] == "Check the logs too."
+        assert unread["note"] == "The subagent stopped before reading it."
+        (message,) = _sent(store, "to_child")
+        assert message.status == ChatSubagentMessageStatus.UNDELIVERED
         await chat.shutdown()
 
     asyncio.run(scenario())

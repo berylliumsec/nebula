@@ -549,6 +549,7 @@ READ_ONLY_RESOURCES = {
 APPEND_ONLY_RESOURCES: set[str] = set()
 CUSTOM_RESOURCES = {
     "browser_companion_actions",
+    "chat_subagent_messages",
     "structured_results",
     "chat_read_cursors",
     "chat_bookmarks",

@@ -1,21 +1,28 @@
 {
-  "change_digest": "6e99fb9f6b98e9caa6f05cfb24027c38ba07af26d37730c88c5337b7fba8ef2f",
-  "reviewed_by": "Claude review of Codex /goal support",
-  "reason": "Codex harness /goal failed on every call: _codex_feature_policy lists goals among the managed vendor features but never enabled it, so Core launched codex app-server with features.goals=false and codex-cli 0.154.0 answers thread/goal/set and thread/goal/get with 'goals feature is disabled' (reproduced against the real binary; the fake RPC in test_harness_commands never checked the flag). Enabling it exposes Codex's goal runtime, which starts the next turn of an active goal on its own about 1-2 s after each turn completes, so CodexAppServerConnection.run_turn now follows turn/started notifications for its own thread while the last goal update said active, until the goal completes, pauses or hits a limit, or no continuation arrives within 15 s. A Stop between two goal turns cancels the reader task first, so interrupt() pauses the goal (Codex then starts no further turn) and interrupts any turn _CodexRpc recorded as already running. Verified end to end against real Codex: /goal ran four vendor turns inside one Nebula turn to status complete, and a Stop in the gap left the goal paused with no new turn for 10 s. test_harness_adapters.py carries the new tests (feature flag in process overrides and thread config, following continuation turns while ignoring another thread's turn/started, timeout, paused-while-waiting, stop in the gap with and without a started turn, running-turn tracking in _CodexRpc); the other files are the suites that drive CodexAppServerConnection, _run_harness_command or the harness runtime.",
-  "exclusions": "Backend-only change inside the Codex connection and its RPC reader; no UI, API shape or native code changed, so no frontend, Playwright or native tests apply. Grok and Claude connections are untouched. test_browser_companion.py is left out: it only calls CodexAppServerAdapter._models, which this change does not touch, and it needs a real Chromium (it passes locally with one).",
+  "change_digest": "818284514768766d7dec6c1ffbd40a3168a5abda0b07a074004db7eb2f16af98",
+  "reviewed_by": "Claude review of two-way subagent messaging",
+  "reason": "Supervisors and subagents could only exchange the task and the final report, and several failures (settle exceptions, unposted reports, goal continuation) only reached the diagnostics log. This adds a durable ChatSubagentMessage entity and ChatSubagent.rounds; message_subagent / subagent.message (working child reads it before its next step, a paused question takes it as the answer, a finished child runs another round); message_parent (optionally waiting for a reply) and read_parent_messages on every subagent turn, which therefore always routes tools; delivery to a waiting parent (waits end on messages and open questions), a working provider parent (Core-added list_subagents step with no budget), a running Codex/Claude harness (steer), Grok (updates on subagent tool results) and an idle parent (posted subagent_message plus next-prompt context); questions to a parent that cannot answer are closed with the reason. Reports carry error, last_step, tool_failures and undelivered_messages; settle exceptions fail the subagent with the cause; goal continuation failures pause the goal. test_chat_subagents.py and test_harness_provider_subagents.py carry 10 new tests (two-way messages mid-work, question answered by a waiting parent, question to an idle parent, new round, failure details, bookkeeping failure, unread messages on stop, harness question/answer, harness steer, harness next-turn delivery). The other files cover the provider tool loop, turn resume, goals, harness runtime, tool catalog/suggestion spec sets, storage deletion and CRUD registration. Verified live on a throwaway Core against OpenRouter (Claude Haiku 4.5, gpt-4.1-mini), Codex and Grok.",
+  "exclusions": "No UI, native or Playwright change: the list API only gains additive fields (rounds, question) and new posted messages use metadata.kind subagent_message, which the transcript renders as a plain assistant message. test_browser_companion.py is left out because it needs a real Chromium and does not touch subagents.",
   "expected_tests": {
-    "python": 221,
+    "python": 389,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_harness_commands.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_harness_provider_subagents.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_tool_loop.py",
     "tests/v3/test_harnesses.py",
-    "tests/v3/test_harness_connection_state.py",
-    "tests/v3/test_approval_handoff.py",
-    "tests/v3/test_harness_provider_subagents.py"
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_tool_suggestions.py",
+    "tests/v3/test_storage.py",
+    "tests/v3/test_chat_reconnection.py",
+    "tests/v3/test_chat_schedules.py",
+    "tests/v3/test_api_crud_validation.py"
   ],
   "frontend": [],
   "native": [],
