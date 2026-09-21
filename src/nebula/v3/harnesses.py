@@ -4562,6 +4562,11 @@ class _AcpRpc(_CodexRpc):
     async def _write(self, value: dict[str, Any]) -> None:
         await super()._write({"jsonrpc": "2.0", **value})
 
+    async def respond_error(self, request_id: Any, code: int, message: str) -> None:
+        await self._write(
+            {"id": request_id, "error": {"code": code, "message": message}}
+        )
+
 
 def _grok_tool_details(
     update: dict[str, Any], previous: dict[str, Any] | None = None
@@ -4645,11 +4650,125 @@ def _grok_tool_details(
 
 
 def _acp_text(content: Any) -> str:
+    """Render one ACP content block as Markdown text, as Zed's thread view does."""
     if isinstance(content, str):
         return content
-    if isinstance(content, dict) and content.get("type") == "text":
+    if not isinstance(content, dict):
+        return ""
+    kind = content.get("type")
+    if kind == "text":
         return str(content.get("text") or "")
+    if kind == "resource_link":
+        uri = str(content.get("uri") or "")
+        name = str(content.get("name") or content.get("title") or uri)
+        return f"[{name}]({uri})" if uri else name
+    if kind == "resource":
+        resource = content.get("resource")
+        resource = resource if isinstance(resource, dict) else {}
+        if isinstance(resource.get("text"), str):
+            return resource["text"]
+        return (
+            f"[resource: {resource.get('uri') or resource.get('mimeType') or 'binary'}]"
+        )
+    if kind in {"image", "audio"}:
+        return f"[{kind}: {content.get('mimeType') or 'unknown type'}]"
     return ""
+
+
+# ACP stop reasons that end a turn early without failing it; the partial answer
+# is kept with this note so it is never mistaken for a complete one.
+_ACP_TRUNCATED_STOP_NOTES = {
+    "max_tokens": "This answer is incomplete: Grok stopped at its output token "
+    "limit (stop reason max_tokens).",
+    "max_turn_requests": "This answer is incomplete: Grok stopped at its limit of "
+    "model requests for one turn (stop reason max_turn_requests).",
+}
+_ACP_PERMISSION_CANCELLED = {"outcome": {"outcome": "cancelled"}}
+_JSONRPC_METHOD_NOT_FOUND = -32601
+
+
+@dataclass
+class _AcpAgentMessage:
+    """One ACP agent message: the chunks that share a ``messageId``."""
+
+    message_id: str | None
+    parts: list[str]
+
+    @property
+    def text(self) -> str:
+        return "".join(self.parts)
+
+
+def _acp_normalized(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _acp_closing_messages(
+    messages: list[_AcpAgentMessage],
+) -> tuple[list[str], list[str]]:
+    """Split the messages after the last tool call into commentary and the answer.
+
+    Goal mode streams its answer and then replays it, whole, split into chunks
+    or with other whitespace. A message that repeats the end of the one before
+    it is that replay, and so is an answer whose second half repeats its first.
+    """
+    kept: list[_AcpAgentMessage] = []
+    for message in messages:
+        text = _acp_normalized(message.text)
+        if kept and (not text or _acp_normalized(kept[-1].text).endswith(text)):
+            continue
+        kept.append(message)
+    if not kept:
+        return [], []
+    parts = kept[-1].parts
+    for split in range(1, len(parts)):
+        head = _acp_normalized("".join(parts[:split]))
+        if head and head == _acp_normalized("".join(parts[split:])):
+            parts = parts[:split]
+            break
+    return [message.text for message in kept[:-1]], parts
+
+
+def _acp_permission_option(options: list[Any], allowed: bool) -> str | None:
+    """Pick the one-time option for Nebula's per-call decision, never ``*_always``."""
+
+    by_kind: dict[str, str] = {}
+    for option in options:
+        if not isinstance(option, dict) or not option.get("optionId"):
+            continue
+        kind = str(
+            option.get("kind") or str(option["optionId"]).replace("-", "_")
+        ).lower()
+        by_kind.setdefault(kind, str(option["optionId"]))
+    # An approval Grok cannot take once is answered with a one-time rejection;
+    # a denial is never turned into an allow.
+    for kind in ("allow_once", "reject_once") if allowed else ("reject_once",):
+        if kind in by_kind:
+            return by_kind[kind]
+    return None
+
+
+def _acp_amount(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if 0 <= value < float("inf") else None
+
+
+def _acp_session_cost(update: Any) -> dict[str, Any] | None:
+    """The cumulative session ``cost`` of an ACP ``usage_update``."""
+
+    if not isinstance(update, dict) or update.get("sessionUpdate") != "usage_update":
+        return None
+    cost = update.get("cost")
+    amount = _acp_amount(cost.get("amount")) if isinstance(cost, dict) else None
+    if not isinstance(cost, dict) or amount is None:
+        return None
+    return {"amount": amount, "currency": str(cost.get("currency") or "")[:16]}
+
+
+def _acp_session_cost_usd(update: Any) -> float | None:
+    cost = _acp_session_cost(update)
+    return cost["amount"] if cost and cost["currency"].upper() == "USD" else None
 
 
 def _acp_plan_entries(value: Any) -> list[HarnessPlanEntry]:
@@ -5005,12 +5124,99 @@ class GrokAcpConnection(HarnessConnection):
         external_session_id: str,
         permission_handler: PermissionHandler,
         developer_instructions: str = "",
+        session_cost_usd: float | None = None,
     ) -> None:
         self.rpc = rpc
         self.external_session_id = external_session_id
         self.permission_handler = permission_handler
         self.developer_instructions = developer_instructions
         self.active = False
+        # ACP's answer to session/prompt is the turn boundary, so a stopped
+        # prompt is kept until Grok answers it and the next prompt waits for it.
+        self._prompt: asyncio.Task[Any] | None = None
+        # The prompt whose turn Nebula stopped; its consumer is gone.
+        self._stopped_prompt: asyncio.Task[Any] | None = None
+        # session/request_permission ids that still need exactly one answer.
+        self._open_permissions: set[str | int] = set()
+        # Cumulative ACP session cost already reported; None when unknown (a
+        # loaded session), so no per-turn cost is invented from it.
+        self._session_cost_usd = session_cost_usd
+
+    async def _finish_stopped_prompt(self) -> None:
+        """Wait for Grok to answer an abandoned prompt before sending another."""
+
+        previous = self._prompt
+        if previous is None:
+            return
+        if not previous.done():
+            await self.interrupt()
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + HARNESS_INTERRUPT_TIMEOUT_SECONDS
+            while not previous.done():
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise HarnessTransportError(
+                        "Grok did not finish the stopped turn; Nebula is reconnecting."
+                    )
+                # diagnostic-expected: this getter is consumed here or cancelled below.
+                getter = asyncio.create_task(self.rpc.events.get())
+                await asyncio.wait(
+                    {previous, getter},
+                    timeout=remaining,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if getter.done():
+                    # Updates sent while Grok winds the stopped turn down belong to it.
+                    await self._answer_stale_frame(getter.result())
+                else:
+                    getter.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await getter
+        self._prompt = None
+        self._stopped_prompt = None
+        if not previous.cancelled() and previous.exception() is not None:
+            record_diagnostic(
+                "info",
+                "harnesses",
+                "harnesses.grok_acp.stopped_prompt_failed",
+                "Grok answered a stopped prompt with an error; the next turn continues.",
+                outcome="ignored",
+                stage="turn-boundary",
+                metadata={"error_type": type(previous.exception()).__name__},
+            )
+
+    async def _drain_between_turns(self) -> None:
+        """Establish a turn boundary, answering any request left in the queue."""
+
+        while True:
+            try:
+                raw = self.rpc.events.get_nowait()
+            except asyncio.QueueEmpty:
+                # diagnostic-expected: QueueEmpty terminates the non-blocking drain.
+                return
+            await self._answer_stale_frame(raw)
+
+    async def _answer_stale_frame(self, raw: Any) -> None:
+        # Resumed sessions replay history and a stopped turn may still stream;
+        # neither is this turn's output, but every request needs one answer.
+        if not isinstance(raw, dict):
+            return
+        if "id" not in raw:
+            params = raw.get("params")
+            update = params.get("update") if isinstance(params, dict) else None
+            cost = _acp_session_cost_usd(update)
+            if cost is not None:
+                self._session_cost_usd = cost
+            return
+        method = str(raw.get("method") or "")
+        if method == "session/request_permission":
+            await self.rpc.respond(raw["id"], _ACP_PERMISSION_CANCELLED)
+        elif method:
+            await self.rpc.respond_error(
+                raw["id"],
+                _JSONRPC_METHOD_NOT_FOUND,
+                f"Nebula does not support {method[:200]}",
+            )
 
     async def run_turn(
         self,
@@ -5031,9 +5237,14 @@ class GrokAcpConnection(HarnessConnection):
             prompt = f"${skill.name} {prompt}"
         if self.developer_instructions:
             prompt = self.developer_instructions + "\n\n" + prompt
-        if self.active:
+        # A stopped turn's generator can be abandoned at a ``yield`` without
+        # running its ``finally``; only a turn that was not stopped is active.
+        if self.active and (
+            self._prompt is None or self._prompt is not self._stopped_prompt
+        ):
             raise HarnessStateError("Grok ACP session already has an active turn")
-        _discard_queued_session_replay(self.rpc.events)
+        await self._finish_stopped_prompt()
+        await self._drain_between_turns()
         if mode:
             await self.rpc.request(
                 "session/set_mode",
@@ -5042,7 +5253,7 @@ class GrokAcpConnection(HarnessConnection):
         # A rejected mode raised above with nothing in flight; only now does the
         # ``finally`` below own clearing ``active``.
         self.active = True
-        # diagnostic-expected: this task is awaited, cancelled, and drained by this turn.
+        # diagnostic-expected: this task is awaited by this turn, or by the next turn's boundary, or cancelled by close().
         request = asyncio.create_task(
             self.rpc.request(
                 "session/prompt",
@@ -5053,8 +5264,10 @@ class GrokAcpConnection(HarnessConnection):
                 },
             )
         )
+        self._prompt = request
+        turn_cost_base = self._session_cost_usd
         message_parts: list[str] = []
-        pending_agent_parts: list[str] = []
+        pending_messages: list[_AcpAgentMessage] = []
         commentary_sequence = 0
         thinking_sequence = 0
         thinking_id: str | None = None
@@ -5099,6 +5312,13 @@ class GrokAcpConnection(HarnessConnection):
                     "_x.ai/session/update",
                     "_x.ai/session_notification",
                 }:
+                    if "id" in raw:
+                        # JSON-RPC requires an answer; unanswered, Grok waits forever.
+                        await self.rpc.respond_error(
+                            raw["id"],
+                            _JSONRPC_METHOD_NOT_FOUND,
+                            f"Nebula does not support {method[:200] or 'this method'}",
+                        )
                     yield HarnessEvent(
                         type="notice",
                         vendor=HarnessKind.GROK_ACP,
@@ -5128,25 +5348,42 @@ class GrokAcpConnection(HarnessConnection):
                     thinking_id = None
                 if kind == "agent_message_chunk":
                     delta = _acp_text(update.get("content"))
+                    raw_message_id = update.get("messageId")
+                    message_id = (
+                        raw_message_id
+                        if isinstance(raw_message_id, str) and raw_message_id
+                        else None
+                    )
                     if delta:
-                        pending_agent_parts.append(delta)
+                        last = pending_messages[-1] if pending_messages else None
+                        # A change of messageId starts a new message (as in Zed).
+                        if last is not None and (
+                            message_id is None or last.message_id in {None, message_id}
+                        ):
+                            last.parts.append(delta)
+                            last.message_id = last.message_id or message_id
+                        else:
+                            pending_messages.append(
+                                _AcpAgentMessage(message_id, [delta])
+                            )
                     continue
-                if pending_agent_parts and kind == "tool_call":
+                if pending_messages and kind == "tool_call":
                     # Only a subsequent tool start proves this text was progress
                     # narration. Session metadata can arrive after the final answer.
-                    commentary_sequence += 1
-                    for chunk in _display_delta_chunks("".join(pending_agent_parts)):
-                        yield HarnessEvent(
-                            type="output_delta",
-                            vendor=HarnessKind.GROK_ACP,
-                            item_id=f"commentary-{commentary_sequence}",
-                            item_kind="reasoning",
-                            item_status="streaming",
-                            title="Commentary",
-                            stream="commentary",
-                            delta=chunk,
-                        )
-                    pending_agent_parts.clear()
+                    for narration in pending_messages:
+                        commentary_sequence += 1
+                        for chunk in _display_delta_chunks(narration.text):
+                            yield HarnessEvent(
+                                type="output_delta",
+                                vendor=HarnessKind.GROK_ACP,
+                                item_id=f"commentary-{commentary_sequence}",
+                                item_kind="reasoning",
+                                item_status="streaming",
+                                title="Commentary",
+                                stream="commentary",
+                                delta=chunk,
+                            )
+                    pending_messages.clear()
                 if kind == "agent_thought_chunk":
                     delta = _acp_text(update.get("content"))
                     if delta:
@@ -5235,6 +5472,31 @@ class GrokAcpConnection(HarnessConnection):
                         **details,
                         payload=_bounded(update, limit=MAX_TOOL_RESULT_TEXT),
                     )
+                elif kind == "usage_update":
+                    # ``used``/``size`` describe the session's context window and
+                    # ``cost`` is cumulative for the session: neither is a token
+                    # count for this turn, so only a measured cost delta is one.
+                    session_cost = _acp_session_cost_usd(update)
+                    turn_cost = (
+                        max(0.0, session_cost - turn_cost_base)
+                        if session_cost is not None and turn_cost_base is not None
+                        else None
+                    )
+                    if session_cost is not None:
+                        self._session_cost_usd = session_cost
+                    used = _acp_amount(update.get("used"))
+                    size = _acp_amount(update.get("size"))
+                    cost = _acp_session_cost(update)
+                    yield HarnessEvent(
+                        type="usage",
+                        vendor=HarnessKind.GROK_ACP,
+                        detailed_usage=HarnessDetailedUsage(
+                            context_used=int(used) if used is not None else None,
+                            context_window=int(size) if size is not None else None,
+                            cost_usd=turn_cost,
+                        ),
+                        payload={"session_cost": cost} if cost else {},
+                    )
                 else:
                     yield HarnessEvent(
                         type="notice",
@@ -5257,12 +5519,42 @@ class GrokAcpConnection(HarnessConnection):
                     else "completed",
                     title="Thinking",
                 )
-            if len(pending_agent_parts) > 1 and pending_agent_parts[-1] == "".join(
-                pending_agent_parts[:-1]
-            ):
-                # Goal mode streams its final answer, then sends it again whole.
-                pending_agent_parts.pop()
-            for delta in pending_agent_parts:
+            stop_reason = (
+                str(result.get("stopReason") or "end_turn")
+                if isinstance(result, dict)
+                else "end_turn"
+            )
+            if stop_reason == "refusal":
+                # ACP drops the refused prompt and everything after it from the
+                # session, so its partial text is no answer (Zed truncates it).
+                yield HarnessEvent(
+                    type="error",
+                    vendor=HarnessKind.GROK_ACP,
+                    external_session_id=self.external_session_id,
+                    message="Grok refused to continue (stop reason refusal). Grok "
+                    "drops a refused prompt from its conversation, so rephrase the "
+                    "request and send it again.",
+                    reason_code="refused",
+                    retryable=False,
+                    # The closest diagnostic family: the request was rejected.
+                    payload={"stop_reason": stop_reason, "code": "invalid_input"},
+                )
+                return
+            commentary, answer_parts = _acp_closing_messages(pending_messages)
+            for commentary_text in commentary:
+                commentary_sequence += 1
+                for chunk in _display_delta_chunks(commentary_text):
+                    yield HarnessEvent(
+                        type="output_delta",
+                        vendor=HarnessKind.GROK_ACP,
+                        item_id=f"commentary-{commentary_sequence}",
+                        item_kind="reasoning",
+                        item_status="streaming",
+                        title="Commentary",
+                        stream="commentary",
+                        delta=chunk,
+                    )
+            for delta in answer_parts:
                 message_parts.append(delta)
                 yield HarnessEvent(
                     type="message_delta",
@@ -5270,23 +5562,31 @@ class GrokAcpConnection(HarnessConnection):
                     item_id="assistant-message",
                     delta=delta,
                 )
-            stop_reason = (
-                str(result.get("stopReason") or "end_turn")
-                if isinstance(result, dict)
-                else "end_turn"
-            )
             if stop_reason in {"cancelled", "canceled"}:
                 yield HarnessEvent(
                     type="interrupted", vendor=HarnessKind.GROK_ACP, message=stop_reason
                 )
                 return
+            answer = "".join(message_parts) or (
+                str(result.get("text") or "") if isinstance(result, dict) else ""
+            )
+            truncation_note = _ACP_TRUNCATED_STOP_NOTES.get(stop_reason)
+            if truncation_note:
+                note = ("\n\n" if answer else "") + truncation_note
+                answer += note
+                yield HarnessEvent(
+                    type="message_delta",
+                    vendor=HarnessKind.GROK_ACP,
+                    item_id="assistant-message",
+                    delta=note,
+                )
             yield HarnessEvent(
                 type="completed",
                 vendor=HarnessKind.GROK_ACP,
                 external_session_id=self.external_session_id,
-                message="".join(message_parts)
-                or (str(result.get("text") or "") if isinstance(result, dict) else ""),
-                payload={"stop_reason": stop_reason},
+                message=answer,
+                payload={"stop_reason": stop_reason}
+                | ({"truncated": True} if truncation_note else {}),
             )
         finally:
             self.active = False
@@ -5294,10 +5594,8 @@ class GrokAcpConnection(HarnessConnection):
                 event_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await event_task
-            if not request.done():
-                request.cancel()
-                with suppress(asyncio.CancelledError):
-                    await request
+            # A prompt still running stays in ``self._prompt``: the next turn
+            # waits for Grok's answer to it before sending another prompt.
 
     async def _permission(
         self, raw: dict[str, Any], params: dict[str, Any]
@@ -5305,6 +5603,14 @@ class GrokAcpConnection(HarnessConnection):
         options: list[Any] = (
             params["options"] if isinstance(params.get("options"), list) else []
         )
+        raw_id = raw.get("id")
+        request_id: str | int | None = (
+            raw_id
+            if isinstance(raw_id, (str, int)) and not isinstance(raw_id, bool)
+            else None
+        )
+        if request_id is not None:
+            self._open_permissions.add(request_id)
         ticket = await self.permission_handler(
             HarnessPermissionRequest(
                 vendor_request_id=str(raw.get("id")),
@@ -5331,57 +5637,66 @@ class GrokAcpConnection(HarnessConnection):
                 title="Grok tool approval required",
                 payload=_bounded(params, limit=8_000),
             )
-        decision = await ticket.decision
-        allow_option = next(
-            (
-                item
-                for item in options
-                if isinstance(item, dict)
-                and "allow"
-                in str(
-                    item.get("kind") or item.get("name") or item.get("optionId") or ""
-                ).lower()
-            ),
-            options[0] if decision.allowed and options else None,
-        )
-        deny_option = next(
-            (
-                item
-                for item in options
-                if isinstance(item, dict)
-                and any(
-                    word
-                    in str(
-                        item.get("kind")
-                        or item.get("name")
-                        or item.get("optionId")
-                        or ""
-                    ).lower()
-                    for word in ("deny", "reject")
-                )
-            ),
-            options[-1] if options else None,
-        )
-        selected = allow_option if decision.allowed else deny_option
-        option_id = selected.get("optionId") if isinstance(selected, dict) else None
+        try:
+            decision = await ticket.decision
+        except asyncio.CancelledError:  # diagnostic-expected: Stop ends the wait; ACP still requires the cancelled answer.
+            if request_id is not None:
+                try:
+                    await self._answer_permission_cancelled(request_id)
+                except (HarnessTransportError, OSError) as write_error:
+                    record_caught_exception(
+                        "harnesses",
+                        "harnesses.grok_acp.permission_cancel_unsent",
+                        "A stopped Grok turn could not answer its permission request.",
+                        write_error,
+                        stage="turn-cancel",
+                    )
+            raise
+        if request_id is not None:
+            if request_id not in self._open_permissions:
+                # Stop already answered it with the cancelled outcome.
+                return
+            self._open_permissions.discard(request_id)
+        option_id = _acp_permission_option(options, decision.allowed)
         result = (
             {"outcome": {"outcome": "selected", "optionId": option_id}}
             if option_id
-            else {"outcome": {"outcome": "cancelled"}}
+            else _ACP_PERMISSION_CANCELLED
         )
-        await _respond_permission(self.rpc, ticket, raw.get("id"), result)
+        await _respond_permission(self.rpc, ticket, raw_id, result)
+
+    async def _answer_permission_cancelled(self, request_id: str | int) -> None:
+        if request_id in self._open_permissions:
+            self._open_permissions.discard(request_id)
+            await self.rpc.respond(request_id, _ACP_PERMISSION_CANCELLED)
 
     async def steer(self, text: str) -> None:
         del text
         raise HarnessStateError("Grok ACP does not advertise turn steering")
 
     async def interrupt(self) -> None:
-        if self.active:
-            await self.rpc.notify(
-                "session/cancel", {"sessionId": self.external_session_id}
-            )
+        # ACP: a client cancelling a turn MUST answer every pending permission
+        # request with the cancelled outcome.
+        for request_id in list(self._open_permissions):
+            await self._answer_permission_cancelled(request_id)
+        prompt = self._prompt
+        if prompt is not None and self._stopped_prompt is not prompt:
+            self._stopped_prompt = prompt
+            if not prompt.done():
+                await self.rpc.notify(
+                    "session/cancel", {"sessionId": self.external_session_id}
+                )
 
     async def close(self) -> None:
+        prompt, self._prompt = self._prompt, None
+        self._open_permissions.clear()
+        if prompt is not None:
+            if not prompt.done():
+                prompt.cancel()
+                await asyncio.wait({prompt})
+            if not prompt.cancelled():
+                # Retrieved: nothing reads the prompt of a closed session.
+                prompt.exception()
         await self.rpc.close()
 
 
@@ -5732,7 +6047,7 @@ class GrokAcpAdapter(HarnessAdapter):
     async def _open(self, request: AdapterOpenRequest) -> HarnessConnection:
         rpc = await self._connect(request.profile, request.workspace, request.session)
         try:
-            await self._initialize(rpc)
+            initialize = await self._initialize(rpc)
             mcp_servers: list[dict[str, Any]] = [
                 {
                     "name": profile.name,
@@ -5760,7 +6075,19 @@ class GrokAcpAdapter(HarnessAdapter):
                             ],
                         }
                     )
+            session_cost_usd: float | None = None
             if request.session.external_session_id:
+                capabilities = initialize.get("agentCapabilities")
+                if not (
+                    isinstance(capabilities, dict)
+                    and capabilities.get("loadSession") is True
+                ):
+                    # ACP defaults loadSession to false; Zed refuses the same way.
+                    raise HarnessConfigurationError(
+                        "This Grok runtime does not advertise session loading "
+                        "(agentCapabilities.loadSession), so Nebula cannot resume "
+                        "this Grok session. Start a new chat to continue."
+                    )
                 await rpc.request(
                     "session/load",
                     {
@@ -5782,10 +6109,13 @@ class GrokAcpAdapter(HarnessAdapter):
                         "Grok ACP session/new omitted sessionId"
                     )
                 external_session_id = result["sessionId"]
+                # A new session has spent nothing yet, so per-turn cost is exact.
+                session_cost_usd = 0.0
             return GrokAcpConnection(
                 rpc,
                 external_session_id=external_session_id,
                 permission_handler=request.permission_handler,
+                session_cost_usd=session_cost_usd,
                 developer_instructions=_harness_developer_instructions(
                     request.session,
                     _session_native_capabilities(request.session, request.profile),

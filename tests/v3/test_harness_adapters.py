@@ -217,6 +217,7 @@ class FixtureGrokRpc:
                 "protocolVersion": 1,
                 "agentInfo": {"name": "grok", "version": "1.0.5"},
                 "authMethods": [{"id": "cached_token", "name": "Cached login"}],
+                "agentCapabilities": {"loadSession": True},
             }
         if method == "authenticate":
             return {}
