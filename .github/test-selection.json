@@ -1,10 +1,10 @@
 {
-  "change_digest": "ba25e775c203efede1cbfbf07bb346406b43e3de654c1feca70d7d5355c6a94c",
+  "change_digest": "5b35049598aed37dd8d48fe95dffbc80c820d559a59e7d1be049e32548af52d6",
   "reviewed_by": "Claude review of native-markup-and-think",
   "reason": "Audit MODEL-7 and OAC-10 (verified on main): a route that does not run a model's tool or reasoning parser leaves the model's own markup in the Chat Completions content, and Core only knew DeepSeek's DSML. GLM's <tool_call>name<arg_key>k</arg_key><arg_value>v</arg_value></tool_call> (4.5 newline and 4.7/5 compact forms), DeepSeek V3/R1 special-token calls (<\uff5ctool\u2581calls\u2581begin\uff5c>... with a fenced JSON body, and V3.1's bare JSON), a leading <think>/<thinking> block and the R1-template reply that carries only a closing </think> all gave tool_calls=0 and _final_answer_problem=None, so the raw markup or the thought became the operator's final answer, and a think block beside a routing call failed the step as routing prose. New src/nebula/v3/tool_markup.py reads GLM and DeepSeek special-token frames alongside DSML (all-or-nothing per frame, same size and call caps); the ModelResponse validator recovers readable frames into ordinary tool calls (ids glm-/deepseek-), and chat's quarantine, answer cut and streamed hold-back (_is_provider_control_frame, _operator_answer_text, _StreamedAnswer) now use its frame_start/is_frame/partial_tag_start, so an unreadable frame is never shown. A GLM frame starts only where <tool_call> is followed by a name and a line break, an argument or the close, or by argument tags before it closes, so prose that mentions the tag stays. New src/nebula/v3/inline_reasoning.py moves a leading think block into reasoning in the OpenAI-compatible adapter (complete via split_reply, stream via ReplySplitter, which holds text only while the opening or a closing tag is undecided) and, for DeepSeek, GLM and Qwen thinking model ids with no routed reasoning, treats everything before a </think> with no earlier <think> as reasoning. dsml._decode_value became public decode_value for GLM values. tests/v3/test_native_tool_markup.py is new: 110 tests, each shape complete and streamed through the real adapter plus chat's routing loop and synthesis; 100 fail on main e3f3adf and 10 are guards that pass on both (mentions of tags, non-template models, routes that sent reasoning). The listed existing node ids directly exercise the changed ModelResponse recovery, decode_value, chat's control-frame quarantine and streamed hold-back, and the OpenAI-compatible reasoning, stream and refusal paths.",
   "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through src/nebula/v3/providers.py and chat.py) never sends GLM or DeepSeek native markup or think tags; the Python tests drive the adapter and chat directly over a scripted wire. The whole test_dsml.py, test_providers.py, test_chat.py, test_chat_tool_loop.py, test_chat_final_synthesis_recovery.py, test_reasoning_recovery.py, test_openai_compatible_parameters.py, test_openai_compatible_robustness.py, test_model_output_budget.py, test_native_adapter_outcomes.py, test_malformed_tool_call_feedback.py, test_tool_call_assembly.py, test_deepseek_glm_compat.py and test_context.py were run locally (640 passed), not in CI. No full suites.",
   "expected_tests": {
-    "python": 131,
+    "python": 140,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -25,7 +25,8 @@
     "tests/v3/test_providers.py::test_openai_compatible_stream_does_not_repeat_mirrored_reasoning",
     "tests/v3/test_providers.py::test_openai_compatible_reads_reasoning_when_content_is_empty",
     "tests/v3/test_providers.py::test_openai_compatible_keeps_reasoning_out_of_the_reply",
-    "tests/v3/test_openai_compatible_robustness.py::test_a_refusal_is_surfaced_as_the_reply"
+    "tests/v3/test_openai_compatible_robustness.py::test_a_refusal_is_surfaced_as_the_reply",
+    "tests/v3/test_routing_prose_answer.py"
   ],
   "frontend": [],
   "native": [],

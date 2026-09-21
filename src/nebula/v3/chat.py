@@ -1099,10 +1099,11 @@ def _is_routing_answer(response: ModelResponse) -> bool:
     return (
         not response.tool_calls
         and (not finish_reason or finish_reason in _ANSWER_FINISH_REASONS)
-        # A DSML tag anywhere starts a call Core could not read. The answer
+        # A native tool frame (DSML, GLM or DeepSeek markup) anywhere starts
+        # a call Core could not read. The answer
         # written before it may be a preamble to that call, so it goes to
         # synthesis rather than ending the turn.
-        and dsml_frame_start(response.text) is None
+        and tool_frame_start(response.text) is None
         and _final_answer_problem(response) is None
     )
 
