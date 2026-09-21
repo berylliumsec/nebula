@@ -118,29 +118,29 @@ def test_routing_prose_beside_finish_response_finishes_through_synthesis(tmp_pat
     assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
 
 
-def test_routing_prose_without_a_call_finishes_through_synthesis(tmp_path):
+def test_routing_prose_without_a_call_is_the_answer(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(calls=[_call("call-1", "safe_read", value="a")]),
         # The route ignored the required tool choice and answered in prose.
         _response(text="The value is a."),
-        _response(text="Read a."),
     ]
     store, service, prepared, provider = _prepared(tmp_path, responses, broker)
 
     events = _stream(service, prepared)
 
     answer = "".join(payload["delta"] for name, payload in events if name == "delta")
-    assert answer == "Read a."
-    # The prose was an answer attempt, not commentary on a call; the synthesis
-    # writes the answer once instead of showing it twice.
+    assert answer == "The value is a."
+    # The prose was the answer, not commentary on a call, so it is shown once,
+    # as the answer.
     assert not [name for name, _ in events if name == "reasoning_delta"]
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
     turn = store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1"]
-    # The synthesis answers from the results the turn already had.
-    assert _turn_requests(provider)[-1].tools == []
+    # Both requests were routing steps; no synthesis request followed.
+    assert all(request.tools for request in _turn_requests(provider))
+    assert len(_turn_requests(provider)) == 2
 
 
 def test_unreadable_routing_control_frame_finishes_through_synthesis(tmp_path):
