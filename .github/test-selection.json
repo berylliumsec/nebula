@@ -1,24 +1,23 @@
 {
-  "change_digest": "55e797ac4246fd4a2571dcfaed591cc5c1aed048371b7b80a61f5c0e9f239155",
-  "reviewed_by": "Claude review of the settings legacy-hash test",
-  "reason": "App.test.tsx 'keeps diagnostics out of the advanced view while preserving legacy hashes' failed on origin/main whenever the file ran. #407 (0244d71) made the router location own the SettingsPage section, but the test still planted #security-settings with window.history.replaceState and rendered a MemoryRouter at a bare /settings, so the router effect correctly settled on Setup. Under BrowserRouter the router hash is the address-bar hash, so that state cannot occur in the app; the test now passes the legacy hash through the router. It passed alone only because the lazy SettingsPage seeded its first render from window.location.hash and findByRole read the DOM before the router effect ran; the initial section and advanced group now come from the router location, so the first paint agrees with the effect (the old test now fails deterministically alone too). Frontend: App.test.tsx carries the fixed test; SettingsPage.test.tsx and SettingsLens.test.tsx cover section routing from the router, tab/group hash rewrites and the embedded lens path that keeps using embeddedTarget. Playwright: appearance-settings deep-links /settings#appearance-settings and asserts Advanced is aria-current (the production legacy-hash path); settings-search covers catalog routes into sections; critical-workspaces screenshots /settings on first paint at desktop, compact and narrow.",
-  "exclusions": "No Python or native changes. The whole ui vitest suite (159 files, 1042 tests) was run locally and passes. After merging main (#471 refreshed the narrow Project baselines), area:critical-workspaces was run locally on narrow and all 7 pass, including the Settings screenshots the loop previously never reached. Other areas SettingsPage.tsx falls back to (desktop-interface, mobile-layout) are broad fallbacks; the section-state change is covered by the selected areas.",
+  "change_digest": "6e99fb9f6b98e9caa6f05cfb24027c38ba07af26d37730c88c5337b7fba8ef2f",
+  "reviewed_by": "Claude review of Codex /goal support",
+  "reason": "Codex harness /goal failed on every call: _codex_feature_policy lists goals among the managed vendor features but never enabled it, so Core launched codex app-server with features.goals=false and codex-cli 0.154.0 answers thread/goal/set and thread/goal/get with 'goals feature is disabled' (reproduced against the real binary; the fake RPC in test_harness_commands never checked the flag). Enabling it exposes Codex's goal runtime, which starts the next turn of an active goal on its own about 1-2 s after each turn completes, so CodexAppServerConnection.run_turn now follows turn/started notifications for its own thread while the last goal update said active, until the goal completes, pauses or hits a limit, or no continuation arrives within 15 s. A Stop between two goal turns cancels the reader task first, so interrupt() pauses the goal (Codex then starts no further turn) and interrupts any turn _CodexRpc recorded as already running. Verified end to end against real Codex: /goal ran four vendor turns inside one Nebula turn to status complete, and a Stop in the gap left the goal paused with no new turn for 10 s. test_harness_adapters.py carries the new tests (feature flag in process overrides and thread config, following continuation turns while ignoring another thread's turn/started, timeout, paused-while-waiting, stop in the gap with and without a started turn, running-turn tracking in _CodexRpc); the other files are the suites that drive CodexAppServerConnection, _run_harness_command or the harness runtime.",
+  "exclusions": "Backend-only change inside the Codex connection and its RPC reader; no UI, API shape or native code changed, so no frontend, Playwright or native tests apply. Grok and Claude connections are untouched. test_browser_companion.py is left out: it only calls CodexAppServerAdapter._models, which this change does not touch, and it needs a real Chromium (it passes locally with one).",
   "expected_tests": {
-    "python": 0,
-    "frontend": 46,
+    "python": 221,
+    "frontend": 0,
     "native": 0,
-    "playwright": 25
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/App.test.tsx",
-    "ui/src/pages/SettingsPage.test.tsx",
-    "ui/src/components/SettingsLens.test.tsx"
+  "python": [
+    "tests/v3/test_harness_adapters.py",
+    "tests/v3/test_harness_commands.py",
+    "tests/v3/test_harnesses.py",
+    "tests/v3/test_harness_connection_state.py",
+    "tests/v3/test_approval_handoff.py",
+    "tests/v3/test_harness_provider_subagents.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:appearance-settings",
-    "area:settings-search",
-    "area:critical-workspaces"
-  ]
+  "playwright": []
 }
