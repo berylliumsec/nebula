@@ -38,6 +38,11 @@ interface CompletedAssistantMessage {
   createdAt: string;
 }
 
+/** A saved answer Core kept from a stopped or interrupted turn still reads as stopped after reload. */
+export function savedAssistantState(finishReason?: string): ConversationMessageState {
+  return finishReason === "interrupted" ? "cancelled" : "complete";
+}
+
 /** Settles the live response Core reported as stopped, keeping the partial content it streamed. */
 export function cancelStreamingAssistantMessage<T extends ReconciledConversationMessage>(
   messages: T[],
