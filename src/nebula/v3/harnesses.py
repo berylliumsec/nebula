@@ -204,6 +204,15 @@ ACTIVITY_DELTA_FLUSH_CHARS = 16 * 1024
 HARNESS_STARTUP_TIMEOUT_SECONDS = 60.0
 HARNESS_INTERRUPT_TIMEOUT_SECONDS = 5.0
 CODEX_SESSION_LIST_TIMEOUT_SECONDS = 15.0
+# One Codex app-server message can carry a whole command output, echoed image
+# data URLs or a thread history, far beyond the MCP message bound. Codex itself
+# reads its input with no line limit.
+CODEX_APP_SERVER_MAX_MESSAGE_BYTES = 256 * 1024 * 1024
+CODEX_APP_SERVER_READ_CHUNK_BYTES = 1024 * 1024
+# The operator-visible transport error is capped at 1,000 characters.
+CODEX_APP_SERVER_STDERR_ERROR_CHARS = 800
+CODEX_APP_SERVER_STDERR_SETTLE_SECONDS = 1.0
+JSONRPC_METHOD_NOT_FOUND = -32601
 # Codex starts the next turn of an active goal itself, about 1-2 s after the
 # previous one completes. A goal that stays active without one is left alone.
 CODEX_GOAL_CONTINUATION_TIMEOUT_SECONDS = 15.0
@@ -1521,6 +1530,7 @@ class _CodexRpc:
 
     transport_name = "Codex app-server"
     diagnostic_namespace = "codex"
+    max_message_bytes = CODEX_APP_SERVER_MAX_MESSAGE_BYTES
 
     def __init__(
         self,
@@ -1587,6 +1597,11 @@ class _CodexRpc:
     async def respond(self, request_id: Any, result: dict[str, Any]) -> None:
         await self._write({"id": request_id, "result": result})
 
+    async def respond_error(self, request_id: Any, code: int, message: str) -> None:
+        await self._write(
+            {"id": request_id, "error": {"code": code, "message": message}}
+        )
+
     async def _write(self, value: dict[str, Any]) -> None:
         if self._closing:
             # The reader is gone, so a response could never be correlated.
@@ -1606,7 +1621,7 @@ class _CodexRpc:
                 async for raw in self.websocket:
                     await self._dispatch_frame(raw)
             elif self.process is not None and self.process.stdout is not None:
-                while line := await self.process.stdout.readline():
+                async for line in self._stdout_lines(self.process.stdout):
                     await self._dispatch_frame(line)
             else:
                 raise HarnessTransportError(
@@ -1614,7 +1629,9 @@ class _CodexRpc:
                 )
             if self._closing:
                 return
-            raise HarnessTransportError(f"{self.transport_name} transport closed")
+            raise HarnessTransportError(
+                await self._with_stderr_tail(f"{self.transport_name} transport closed")
+            )
         except asyncio.CancelledError as caught_error:
             if not self._closing:
                 record_caught_exception(
@@ -1637,10 +1654,108 @@ class _CodexRpc:
                 exc
                 if isinstance(exc, HarnessTransportError)
                 else HarnessTransportError(
-                    f"{self.transport_name} transport failed: {type(exc).__name__}"
+                    await self._with_stderr_tail(
+                        f"{self.transport_name} transport failed: {type(exc).__name__}"
+                    )
                 )
             )
             await self._end_transport(error)
+
+    async def _stdout_lines(self, stdout: Any) -> AsyncIterator[bytes]:
+        """Split stdout into lines without the stream reader's line limit.
+
+        ``StreamReader.readline`` fails on a line over its buffer limit and the
+        reader could not resynchronise, so the whole transport had to end. Lines
+        are split here instead, and one line over ``max_message_bytes`` is
+        dropped without being buffered.
+        """
+
+        buffer = bytearray()
+        dropped_bytes = 0
+        dropped_head = b""
+        while chunk := await stdout.read(CODEX_APP_SERVER_READ_CHUNK_BYTES):
+            start = 0
+            while True:
+                end = chunk.find(b"\n", start)
+                piece = chunk[start:] if end < 0 else chunk[start:end]
+                if dropped_bytes:
+                    dropped_bytes += len(piece)
+                elif len(buffer) + len(piece) > self.max_message_bytes:
+                    dropped_head = (bytes(buffer[:256]) + piece[:256])[:256]
+                    dropped_bytes = len(buffer) + len(piece)
+                    buffer.clear()
+                else:
+                    buffer += piece
+                if end < 0:
+                    break
+                start = end + 1
+                if dropped_bytes:
+                    self._drop_oversized_message(dropped_head, dropped_bytes)
+                    dropped_bytes = 0
+                else:
+                    yield bytes(buffer)
+                    buffer.clear()
+        if dropped_bytes:
+            self._drop_oversized_message(dropped_head, dropped_bytes)
+        elif buffer:
+            yield bytes(buffer)
+
+    def _drop_oversized_message(self, head: bytes, size: int) -> None:
+        """Skip one message over the size limit without ending the transport.
+
+        A response still fails its request (its id leads the JSON object), so
+        the caller gets an error instead of waiting forever.
+        """
+
+        response = re.match(
+            rb'\{\s*(?:"jsonrpc"\s*:\s*"2\.0"\s*,\s*)?"id"\s*:\s*(\d+)\s*,\s*"(?:result|error)"',
+            head,
+        )
+        method = re.match(
+            rb'\{\s*(?:"jsonrpc"\s*:\s*"2\.0"\s*,\s*)?(?:"id"\s*:\s*[^,]{1,40},\s*)?'
+            rb'"method"\s*:\s*"([A-Za-z0-9_/.-]{1,100})"',
+            head,
+        )
+        pending = self._pending.get(int(response.group(1))) if response else None
+        record_diagnostic(
+            "warning",
+            "harnesses",
+            f"harnesses.{self.diagnostic_namespace}.message_too_large",
+            "The harness sent one protocol message over the size limit; it was dropped.",
+            outcome="dropped",
+            stage="protocol",
+            metadata={
+                "byte_count": size,
+                "limit": self.max_message_bytes,
+                "method": method.group(1).decode("ascii") if method else None,
+            },
+        )
+        if pending is not None and not pending.done():
+            pending.set_exception(
+                HarnessTransportError(
+                    f"{self.transport_name} response of {size:,} bytes exceeded "
+                    f"the {self.max_message_bytes:,}-byte message limit"
+                )
+            )
+
+    async def _with_stderr_tail(self, detail: str) -> str:
+        """Name what the process last printed on stderr, as Codex's own SDK does."""
+
+        stderr_task = self._stderr_task
+        if stderr_task is not None and not stderr_task.done():
+            # stdout usually reaches EOF first while the cause is still in the pipe.
+            await asyncio.wait(
+                {stderr_task}, timeout=CODEX_APP_SERVER_STDERR_SETTLE_SECONDS
+            )
+        # Codex colours its log lines even on a pipe.
+        tail = sanitize_display_text(
+            re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", redact_text(self.stderr_tail))
+        ).strip()
+        if not tail:
+            return detail
+        return (
+            f"{detail}. stderr: {tail[-CODEX_APP_SERVER_STDERR_ERROR_CHARS:].lstrip()}"
+        )
 
     async def _end_transport(self, error: HarnessTransportError) -> None:
         """Fail every waiter once the reader can no longer correlate responses.
@@ -2104,6 +2219,24 @@ class CodexAppServerConnection(HarnessConnection):
                     payload={"interaction_id": interaction_id, "accepted": accepted},
                 )
                 continue
+            if raw.get("id") is not None:
+                # Every server request Nebula implements was answered above. Codex
+                # waits for a reply to any other, so decline it as its TUI does.
+                request_method = str(method)[:200]
+                await self.rpc.respond_error(
+                    raw.get("id"),
+                    JSONRPC_METHOD_NOT_FOUND,
+                    f"Nebula does not support the {request_method} request",
+                )
+                yield HarnessEvent(
+                    type="notice",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    title="Codex request declined",
+                    summary=f"Nebula does not support the Codex request {request_method}.",
+                    payload={"severity": "warning", "method": request_method},
+                )
+                continue
             if params.get("turnId") not in {None, self.active_turn_id}:
                 continue
             if method == "item/agentMessage/delta":
@@ -2351,7 +2484,10 @@ class CodexAppServerConnection(HarnessConnection):
                     stream=stream,
                     delta=str(
                         _bounded(
-                            params.get("delta") or params.get("input") or "",
+                            params.get("delta")
+                            or params.get("stdin")
+                            or params.get("input")
+                            or "",
                             limit=MAX_TOOL_RESULT_TEXT,
                         )
                     ),
@@ -2571,17 +2707,87 @@ class CodexAppServerConnection(HarnessConnection):
                 )
                 continue
             if method in {"hook/started", "hook/completed"}:
+                # Codex nests the hook's id, event and outcome in a run summary.
+                raw_run = params.get("run")
+                hook_run = raw_run if isinstance(raw_run, dict) else params
+                hook_status = str(
+                    hook_run.get("status")
+                    or ("running" if method.endswith("started") else "completed")
+                ).lower()
+                hook_outcome = {
+                    "failed": "Hook failed",
+                    "blocked": "Blocked by hook",
+                    "stopped": "Hook stopped",
+                }.get(hook_status)
+                status_message = hook_run.get("statusMessage")
                 yield HarnessEvent(
                     type="item_upsert",
                     vendor=HarnessKind.CODEX_APP_SERVER,
                     external_turn_id=self.active_turn_id,
-                    item_id=str(params.get("id") or params.get("hookId") or method),
+                    item_id=str(
+                        hook_run.get("id")
+                        or params.get("id")
+                        or params.get("hookId")
+                        or method
+                    )[:500],
                     item_kind="hook",
-                    item_status="running"
-                    if method.endswith("started")
-                    else "completed",
-                    title=str(params.get("eventName") or "Hook"),
+                    item_status=(
+                        "running"
+                        if hook_status == "running"
+                        else "failed"
+                        if hook_status in {"failed", "blocked"}
+                        else "cancelled"
+                        if hook_status == "stopped"
+                        else "completed"
+                    ),
+                    title=str(
+                        hook_run.get("eventName") or params.get("eventName") or "Hook"
+                    )[:1_000],
+                    summary=(
+                        str(
+                            _bounded(
+                                f"{hook_outcome}: {status_message}"
+                                if isinstance(status_message, str) and status_message
+                                else hook_outcome,
+                                limit=1_000,
+                            )
+                        )
+                        if hook_outcome
+                        else None
+                    ),
                     payload=_bounded(params, limit=MAX_TOOL_RESULT_TEXT),
+                )
+                continue
+            if method == "error":
+                # willRetry marks Codex's own stream retry; the turn goes on.
+                # Any other error is repeated by the failed turn/completed that
+                # follows, which reports it, so it is only recorded here.
+                raw_error = params.get("error")
+                turn_error = raw_error if isinstance(raw_error, dict) else {}
+                will_retry = params.get("willRetry") is True
+                error_text = str(
+                    turn_error.get("message") or "Codex reported an error."
+                )
+                details = turn_error.get("additionalDetails")
+                if isinstance(details, str) and details.strip():
+                    error_text += f" ({details.strip()})"
+                yield HarnessEvent(
+                    type="notice",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    external_turn_id=self.active_turn_id,
+                    # Successive retries update one row instead of stacking up.
+                    item_id="codex-reconnecting" if will_retry else None,
+                    title="Reconnecting…" if will_retry else "Codex error",
+                    summary=str(_bounded(error_text, limit=1_000)),
+                    payload=_bounded(
+                        {
+                            "severity": "warning" if will_retry else "info",
+                            "retrying": will_retry,
+                            "method": method,
+                            "error": turn_error,
+                        },
+                        limit=MAX_TOOL_RESULT_TEXT,
+                    ),
                 )
                 continue
             if method in {
@@ -3460,6 +3666,9 @@ class CodexAppServerAdapter(HarnessAdapter):
                             native_capabilities=native_capabilities,
                         ),
                         "developerInstructions": developer_instructions,
+                        # Nebula never reads thread.turns, and a long history can
+                        # be larger than any message bound.
+                        "excludeTurns": True,
                         **thread_runtime_options,
                     },
                 )
@@ -3583,7 +3792,8 @@ class CodexAppServerAdapter(HarnessAdapter):
                     child_env,
                     host_session=effective_native_capabilities.shell,
                 ),
-                limit=MAX_MCP_MESSAGE_BYTES,
+                # Read-ahead only: _CodexRpc splits lines itself.
+                limit=CODEX_APP_SERVER_READ_CHUNK_BYTES,
             )
             rpc = _CodexRpc(process=process)
             await rpc.start()
@@ -3601,11 +3811,16 @@ class CodexAppServerAdapter(HarnessAdapter):
             parsed = urlsplit(endpoint)
             path = unquote(parsed.path)
             websocket = await websockets.unix_connect(
-                path, uri="ws://localhost", additional_headers=headers or None
+                path,
+                uri="ws://localhost",
+                additional_headers=headers or None,
+                max_size=CODEX_APP_SERVER_MAX_MESSAGE_BYTES,
             )
         else:
             websocket = await websockets.connect(
-                endpoint, additional_headers=headers or None
+                endpoint,
+                additional_headers=headers or None,
+                max_size=CODEX_APP_SERVER_MAX_MESSAGE_BYTES,
             )
         rpc = _CodexRpc(websocket=websocket)
         await rpc.start()

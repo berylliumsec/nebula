@@ -1636,7 +1636,7 @@ def test_codex_rpc_reader_survives_one_invalid_frame():
                 ]
             )
 
-        async def readline(self) -> bytes:
+        async def read(self, _size: int = -1) -> bytes:
             return next(self.lines)
 
     async def scenario() -> None:
@@ -1658,7 +1658,7 @@ def test_codex_rpc_reader_survives_one_invalid_frame():
 
 def test_grok_acp_rpc_reports_its_own_transport_identity():
     class ClosedStdout:
-        async def readline(self) -> bytes:
+        async def read(self, _size: int = -1) -> bytes:
             return b""
 
     async def scenario() -> None:
@@ -3144,10 +3144,10 @@ def test_grok_session_listing_timeout_kills_the_child_process(tmp_path, monkeypa
     asyncio.run(scenario())
 
 
-def test_codex_rpc_reader_limit_overrun_ends_the_transport():
-    class OverrunStdout:
-        async def readline(self) -> bytes:
-            raise ValueError("Separator is not found, and chunk exceed the limit")
+def test_codex_rpc_reader_failure_ends_the_transport():
+    class FailingStdout:
+        async def read(self, _size: int = -1) -> bytes:
+            raise OSError("stdout read failed")
 
     class Stdin:
         def write(self, _data: bytes) -> None:
@@ -3159,7 +3159,7 @@ def test_codex_rpc_reader_limit_overrun_ends_the_transport():
     class Process:
         def __init__(self) -> None:
             self.returncode: int | None = None
-            self.stdout = OverrunStdout()
+            self.stdout = FailingStdout()
             self.stderr = None
             self.stdin = Stdin()
             self.killed = False
