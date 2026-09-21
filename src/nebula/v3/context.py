@@ -34,7 +34,13 @@ from .domain import (
 )
 from .known_model_limits import KNOWN_MODEL_LIMITS, KNOWN_MODEL_LIMITS_REVISION
 from .model_catalog import route_limits_verified as descriptor_routes_verified
-from .providers import ModelMessage, ModelProvider, ModelRequest
+from .providers import (
+    ModelMessage,
+    ModelProvider,
+    ModelRequest,
+    ProviderError,
+    json_schema_instruction,
+)
 from .storage import ConflictError, NebulaStore, NotFoundError
 
 DEFAULT_CONTEXT_WINDOW = 8_192
@@ -61,6 +67,10 @@ _HOSTED_MODEL_PREFIX = re.compile(
     r"moonshotai|minimax|zai|writer)\."
 )
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{1,}")
+# How providers name a refused structured-output request: DeepSeek's "This
+# response_format type is unavailable now", OpenAI-style "'response_format'
+# of type 'json_schema' is not supported".
+_RESPONSE_FORMAT_REJECTION = re.compile(r"response[_ ]format|json[_ ]schema", re.I)
 _SECURITY_IDENTIFIER = re.compile(
     r"(?i)(?:CVE-\d{4}-\d{4,}|[a-f0-9]{32,}|"
     r"(?:artifact|task|attempt|evidence)[-_:#][A-Za-z0-9][A-Za-z0-9_.:-]*|"
@@ -903,7 +913,13 @@ class ContextCompactor:
         usage = ChatTokenUsage()
         last_error = "invalid structured memory"
         previous_output = ""
-        for attempt in range(2):
+        schema = ContextMemory.model_json_schema()
+        # Whether the schema goes on the wire (response_format) or, once the
+        # provider has refused that parameter, in the instructions.
+        wire_schema = provider.capabilities.structured_output
+        schema_in_prompt = False
+        attempt = 0
+        while attempt < 2:
             messages = [ModelMessage(role="user", content=prompt)]
             if attempt:
                 messages.append(
@@ -918,18 +934,18 @@ class ContextCompactor:
                 )
             request = ModelRequest(
                 model=model,
-                instructions=instructions,
+                instructions=(
+                    f"{instructions}\n\n{json_schema_instruction(schema)}"
+                    if schema_in_prompt
+                    else instructions
+                ),
                 messages=messages,
                 max_output_tokens=max_output_tokens,
                 temperature=0,
                 # The memory JSON is the whole answer; thinking would spend
                 # the allowance it needs.
                 reasoning_effort="none",
-                response_schema=(
-                    ContextMemory.model_json_schema()
-                    if provider.capabilities.structured_output
-                    else None
-                ),
+                response_schema=schema if wire_schema else None,
                 metadata={"operation": "context_compaction"},
             )
             if (
@@ -957,9 +973,18 @@ class ContextCompactor:
                     exc,
                     stage="context",
                 )
+                if wire_schema and self._response_format_rejected(exc):
+                    # DeepSeek and Z.ai refuse a response_format they do not
+                    # serve, and a gateway in front of them may too. Ask
+                    # once more with the schema in the instructions, rather
+                    # than fail this and every later turn of the owner.
+                    wire_schema = False
+                    schema_in_prompt = True
+                    continue
                 raise ContextCompactionError(
                     "context compactor provider request failed", usage=usage
                 ) from exc
+            attempt += 1
             call_usage = ChatTokenUsage.model_validate(response.usage.model_dump())
             usage = self._add_usage(usage, call_usage)
             if response.tool_calls:
@@ -984,6 +1009,14 @@ class ContextCompactor:
                 last_error = str(exc)[:500]
         raise ContextCompactionError(
             "compactor did not return valid sourced memory", usage=usage
+        )
+
+    @staticmethod
+    def _response_format_rejected(exc: Exception) -> bool:
+        """Whether a provider refused the request's response_format itself."""
+
+        return isinstance(exc, ProviderError) and bool(
+            _RESPONSE_FORMAT_REJECTION.search(str(exc))
         )
 
     @staticmethod

@@ -643,6 +643,11 @@ class ProviderRouteRequest(BaseModel):
     preferred_provider_ids: list[str] = Field(default_factory=list)
 
 
+# A base URL path that ends in its API version: ``/v1``, ``/v1beta``, Z.ai's
+# and BigModel's ``/api/paas/v4``.
+_VERSIONED_BASE_PATH = re.compile(r"/v\d+[a-z0-9]*$")
+
+
 class ModelProvider(ABC):
     def __init__(
         self,
@@ -696,14 +701,19 @@ class ModelProvider(ABC):
         )
 
     def _path(self, path: str) -> str:
-        """Avoid duplicating `/v1` when users provide an SDK-style base URL."""
+        """Avoid duplicating `/v1` when users provide an SDK-style base URL.
+
+        A base that already ends in its API version (``/v1``, or Z.ai's and
+        BigModel's ``/api/paas/v4``) takes the operation path without a
+        second version segment.
+        """
 
         normalized = "/" + path.lstrip("/")
         base_path = httpx.URL(self.config.base_url).path.rstrip("/")
-        if base_path.endswith("/v1") and normalized.startswith("/v1/"):
-            return normalized[3:]
         if base_path.endswith("/v1beta") and normalized.startswith("/v1beta/"):
             return normalized[7:]
+        if _VERSIONED_BASE_PATH.search(base_path) and normalized.startswith("/v1/"):
+            return normalized[3:]
         return normalized
 
     def _bearer_or_key_headers(self) -> dict[str, str]:
@@ -1240,20 +1250,21 @@ def _frame_has_output(data: Any) -> bool:
     for choice in choices:
         if not isinstance(choice, dict):
             return True
-        if choice.get("finish_reason"):
-            return True
-        delta = choice.get("delta")
-        if not isinstance(delta, dict):
-            continue
-        if (
-            delta.get("tool_calls")
-            or delta.get("function_call")
-            or _openai_message_content(delta)
-            or _openai_refusal(delta)
-            or _openai_message_reasoning(delta)
-        ):
+        if choice.get("finish_reason") or _delta_has_output(choice.get("delta")):
             return True
     return False
+
+
+def _delta_has_output(delta: Any) -> bool:
+    """Whether one streamed ``delta`` carries text, reasoning or a call."""
+
+    return isinstance(delta, dict) and bool(
+        delta.get("tool_calls")
+        or delta.get("function_call")
+        or _openai_message_content(delta)
+        or _openai_refusal(delta)
+        or _openai_message_reasoning(delta)
+    )
 
 
 # Role-only and heartbeat frames precede an in-band error; a peek past this
@@ -1283,6 +1294,13 @@ async def _leading_frames(
             return buffered, None
         # A keepalive (``data`` of None) is not output; keep looking.
         failure = _stream_error_frame(data)
+        if failure is None and isinstance(data, dict):
+            # A transient finish reason (DeepSeek's out-of-capacity, Z.ai's
+            # network_error) on a frame that carries nothing else ended the
+            # reply before any output, so it is replayed like a 503.
+            choice = _first_choice(data)
+            if not _delta_has_output(choice.get("delta")):
+                failure = _finish_reason_failure(choice)
         if isinstance(failure, ProviderOverloadedError):
             return buffered, failure
         if (
@@ -2636,18 +2654,48 @@ def _first_choice(data: dict[str, Any]) -> dict[str, Any]:
     return first if isinstance(first, dict) else {}
 
 
-def _finish_reason_failure(choice: dict[str, Any]) -> ProviderError | None:
-    """A finish reason that ends the reply as a failure, not an answer."""
+# Vendor finish reasons that end a reply early. DeepSeek reports an inference
+# fleet out of capacity, and Z.ai an internal network failure, as a finish
+# reason on an HTTP 200 (Vercel AI ``map-deepseek-finish-reason.ts`` and
+# ``zai-chat-language-model.ts`` map both to "error"). Resending can succeed.
+_TRANSIENT_FINISH_REASONS = frozenset(
+    {"error", "insufficient_system_resource", "network_error"}
+)
+# Z.ai names its content filter ``sensitive``.
+_FILTER_FINISH_REASONS = frozenset({"content_filter", "sensitive"})
+# Z.ai stops at the model's context window with this reason; it is an
+# overflow (pi-mono ``overflow.ts``), so compaction recovery must run.
+_CONTEXT_FINISH_REASONS = frozenset({"model_context_window_exceeded"})
+_FINISH_REASON_WORD = re.compile(r"[^a-z0-9]+")
 
-    reason = choice.get("finish_reason")
-    if reason == "error":
+
+def _finish_reason_failure(choice: dict[str, Any]) -> ProviderError | None:
+    """A finish reason that ends the reply as a failure, not an answer.
+
+    Besides the named values, only a reason that plainly names an error
+    (``server_error``, ``upstream_error``) is a failure; any other value a
+    runtime invents (``end``, ``eos``, ``end_turn``) is left to the caller,
+    as an ordinary stop or ``length`` is.
+    """
+
+    raw = choice.get("finish_reason")
+    reason = raw.casefold() if isinstance(raw, str) else ""
+    if reason in _TRANSIENT_FINISH_REASONS or "error" in _FINISH_REASON_WORD.split(
+        reason
+    ):
         # OpenRouter may name the cause in the choice's own ``error`` object.
         error = choice.get("error")
         detail = _error_detail({"error": error})[0] if error else None
+        named = "" if reason == "error" else f" ({raw})"
         return ProviderOverloadedError(
-            "provider ended the reply with an error" + (f": {detail}" if detail else "")
+            f"provider ended the reply with an error{named}"
+            + (f": {detail}" if detail else "")
         )
-    if reason == "content_filter":
+    if reason in _CONTEXT_FINISH_REASONS:
+        return ProviderContextLengthError(
+            f"provider stopped the reply at the model's context window ({raw})"
+        )
+    if reason in _FILTER_FINISH_REASONS:
         verdicts = choice.get("content_filter_results")
         flagged = (
             sorted(
@@ -2658,8 +2706,10 @@ def _finish_reason_failure(choice: dict[str, Any]) -> ProviderError | None:
             if isinstance(verdicts, dict)
             else []
         )
-        return ProviderResponseError(
-            "the provider's content filter stopped the reply"
+        # A refusal is reported as it is, not as an unfinished answer.
+        return ProviderRefusalError(
+            "content filter stopped the reply"
+            + ("" if reason == "content_filter" else f" ({raw})")
             + (f" (filtered: {', '.join(flagged)})" if flagged else "")
         )
     return None
@@ -2687,7 +2737,12 @@ def _chat_completion_failure(data: dict[str, Any]) -> ProviderError | None:
 def _chat_completion_body_failure(response: httpx.Response) -> ProviderError | None:
     """Retry inspector: a transient failure inside a 200 is resent like a 5xx."""
 
-    if b'"error"' not in response.content:
+    # A cheap pre-check before parsing: an error object, or a transient
+    # finish reason (``"error"``, ``"network_error"``, DeepSeek's
+    # ``"insufficient_system_resource"``).
+    if b'error"' not in response.content and (
+        b'"insufficient_system_resource"' not in response.content
+    ):
         return None
     try:
         data = response.json()
@@ -2728,14 +2783,73 @@ def _legacy_function_call(
     )
 
 
+def json_schema_instruction(schema: dict[str, Any]) -> str:
+    """The instruction that carries a response schema where the wire cannot."""
+
+    return "Return JSON matching this schema: " + json.dumps(
+        schema, ensure_ascii=False, separators=(",", ":")
+    )
+
+
+# Flavors that serve OpenAI's own models and honour its ``strict`` contract.
+_OPENAI_STRICT_FLAVORS = frozenset(
+    {
+        ProviderFlavor.OPENAI,
+        ProviderFlavor.AZURE_OPENAI,
+        ProviderFlavor.MICROSOFT_FOUNDRY,
+    }
+)
+# DeepSeek's and Z.ai's (and BigModel's) chat APIs take ``json_object`` but
+# not ``json_schema`` structured output.
+_JSON_OBJECT_ONLY_HOSTS = ("deepseek.com", "z.ai", "bigmodel.cn")
+
+
 class OpenAICompatibleProvider(ModelProvider):
     """Adapter for Chat Completions-compatible hosted and local runtimes."""
 
     def _headers(self) -> dict[str, str]:
         return self._bearer_or_key_headers()
 
+    def _strict_contract(self, model: str) -> bool:
+        """Whether this route takes OpenAI's ``strict`` schema contract.
+
+        Strict mode is OpenAI's: OpenRouter's own SDK never sends it on tools,
+        and pi-mono sends it only where a provider opts in. DeepSeek's strict
+        mode is beta-only and needs every tool strict, which Nebula's routing
+        (``tool_catalog.call`` is never strict) is not.
+        """
+
+        if self.config.flavor in _OPENAI_STRICT_FLAVORS:
+            return True
+        return self.config.flavor == ProviderFlavor.OPENROUTER and (
+            model.casefold().startswith("openai/")
+        )
+
+    def _json_object_only(self, model: str) -> bool:
+        """Whether structured output must be JSON mode instead of a schema.
+
+        DeepSeek and Z.ai reject ``json_schema`` ("This response_format type
+        is unavailable now"); Vercel AI's DeepSeek provider sends
+        ``json_object`` with the schema in a system message instead. An
+        OpenRouter model whose catalog entry lacks ``structured_outputs`` is
+        treated the same; one with no entry keeps the schema.
+        """
+
+        if self.config.flavor == ProviderFlavor.OPENROUTER:
+            supported = self.config.model_parameters.get(model) or []
+            return bool(supported) and "structured_outputs" not in supported
+        if self.config.flavor == ProviderFlavor.DEEPSEEK:
+            return True
+        host = (httpx.URL(self.config.base_url).host or "").casefold()
+        return any(
+            host == domain or host.endswith("." + domain)
+            for domain in _JSON_OBJECT_ONLY_HOSTS
+        )
+
     def _payload(self, request: ModelRequest, model: str) -> dict[str, Any]:
         vllm_grammar = self.config.flavor == ProviderFlavor.VLLM
+        strict = self._strict_contract(model)
+        json_object = bool(request.response_schema) and self._json_object_only(model)
         wire_names = _wire_tool_names(request)
         payload: dict[str, Any] = {
             "model": model,
@@ -2771,10 +2885,16 @@ class OpenAICompatibleProvider(ModelProvider):
                     },
                 ]
             )
-        if request.instructions:
-            payload["messages"].insert(
-                0, {"role": "system", "content": request.instructions}
+        instructions = request.instructions
+        if json_object and request.response_schema:
+            # JSON mode has no schema field, so the schema travels with the
+            # instructions (Vercel AI's DeepSeek provider does the same).
+            schema_text = json_schema_instruction(request.response_schema)
+            instructions = (
+                f"{instructions}\n\n{schema_text}" if instructions else schema_text
             )
+        if instructions:
+            payload["messages"].insert(0, {"role": "system", "content": instructions})
         openrouter = self.config.flavor == ProviderFlavor.OPENROUTER
         if request.max_output_tokens:
             # OpenAI's reasoning families answer 400 to max_tokens ("use
@@ -2822,22 +2942,34 @@ class OpenAICompatibleProvider(ModelProvider):
                         ),
                         # Strict mode is a request-level contract: one schema
                         # it rejects fails every tool in the call.
-                        "strict": tool.strict
-                        and _openai_strict_schema(tool.input_schema),
+                        **(
+                            {
+                                "strict": tool.strict
+                                and _openai_strict_schema(tool.input_schema)
+                            }
+                            if strict
+                            else {}
+                        ),
                     },
                 }
                 for tool in request.tools
             ]
             if request.tool_choice == ToolChoice.REQUIRED:
                 payload["tool_choice"] = "required"
-        if request.response_schema:
+        if json_object:
+            payload["response_format"] = {"type": "json_object"}
+        elif request.response_schema:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "nebula_response",
                     # A schema strict mode rejects (optional properties,
                     # defaults) fails the request; callers validate the reply.
-                    "strict": _openai_strict_schema(request.response_schema),
+                    **(
+                        {"strict": _openai_strict_schema(request.response_schema)}
+                        if strict
+                        else {}
+                    ),
                     "schema": (
                         _vllm_grammar_schema(request.response_schema)
                         if vllm_grammar
@@ -2881,8 +3013,13 @@ class OpenAICompatibleProvider(ModelProvider):
                         if optional in payload and optional not in supported:
                             payload.pop(optional)
                     # A json_schema response_format is advertised as
-                    # structured_outputs alongside response_format.
-                    structured = {"response_format", "structured_outputs"}
+                    # structured_outputs alongside response_format; JSON mode
+                    # needs response_format alone.
+                    structured = (
+                        {"response_format"}
+                        if json_object
+                        else {"response_format", "structured_outputs"}
+                    )
                     if "response_format" in payload and not structured <= supported:
                         payload.pop("response_format")
         if self.config.flavor == ProviderFlavor.MISTRAL or _MISTRAL_MODEL.search(model):
@@ -4722,6 +4859,7 @@ __all__ = [
     "UnsupportedCapability",
     "build_provider",
     "config_from_catalog",
+    "json_schema_instruction",
     "provider_from_profile",
     "retry_policy",
 ]

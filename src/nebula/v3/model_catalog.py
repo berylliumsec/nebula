@@ -257,7 +257,13 @@ def openrouter_model_routes(payload: Any, *, model: str) -> list[ModelRouteDescr
         # OpenRouter publishes max_prompt_tokens as null for most endpoints; the
         # prompt may then use the whole context window.
         max_input = _positive_int(item.get("max_prompt_tokens")) or context_window
-        max_output = _positive_int(item.get("max_completion_tokens"))
+        # A null max_completion_tokens is an endpoint with no separate output
+        # cap: its own window bounds the reply. The endpoint stays in the set,
+        # because automatic routing may still pick it and its window must keep
+        # bounding sizing; failing the whole set discarded every endpoint's
+        # verified limits over one upstream's missing figure.
+        raw_output = item.get("max_completion_tokens")
+        max_output = context_window if raw_output is None else _positive_int(raw_output)
         status = item.get("status", 0)
         if (
             not isinstance(provider_name, str)
