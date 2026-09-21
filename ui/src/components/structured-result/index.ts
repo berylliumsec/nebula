@@ -24,10 +24,8 @@ export {
 } from "./normalize";
 export { renderRaw, type RawDocument } from "./rawText";
 export { structuralReferences, type StructuralReference } from "./references";
-export { ChatResultStream } from "./ChatResultStream";
 export { AgentViewPanel } from "./AgentViewPanel";
 export { AgentViewBody, agentViewStatus, useAgentViewStream, type AgentViewStream } from "./AgentViewBody";
-export { readPlacement, writePlacement, type AgentViewPlacement } from "./agentViewGeometry";
 export { InspectorPanel } from "./InspectorPanel";
 export { PropertyGrid } from "./PropertyGrid";
 export { ResultTimeline, shapeLabel, whenLabel } from "./ResultTimeline";

@@ -9040,10 +9040,14 @@ test("stabilization Results shows the assistant's snapshots beside the conversat
       await route.fulfill({ json: null });
     } else await route.fallback();
   });
+  // A link saved when the Agent view was a details tab opens it floating over
+  // the conversation instead; the details drawer stays closed.
   await page.goto("/?view=chat&session=results-chat&drawer=visuals");
 
-  const panel = page.getByRole("region", { name: "Published results for this conversation" });
+  const panel = page.getByRole("dialog", { name: "Agent view" });
   await expect(panel.getByRole("heading", { name: "Agent view" })).toBeVisible();
+  await expect(page).not.toHaveURL(/drawer=/);
+  await expect(page.getByRole("button", { name: "Close details" })).toHaveCount(0);
   await expect(panel.getByRole("button", { name: /2\. Mapped the call graph/ })).toBeVisible();
 
   // The newest snapshot opens by itself, explored by the same dashboard.
@@ -9549,10 +9553,10 @@ test("stabilization a harness chat delegates to a chosen provider model", async 
   expect(accessibility.violations).toEqual([]);
 });
 
-test("stabilization the result explorer stays readable in the conversation drawer", async ({ page }) => {
-  // The drawer is ~280px inside a wide window, so a viewport media query never
-  // matches it. A name column with a fixed floor left the value nothing to
-  // wrap in and its text rendered one character per line.
+test("stabilization the result explorer stays readable in the narrowest Agent view", async ({ page }) => {
+  // The Agent view can shrink far below the window, so a viewport media query
+  // never matches it. A name column with a fixed floor left the value nothing
+  // to wrap in and its text rendered one character per line.
   await installPublishedResults(page);
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -9564,10 +9568,17 @@ test("stabilization the result explorer stays readable in the conversation drawe
       await route.fulfill({ json: null });
     } else await route.fallback();
   });
-  await page.goto("/?view=chat&session=results-chat&drawer=visuals");
-
-  const panel = page.getByRole("region", { name: "Published results for this conversation" });
+  await page.goto("/?view=chat&session=results-chat");
+  await page.getByRole("button", { name: /^Agent view/ }).click();
+  const panel = page.getByRole("dialog", { name: "Agent view" });
   await expect(panel).toBeVisible();
+  // Shrink it to its minimum width; a phone shows a sheet that is already narrow.
+  const resize = panel.getByRole("button", { name: "Resize Agent view" });
+  if (await resize.count()) {
+    await resize.focus();
+    for (let step = 0; step < 8; step += 1) await page.keyboard.press("ArrowLeft");
+    expect(Math.round((await panel.boundingBox())?.width ?? 0)).toBe(360);
+  }
   await panel.getByRole("button", { name: /Verdict snapshot/ }).click();
 
   // Every value keeps a usable measure: one character per line means zero.
@@ -9592,7 +9603,7 @@ test("stabilization the result explorer stays readable in the conversation drawe
   const path = panel.locator(".structured-inspector code").first();
   expect((await path.boundingBox())?.width ?? 0).toBeGreaterThan(24);
 
-  const accessibility = await new AxeBuilder({ page }).include(".chat-result-stream").analyze();
+  const accessibility = await new AxeBuilder({ page }).include(".agent-view-panel").analyze();
   expect(accessibility.violations).toEqual([]);
 });
 
@@ -9689,7 +9700,7 @@ test("stabilization continue as mission moves to the conversation actions menu",
   await expect(item).toBeFocused();
 });
 
-test("stabilization the Agent view floats over the conversation, minimizes and docks", async ({ page }, testInfo) => {
+test("stabilization the Agent view floats over the conversation, minimizes and has no dock", async ({ page }, testInfo) => {
   await installReasoningProvider(page);
   await installPublishedResults(page);
   await page.route("**/api/v1/**", async route => {
@@ -9727,7 +9738,6 @@ test("stabilization the Agent view floats over the conversation, minimizes and d
   if (phone) {
     // A phone has no room to float beside the conversation: it is a sheet.
     await expect(view).toHaveClass(/sheet/);
-    await expect(view.getByRole("button", { name: "Dock in conversation details" })).toHaveCount(0);
     await view.getByRole("button", { name: "Minimize Agent view" }).click();
     await expect(page.getByRole("button", { name: /^Show Agent view/ })).toBeFocused();
     await page.getByRole("button", { name: /^Show Agent view/ }).click();
@@ -9756,23 +9766,12 @@ test("stabilization the Agent view floats over the conversation, minimizes and d
   await expect(view).toBeVisible();
   expect(Math.round((await view.boundingBox())?.x ?? 0)).toBe(Math.round(moved?.x ?? 0));
 
-  // Docked, the same view lives in the conversation's details, and stays there.
-  await view.getByRole("button", { name: "Dock in conversation details" }).click();
-  await expect(view).toBeHidden();
-  const docked = page.getByRole("region", { name: "Published results for this conversation" });
-  await expect(docked.getByRole("heading", { name: "Agent view" })).toBeVisible();
-  await expect(page).toHaveURL(/drawer=visuals/);
-  // Focus follows the view to the control that undoes the move.
-  await expect(docked.getByRole("button", { name: /Pop out/ })).toBeFocused();
-  await page.goto("/?view=chat&session=results-chat");
-  await opener.click();
-  await expect(docked).toBeVisible();
-  await expect(view).toHaveCount(0);
-
-  // Popping it out floats it again and closes the details it came from.
-  await docked.getByRole("button", { name: /Pop out/ }).click();
-  await expect(view).toBeVisible();
-  await expect(page).not.toHaveURL(/drawer=/);
+  // It lives over the conversation only: nothing moves it into the details,
+  // whose tabs no longer include an Agent view.
+  await expect(view.getByRole("button", { name: "Dock in conversation details" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Show session details" }).click();
+  await expect(page.getByRole("navigation", { name: "Conversation detail views" }).getByRole("button")).toHaveText(["Context", "Results", "Subagents"]);
+  await page.getByRole("button", { name: "Close details" }).click();
   await view.getByRole("button", { name: "Close Agent view" }).click();
   await expect(view).toBeHidden();
   await expect(opener).toBeFocused();
