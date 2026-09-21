@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 from uuid import uuid4
 
 from pydantic import Field, field_validator
 
+from .diagnostics import record_caught_exception
 from .domain import NativeHookExecution, NebulaModel, utc_now
 from .storage import NebulaStore
 
@@ -29,6 +31,62 @@ MAX_HOOK_OUTPUT_BYTES = 64 * 1024
 
 class NativeHookError(RuntimeError):
     """A safe, operator-actionable native-hook failure."""
+
+
+class _HookProcessOutcome(TypedDict):
+    status: Literal["complete", "failed", "timed_out"]
+    error: str | None
+    exit_code: int | None
+    stdout: bytes
+    stderr: bytes
+
+
+def _run_hook_process(
+    argv: list[str],
+    *,
+    cwd: str,
+    env: dict[str, str],
+    envelope: bytes,
+    timeout: int,
+) -> _HookProcessOutcome:
+    """Run one hook process to its end; a hook's own failure is data, not an error."""
+
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=cwd,
+            env=env,
+            input=envelope,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (
+        subprocess.TimeoutExpired
+    ):  # diagnostic-expected: timeout is persisted on the durable hook execution
+        return {
+            "status": "timed_out",
+            "error": "hook timed out",
+            "exit_code": None,
+            "stdout": b"",
+            "stderr": b"",
+        }
+    except OSError as exc:  # diagnostic-expected: start failure is persisted on the durable hook execution
+        return {
+            "status": "failed",
+            "error": f"hook could not start: {exc}",
+            "exit_code": None,
+            "stdout": b"",
+            "stderr": b"",
+        }
+    succeeded = completed.returncode == 0
+    return {
+        "status": "complete" if succeeded else "failed",
+        "error": None if succeeded else "hook exited unsuccessfully",
+        "exit_code": completed.returncode,
+        "stdout": completed.stdout,
+        "stderr": completed.stderr,
+    }
 
 
 class NativeHookManifest(NebulaModel):
@@ -209,42 +267,72 @@ class NativeHookRunner:
             "NEBULA_HOOK_EVENT": event_name,
             "NEBULA_HOOK_EVENT_VERSION": "1",
         }
-        try:
-            completed = await asyncio.to_thread(
-                subprocess.run,
+        work = asyncio.get_running_loop().run_in_executor(
+            None,
+            functools.partial(
+                _run_hook_process,
                 [str(executable), *snapshot.manifest.command[1:]],
                 cwd=str(directory),
                 env=environment,
-                input=envelope,
-                capture_output=True,
+                envelope=envelope,
                 timeout=snapshot.manifest.timeout_seconds,
-                check=False,
+            ),
+        )
+        try:
+            outcome = await asyncio.shield(work)
+        except asyncio.CancelledError:  # diagnostic-expected: the stop propagates to the turn; the hook's outcome is persisted when its process exits
+            # Stopping the turn cannot stop the hook process: it keeps running
+            # in its worker thread. Record its real outcome when it exits
+            # instead of leaving the execution "running" forever.
+            work.add_done_callback(
+                functools.partial(self._persist_late_outcome, execution.id)
             )
-            stdout, stderr = completed.stdout, completed.stderr
-            status = "complete" if completed.returncode == 0 else "failed"
-            error = None if completed.returncode == 0 else "hook exited unsuccessfully"
-            exit_code = completed.returncode
-        except (
-            subprocess.TimeoutExpired
-        ):  # diagnostic-expected: timeout is persisted on the durable hook execution
-            stdout, stderr = b"", b""
-            status, error, exit_code = "timed_out", "hook timed out", None
-        except OSError as exc:  # diagnostic-expected: start failure is persisted on the durable hook execution
-            stdout, stderr = b"", b""
-            status, error, exit_code = "failed", f"hook could not start: {exc}", None
+            raise
+        return self._persist_outcome(execution, outcome)
+
+    def _persist_outcome(
+        self, execution: NativeHookExecution, outcome: _HookProcessOutcome
+    ) -> NativeHookExecution:
         return self.store.update(
             NativeHookExecution,
             execution.id,
             {
-                "status": status,
+                "status": outcome["status"],
                 "completed_at": utc_now(),
-                "exit_code": exit_code,
-                "stdout": stdout[:MAX_HOOK_OUTPUT_BYTES].decode("utf-8", "replace"),
-                "stderr": stderr[:MAX_HOOK_OUTPUT_BYTES].decode("utf-8", "replace"),
-                "error": error,
+                "exit_code": outcome["exit_code"],
+                "stdout": outcome["stdout"][:MAX_HOOK_OUTPUT_BYTES].decode(
+                    "utf-8", "replace"
+                ),
+                "stderr": outcome["stderr"][:MAX_HOOK_OUTPUT_BYTES].decode(
+                    "utf-8", "replace"
+                ),
+                "error": outcome["error"],
             },
             expected_revision=execution.revision,
         )
+
+    def _persist_late_outcome(
+        self, execution_id: str, work: asyncio.Future[_HookProcessOutcome]
+    ) -> None:
+        """Record the outcome of a hook whose turn ended while it ran."""
+
+        if work.cancelled():
+            return
+        try:
+            outcome = work.result()
+            latest = self.store.get(NativeHookExecution, execution_id)
+            # Core stopping marks a running hook interrupted so an effectful
+            # one is reconciled by the operator; a late exit keeps that.
+            if latest.status == "running":
+                self._persist_outcome(latest, outcome)
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.native_hook.late_outcome_failed",
+                "A hook that outlived its stopped turn could not record its outcome.",
+                exc,
+                stage="native-hook",
+            )
 
 
 __all__ = [

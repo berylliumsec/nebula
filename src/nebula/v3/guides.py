@@ -179,6 +179,12 @@ STARTER_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,62}$"
 HOOK_SCRIPT = """#!/bin/sh
 # Nebula sends one JSON event on stdin, e.g.
 # {"schema":"nebula.native-hook-event/v1","event":"chat.turn.started",...}
+# "payload" always has provider_id and model. The three turn-end events
+# (chat.turn.completed, chat.turn.failed, chat.turn.cancelled) also all have
+# finish_reason ("stop" or the provider's reason, "failed", "cancelled") and
+# detail (null, the error, "response stopped"), so one hook can handle all
+# three. A "block" hook failing on chat.turn.completed fails the turn; on
+# failed or cancelled the turn has already ended, so it is only reported.
 # This starter appends each event to events.jsonl beside this script.
 # Replace it with your own logic. Exit non-zero to report a failure.
 cat >> events.jsonl
