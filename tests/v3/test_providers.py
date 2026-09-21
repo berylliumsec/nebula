@@ -188,6 +188,8 @@ def test_openai_compatible_uses_chat_completions_shape():
             )
         )
     )
+    assert result.raw_body is not None
+    assert json.loads(result.raw_body) == result.raw
 
     assert observed["path"] == "/v1/chat/completions"
     assert observed["payload"]["messages"][0] == {
@@ -412,10 +414,26 @@ def test_openai_compatible_rejects_partial_or_unidentified_tool_calls(
         )
 
 
+@pytest.mark.parametrize("capture_enabled", [False, True])
 def test_openai_compatible_logs_exact_malformed_tool_json_without_its_values(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, capture_enabled
 ):
     malformed = '{"address":"sensitive.example"'
+    if capture_enabled:
+        from nebula.v3 import diagnostic_sensitive
+
+        monkeypatch.setattr(diagnostic_sensitive.keyring, "get_keyring", lambda: None)
+        (tmp_path / "diagnostics-settings.json").write_text(
+            json.dumps(
+                {
+                    "schema": diagnostics.SETTINGS_SCHEMA,
+                    "global_level": "error",
+                    "feature_levels": {},
+                    "sensitive_detail_capture": True,
+                }
+            ),
+            encoding="utf-8",
+        )
     manager = diagnostics.DiagnosticManager(tmp_path, watch_settings=False)
     monkeypatch.setattr(diagnostics, "_manager", manager)
 
@@ -468,6 +486,15 @@ def test_openai_compatible_logs_exact_malformed_tool_json_without_its_values(
                 )
             )
         assert manager.flush()
+        if capture_enabled:
+            captured = next(
+                item
+                for item in manager.recent_errors(limit=10)
+                if item["event_code"] == "providers.tool_arguments.invalid_json"
+            )
+            assert malformed in manager.reveal_sensitive_detail(
+                captured["error_id"], operator_id="operator", action="reveal"
+            )
     finally:
         manager.close()
 
@@ -498,6 +525,7 @@ def test_openai_compatible_logs_exact_malformed_tool_json_without_its_values(
         "vendor_request_id": "gen-malformed-1",
     }
     assert "sensitive.example" not in json.dumps(record)
+    assert record["sensitive_detail_available"] is capture_enabled
 
 
 @pytest.mark.parametrize(

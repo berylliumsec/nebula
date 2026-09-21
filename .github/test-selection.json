@@ -1,30 +1,24 @@
 {
-  "change_digest": "10ebe2200e0a624a3731d0bb29157a94ac0ea121d68adc5716b026a4809498d1",
-  "reviewed_by": "Codex focused selection review",
-  "reason": "The change is limited to conversation deletion reconciliation in SessionsPage, its diagnostic presentation, and permanent focused UI and real-Core regression coverage.",
-  "exclusions": "No Python or native implementation changed, so backend and native tests are excluded. Unrelated chat streaming, provider, mission, browser, terminal, workspace, and full-suite journeys are excluded.",
+  "change_digest": "aa135bf9108853b629c9d60f851afc0be8010a020a5c0289ef80017a7a974dc7",
+  "reviewed_by": "Codex focused review of protected failed-provider capture",
+  "reason": "The Core change captures raw failed provider responses or malformed tool arguments only in opt-in protected diagnostic detail. Select exact provider parsing, fail-closed routing, sensitive-store isolation, and existing protected-reveal UI coverage.",
+  "exclusions": "Full suites, unrelated chat/provider scenarios, native tests, and Playwright are excluded. No UI implementation, API shape, browser-origin behavior, or interaction changed; mocked browser journeys would not prove protected Core capture. The real-Core deployment and authenticated health check are verified separately.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 3,
+    "python": 8,
+    "frontend": 12,
     "native": 0,
-    "playwright": 11
+    "playwright": 0
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_chat_tool_loop.py::test_malformed_routing_never_reaches_the_tool_broker",
+    "tests/v3/test_chat_tool_loop.py::test_routing_prose_captures_exact_provider_response_only_in_protected_detail",
+    "tests/v3/test_diagnostics.py::test_explicit_sensitive_detail_never_enters_exportable_log",
+    "tests/v3/test_providers.py::test_openai_compatible_uses_chat_completions_shape",
+    "tests/v3/test_providers.py::test_openai_compatible_logs_exact_malformed_tool_json_without_its_values"
+  ],
   "frontend": [
-    "ui/src/App.test.tsx"
+    "ui/src/diagnostics/DiagnosticsPanel.test.tsx"
   ],
   "native": [],
-  "playwright": [
-    "entry:conversation-delete-reconciliation/desktop",
-    "entry:conversation-delete-reconciliation/compact",
-    "entry:conversation-delete-reconciliation/mobile-chromium-small",
-    "entry:conversation-delete-reconciliation/mobile-chromium-ledger-390",
-    "entry:conversation-delete-reconciliation/mobile-chromium-wide",
-    "entry:conversation-delete-reconciliation/mobile-webkit-small",
-    "entry:conversation-delete-reconciliation/mobile-webkit",
-    "entry:conversation-delete-reconciliation/mobile-webkit-wide",
-    "entry:conversation-delete-reconciliation-core/assistant-real-desktop",
-    "entry:conversation-delete-reconciliation-core/assistant-real-chromium-390",
-    "entry:conversation-delete-reconciliation-core/assistant-real-webkit-390"
-  ]
+  "playwright": []
 }

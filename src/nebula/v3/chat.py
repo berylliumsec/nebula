@@ -3583,9 +3583,48 @@ class ChatService:
                             "goal token budget was exhausted before tool execution"
                         )
                     if response.text.strip():
-                        raise ChatError(
+                        failure = ChatError(
                             "provider returned routing prose instead of a tool call"
                         )
+                        record_caught_exception(
+                            "chat",
+                            "chat.routing.prose_with_required_tool",
+                            "A provider returned text during a required tool-routing step.",
+                            failure,
+                            stage="routing",
+                            metadata={
+                                "provider": prepared.provider_profile.id,
+                                "model_id": prepared.resolved_model,
+                                "vendor_request_id": response.provider_request_id or "",
+                                "status": "text_with_tool_calls"
+                                if response.tool_calls
+                                else "text_without_tool_calls",
+                            },
+                            sensitive_detail=json.dumps(
+                                {
+                                    "provider_response_body_base64": (
+                                        base64.b64encode(response.raw_body).decode(
+                                            "ascii"
+                                        )
+                                        if response.raw_body is not None
+                                        else None
+                                    ),
+                                    "provider_response": response.raw,
+                                    "normalized": {
+                                        "text": response.text,
+                                        "reasoning": response.reasoning,
+                                        "tool_calls": [
+                                            call.model_dump(mode="json")
+                                            for call in response.tool_calls
+                                        ],
+                                        "finish_reason": response.finish_reason,
+                                    },
+                                },
+                                ensure_ascii=False,
+                                default=str,
+                            ),
+                        )
+                        raise failure
                     if not response.tool_calls:
                         # A required tool choice the provider ignored. The
                         # results already gathered are a better answer than a

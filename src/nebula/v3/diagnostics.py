@@ -865,6 +865,7 @@ class DiagnosticManager:
         retryable: bool | None = None,
         safe_failure_cause: str | None = None,
         exception: BaseException | None = None,
+        sensitive_detail: str | None = None,
         exception_type: str | None = None,
         stack_frames: Sequence[Mapping[str, Any]] | None = None,
         metadata: Mapping[str, Any] | None = None,
@@ -911,11 +912,17 @@ class DiagnosticManager:
         sensitive_expires: str | None = None
         if (
             error_id
-            and exception is not None
+            and (exception is not None or sensitive_detail is not None)
             and normalized_level in {"error", "critical"}
             and self._sensitive_detail_store is not None
         ):
-            detail = f"{type(exception).__name__}: {_safe_text(str(exception), limit=64 * 1024).strip()}"
+            detail = (
+                sensitive_detail
+                if sensitive_detail is not None
+                else (
+                    f"{type(exception).__name__}: {_safe_text(str(exception), limit=64 * 1024).strip()}"
+                )
+            )
             try:
                 capture = self._sensitive_detail_store.capture(
                     error_id,
@@ -1963,6 +1970,7 @@ def record_caught_exception(
     *,
     stage: str,
     metadata: Mapping[str, Any] | None = None,
+    sensitive_detail: str | None = None,
 ) -> str | None:
     """Classify a reviewed catch site without recording exception messages.
 
@@ -2099,6 +2107,7 @@ def record_caught_exception(
         reason_code=reason_code,
         operator_detail=operator_detail,
         exception=exception,
+        sensitive_detail=sensitive_detail,
         metadata=metadata,
     )
     error_id = recorded_error_id or emergency_error_id
