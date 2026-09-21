@@ -9526,3 +9526,92 @@ test("stabilization continue as mission moves to the conversation actions menu",
   await expect(item).toBeVisible();
   await expect(item).toBeEnabled();
 });
+
+test("stabilization the Agent view floats over the conversation, minimizes and docks", async ({ page }, testInfo) => {
+  await installReasoningProvider(page);
+  await installPublishedResults(page);
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{ ...entity, id: "results-chat", engagement_id: "scratch-project", title: "Refactor auth", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/results-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/results-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await page.goto("/?view=chat&session=results-chat");
+  const phone = (page.viewportSize()?.width ?? 1440) <= 760;
+
+  // The composer's Agent view button opens it over the conversation.
+  const opener = page.getByRole("button", { name: /^Agent view/ });
+  await opener.click();
+  const view = page.getByRole("dialog", { name: "Agent view" });
+  await expect(view).toBeVisible();
+  await expect(view).toBeFocused();
+  await expect(opener).toHaveAttribute("aria-expanded", "true");
+  await expect(view.getByText("Following newest · 3 snapshots")).toBeVisible();
+  await expect(view.getByRole("button", { name: /2\. Mapped the call graph/ })).toBeVisible();
+  await expect(view.getByRole("link", { name: /Open in Results/ })).toHaveAttribute("href", "/projects/scratch-project/results/snapshot-2");
+
+  // It is not modal: the operator keeps writing underneath it.
+  const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+  await composer.fill("Keep going on the handler");
+  await expect(composer).toHaveValue("Keep going on the handler");
+
+  const accessibility = await new AxeBuilder({ page }).include(".agent-view-panel").analyze();
+  expect(accessibility.violations).toEqual([]);
+
+  if (phone) {
+    // A phone has no room to float beside the conversation: it is a sheet.
+    await expect(view).toHaveClass(/sheet/);
+    await expect(view.getByRole("button", { name: "Dock in conversation details" })).toHaveCount(0);
+    await view.getByRole("button", { name: "Minimize Agent view" }).click();
+    await expect(page.getByRole("button", { name: /^Show Agent view/ })).toBeFocused();
+    await page.getByRole("button", { name: /^Show Agent view/ }).click();
+    await expect(view).toBeVisible();
+    await view.getByRole("button", { name: "Close Agent view" }).click();
+    await expect(view).toBeHidden();
+    await expect(opener).toBeFocused();
+    return;
+  }
+  testInfo.annotations.push({ type: "layout", description: "floating" });
+
+  // It moves from the keyboard as well as by its grip.
+  const before = await view.boundingBox();
+  await view.getByRole("button", { name: "Move Agent view" }).focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  const moved = await view.boundingBox();
+  expect(Math.round((before?.x ?? 0) - (moved?.x ?? 0))).toBe(48);
+
+  // Minimized, it waits as a launcher and comes back exactly where it was.
+  await page.keyboard.press("Escape");
+  await expect(view).toBeHidden();
+  const show = page.getByRole("button", { name: /^Show Agent view/ });
+  await expect(show).toBeFocused();
+  await show.click();
+  await expect(view).toBeVisible();
+  expect(Math.round((await view.boundingBox())?.x ?? 0)).toBe(Math.round(moved?.x ?? 0));
+
+  // Docked, the same view lives in the conversation's details, and stays there.
+  await view.getByRole("button", { name: "Dock in conversation details" }).click();
+  await expect(view).toBeHidden();
+  const docked = page.getByRole("region", { name: "Published results for this conversation" });
+  await expect(docked.getByRole("heading", { name: "Agent view" })).toBeVisible();
+  await expect(page).toHaveURL(/drawer=visuals/);
+  // Focus follows the view to the control that undoes the move.
+  await expect(docked.getByRole("button", { name: /Pop out/ })).toBeFocused();
+  await page.goto("/?view=chat&session=results-chat");
+  await opener.click();
+  await expect(docked).toBeVisible();
+  await expect(view).toHaveCount(0);
+
+  // Popping it out floats it again and closes the details it came from.
+  await docked.getByRole("button", { name: /Pop out/ }).click();
+  await expect(view).toBeVisible();
+  await expect(page).not.toHaveURL(/drawer=/);
+  await view.getByRole("button", { name: "Close Agent view" }).click();
+  await expect(view).toBeHidden();
+  await expect(opener).toBeFocused();
+});

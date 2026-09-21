@@ -1,74 +1,56 @@
-import { useState } from "react";
-import { ExternalLink, LoaderCircle } from "lucide-react";
+import { useLayoutEffect, useRef } from "react";
+import { ExternalLink, SquareArrowOutUpRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ApiClient } from "../../api/client";
-import type { StructuredResultSummary } from "../../api/types";
-import { DiagnosticErrorNotice } from "../../diagnostics";
 import { projectSurface } from "../../resourceRoutes";
-import { StandardEmptyState } from "../SurfacePrimitives";
-import { ResultTimeline, shapeLabel, whenLabel } from "./ResultTimeline";
-import { StructuredResultDashboard } from "./StructuredResultDashboard";
-import { useStructuredResult, useStructuredResults } from "./useStructuredResults";
+import { AgentViewBody, agentViewStatus, useAgentViewStream } from "./AgentViewBody";
 
 interface ChatResultStreamProps {
   api: ApiClient;
   projectId: string;
   sessionId: string;
+  /** Float the view over the conversation instead of keeping it here. */
+  onPopOut?: () => void;
+  /**
+   * Set when the operator just docked the floating view here: focus follows
+   * it to the control that undoes the move, then this is reported done.
+   */
+  focusPopOut?: boolean;
+  onPopOutFocused?: () => void;
 }
 
 /**
- * What the agent published while working on this conversation, beside the
- * conversation. It is the same explorer as the Results surface, narrowed to
- * this session and following the newest snapshot as it arrives.
+ * The Agent view docked in the conversation's details: what the agent
+ * published while working on this conversation, following the newest
+ * snapshot as it arrives. The same view floats over the conversation when
+ * popped out; see AgentViewPanel.
  */
-export function ChatResultStream({ api, projectId, sessionId }: ChatResultStreamProps) {
-  const { items, loading, error, refresh } = useStructuredResults(api, projectId, { chatSessionId: sessionId, live: true, limit: 50 });
-  const [pinned, setPinned] = useState<string>();
-  const current = pinned && items.some((item) => item.id === pinned) ? pinned : items[0]?.id;
-  const detail = useStructuredResult(api, projectId, current);
-
-  const select = (item: StructuredResultSummary) => setPinned(item.id);
+export function ChatResultStream({ api, projectId, sessionId, onPopOut, focusPopOut = false, onPopOutFocused }: ChatResultStreamProps) {
+  const stream = useAgentViewStream(api, projectId, sessionId);
+  const popOut = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    if (!focusPopOut || !popOut.current) return;
+    popOut.current.focus();
+    onPopOutFocused?.();
+  }, [focusPopOut, onPopOutFocused]);
 
   return <section className="chat-result-stream" aria-label="Published results for this conversation">
     <header>
       <div>
         <h3>Agent view</h3>
-        <p>What this conversation's goal published as it worked. New snapshots appear as they arrive.</p>
+        <p role="status">{agentViewStatus(stream)}</p>
       </div>
-      <Link className="button quiet" to={projectSurface(projectId, "results", current)}>
-        <ExternalLink size={14} aria-hidden="true" /> Open in Results
-      </Link>
+      <div className="chat-result-stream-actions">
+        {onPopOut && <button ref={popOut} type="button" className="button quiet" onClick={onPopOut}>
+          <SquareArrowOutUpRight size={14} aria-hidden="true" /> Pop out
+        </button>}
+        <Link className="button quiet" to={projectSurface(projectId, "results", stream.current)}>
+          <ExternalLink size={14} aria-hidden="true" /> Open in Results
+        </Link>
+      </div>
     </header>
 
-    {error && <DiagnosticErrorNotice title="Published results could not be read" error={error} compact />}
-
-    {loading && items.length === 0 && <p role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" /> Reading published results…</p>}
-
-    {!loading && items.length === 0 && <StandardEmptyState
-      compact
-      title="Nothing published yet"
-      explanation="Start a goal and the assistant publishes where its work stands as it goes. Snapshots appear here as soon as they do, with no schema to configure."
-    />}
-
-    {items.length > 0 && <div className="chat-result-stream-body">
-      <ResultTimeline items={items} selectedId={current} onSelect={select} emptyMessage="Nothing published yet." />
-      {detail.error && <DiagnosticErrorNotice title="That snapshot could not be opened" error={detail.error} compact />}
-      {detail.record && <article className="chat-result-stream-detail">
-        <header>
-          <strong>{detail.record.title}</strong>
-          <small>{whenLabel(detail.record.createdAt)} · {shapeLabel(detail.record)}</small>
-        </header>
-        {detail.record.summary && <p>{detail.record.summary}</p>}
-        <StructuredResultDashboard
-          key={detail.record.id}
-          compact
-          value={detail.record.result}
-          hints={detail.record.hints}
-          title={detail.record.title}
-        />
-      </article>}
-      {!pinned && items.length > 1 && <p className="structured-derived">Showing the newest snapshot. Choose an earlier step above to stay on it.</p>}
-      <button type="button" className="button quiet" onClick={refresh}>Refresh now</button>
-    </div>}
+    <AgentViewBody stream={stream} />
+    {stream.items.length > 0 && <button type="button" className="button quiet" onClick={stream.refresh}>Refresh now</button>}
   </section>;
 }

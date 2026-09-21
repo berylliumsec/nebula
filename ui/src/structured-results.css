@@ -185,6 +185,44 @@
 .chat-result-stream-detail { display: grid; gap: 8px; min-width: 0; padding-top: 8px; border-top: 1px solid var(--border-soft); }
 .chat-result-stream-detail > header { display: grid; gap: 2px; }
 .chat-result-stream-detail > header small { color: var(--muted); font-size: 11px; }
+.chat-result-stream-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.agent-view-pinned { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: 11px; }
+
+/*
+ * The Agent view floating over the conversation. It is not modal: nothing
+ * dims, and the transcript and composer stay usable under it. It sits one
+ * layer under Ask Nebula, which is opened on purpose from a selection.
+ */
+.agent-view-panel { position: fixed; z-index: 79; box-sizing: border-box; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-overlay); color: var(--text); box-shadow: var(--shadow-overlay); overflow: hidden; }
+.agent-view-panel:focus { outline: none; }
+.agent-view-header { display: flex; align-items: center; gap: 2px; padding: 6px 6px 6px 4px; border-bottom: 1px solid var(--border-soft); }
+.agent-view-title { display: grid; flex: 1; gap: 1px; min-width: 0; padding-inline: 4px; }
+.agent-view-title h2 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 14px; font-weight: var(--weight-semibold); }
+.agent-view-title h2 svg { color: var(--blue); }
+.agent-view-title small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-view-scroll { display: grid; align-content: start; gap: 10px; min-height: 0; padding: 12px 14px; overflow: auto; overscroll-behavior: contain; }
+.agent-view-footer { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 6px 6px 12px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 11px; }
+.agent-view-footer > span { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-view-handle { flex-shrink: 0; cursor: grab; touch-action: none; }
+.agent-view-handle:active { cursor: grabbing; }
+.agent-view-resize { flex-shrink: 0; cursor: nwse-resize; touch-action: none; }
+.agent-view-panel :focus-visible, .agent-view-launcher :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+/* A phone has no room beside the conversation, so the view is a sheet. */
+.agent-view-panel.sheet { inset: auto 0 0 0; width: 100%; max-height: min(80dvh, 720px); border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom); }
+.agent-view-panel.sheet .agent-view-header { padding-inline-start: 8px; }
+
+/* Minimized: a launcher above Ask Nebula's, so neither covers the other. */
+.agent-view-launcher { position: fixed; z-index: 79; right: max(12px, env(safe-area-inset-right)); bottom: calc(88px + env(safe-area-inset-bottom)); box-sizing: border-box; display: flex; align-items: center; gap: 4px; width: min(300px, calc(100vw - 24px)); min-height: 56px; padding: 6px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-overlay); color: var(--text); box-shadow: var(--shadow-overlay); }
+.agent-view-launcher-show { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; min-height: 44px; padding: 2px 8px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.agent-view-launcher-show > span { display: grid; gap: 1px; min-width: 0; }
+.agent-view-launcher-show strong { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.agent-view-launcher-show strong svg { color: var(--blue); }
+.agent-view-launcher-show small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.agent-view-launcher-show em { color: var(--blue); font-size: 12px; font-style: normal; font-weight: var(--weight-semibold); }
+@media (max-width: 760px) {
+  .agent-view-launcher { bottom: calc(152px + env(safe-area-inset-bottom)); }
+}
 .chat-composer-badge { display: inline-grid; min-width: 16px; height: 16px; place-items: center; margin-inline-start: 2px; padding: 0 4px; border-radius: 999px; background: var(--blue-muted); color: var(--blue-bright); font-size: 11px; }
 
 .structured-dashboard.compact .structured-dashboard-body,

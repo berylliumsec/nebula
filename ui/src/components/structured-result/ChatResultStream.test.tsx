@@ -69,7 +69,8 @@ describe("what the assistant published beside the conversation", () => {
     getStructuredResult.mockResolvedValue(record({ id: "step-2", title: "Mapped the call graph" }));
     show();
 
-    expect(await screen.findByText("Showing the newest snapshot. Choose an earlier step above to stay on it.")).toBeInTheDocument();
+    // The header says it is keeping up, so a new snapshot replacing this one is expected.
+    expect(await screen.findByText("Following newest · 2 snapshots")).toBeInTheDocument();
     expect(getStructuredResult).toHaveBeenCalledWith("project-1", "step-2", expect.anything());
     // Multi-line text reads as a block, with the sibling language named.
     const block = (await screen.findByText(/def login/)).closest(".structured-block");
@@ -89,7 +90,22 @@ describe("what the assistant published beside the conversation", () => {
     const series = await screen.findByRole("region", { name: "Stream refactor-auth" });
     await user.click(within(series).getByRole("button", { name: /Read the handler/ }));
     expect(getStructuredResult).toHaveBeenLastCalledWith("project-1", "step-1", expect.anything());
-    expect(screen.queryByText(/Showing the newest snapshot/)).not.toBeInTheDocument();
+    expect(screen.getByText("Stopped on snapshot 1 of 2")).toBeInTheDocument();
+    expect(screen.getByText(/New snapshots will not replace this one/)).toBeInTheDocument();
+
+    // And goes back to following as plainly as it stopped.
+    await user.click(screen.getByRole("button", { name: "Back to newest" }));
+    expect(getStructuredResult).toHaveBeenLastCalledWith("project-1", "step-2", expect.anything());
+    expect(screen.getByText("Following newest · 2 snapshots")).toBeInTheDocument();
+  });
+
+  it("offers to float the view when a caller can place it", async () => {
+    const user = userEvent.setup();
+    const onPopOut = vi.fn();
+    render(<MemoryRouter><ChatResultStream api={api} projectId="project-1" sessionId="session-1" onPopOut={onPopOut} /></MemoryRouter>);
+    await screen.findByText("Waiting for the first snapshot");
+    await user.click(screen.getByRole("button", { name: /Pop out/ }));
+    expect(onPopOut).toHaveBeenCalledOnce();
   });
 
   it("offers the full surface without making it the only way in", async () => {
