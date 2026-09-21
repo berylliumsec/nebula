@@ -33,6 +33,7 @@ from pydantic import (
     PrivateAttr,
     Field,
     StringConstraints,
+    ValidationError,
     field_validator,
     model_validator,
 )
@@ -269,15 +270,35 @@ class ChatContextAttachment(NebulaModel):
         return self
 
 
+def _omitted_image_text(content: str, images: list[ChatContentBlock]) -> str:
+    """A message's text with each image named, for a model that takes no images."""
+
+    notes = [
+        "[image: "
+        + (" ".join((block.alt or "").split()) or "attached image")
+        + " omitted: this model does not accept images]"
+        for block in images
+    ]
+    return content + "\n\n" + "\n".join(notes)
+
+
 def resolve_chat_model_content(
     store: NebulaStore,
     artifact_store: ArtifactStore | None,
     message: ChatRequestMessage,
     engagement_id: str | None,
+    *,
+    images_supported: bool = True,
 ) -> str | list[dict[str, Any]]:
     images = [block for block in message.content_blocks if block.type == "image"]
     if not images:
         return message.content
+    if not images_supported:
+        # Earlier turns may hold images sent to a vision model before the
+        # conversation switched runtime. The stored transcript keeps them; a
+        # text-only model is told they were there instead of being sent parts
+        # it rejects (opencode and Codex strip unsupported media the same way).
+        return _omitted_image_text(message.content, images)
     if artifact_store is None or not engagement_id:
         raise ChatConfigurationError("image messages require durable artifact storage")
     parts: list[dict[str, Any]] = [{"type": "text", "text": message.content}]
@@ -651,6 +672,67 @@ def _context_attachment_metadata(
     return {
         "context_attachments": [item.model_dump(mode="json") for item in attachments]
     }
+
+
+def _stored_model_text(message: ChatMessage) -> str:
+    """The text a stored message stands for in model context.
+
+    The transcript keeps the operator's own words as ``content`` and the
+    context they selected for that turn in ``metadata.context_attachments``.
+    Every later request, compaction and recovery rebuilds the same envelope the
+    turn was first sent with, so the selection does not vanish after its turn.
+    """
+
+    raw = message.metadata.get("context_attachments")
+    if message.role != ChatRole.USER or not isinstance(raw, list) or not raw:
+        return message.content
+    try:
+        attachments = [ChatContextAttachment.model_validate(item) for item in raw]
+    except ValidationError as exc:
+        record_caught_exception(
+            "chat",
+            "chat.chat.stored_context_attachment_invalid",
+            "A stored message's selected context failed validation and was left out.",
+            exc,
+            stage="chat",
+            metadata={"message_id": message.id},
+        )
+        return message.content
+    return _content_with_selected_context(message.content, attachments)
+
+
+def _estimation_message(
+    role: ChatRole,
+    text: str,
+    blocks: list[ChatContentBlock],
+    *,
+    images_supported: bool,
+) -> ModelMessage:
+    """A byte-free stand-in for a message's model content, for token estimates.
+
+    Images count the way the resolved request will: the image reserve for a
+    vision model, their text placeholder for a text-only one.
+    """
+
+    images = [block for block in blocks if block.type == "image"]
+    if not images:
+        return ModelMessage(role=role.value, content=text)
+    if not images_supported:
+        return ModelMessage(role=role.value, content=_omitted_image_text(text, images))
+    return ModelMessage(
+        role=role.value,
+        content=[
+            {"type": "text", "text": text},
+            *(
+                {"type": "image", "media_type": block.media_type, "alt": block.alt}
+                for block in images
+            ),
+        ],
+    )
+
+
+def _estimated_message_tokens(message: ModelMessage) -> int:
+    return estimate_messages([message]) - estimate_tokens("")
 
 
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{2,}")
@@ -2133,10 +2215,18 @@ class ChatService:
             self._active_provider_turns.pop(turn_id, None)
 
     def _model_content(
-        self, message: ChatRequestMessage, engagement_id: str | None
+        self,
+        message: ChatRequestMessage,
+        engagement_id: str | None,
+        *,
+        images_supported: bool,
     ) -> str | list[dict[str, Any]]:
         return resolve_chat_model_content(
-            self.store, self.artifact_store, message, engagement_id
+            self.store,
+            self.artifact_store,
+            message,
+            engagement_id,
+            images_supported=images_supported,
         )
 
     def prepare(self, request: ChatCompletionRequest) -> PreparedChat:
@@ -2213,17 +2303,6 @@ class ChatService:
                 f"provider {request.provider_id!r} is disabled"
             )
         provider = self.provider_factory(profile)
-        if (
-            any(
-                block.type == "image"
-                for message in request.messages
-                for block in message.content_blocks
-            )
-            and not profile.capabilities.vision
-        ):
-            raise ChatConfigurationError(
-                "the selected provider/model is not verified for vision input"
-            )
 
         session: ChatSession | None = None
         pending_session: ChatSession | None = None
@@ -2257,6 +2336,21 @@ class ChatService:
             _, new_messages = self._merge_history(stored_messages, durable_incoming)
         else:
             new_messages = durable_incoming
+        # Only an image this request adds must reach the model as an image.
+        # Images already in the transcript are named in text for a text-only
+        # model (see resolve_chat_model_content), so a runtime switch to one
+        # keeps the conversation usable.
+        if (
+            any(
+                block.type == "image"
+                for message in new_messages
+                for block in message.content_blocks
+            )
+            and not profile.capabilities.vision
+        ):
+            raise ChatConfigurationError(
+                "the selected provider/model is not verified for vision input"
+            )
 
         goal: ChatGoal | None = None
         if request.goal_id:
@@ -2617,7 +2711,11 @@ class ChatService:
             messages=[
                 ModelMessage(
                     role=message.role.value,
-                    content=self._model_content(message, engagement_id),
+                    content=self._model_content(
+                        message,
+                        engagement_id,
+                        images_supported=profile.capabilities.vision,
+                    ),
                 )
                 for message in model_messages
             ],
@@ -3367,12 +3465,14 @@ class ChatService:
             prepared.provider_profile.id, prepared.provider, prepared.resolved_model
         )
         canonical = self._session_messages(prepared.session)
+        # The canonical transcript stands for what each turn was sent with,
+        # including the context the operator selected for this very turn.
         messages = [
             ChatRequestMessage(
                 role=item.role,
                 content=item.content,
                 content_blocks=item.content_blocks,
-            )
+            ).model_copy(update={"content": _stored_model_text(item)})
             for item in canonical
         ]
         goal = self.store.get(ChatGoal, turn.goal_id) if turn and turn.goal_id else None
@@ -3438,7 +3538,11 @@ class ChatService:
                 "messages": [
                     ModelMessage(
                         role=item.role.value,
-                        content=self._model_content(item, prepared.engagement_id),
+                        content=self._model_content(
+                            item,
+                            prepared.engagement_id,
+                            images_supported=refreshed.capabilities.vision,
+                        ),
                     )
                     for item in model_messages
                 ],
@@ -7190,12 +7294,31 @@ class ChatService:
         ]
         return session, retained, retracted
 
-    def context_status(self, session_id: str) -> ContextStatus:
+    def context_status(
+        self, session_id: str, *, images_supported: bool | None = None
+    ) -> ContextStatus:
+        """Estimate the conversation's active context as the model receives it.
+
+        ``images_supported`` sizes stored images for a model other than the
+        conversation's own, as a runtime switch preflight does.
+        """
+
         session = self.store.get(ChatSession, session_id)
         if session.provider_profile_id is None:
             raise ChatConfigurationError("chat session does not identify a provider")
         profile = self.store.get(ProviderProfile, session.provider_profile_id)
+        if images_supported is None:
+            images_supported = profile.capabilities.vision
         messages = self._session_messages(session)
+        estimated_forms = {
+            message.id: _estimation_message(
+                message.role,
+                _stored_model_text(message),
+                message.content_blocks,
+                images_supported=images_supported,
+            )
+            for message in messages
+        }
         limits = resolve_context_limits(profile, model=session.model)
         try:
             project_text = project_instructions_text(
@@ -7205,13 +7328,7 @@ class ChatService:
             # diagnostic-expected: an unusable AGENTS.md is reported when a turn starts
             project_text = ""
         base_instructions = _CHAT_INSTRUCTIONS + project_text
-        estimated = estimate_messages(
-            [
-                ModelMessage(role=message.role.value, content=message.content)
-                for message in messages
-            ],
-            base_instructions,
-        )
+        estimated = estimate_messages(estimated_forms.values(), base_instructions)
         active_estimated = estimated
         latest = ContextCompactor(self.store).latest(
             ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
@@ -7231,7 +7348,7 @@ class ChatService:
                 if message.sequence > latest.compacted_through
             ]
             uncompacted_tokens = sum(
-                estimate_tokens(message.content, message_count=1)
+                _estimated_message_tokens(estimated_forms[message.id])
                 for message in uncompacted
             )
             status = (
@@ -7347,7 +7464,11 @@ class ChatService:
                 reason=str(exc),
                 reason_code="context_or_privacy",
             )
-        active_tokens = self.context_status(session.id).estimated_input_tokens
+        # Size stored images the way the target model will receive them: the
+        # image reserve for a vision model, a text placeholder otherwise.
+        active_tokens = self.context_status(
+            session.id, images_supported=profile.capabilities.vision
+        ).estimated_input_tokens
         requires_confirmation = active_tokens > limits.target_input_tokens
         confirmation = (
             self._runtime_switch_token(
@@ -7487,6 +7608,12 @@ class ChatService:
             )
             for message in stored
         ]
+        # A client replays the operator's words; the model is sent each stored
+        # message as it was first sent, selected context included.
+        history = [
+            item.model_copy(update={"content": _stored_model_text(message)})
+            for item, message in zip(durable, stored, strict=True)
+        ]
         if len(incoming) >= len(durable) and incoming[: len(durable)] == durable:
             new_messages = incoming[len(durable) :]
             if not new_messages:
@@ -7495,9 +7622,9 @@ class ChatService:
                 raise ChatHistoryConflict(
                     "a durable chat request may append exactly one user message"
                 )
-            return incoming, new_messages
+            return [*history, *new_messages], new_messages
         if len(incoming) == 1 and incoming[0].role == ChatRole.USER:
-            return [*durable, *incoming], incoming
+            return [*history, *incoming], incoming
         raise ChatHistoryConflict(
             "supplied history diverges from the durable chat transcript"
         )
@@ -7528,19 +7655,27 @@ class ChatService:
             requested_output_tokens=request.max_output_tokens,
             required_parameters=required_parameters,
         )
-        as_model_messages = [
-            ModelMessage(role=message.role.value, content=message.content)
-            for message in messages
-        ]
-        estimated = estimate_messages(as_model_messages, instructions)
+        images_supported = profile.capabilities.vision
+
+        def estimated_form(message: ChatRequestMessage) -> ModelMessage:
+            # Size each message as it will be sent: images count toward the
+            # window, so an image-heavy conversation compacts instead of
+            # failing the request capacity check on every later turn.
+            return _estimation_message(
+                message.role,
+                message.content,
+                message.content_blocks,
+                images_supported=images_supported,
+            )
+
+        estimated = estimate_messages(
+            [estimated_form(message) for message in messages], instructions
+        )
         if estimated <= limits.target_input_tokens:
             return messages, instructions, ChatTokenUsage(), None, session
 
         current = messages[-1]
-        mandatory = estimate_messages(
-            [ModelMessage(role=current.role.value, content=current.content)],
-            instructions,
-        )
+        mandatory = estimate_messages([estimated_form(current)], instructions)
         if mandatory > limits.input_capacity:
             raise ContextCapacityError(
                 "the current message and required instructions exceed the model context window"
@@ -7553,13 +7688,13 @@ class ChatService:
         # Keep a recent, complete, user-led tail. The remaining space is reserved
         # for derived memory, retrieved originals, instructions, and headroom.
         tail_budget = max(
-            estimate_tokens(current.content, message_count=1),
+            _estimated_message_tokens(estimated_form(current)),
             limits.target_input_tokens * 2 // 5,
         )
         tail: list[ChatRequestMessage] = []
         tail_tokens = 0
         for message in reversed(messages):
-            size = estimate_tokens(message.content, message_count=1)
+            size = _estimated_message_tokens(estimated_form(message))
             if tail and tail_tokens + size > tail_budget:
                 break
             tail.append(message)
@@ -7577,6 +7712,11 @@ class ChatService:
             raise ContextCapacityError(
                 "chat context cannot be compacted without omitting the current turn"
             )
+        # Compaction and retrieval read what each message was sent with, so
+        # an old turn's selected context is summarised rather than dropped.
+        archived_text = {
+            message.id: _stored_model_text(message) for message in archived
+        }
         compacted_through = archived[-1].sequence
         compactor = ContextCompactor(self.store)
         latest = compactor.latest(
@@ -7603,7 +7743,7 @@ class ChatService:
                             source_id=message.id,
                             sequence=message.sequence,
                         ),
-                        content=f"role={message.role.value}\n{message.content}",
+                        content=f"role={message.role.value}\n{archived_text[message.id]}",
                     )
                     for message in archived
                 ],
@@ -7623,15 +7763,16 @@ class ChatService:
         ranked = sorted(
             archived,
             key=lambda item: (
-                -lexical_score(current.content, item.content),
+                -lexical_score(current.content, archived_text[item.id]),
                 -item.sequence,
             ),
         )
         for archived_message in ranked:
-            score = lexical_score(current.content, archived_message.content)
+            text = archived_text[archived_message.id]
+            score = lexical_score(current.content, text)
             if score <= 0:
                 continue
-            size = estimate_tokens(archived_message.content, message_count=1)
+            size = estimate_tokens(text, message_count=1)
             if retrieved_tokens + size > retrieval_budget:
                 continue
             retrieved.append(
@@ -7639,7 +7780,7 @@ class ChatService:
                     "message_id": archived_message.id,
                     "sequence": archived_message.sequence,
                     "role": archived_message.role.value,
-                    "content": archived_message.content,
+                    "content": text,
                 }
             )
             retrieved_tokens += size
@@ -7658,10 +7799,7 @@ class ChatService:
         while (
             len(tail) > 1
             and estimate_messages(
-                [
-                    ModelMessage(role=message.role.value, content=message.content)
-                    for message in tail
-                ],
+                [estimated_form(message) for message in tail],
                 context_instructions,
             )
             > limits.target_input_tokens
@@ -7670,10 +7808,7 @@ class ChatService:
             while tail and tail[0].role == ChatRole.ASSISTANT:
                 tail.pop(0)
         final_estimate = estimate_messages(
-            [
-                ModelMessage(role=message.role.value, content=message.content)
-                for message in tail
-            ],
+            [estimated_form(message) for message in tail],
             context_instructions,
         )
         if final_estimate > limits.target_input_tokens:
