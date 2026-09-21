@@ -260,7 +260,8 @@ def test_hosted_provider_uses_published_limits_without_a_catalog():
     limits = resolve_context_limits(profile, model="glm-4.6")
 
     assert limits.context_window == 202_752
-    assert limits.max_output_tokens == 2_048
+    # min(published 131,072, 32,000 ceiling, window // 4)
+    assert limits.max_output_tokens == 32_000
     assert limits.source == "known_model"
     assert limits.estimated is False
     assert limits.metadata_revision.startswith("known-models:")

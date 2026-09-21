@@ -33,6 +33,7 @@ from .automation_tools import (
     PROCESS_IO_NAME,
     RUN_COMMAND_NAME,
 )
+from .context import default_output_tokens
 from .credentials import CredentialStore
 from .database import Database
 from .diagnostics import (
@@ -816,8 +817,8 @@ def run_mission(
             ModelSpecialist(
                 selected_provider,
                 model=selected_model,
-                max_output_tokens=(
-                    2048 if max_tokens is None else min(2048, max_tokens)
+                max_output_tokens=default_output_tokens(
+                    store, provider_id, selected_model, token_budget=max_tokens
                 ),
             )
             if selected_provider is not None

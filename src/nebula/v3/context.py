@@ -38,7 +38,14 @@ from .providers import ModelMessage, ModelProvider, ModelRequest
 from .storage import ConflictError, NebulaStore, NotFoundError
 
 DEFAULT_CONTEXT_WINDOW = 8_192
+# Output allowance when the model's own output limit is unknown.
 DEFAULT_MAX_OUTPUT_TOKENS = 2_048
+# When the model's output limit is known, the default allowance is that limit,
+# held to opencode's 32,000-token OUTPUT_TOKEN_MAX and to a quarter of the
+# window, so input keeps at least the three quarters the 2,048-of-8,192
+# fallback has always left it. An explicit request may still ask for more.
+KNOWN_MODEL_OUTPUT_CEILING = 32_000
+DEFAULT_OUTPUT_WINDOW_DIVISOR = 4
 CONTEXT_TARGET_FRACTION = 0.75
 COMPACTOR_INPUT_FRACTION = 0.60
 COMPACTOR_OUTPUT_FRACTION = 0.05
@@ -315,6 +322,18 @@ def resolve_context_limits(
     if configured_output:
         output_caps.append(configured_output)
     default_output = min(DEFAULT_MAX_OUTPUT_TOKENS, *output_caps)
+    if model_output or configured_output:
+        # Reasoning models spend their thinking from this same allowance, so
+        # a flat 2,048 cuts them off mid-thought. Size it from the known
+        # limit instead, never below what the fallback already allowed.
+        default_output = max(
+            default_output,
+            min(
+                KNOWN_MODEL_OUTPUT_CEILING,
+                context_window // DEFAULT_OUTPUT_WINDOW_DIVISOR,
+                *output_caps,
+            ),
+        )
     output = min(requested_output_tokens or default_output, *output_caps)
     input_capacity = context_window - output
     if input_limit:
@@ -346,6 +365,33 @@ def resolve_context_limits(
         route_input_limit=route_input_limit or None,
         route_limits_required=profile.provider_type == "openrouter",
     )
+
+
+def default_output_tokens(
+    store: NebulaStore,
+    provider_id: str | None,
+    model: str | None,
+    *,
+    token_budget: int | None = None,
+) -> int:
+    """Output allowance for a mission call that names no maximum of its own.
+
+    Sized the way chat sizes a turn, from the stored profile's limits for the
+    model; without them it is the 2,048-token fallback. A smaller mission
+    token budget still bounds it.
+    """
+
+    output = DEFAULT_MAX_OUTPUT_TOKENS
+    if provider_id:
+        try:
+            profile = store.get(ProviderProfile, provider_id)
+            output = resolve_context_limits(profile, model=model).max_output_tokens
+        except (
+            NotFoundError,
+            ContextCapacityError,
+        ):  # diagnostic-expected: the fallback allowance applies; the provider call reports any routing failure itself
+            output = DEFAULT_MAX_OUTPUT_TOKENS
+    return min(output, token_budget) if token_budget else output
 
 
 def estimate_tokens(value: str, *, message_count: int = 0) -> int:
@@ -1201,6 +1247,8 @@ __all__ = [
     "ContextSource",
     "ContextStatus",
     "CompactionResult",
+    "DEFAULT_MAX_OUTPUT_TOKENS",
+    "default_output_tokens",
     "estimate_messages",
     "estimate_model_request",
     "estimate_tokens",
