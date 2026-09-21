@@ -435,6 +435,7 @@ from .providers import (
     ModelMessage,
     ModelRequest,
     PROVIDER_CATALOG,
+    ReasoningEffort,
     ProviderError,
     ProviderFlavor,
     ProviderHealth,
@@ -784,6 +785,7 @@ class ChatSessionUpdateRequest(NebulaModel):
     archived: bool | None = None
     mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
     hook_ids: list[str] | None = Field(default=None, max_length=32)
+    reasoning_effort: ReasoningEffort | None = None
     expected_revision: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
@@ -793,6 +795,7 @@ class ChatSessionUpdateRequest(NebulaModel):
             and self.archived is None
             and self.mcp_server_ids is None
             and self.hook_ids is None
+            and "reasoning_effort" not in self.model_fields_set
         ):
             raise ValueError("Provide a title, archived state, or assistant settings")
         for name, values in (
@@ -9911,6 +9914,8 @@ def create_app(
             metadata["mcp_server_ids"] = request.mcp_server_ids
         if request.hook_ids is not None:
             metadata["hook_ids"] = request.hook_ids
+        if "reasoning_effort" in request.model_fields_set:
+            metadata["reasoning_effort"] = request.reasoning_effort
         changes["metadata"] = metadata
         updated = store.update(
             ChatSession,

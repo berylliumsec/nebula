@@ -8525,6 +8525,8 @@ export class ApiClient {
         body: JSON.stringify({
           mcp_server_ids: body.mcpServerIds,
           hook_ids: body.hookIds,
+          ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
+          ...(body.useModelReasoningDefault ? { reasoning_effort: null } : {}),
           expected_revision: body.expectedRevision,
         }),
       },

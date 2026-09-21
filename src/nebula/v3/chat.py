@@ -1659,6 +1659,7 @@ class ChatService:
                     allow_cloud_tool_results=source.allow_cloud_tool_results,
                     max_output_tokens=source.max_output_tokens,
                     temperature=source.temperature,
+                    reasoning_effort=source.reasoning_effort,
                     stream=True,
                 )
             )
@@ -1736,6 +1737,7 @@ class ChatService:
                     hook_ids=hook_ids,
                     allow_subagents=settings.allow_subagents,
                     allow_cloud_tool_results=settings.allow_cloud_tool_results,
+                    reasoning_effort=session.metadata.get("reasoning_effort"),
                     stream=True,
                 )
             )

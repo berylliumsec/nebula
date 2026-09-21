@@ -123,6 +123,23 @@ it("requires an explicit Start and uses the latest revision", async () => {
   expect(onWorkDispatched).toHaveBeenCalledOnce();
 });
 
+it("waits for durable assistant settings before resuming a goal", () => {
+  const paused: ChatGoal = { ...draft, status: "paused", revision: 2 };
+  const writeChatGoal = vi.fn();
+  render(<DialogProvider><ProviderGoalPanel
+    api={{ writeChatGoal } as unknown as ApiClient}
+    sessionId="session"
+    goal={paused}
+    settingsBusy
+    onChange={vi.fn()}
+  /></DialogProvider>);
+
+  const resume = screen.getByRole("button", { name: "Resume" });
+  expect(resume).toBeDisabled();
+  fireEvent.click(resume);
+  expect(writeChatGoal).not.toHaveBeenCalled();
+});
+
 it("explicitly replaces immutable goal skills by exact source path", async () => {
   const running: ChatGoal = {
     ...draft,

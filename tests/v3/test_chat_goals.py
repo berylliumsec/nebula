@@ -244,6 +244,13 @@ def test_successful_provider_turn_automatically_continues_running_goal(tmp_path)
         running = goals.write(
             "session", GoalWrite(expected_revision=draft.revision, action="start")
         )
+        session = store.get(ChatSession, "session")
+        store.update(
+            ChatSession,
+            session.id,
+            {"metadata": {**session.metadata, "reasoning_effort": "high"}},
+            expected_revision=session.revision,
+        )
         provider = FakeProvider("provider", local=False)
         provider.config.model_allowlist.append("model")
         chat = ChatService(store, provider_factory=lambda _: provider)
@@ -267,6 +274,15 @@ def test_successful_provider_turn_automatically_continues_running_goal(tmp_path)
         assert [turn.goal_id for turn in turns] == [running.id, running.id]
         assert goal.current_step == 2
         assert goal.blocked_reason == "Goal step budget is exhausted."
+        goal_requests = [
+            request
+            for request in provider.requests
+            if not request.metadata.get("operation")
+        ]
+        assert [request.reasoning_effort for request in goal_requests] == [
+            "high",
+            "high",
+        ]
         assert any(
             message.role.value == "user"
             and "without another operator message" in message.content

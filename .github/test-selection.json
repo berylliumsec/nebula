@@ -1,19 +1,26 @@
 {
-  "change_digest": "c95c5988297db724642dd974085ccba1b316a6ebcf5ca1d547c0446e78e157d1",
-  "reviewed_by": "Codex review of goal dashboard publication and immutable tool evidence wiring",
-  "reason": "Goal-mode chat exposed dashboard.publish through a ToolBroker that had no evidence recorder. The tool could commit its structured result and then fail after execution when the broker enforced immutable evidence. The selected regression executes the real dashboard broker with Core storage and ArtifactStore and verifies a successful receipt with three immutable artifacts. The existing goal-tool integration test verifies fresh goal turns still expose dashboard.publish when the required artifact store is configured.",
-  "exclusions": "No frontend, native, or Playwright tests because the UI, desktop shell, browser behavior, and API contract are unchanged. Container runners, network tools, unrelated chat lifecycle behavior, and full suites are excluded. The focused Python tests use an in-process Core database and real filesystem-backed ArtifactStore without network access.",
+  "change_digest": "77fd3987230d5018de4ba81e7d32a6fa48dc84b67999bf17e92a9ee72c7e20c5",
+  "reviewed_by": "Codex review of durable provider reasoning effort across the goal lifecycle",
+  "reason": "Provider reasoning effort was transient until a normal message completed, while Start, Resume, and automatic goal continuation built Core-side requests that omitted it. The selection verifies session metadata persistence, exact API serialization, UI prevention of Resume during the save, Core propagation through initial and continued goal turns, and the real production-bundle LAN workflow across desktop Chromium and emulated mobile Chromium/WebKit.",
+  "exclusions": "Full backend and frontend suites, unrelated chat/provider/harness tests, native Rust tests, physical devices, and unrelated Playwright areas are excluded. The selected real-Core goal-lifecycle journey covers the affected UI, persistence, refresh, resume, and continuation boundaries; no origin-sensitive browser API changed.",
   "expected_tests": {
     "python": 2,
-    "frontend": 0,
+    "frontend": 84,
     "native": 0,
-    "playwright": 0
+    "playwright": 3
   },
   "python": [
-    "tests/v3/test_structured_results.py::test_goal_dashboard_broker_records_publish_execution_as_immutable_evidence",
-    "tests/v3/test_structured_results.py::test_publishing_is_offered_to_a_goal_turn_and_to_nothing_else"
+    "tests/v3/test_chat_api.py::test_chat_api_completes_streams_and_exposes_durable_history",
+    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/client.test.ts",
+    "ui/src/components/ProviderGoalPanel.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "provider-goal-lifecycle-core/assistant-real-desktop",
+    "provider-goal-lifecycle-core/assistant-real-chromium-390",
+    "provider-goal-lifecycle-core/assistant-real-webkit-390"
+  ]
 }

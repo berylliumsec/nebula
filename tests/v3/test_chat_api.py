@@ -572,12 +572,14 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
         json={
             "mcp_server_ids": [mcp.id],
             "hook_ids": ["audit"],
+            "reasoning_effort": "high",
             "expected_revision": renamed.json()["revision"],
         },
     )
     assert settings.status_code == 200, settings.text
     assert settings.json()["metadata"]["mcp_server_ids"] == [mcp.id]
     assert settings.json()["metadata"]["hook_ids"] == ["audit"]
+    assert settings.json()["metadata"]["reasoning_effort"] == "high"
     assert store.get(ChatSession, session_id).metadata["mcp_server_ids"] == [mcp.id]
     stale_rename = client.patch(
         f"/api/v1/chat-sessions/{session_id}",

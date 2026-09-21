@@ -2414,6 +2414,8 @@ export interface ChatSessionRenameRequest {
 export interface ChatSessionAssistantSettingsRequest {
   mcpServerIds: Identifier[];
   hookIds: Identifier[];
+  reasoningEffort?: ReasoningEffort;
+  useModelReasoningDefault?: boolean;
   expectedRevision?: number;
 }
 

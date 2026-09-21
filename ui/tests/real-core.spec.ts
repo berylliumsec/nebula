@@ -481,6 +481,19 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
 
     await page.reload();
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("paused");
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    const resumedSettings = page.getByRole("dialog", { name: "Assistant settings" });
+    const effortSave = page.waitForResponse(response =>
+      response.request().method() === "PATCH"
+      && response.url().endsWith(`/chat-sessions/${sessionId}`),
+    );
+    await resumedSettings.getByRole("combobox", { name: "Reasoning effort" }).selectOption("high");
+    expect((await effortSave).ok()).toBe(true);
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
+    await page.reload();
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Assistant settings" }).getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("high");
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
     await page.getByRole("button", { name: "Resume" }).click();
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("running");
     await expect(composer).toHaveValue("");
@@ -491,6 +504,8 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     expect(messagesAfterContinuation.filter(message => message.role === "user")).toHaveLength(3);
     expect(messagesAfterContinuation.some(message => message.content.includes("without waiting for another operator message"))).toBe(true);
     expect(messagesAfterContinuation.some(message => message.content.includes("Is the goal complete?") && message.content.includes("continue making concrete progress"))).toBe(true);
+    const savedSession = (await (await api.get(`chat-sessions?engagement_id=${projectId}`)).json() as Array<{ id: string; metadata: { reasoning_effort?: string } }>).find(item => item.id === sessionId);
+    expect(savedSession?.metadata.reasoning_effort).toBe("high");
     expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
     expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
   } finally {
