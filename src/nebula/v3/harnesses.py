@@ -36,7 +36,9 @@ import inspect
 import json
 import os
 import re
+import sys
 from abc import ABC, abstractmethod
+from collections import deque
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
@@ -45,7 +47,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from contextlib import suppress
+from contextlib import AsyncExitStack, suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -727,6 +729,14 @@ class HarnessCommandRuntimeSnapshotMismatch(HarnessConfigurationError):
     """A durable session references a command runtime that has been replaced."""
 
 
+class HarnessVendorSessionNotFoundError(HarnessConfigurationError):
+    """The vendor cannot resume the saved session.
+
+    The vendor no longer has it, or the runtime cannot load sessions at all.
+    Raised only when the vendor said so unambiguously.
+    """
+
+
 class HarnessUnavailableError(HarnessError):
     """The selected local harness cannot currently be reached."""
 
@@ -775,6 +785,36 @@ class HarnessTurnFailedError(HarnessError):
         self.reason_code = reason_code
         self.vendor_error_info = _bounded(vendor_error_info, limit=1_000)
         super().__init__(message)
+
+
+# How each vendor says a saved session is gone. Anything else (authentication,
+# transport, an internal error) is not proof the session is gone.
+# ACP's standard "Resource not found" code (also MCP's).
+ACP_RESOURCE_NOT_FOUND = -32002
+# grok 1.0.40 answers session/load for a session it no longer has with
+# -32603 "Path not found." and this data code.
+GROK_SESSION_FILES_MISSING = "FS_NOT_FOUND"
+# codex app-server answers thread/resume with -32600 and this message
+# (thread_store_resume_read_error in codex-rs/app-server).
+CODEX_NO_ROLLOUT = "no rollout found for thread id "
+# Claude Code prints this on stderr and in its error result, then exits 1.
+CLAUDE_NO_CONVERSATION = "No conversation found with session ID"
+
+
+def _grok_session_missing(error: HarnessProviderError) -> bool:
+    data = error.data.get("data") if isinstance(error.data, dict) else None
+    return error.code == ACP_RESOURCE_NOT_FOUND or (
+        isinstance(data, dict) and data.get("code") == GROK_SESSION_FILES_MISSING
+    )
+
+
+def _codex_thread_missing(error: HarnessProviderError) -> bool:
+    message = error.data.get("message") if isinstance(error.data, dict) else None
+    return (
+        error.code == -32600
+        and isinstance(message, str)
+        and message.startswith(CODEX_NO_ROLLOUT)
+    )
 
 
 class HarnessPlanEntry(NebulaModel):
@@ -3653,25 +3693,32 @@ class CodexAppServerAdapter(HarnessAdapter):
                 ),
             }
             if request.session.external_session_id:
-                result = await rpc.request(
-                    "thread/resume",
-                    {
-                        "threadId": request.session.external_session_id,
-                        "model": request.session.model,
-                        "cwd": str(request.workspace),
-                        "approvalPolicy": approval_policy,
-                        "sandbox": sandbox,
-                        "config": _codex_thread_config(
-                            effective_mcp,
-                            native_capabilities=native_capabilities,
-                        ),
-                        "developerInstructions": developer_instructions,
-                        # Nebula never reads thread.turns, and a long history can
-                        # be larger than any message bound.
-                        "excludeTurns": True,
-                        **thread_runtime_options,
-                    },
-                )
+                try:
+                    result = await rpc.request(
+                        "thread/resume",
+                        {
+                            "threadId": request.session.external_session_id,
+                            "model": request.session.model,
+                            "cwd": str(request.workspace),
+                            "approvalPolicy": approval_policy,
+                            "sandbox": sandbox,
+                            "config": _codex_thread_config(
+                                effective_mcp,
+                                native_capabilities=native_capabilities,
+                            ),
+                            "developerInstructions": developer_instructions,
+                            # Nebula never reads thread.turns, and a long history
+                            # can be larger than any message bound.
+                            "excludeTurns": True,
+                            **thread_runtime_options,
+                        },
+                    )
+                except HarnessProviderError as exc:
+                    if not _codex_thread_missing(exc):
+                        raise
+                    raise HarnessVendorSessionNotFoundError(
+                        "Codex no longer has this thread, so it cannot be resumed."
+                    ) from exc
             else:
                 result = await rpc.request(
                     "thread/start",
@@ -6743,19 +6790,26 @@ class GrokAcpAdapter(HarnessAdapter):
                     and capabilities.get("loadSession") is True
                 ):
                     # ACP defaults loadSession to false; Zed refuses the same way.
-                    raise HarnessConfigurationError(
+                    raise HarnessVendorSessionNotFoundError(
                         "This Grok runtime does not advertise session loading "
                         "(agentCapabilities.loadSession), so Nebula cannot resume "
                         "this Grok session. Start a new chat to continue."
                     )
-                await rpc.request(
-                    "session/load",
-                    {
-                        "sessionId": request.session.external_session_id,
-                        "cwd": str(request.workspace),
-                        "mcpServers": mcp_servers,
-                    },
-                )
+                try:
+                    await rpc.request(
+                        "session/load",
+                        {
+                            "sessionId": request.session.external_session_id,
+                            "cwd": str(request.workspace),
+                            "mcpServers": mcp_servers,
+                        },
+                    )
+                except HarnessProviderError as exc:
+                    if not _grok_session_missing(exc):
+                        raise
+                    raise HarnessVendorSessionNotFoundError(
+                        "Grok no longer has this session, so it cannot be resumed."
+                    ) from exc
                 external_session_id = request.session.external_session_id
             else:
                 result = await rpc.request(
@@ -7064,11 +7118,31 @@ class ClaudeAgentSdkAdapter(HarnessAdapter):
             )
         if request.profile.executable:
             options_kwargs["cli_path"] = request.profile.executable
+        resume_stderr: deque[str] = deque(maxlen=20)
+        if request.session.external_session_id:
+            # SDK 0.2.118 reports a refused resume only as "exit code 1"; the
+            # CLI says why on stderr. Keep the latest lines and pass them on to
+            # Core's stderr, where the CLI's own stderr went before.
+            def keep_resume_stderr(line: str) -> None:
+                resume_stderr.append(line)
+                sys.stderr.write(line + "\n")
+
+            options_kwargs["stderr"] = keep_resume_stderr
         options = sdk.ClaudeAgentOptions(
             **{key: value for key, value in options_kwargs.items() if value is not None}
         )
         client = sdk.ClaudeSDKClient(options=options)
-        await client.connect()
+        try:
+            await client.connect()
+        except Exception as exc:
+            if request.session.external_session_id and any(
+                CLAUDE_NO_CONVERSATION in text for text in (*resume_stderr, str(exc))
+            ):
+                raise HarnessVendorSessionNotFoundError(
+                    "Claude Code no longer has this conversation, so it cannot be "
+                    "resumed."
+                ) from exc
+            raise
         required_servers = {
             name: float(item["startup_timeout_seconds"])
             for name, item in mcp_config.items()
@@ -8397,9 +8471,25 @@ class HarnessRuntimeService:
             offset += len(page)
 
     def _chat_handoff_context(
-        self, chat: ChatSession, *, reason: str = "parallel harness session"
+        self,
+        chat: ChatSession,
+        *,
+        reason: str = "parallel harness session",
+        before_turn_id: str | None = None,
     ) -> str:
         messages = self._chat_messages(chat.engagement_id, chat.id)
+        if before_turn_id is not None:
+            # A turn that is already prepared sends its own prompt; hand over
+            # only the conversation before it.
+            cut = next(
+                (
+                    index
+                    for index, item in enumerate(messages)
+                    if item.metadata.get("harness_turn_id") == before_turn_id
+                ),
+                len(messages),
+            )
+            messages = messages[:cut]
         lines = [
             f"{item.role.value}: {item.content}"
             for item in messages[-40:]
@@ -8412,6 +8502,87 @@ class HarnessRuntimeService:
         if len(history) > limit:
             history = history[-limit:]
         return f"\n\nNebula conversation handoff after {reason}:\n" + history
+
+    def _replace_missing_vendor_session(
+        self,
+        turn: HarnessTurn,
+        session: HarnessSession,
+        error: HarnessVendorSessionNotFoundError,
+    ) -> tuple[HarnessTurn, HarnessSession, HarnessEvent] | None:
+        """Move a chat turn off a vendor session the vendor can no longer resume.
+
+        Reopening the same saved vendor session would fail the same way on every
+        later turn. Like the other session rollovers, the chat continues on a
+        forked Nebula session with no vendor session, and the turn carries the
+        saved conversation as handoff context. Other turns have no chat to hand
+        over, so they keep failing visibly.
+        """
+
+        session = self.store.get(HarnessSession, session.id)
+        turn = self.store.get(HarnessTurn, turn.id)
+        if turn.chat_session_id is None or not session.external_session_id:
+            return None
+        record_caught_exception(
+            "harnesses",
+            "harnesses.connection.vendor_session_unavailable",
+            "The saved vendor session could not be resumed; a fresh one was started.",
+            error,
+            stage="connection",
+            metadata={"entity_type": "harness_turn", "entity_id": turn.id},
+        )
+        chat = self.store.get(ChatSession, turn.chat_session_id)
+        handoff = self._chat_handoff_context(
+            chat,
+            reason="the saved harness session could not be resumed",
+            before_turn_id=turn.id,
+        )
+        replacement = self._fork_session(session, reason="vendor_session_unavailable")
+        self._rebind_chat_session(
+            chat,
+            replacement,
+            previous_session_id=session.id,
+            reason="vendor_session_unavailable",
+        )
+        user_prompt = turn.metadata.get("user_prompt")
+        prompt = (
+            user_prompt + handoff + turn.prompt[len(user_prompt) :]
+            if isinstance(user_prompt, str) and turn.prompt.startswith(user_prompt)
+            else turn.prompt + handoff
+        )
+        turn = self.store.update(
+            HarnessTurn,
+            turn.id,
+            {
+                "harness_session_id": replacement.id,
+                "prompt": prompt,
+                "metadata": {
+                    **turn.metadata,
+                    "forked_from_session_id": session.id,
+                    "session_rollover_reason": "vendor_session_unavailable",
+                },
+            },
+            expected_revision=turn.revision,
+        )
+        notice = self._persist_activity(
+            turn,
+            replacement,
+            HarnessEvent(
+                type="status",
+                origin=turn.origin,
+                harness_profile_id=replacement.harness_profile_id,
+                harness_session_id=replacement.id,
+                harness_turn_id=turn.id,
+                model=replacement.model,
+                payload={
+                    "phase": "vendor_session_recreated",
+                    "detail": "The saved harness session could no longer be resumed, "
+                    "so Nebula started a new session and continued with this "
+                    "conversation's context.",
+                    "previous_session_id": session.id,
+                },
+            ),
+        )
+        return turn, replacement, notice
 
     def _replace_session_for_current_command_runtime(
         self, session: HarnessSession
@@ -9290,7 +9461,8 @@ class HarnessRuntimeService:
                     },
                 ),
             )
-        async with lock:
+        async with AsyncExitStack() as held_locks:
+            await held_locks.enter_async_context(lock)
             yield self._persist_activity(
                 turn,
                 session,
@@ -9308,7 +9480,21 @@ class HarnessRuntimeService:
                 ),
             )
             try:
-                connection = await self._connection(session, turn)
+                try:
+                    connection = await self._connection(session, turn)
+                except HarnessVendorSessionNotFoundError as missing:
+                    replacement = self._replace_missing_vendor_session(
+                        turn, session, missing
+                    )
+                    if replacement is None:
+                        raise
+                    turn, session, notice = replacement
+                    await held_locks.enter_async_context(
+                        self._locks.setdefault(session.id, asyncio.Lock())
+                    )
+                    yield notice
+                    # Once: the fresh session has nothing to resume.
+                    connection = await self._connection(session, turn)
             except Exception as exc:
                 error_id = record_caught_exception(
                     "harnesses",
@@ -9323,6 +9509,11 @@ class HarnessRuntimeService:
                     exc,
                     feature="harnesses",
                     event_code="harnesses.connection.failed",
+                    supplied=(
+                        "session_not_found"
+                        if isinstance(exc, HarnessVendorSessionNotFoundError)
+                        else None
+                    ),
                 )
                 guidance = guidance_for("harnesses", reason, operator_detail=error)
                 retryable = reason in {
