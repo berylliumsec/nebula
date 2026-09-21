@@ -15,16 +15,16 @@
   ],
   "native": [],
   "playwright": [
-    "conversation-delete-reconciliation/desktop",
-    "conversation-delete-reconciliation/compact",
-    "conversation-delete-reconciliation/mobile-chromium-small",
-    "conversation-delete-reconciliation/mobile-chromium-ledger-390",
-    "conversation-delete-reconciliation/mobile-chromium-wide",
-    "conversation-delete-reconciliation/mobile-webkit-small",
-    "conversation-delete-reconciliation/mobile-webkit",
-    "conversation-delete-reconciliation/mobile-webkit-wide",
-    "conversation-delete-reconciliation-core/assistant-real-desktop",
-    "conversation-delete-reconciliation-core/assistant-real-chromium-390",
-    "conversation-delete-reconciliation-core/assistant-real-webkit-390"
+    "entry:conversation-delete-reconciliation/desktop",
+    "entry:conversation-delete-reconciliation/compact",
+    "entry:conversation-delete-reconciliation/mobile-chromium-small",
+    "entry:conversation-delete-reconciliation/mobile-chromium-ledger-390",
+    "entry:conversation-delete-reconciliation/mobile-chromium-wide",
+    "entry:conversation-delete-reconciliation/mobile-webkit-small",
+    "entry:conversation-delete-reconciliation/mobile-webkit",
+    "entry:conversation-delete-reconciliation/mobile-webkit-wide",
+    "entry:conversation-delete-reconciliation-core/assistant-real-desktop",
+    "entry:conversation-delete-reconciliation-core/assistant-real-chromium-390",
+    "entry:conversation-delete-reconciliation-core/assistant-real-webkit-390"
   ]
 }
