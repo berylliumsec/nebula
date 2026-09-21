@@ -653,11 +653,106 @@ def test_a_wordless_routing_step_adds_no_thinking(tmp_path):
     assert store.get(ChatTurn, "turn").reasoning == "Only the answer needed thought."
 
 
+def test_serialized_dsml_calls_run_like_any_other_tool_call(tmp_path):
+    """A route that puts calls in ``content`` still gets its tools run."""
+
+    broker = RecordingBroker()
+    frame = (
+        "<｜DSML｜ calls>\n"
+        '  <｜DSML｜ invoke name="safe_read">\n'
+        '    <｜DSML｜ parameter name="value">a</｜DSML｜ parameter>\n'
+        "  </｜DSML｜ invoke>\n"
+        "</｜DSML｜ calls>"
+    )
+    responses = [
+        _response(text=frame),
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(text="The safe tool returned a."),
+    ]
+    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == "The safe tool returned a."
+    # The broker saw an ordinary invocation: the frame never reached it, and
+    # the recovered call carried the arguments the model wrote.
+    assert [call.tool_name for call in broker.calls] == ["safe_read"]
+    assert broker.calls[0].arguments == {"value": "a"}
+    completed = store.get(ChatTurn, "turn")
+    assert completed.status == ChatTurnStatus.COMPLETE
+    assert completed.tool_history[0]["status"] == "complete"
+    # The turn's own record of the step is the recovered call, not the frame.
+    assert frame not in str(completed.tool_history)
+    assert provider.requests[1].tool_results[0].is_error is False
+
+
+def test_final_synthesis_reads_serialized_tool_calls_as_tool_calls(tmp_path):
+    """A readable DSML frame is a tool call, whichever field carried it."""
+
+    broker = RecordingBroker()
+    serialized = (
+        '<｜DSML｜ calls> <｜DSML｜ invoke name="tool_output_read">'
+        '<｜DSML｜ parameter name="artifact_id">artifact-a</｜DSML｜ parameter>'
+        "</｜DSML｜ invoke> </｜DSML｜ calls>"
+    )
+    responses = [
+        _response(
+            calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})]
+        ),
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(text=serialized),
+        _response(text="The safe tool returned a."),
+    ]
+    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+
+    async def scenario():
+        return [event async for event in service.stream(prepared)]
+
+    events = asyncio.run(scenario())
+
+    visible = "".join(payload["delta"] for name, payload in events if name == "delta")
+    assert visible == "The safe tool returned a."
+    assert serialized not in visible
+    turn_requests = [
+        request
+        for request in provider.requests
+        if not request.metadata.get("operation")
+    ]
+    assert len(turn_requests) == 4
+    # The frame was asking for a tool after the turn finished routing, so the
+    # turn recovers the way it does from any late tool call.
+    assert turn_requests[-1].metadata["final_answer_recovery"] == "tool_call"
+    completed = store.get(ChatTurn, "turn")
+    assert completed.status == ChatTurnStatus.COMPLETE
+    assert completed.request_snapshot["final_answer_recovery"] == {
+        "attempts": 1,
+        "reason": "tool_call",
+        "responses": [
+            {
+                "content_characters": 0,
+                "finish_reason": "stop",
+                "provider_request_id": None,
+                "reason": "tool_call",
+                "reasoning_characters": 0,
+            }
+        ],
+    }
+    assert completed.usage.input_tokens == 8
+    assert completed.usage.output_tokens == 4
+    assert completed.usage.total_tokens == 12
+
+
 def test_final_synthesis_recovers_from_a_provider_control_frame(tmp_path):
+    """A frame Core cannot read completely is still refused, not guessed at."""
+
     broker = RecordingBroker()
     control_frame = (
         '<｜DSML｜ calls> <｜DSML｜ invoke name="tool_output_read">'
-        '<｜DSML｜ parameter name="artifact_id">artifact-a</｜DSML｜ parameter>'
+        "the artifact I mentioned"
         "</｜DSML｜ invoke> </｜DSML｜ calls>"
     )
     responses = [

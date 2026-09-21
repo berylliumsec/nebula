@@ -1,28 +1,21 @@
 {
-  "change_digest": "2e9476f991429c6bc87ca6f54a93802df30f65343d2eaf764e1c46e83ea35810",
-  "reviewed_by": "Claude review of the always-send MCP servers change",
-  "reason": "A provider chat's ticked MCP servers are now always sent (their tools are pinned out of the on-demand catalog), and every other enabled, probed server with a usable tool joins the catalog that Jev or the local ranker picks from. chat.py builds the catalog only for a turn that already uses tools and only when the project defers tools, records it as mcp_catalog_snapshot so prepare_resume rebuilds the same catalog, and asks Jev only about catalog servers. mcp.py gains usable_mcp_tools (the one tool filter now shared by resolve_mcp_profiles, build_mcp_tool_plugins and the tool-candidates endpoint) and catalog_mcp_profiles; tool_catalog.deferrable_specs gains always_loaded_sources. The Python selection is test_tool_catalog.py and test_tool_suggestions.py, whose prepare tests now run on real stored server profiles (a ticked notes server and an on-demand tracker server) and cover the always-sent split, on-demand off, a plain chat, resume from the snapshot and the catalog lookup; test_mcp_probe.py for the shared tool filter; and test_chat.py for the prepare path the catalog joins. The frontend selection is the new McpServerChoices component test (row states, hint, Jev implying deferral, scope failure, empty state), client.test.ts for mapping on_demand_tools without writing it back, and guides.test.tsx for the edited MCP guide step. Playwright selects the assistant-settings-navigation area, which opens the provider Assistant settings popover on desktop and both phones, and the assistant-viewer desktop entry, whose browser Assistant test asserts the popover's empty MCP state stays in view.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust changed. The broad assistant, provider-reasoning, provider-thinking and chat-edit-in-place areas that chat.py and SessionsPage.tsx map to are not selected: the SessionsPage change swaps one inline checklist for McpServerChoices with the same props, and the chat.py change is confined to which MCP profiles feed the tool components, which the selected Python tests exercise directly. The mcp-import area is not selected: mcp.py changes only the tool filter shared by runtime and candidates, not import. ui/src/App.test.tsx is not selected; its 'keeps diagnostics out of the advanced view while preserving legacy hashes' test fails only when the whole file runs and is already red on main. Missions, schedules, subagents and harness chats read only mcp_server_ids, which keeps its meaning, so their suites are not selected.",
+  "change_digest": "3f3df75790a682e368530f83ed79e27add30284908a740393546e8ea6d2c350a",
+  "reviewed_by": "Claude review of DSML tool-call recovery",
+  "reason": "Some OpenRouter routes serialize a DeepSeek model's DSML tool calls into the Chat Completions content field instead of tool_calls. Core recognised the frame and quarantined it, which discarded the work the model had asked for and sent the turn into final-answer recovery. This adds a parser (src/nebula/v3/dsml.py) that reads a complete frame back into ordinary tool calls, and a ModelResponse validator that applies it wherever a response is built, so every adapter, streaming or not, reports the calls in tool_calls and the frame leaves the text. Recovered calls take the same broker, policy and approval path as any other call; the parser executes nothing. Parsing is all-or-nothing per frame: a fragment, prose inside a call, a repeated or unnamed argument, an identity no tool can have, or an oversized frame is left in the text exactly as it arrived, and the existing quarantine, now sharing the parser's grammar, still refuses it. test_dsml.py covers the grammar (both pipes, both escape spellings, several invokes and frames, prose around a frame, JSON-typed and literal values, every unreadable shape, the size bound) and the ModelResponse hook (idempotent on re-validation, merging with route-reported calls, leaving unreadable text for quarantine). test_chat_tool_loop.py proves a frame at a routing step runs its tool through the broker, that a readable frame at final synthesis is recovered as a late tool call, and that an unreadable one is still quarantined. test_chat.py and test_providers.py are selected because they construct ModelResponse on every path the validator now runs on.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No frontend or Playwright test is selected because no UI changed: a recovered call reaches the transcript as the ordinary tool call it already renders. No native tests are selected because no Rust changed. No real-Core entry is selected: reproducing the route requires a live OpenRouter DeepSeek endpoint that CI does not have, and the provider contract the parser relies on is exercised directly on ModelResponse.",
   "expected_tests": {
-    "python": 138,
-    "frontend": 93,
+    "python": 181,
+    "frontend": 0,
     "native": 0,
-    "playwright": 6
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_mcp_probe.py",
-    "tests/v3/test_chat.py"
+    "tests/v3/test_dsml.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_providers.py"
   ],
-  "frontend": [
-    "ui/src/components/McpServerChoices.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/guides/guides.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:assistant-settings-navigation",
-    "entry:assistant-viewer/desktop"
-  ]
+  "playwright": []
 }
