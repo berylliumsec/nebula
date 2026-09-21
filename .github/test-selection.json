@@ -2,9 +2,9 @@
   "change_digest": "2df5610cf5d429ceb5601e33fe2fc4f0b4532600510eea81c49744827c215041",
   "reviewed_by": "Claude review of operator-set subagent limits",
   "reason": "Subagents lose their fixed caps (3 running per conversation, 6 per parent response). ChatCompletionRequest gains max_active_subagents (1-100, default none); provider chats keep it in the turn request_snapshot and session metadata and pass it through schedules and goal continuations, harness chats keep it as provider_subagent.max_active, which _subagent_binding includes so a change reopens the vendor connection with instructions stating the limit. SubagentService.start refuses a start only at an operator-set limit. The UI adds a shared Running at once field to the harness subagent settings and the provider Subagents toggle, sends the field only when set, reads it back from either metadata shape, and the Subagents pane stops assuming three slots. Selected Python files cover subagent start/limits, harness gateway binding and instructions, schedules, goal continuation, queueing, chat API and the harness instruction builders; frontend files cover the field, pane and client mapping; chat-subagents exercises both settings surfaces end to end, provider-reasoning covers the request builder beside reasoning effort, and the assistant entries cover the SessionsPage settings popover.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust or packaging changed. No real-Core Playwright: the request and metadata contract is covered by the Python chat API and harness tests plus the mocked end-to-end settings flows.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust or packaging changed. No real-Core Playwright: the request and metadata contract is covered by the Python chat API and harness tests plus the mocked end-to-end settings flows. Only the harness-instruction case of test_browser_companion.py is selected; its real-Chromium capture tests need a browser the Python CI job does not install and are unaffected by this change.",
   "expected_tests": {
-    "python": 356,
+    "python": 320,
     "frontend": 95,
     "native": 0,
     "playwright": 165
@@ -19,7 +19,7 @@
     "tests/v3/test_chat_goals.py",
     "tests/v3/test_chat_queue.py",
     "tests/v3/test_chat_api.py",
-    "tests/v3/test_browser_companion.py",
+    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness",
     "tests/v3/test_minimal_agent_instructions.py"
   ],
   "frontend": [
