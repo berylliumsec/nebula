@@ -914,7 +914,12 @@ class DiagnosticManager:
         if (
             error_id
             and (exception is not None or sensitive_detail is not None)
-            and normalized_level in {"error", "critical"}
+            and (
+                normalized_level in {"error", "critical"}
+                # A recovered deviation may name its own id to keep exact
+                # evidence, such as the provider response it recovered from.
+                or (normalized_level == "warning" and sensitive_detail is not None)
+            )
             and self._sensitive_detail_store is not None
         ):
             detail = (

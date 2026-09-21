@@ -337,14 +337,29 @@ def unwrap_call(
     name = arguments.get("name")
     if not isinstance(name, str) or name not in set(deferred):
         return None
-    inner = arguments.get("arguments", {})
+    inner = arguments.get("arguments")
+    if inner is None:
+        # The envelope is free-form, so some models flatten the target's
+        # arguments into it beside the name.
+        return name, {
+            key: value
+            for key, value in arguments.items()
+            if key not in {"name", "arguments"}
+        }
+    decoded = inner
     if isinstance(inner, str):
         # Some models serialize a free-form object as a JSON string.
         try:
-            inner = json.loads(inner) if inner.strip() else {}
+            decoded = json.loads(inner) if inner.strip() else {}
         except json.JSONDecodeError:  # diagnostic-expected: the broker rejects it
             return name, {"_unparsed_arguments": inner}
-    return name, dict(inner) if isinstance(inner, dict) else {}
+    if decoded is None:
+        return name, {}
+    if not isinstance(decoded, dict):
+        # Reported rather than emptied, so the broker's error names the real
+        # problem instead of a missing field.
+        return name, {"_unparsed_arguments": inner}
+    return name, dict(decoded)
 
 
 def _schema_view(

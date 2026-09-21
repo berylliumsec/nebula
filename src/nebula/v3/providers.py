@@ -2750,10 +2750,22 @@ class AnthropicProvider(ModelProvider):
 _GEMINI_SYNTHETIC_CALL_ID = "nebula-gemini-call:"
 
 
-def _gemini_call_id(value: Any, response_id: Any, index: int) -> str:
+def _gemini_call_scope(response_id: Any) -> str:
+    """Scope made-up call ids to one response.
+
+    ``responseId`` is optional. Without a fresh scope per response, every
+    step's first call would get the same id, and a later step would look like
+    a replay of an earlier one.
+    """
+
+    if isinstance(response_id, str) and response_id:
+        return response_id
+    return uuid.uuid4().hex
+
+
+def _gemini_call_id(value: Any, scope: str, index: int) -> str:
     if isinstance(value, str) and value:
         return value
-    scope = response_id if isinstance(response_id, str) and response_id else "call"
     return f"{_GEMINI_SYNTHETIC_CALL_ID}{scope}:{index}"
 
 
@@ -2888,11 +2900,10 @@ class GeminiProvider(ModelProvider):
         candidate = (data.get("candidates") or [{}])[0]
         parts = candidate.get("content", {}).get("parts", [])
         text_parts = [part.get("text", "") for part in parts if "text" in part]
+        call_scope = _gemini_call_scope(data.get("responseId"))
         calls = [
             _normalized_tool_call(
-                id=_gemini_call_id(
-                    part["functionCall"].get("id"), data.get("responseId"), index
-                ),
+                id=_gemini_call_id(part["functionCall"].get("id"), call_scope, index),
                 name=part["functionCall"]["name"],
                 arguments=_arguments(part["functionCall"].get("args")),
             )

@@ -221,40 +221,43 @@ def _prepared(
     "routing,detail",
     [
         (
+            _response(calls=[ToolCall(id="call-1", name="other_tool", arguments={})]),
+            "'other_tool' is not available",
+        ),
+        (
             _response(
-                text="I will run it.",
                 calls=[
                     ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})
                 ],
+                finish_reason="length",
             ),
-            "routing prose",
-        ),
-        (
-            _response(
-                calls=[
-                    ToolCall(id="call-1", name="safe_read", arguments={"value": "a"}),
-                    ToolCall(id="call-1", name="safe_read", arguments={"value": "b"}),
-                ]
-            ),
-            "refusing duplicate execution",
-        ),
-        (
-            _response(calls=[ToolCall(id="call-1", name="other_tool", arguments={})]),
-            "unavailable tool",
+            "cut off",
         ),
     ],
 )
 def test_malformed_routing_never_reaches_the_tool_broker(tmp_path, routing, detail):
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(tmp_path, [routing], broker)
+    responses = [
+        routing,
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(text="Nothing ran."),
+    ]
+    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
 
-    with pytest.raises(ChatError, match=detail):
-        asyncio.run(service.complete(prepared))
+    completion = asyncio.run(service.complete(prepared))
 
+    # Core answers the call itself, and the model routes again.
+    assert completion.message.content == "Nothing ran."
     assert broker.calls == []
-    failed = store.get(ChatTurn, "turn")
-    assert failed.status == ChatTurnStatus.FAILED
-    assert failed.execution_claim_id is None
+    turn = store.get(ChatTurn, "turn")
+    assert turn.status == ChatTurnStatus.COMPLETE
+    assert turn.execution_claim_id is None
+    assert turn.execution_tool_calls == 0
+    [refused] = provider.requests[1].tool_results
+    assert refused.is_error is True
+    assert detail in str(refused.output)
 
 
 def test_routing_prose_captures_exact_provider_response_only_in_protected_detail(
@@ -268,7 +271,7 @@ def test_routing_prose_captures_exact_provider_response_only_in_protected_detail
             {
                 "schema": diagnostics.SETTINGS_SCHEMA,
                 "global_level": "error",
-                "feature_levels": {},
+                "feature_levels": {"chat": "warning"},
                 "sensitive_detail_capture": True,
             }
         ),
@@ -305,10 +308,19 @@ def test_routing_prose_captures_exact_provider_response_only_in_protected_detail
         }
     )
     broker = RecordingBroker()
-    store, service, prepared, _ = _prepared(tmp_path, [routing], broker)
+    responses = [
+        routing,
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(text="The safe tool returned a."),
+    ]
+    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
     try:
-        with pytest.raises(ChatError, match="routing prose"):
-            asyncio.run(service.complete(prepared))
+        # Prose beside a call is commentary: the call runs and the turn
+        # completes, while the exact response stays in protected detail.
+        completion = asyncio.run(service.complete(prepared))
+        assert completion.message.content == "The safe tool returned a."
         assert manager.flush()
         records = [
             json.loads(line)
@@ -319,6 +331,8 @@ def test_routing_prose_captures_exact_provider_response_only_in_protected_detail
             for item in records
             if item["event_code"] == "chat.routing.prose_with_required_tool"
         )
+        assert record["level"] == "WARNING"
+        assert record["outcome"] == "fallback"
         assert record["sensitive_detail_available"] is True
         assert record["metadata"]["status"] == "text_with_tool_calls"
         assert "private routing text" not in json.dumps(records)
@@ -330,8 +344,8 @@ def test_routing_prose_captures_exact_provider_response_only_in_protected_detail
         assert detail["provider_response"] == raw
         assert base64.b64decode(detail["provider_response_body_base64"]) == raw_body
         assert detail["normalized"]["text"] == "private routing text"
-        assert broker.calls == []
-        assert store.get(ChatTurn, "turn").status == ChatTurnStatus.FAILED
+        assert [call.arguments for call in broker.calls] == [{"value": "a"}]
+        assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
     finally:
         manager.close()
 
@@ -395,20 +409,33 @@ def test_denied_tool_is_returned_as_error_context_without_reexecution(tmp_path):
 def test_repeated_provider_call_id_cannot_duplicate_a_tool_effect(tmp_path):
     broker = RecordingBroker()
     repeated = ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})
-    store, service, prepared, _ = _prepared(
+    store, service, prepared, provider = _prepared(
         tmp_path,
-        [_response(calls=[repeated]), _response(calls=[repeated])],
+        [
+            _response(calls=[repeated]),
+            _response(calls=[repeated]),
+            _response(
+                calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+            ),
+            _response(text="Read a."),
+        ],
         broker,
     )
 
-    with pytest.raises(ChatError, match="refusing duplicate execution"):
-        asyncio.run(service.complete(prepared))
+    completion = asyncio.run(service.complete(prepared))
 
+    # The replayed call is answered from history instead of running again.
+    assert completion.message.content == "Read a."
     assert len(broker.calls) == 1
-    failed = store.get(ChatTurn, "turn")
-    assert failed.status == ChatTurnStatus.FAILED
-    assert len(failed.tool_history) == 1
-    assert failed.tool_history[0]["model_call_id"] == "call-1"
+    turn = store.get(ChatTurn, "turn")
+    assert turn.status == ChatTurnStatus.COMPLETE
+    assert [entry["status"] for entry in turn.tool_history] == ["complete", "failed"]
+    assert turn.tool_history[0]["model_call_id"] == "call-1"
+    assert turn.tool_history[1]["model_call_id"] != "call-1"
+    assert turn.execution_tool_calls == 1
+    replayed = provider.requests[2].tool_results[1]
+    assert replayed.is_error is True
+    assert "already ran" in str(replayed.output)
 
 
 def test_goal_exhaustion_after_routing_stops_before_tool_effect(tmp_path):

@@ -348,6 +348,33 @@ def test_unwrap_call_accepts_only_on_demand_targets(arguments, expected):
     assert unwrap_call(arguments, [MCP_TOOL]) == expected
 
 
+@pytest.mark.parametrize(
+    "arguments,expected",
+    [
+        # Arguments flattened into the envelope, beside the name.
+        (
+            {"name": MCP_TOOL, "target": "10.0.0.1", "ports": [22]},
+            (MCP_TOOL, {"target": "10.0.0.1", "ports": [22]}),
+        ),
+        # Anything but an object is reported, never silently emptied.
+        (
+            {"name": MCP_TOOL, "arguments": ["10.0.0.1"]},
+            (MCP_TOOL, {"_unparsed_arguments": ["10.0.0.1"]}),
+        ),
+        (
+            {"name": MCP_TOOL, "arguments": '[{"target": "10.0.0.1"}]'},
+            (MCP_TOOL, {"_unparsed_arguments": '[{"target": "10.0.0.1"}]'}),
+        ),
+        ({"name": MCP_TOOL, "arguments": 7}, (MCP_TOOL, {"_unparsed_arguments": 7})),
+        # null is the absence of arguments, as an omitted field is.
+        ({"name": MCP_TOOL, "arguments": None}, (MCP_TOOL, {})),
+        ({"name": MCP_TOOL, "arguments": "null"}, (MCP_TOOL, {})),
+    ],
+)
+def test_unwrap_call_keeps_flattened_arguments(arguments, expected):
+    assert unwrap_call(arguments, [MCP_TOOL]) == expected
+
+
 def test_loaded_names_come_from_preloads_loads_and_direct_calls():
     receipt = {"deferred": ["a", "b", "c", "d"], "preloaded": ["a"]}
     history = [
