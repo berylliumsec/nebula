@@ -20,7 +20,9 @@ from nebula.v3.domain import (
     ChatTurn,
     Engagement,
     HarnessKind,
+    HarnessModelOptions,
     HarnessProfile,
+    HarnessRuntimeOption,
     HarnessSession,
     HarnessTurn,
     HarnessTurnStatus,
@@ -758,3 +760,100 @@ def test_waits_stay_below_each_harness_tool_timeout(tmp_path):
         gateway_tools=({"name": _portable_gateway_tool_name("subagent.start")},),
     )
     assert "waits up to 60 seconds" in instructions
+
+
+def test_harness_subagents_take_its_reasoning_level_unless_told_otherwise(tmp_path):
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        harness = store.update(
+            HarnessProfile,
+            harness.id,
+            {
+                "capabilities": harness.capabilities.model_copy(
+                    update={
+                        "models": ["gpt-test"],
+                        "model_options": [
+                            HarnessModelOptions(
+                                model="gpt-test",
+                                reasoning_efforts=[
+                                    HarnessRuntimeOption(id="high", label="High"),
+                                    HarnessRuntimeOption(id="max", label="Max"),
+                                ],
+                            )
+                        ],
+                    }
+                )
+            },
+            expected_revision=harness.revision,
+        )
+        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        child.answers = ["Done.", "Done.", "Done."]
+        started: list[dict] = []
+
+        async def delegate(connection: ScriptedConnection, prompt: str) -> str:
+            del prompt
+            started.append(
+                _payload(
+                    await connection.call("subagent.start", task="Map the API routes.")
+                )
+            )
+            started.append(
+                _payload(
+                    await connection.call(
+                        "subagent.start",
+                        task="List the config files.",
+                        reasoning_effort="low",
+                    )
+                )
+            )
+            rejected = await connection.call(
+                "subagent.start", task="Guess.", reasoning_effort="extreme"
+            )
+            assert rejected["isError"] is True
+            _payload(await connection.call("subagent.wait"))
+            return "Delegated."
+
+        def prepare(effort: str):
+            return runtime.prepare_chat(
+                engagement_id=project.id,
+                profile_id=harness.id,
+                model="gpt-test",
+                prompt="Split the work.",
+                chat_session_id=None,
+                harness_session_id=None,
+                mcp_server_ids=[],
+                harness_reasoning_effort=effort,
+                provider_subagent=SETTING,
+            )
+
+        adapter.script = delegate
+        _, _, turn = prepare("high")
+        await runtime.start_chat_turn(turn.id)
+        assert [item["reasoning_effort"] for item in started] == ["high", "low"]
+        assert {
+            request.messages[-1].content: request.reasoning_effort
+            for request in child.requests
+        } == {"Map the API routes.": "high", "List the config files.": "low"}
+        assert sorted(
+            str(item.reasoning_effort) for item in store.list_entities(ChatSubagent)
+        ) == ["high", "low"]
+
+        # A vendor-only level has no provider equivalent; the child keeps the
+        # provider model's own default.
+        async def delegate_once(connection: ScriptedConnection, prompt: str) -> str:
+            del prompt
+            started.append(
+                _payload(await connection.call("subagent.start", task="Count tests."))
+            )
+            _payload(await connection.call("subagent.wait"))
+            return "Delegated."
+
+        adapter.script = delegate_once
+        _, _, other = prepare("max")
+        await runtime.start_chat_turn(other.id)
+        assert started[-1]["reasoning_effort"] == "model default"
+        assert child.requests[-1].messages[-1].content == "Count tests."
+        assert child.requests[-1].reasoning_effort is None
+        await chat.shutdown()
+
+    asyncio.run(scenario())

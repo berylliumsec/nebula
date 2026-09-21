@@ -35,7 +35,16 @@ Static mockups; names, steps and token counts are illustrative.
 - Once the parent is idle, every finished child is posted to the parent
   conversation as an assistant message with `metadata.kind = "subagent_result"`,
   so later turns remember it. If the parent's goal is running and no children
-  remain, Core continues the goal once.
+  remain, Core continues the goal once, at the conversation's current model
+  and reasoning level.
+- Reasoning level: `start_subagent` and `subagent.start` take an optional
+  `reasoning_effort` (`none` to `xhigh`). Unset, a provider parent's child
+  uses the conversation's current level (`metadata.reasoning_effort`, which
+  the operator may change mid-response). A harness parent's child uses the
+  harness session's level when a provider model takes it too; a vendor-only
+  level leaves the model's default. The level is kept on
+  `ChatSubagent.reasoning_effort` and returned by the start tools and the list
+  API.
 - Approval mode is inherited: commands follow the project's automation policy
   and a child always runs in its parent's project, so "always", "on boundary"
   and "never" (full auto-approval) apply to subagents exactly as to the parent.

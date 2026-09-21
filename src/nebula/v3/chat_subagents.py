@@ -20,7 +20,7 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable, cast
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .diagnostics import record_caught_exception
@@ -43,6 +43,7 @@ from .domain import (
     ScopePolicy,
     utc_now,
 )
+from .providers import REASONING_EFFORTS, ReasoningEffort
 from .runtime_platform import RuntimeToolComponents
 from .storage import ConflictError, NotFoundError
 from .tools import InvalidToolArguments, ToolExecutionResult, ToolInvocation, ToolSpec
@@ -73,6 +74,12 @@ assistant with the same model and tools; it returns immediately and runs in
 parallel. Give it a complete, self-contained task. Do not delegate single
 lookups. Call wait_subagents when you need their reports before answering;
 subagents that finish after your answer report back in the conversation."""
+
+SUBAGENT_EFFORT_DESCRIPTION = (
+    "How hard the subagent reasons: lower for routine, mechanical work, higher "
+    "for hard analysis. Leave it unset to use this conversation's level, or the "
+    "model's default when it has none."
+)
 
 SUBAGENT_CHILD_INSTRUCTIONS = """
 
@@ -148,6 +155,12 @@ def is_subagent_session(session: ChatSession) -> bool:
 def _bounded(text: str, limit: int = RESULT_CHARACTERS) -> str:
     text = text.strip()
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _known_effort(value: Any) -> ReasoningEffort | None:
+    """A reasoning level a provider model can be asked for, else None."""
+
+    return cast(ReasoningEffort, value) if value in REASONING_EFFORTS else None
 
 
 def _step_detail(arguments: Any) -> str:
@@ -273,6 +286,7 @@ class SubagentService:
             "parent_backend": record.parent_backend.value,
             "provider_profile_id": provider_profile_id,
             "model": model,
+            "reasoning_effort": record.reasoning_effort,
             "child_session_id": record.child_session_id,
             "child_turn_id": record.child_turn_id,
             "step_count": turn.next_step if turn is not None else 0,
@@ -313,6 +327,7 @@ class SubagentService:
         task: str,
         name: str | None,
         context: str | None,
+        reasoning_effort: str | None = None,
     ) -> ChatSubagent:
         from .chat import ChatCompletionRequest, ChatRequestMessage
 
@@ -325,6 +340,11 @@ class SubagentService:
         task = task.strip()
         if not task:
             raise InvalidToolArguments("task must describe the delegated work")
+        requested_effort = _known_effort(reasoning_effort)
+        if reasoning_effort is not None and requested_effort is None:
+            raise InvalidToolArguments(
+                "reasoning_effort must be one of " + ", ".join(REASONING_EFFORTS)
+            )
         label = " ".join((name or task).split())[:80] or "Subagent"
         siblings = self.for_session(parent_session.id)
         for existing in siblings:
@@ -368,12 +388,26 @@ class SubagentService:
             allow_subagents = False
             # Harness chats have no SSH selection; never hand a child every host.
             ssh_environment_ids: list[str] | None = []
+            # The harness's own level carries over when a provider model takes
+            # it too; a vendor-only level leaves the child at its default.
+            runtime_options = snapshot.get("harness_runtime_options")
+            inherited_effort = _known_effort(
+                runtime_options.get("reasoning_effort")
+                if isinstance(runtime_options, dict)
+                else None
+            )
         else:
             provider_id = parent_turn.provider_profile_id or ""
             model = parent_turn.model
             tools_enabled = bool(snapshot.get("include_oci_tools", False))
             allow_subagents = bool(snapshot.get("allow_subagents", False))
             ssh_environment_ids = None
+            # A child is a new turn, so it reads the conversation's current
+            # level like any other; the operator may have changed it mid-turn.
+            inherited_effort = _known_effort(
+                parent_session.metadata.get("reasoning_effort")
+            )
+        effort = requested_effort or inherited_effort
         if not provider_id or not model:
             raise InvalidToolArguments("subagents need a provider model")
         parent_request: dict[str, Any] = {
@@ -406,6 +440,7 @@ class SubagentService:
             child_session_id=child_session.id,
             provider_profile_id=provider_id,
             model=model,
+            reasoning_effort=effort,
             name=label,
             task=_bounded(task, 20_000),
             parent_request=parent_request,
@@ -442,6 +477,7 @@ class SubagentService:
                     # harness chat's operator consented by turning on provider
                     # subagents for this model.
                     allow_cloud_tool_results=True,
+                    reasoning_effort=effort,
                     stream=True,
                 )
             )
@@ -1014,13 +1050,20 @@ class SubagentService:
             return
         flags = record.parent_request
         try:
+            # The operator may have picked another model or effort while the
+            # goal ran; the conversation holds that choice, the turn does not.
+            session = self.store.get(ChatSession, record.parent_session_id)
             prepared = await self.chat.prepare_async(
                 ChatCompletionRequest(
-                    provider_id=parent_turn.provider_profile_id,
+                    provider_id=session.provider_profile_id
+                    or parent_turn.provider_profile_id,
                     engagement_id=record.engagement_id,
                     session_id=record.parent_session_id,
                     goal_id=goal.id,
-                    model=parent_turn.model,
+                    model=session.model or parent_turn.model,
+                    reasoning_effort=_known_effort(
+                        session.metadata.get("reasoning_effort")
+                    ),
                     messages=[
                         ChatRequestMessage(
                             role=ChatRole.USER,
@@ -1115,6 +1158,9 @@ class SubagentBroker:
                 context=arguments.get("context")
                 if isinstance(arguments.get("context"), str)
                 else None,
+                reasoning_effort=arguments.get("reasoning_effort")
+                if isinstance(arguments.get("reasoning_effort"), str)
+                else None,
             )
             if record.status == ChatSubagentStatus.FAILED:
                 raise InvalidToolArguments(record.error or "subagent could not start")
@@ -1122,6 +1168,7 @@ class SubagentBroker:
                 output={
                     "subagent_id": record.id,
                     "name": record.name,
+                    "reasoning_effort": record.reasoning_effort or "model default",
                     "status": "running",
                     "note": "Running in parallel. Call wait_subagents when you need its report.",
                 }
@@ -1198,6 +1245,11 @@ def subagent_specs() -> dict[str, ToolSpec]:
                     "type": ["string", "null"],
                     "description": "Facts from this conversation the subagent needs.",
                 },
+                "reasoning_effort": {
+                    "type": ["string", "null"],
+                    "enum": [*REASONING_EFFORTS, None],
+                    "description": SUBAGENT_EFFORT_DESCRIPTION,
+                },
             },
         ),
         _spec(
@@ -1259,6 +1311,7 @@ __all__ = [
     "HARNESS_WAIT_DEFAULT_SECONDS",
     "HARNESS_WAIT_MAX_SECONDS",
     "SUBAGENT_CHILD_INSTRUCTIONS",
+    "SUBAGENT_EFFORT_DESCRIPTION",
     "SUBAGENT_LIMIT_CEILING",
     "SUBAGENT_ROUTING_INSTRUCTIONS",
     "SUBAGENT_TOOL_NAMES",
