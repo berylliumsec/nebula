@@ -8,9 +8,6 @@ const POLL_MS = 2_000;
 /** Consecutive failures after which polling stops until someone retries. */
 const FAILURE_LIMIT = 3;
 
-/** Core's running limit per conversation, mirrored for the slot readout. */
-export const SUBAGENT_SLOTS = 3;
-
 export const ACTIVE_STATUSES = new Set(["running", "waiting_approval"]);
 
 export interface ChatSubagentState {

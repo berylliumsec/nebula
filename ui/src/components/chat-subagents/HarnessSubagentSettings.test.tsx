@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ProviderHealth } from "../../api/types";
@@ -68,6 +68,35 @@ describe("provider subagents in a harness chat", () => {
 
     await user.selectOptions(screen.getByLabelText("Subagent model"), "qwen/qwen3-coder");
     expect(onChange).toHaveBeenLastCalledWith({ enabled: true, providerId: "openrouter", model: "qwen/qwen3-coder" });
+  });
+
+  it("runs without a limit until the operator sets one", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const choice = { enabled: true, providerId: "openrouter", model: "deepseek/deepseek-v3.2" };
+    const { rerender } = render(<HarnessSubagentSettings providers={[provider({})]} harnessName="Codex" choice={choice} onChange={onChange} />);
+    expect(screen.getByRole("checkbox", { name: /Delegate to the model below · no limit/ })).toBeChecked();
+    const field = screen.getByRole("spinbutton", { name: "Running at once" });
+    expect(field).toHaveValue(null);
+    expect(field).toHaveAttribute("placeholder", "No limit");
+    expect(screen.getByText(/Leave empty and Codex may run as many subagents as it needs/)).toBeInTheDocument();
+
+    await user.type(field, "3");
+    expect(onChange).toHaveBeenLastCalledWith({ ...choice, limit: 3 });
+    rerender(<HarnessSubagentSettings providers={[provider({})]} harnessName="Codex" choice={{ ...choice, limit: 3 }} onChange={onChange} />);
+    expect(screen.getByRole("checkbox", { name: /up to 3 at a time/ })).toBeChecked();
+    expect(screen.getByText(/With 3 running, a new start is refused until one finishes/)).toBeInTheDocument();
+
+    // Out of range is explained and never sent; the last valid limit stands.
+    onChange.mockClear();
+    fireEvent.change(field, { target: { value: "150" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter a whole number from 1 to 100");
+    expect(onChange).not.toHaveBeenCalled();
+    await user.tab();
+    expect(field).toHaveValue(3);
+
+    await user.clear(field);
+    expect(onChange).toHaveBeenLastCalledWith({ ...choice, limit: undefined });
   });
 
   it("says a model is being checked, or why it cannot run subagents", () => {

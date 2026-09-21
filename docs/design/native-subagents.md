@@ -25,8 +25,10 @@ Static mockups; names, steps and token counts are illustrative.
   `metadata.subagent_id`) and a `ChatSubagent` record, then runs the child as an
   ordinary background provider turn with the parent's provider, model, command
   runtime and MCP servers. It returns immediately, so children run in parallel
-  despite one tool call per routing step. Limits: 3 running per conversation,
-  6 per parent response. Retried steps reuse the same child (idempotency key).
+  despite one tool call per routing step. There is no limit on how many run
+  unless the operator sets "Running at once" (1-100) in Assistant settings;
+  `max_active_subagents` then refuses a start at that many and the model is
+  told the limit. Retried steps reuse the same child (idempotency key).
 - `wait_subagents` (mode `all` or `any`) pauses the parent turn in
   `waiting_callback`. When the wait is satisfied, Core resumes it and the tool
   result carries each child's final answer as its report.
@@ -82,7 +84,9 @@ in the same file (`108:2`): H1 settings popover `108:3`, H2 desktop pane
   `parent_backend: harness` and the chosen `provider_profile_id`/`model`. They
   run in the project with the harness session's MCP servers, Nebula's command
   runtime when the session has one, no SSH hosts, and the project approval
-  policy. Limits are unchanged (3 running, 6 per response, depth 1).
+  policy. The optional running-at-once limit travels as
+  `provider_subagent.max_active`; changing it reopens the connection so the
+  instructions state it. Depth stays 1.
 - The gateway serves one call per session and Codex times a Nebula tool out
   after 900 s, so `subagent.wait` blocks for at most `timeout_seconds`
   (default 300, max 600) and returns unfinished children in `still_running`.

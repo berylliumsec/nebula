@@ -9378,6 +9378,12 @@ test("stabilization an operator allows delegation and acts on a waiting subagent
   await expect(toggle).toBeVisible();
   await expect(toggle).not.toBeChecked();
   await toggle.check();
+  // Delegation is unlimited until the operator caps how many run at once.
+  await expect(toggle).toHaveAccessibleName(/no limit/);
+  const limit = page.getByRole("spinbutton", { name: "Running at once" });
+  await expect(limit).toHaveAttribute("placeholder", "No limit");
+  await limit.fill("3");
+  await expect(toggle).toHaveAccessibleName(/up to 3 at a time/);
   await page.getByRole("button", { name: "Close assistant settings" }).click();
 
   // The rail reports what is delegated without taking over the composer.
@@ -9388,7 +9394,7 @@ test("stabilization an operator allows delegation and acts on a waiting subagent
 
   await rail.getByRole("button", { name: "Show subagents" }).click();
   const pane = page.getByRole("region", { name: "Subagents" }).last();
-  await expect(pane).toContainText("2 of 3 slots active");
+  await expect(pane).toContainText("2 of 3 running · limit 3");
   await expect(pane).toContainText("Map documented API routes");
 
   // The child waiting on a person shows exactly what it wants to run.
@@ -9505,7 +9511,7 @@ test("stabilization a harness chat delegates to a chosen provider model", async 
   await expect(rail).toContainText("1 running");
   await rail.getByRole("button", { name: "Show subagents" }).click();
   const pane = page.getByRole("region", { name: "Subagents" }).last();
-  await expect(pane).toContainText("2 of 3 slots active · deepseek/deepseek-v3.2");
+  await expect(pane).toContainText("2 running · no limit · deepseek/deepseek-v3.2");
   await expect(pane).toContainText("Their tool outputs go to Local subagents");
 
   const composer = page.locator(".chat-composer textarea").first();
@@ -9519,6 +9525,8 @@ test("stabilization a harness chat delegates to a chosen provider model", async 
     subagent_provider_id: subagentProvider.id,
     subagent_model: "deepseek/deepseek-v3.2",
   });
+  // No limit was set, so none is sent.
+  expect(sent).not.toHaveProperty("max_active_subagents");
 
   const accessibility = await new AxeBuilder({ page }).include(".chat-subagent-pane").analyze();
   expect(accessibility.violations).toEqual([]);
