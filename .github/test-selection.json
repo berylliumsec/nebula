@@ -1,37 +1,29 @@
 {
-  "change_digest": "91246e0ac23d30c42f7eba3a6086b7267bcdc10a9cb40e0c3e678980abf735b2",
-  "reviewed_by": "Claude review of turn-outcome-history",
-  "reason": "A provider chat turn that ended FAILED or CANCELLED without an answer left only the operator's message in the transcript, so the next request carried two user messages in a row (Bedrock Converse and strict chat templates reject that) and the model never learned which tools the failed or stopped turn had already run, so it could repeat a side-effecting command. Core now saves a system-authored assistant note for such a turn (new chat_turn_outcomes.py; ChatService.record_turn_outcome): 'Response failed/stopped: <reason>' plus the completed tool steps (name, redacted arguments, result summary) and any step that never ran or never reported, bounded to 12 steps and 6,000 characters, with metadata kind turn_outcome, chat_turn_id, turn_status, interrupted and the same tool_results shape as an answer, and finish_reason interrupted so the UI shows it as stopped (#491's existing mapping). It is written by _produce_provider_turn's finally (streamed turns), complete() after _fail_closed_turn, cancel_turn, and SubagentService._fail_unresumable, each before held subagent reports post; it is idempotent per turn and never written after the turn's own answer. Finishing a failed synthesis (prepare_resume) deletes the note so the answer takes its place, an in-place edit retracts it with its message, and _merge_history accepts a full-history client that never saw the note. Subagent reports and messages posted after the parent's answer produced assistant,assistant pairs; the model request built in prepare_async and in context-length recovery now joins consecutive assistant messages (the transcript keeps them separate for the UI cards). The compactor's repair attempt in _request_memory sent [user prompt, user repair]; it now sends [user prompt, assistant previous output, user repair] and keeps the response_format fallback. The UI maps metadata.chat_turn_id of a turn_outcome message to outcomeTurnId and hides that note while it shows the same turn's unfinished reply with Finish the answer, so the failed turn is not shown twice. tests/v3/test_turn_outcome_history.py (13 tests) fails entirely on origin/main; ui/src/pages/turnOutcomeNotes.test.ts (2 tests) fails without the UI change. The listed existing node ids exercise the changed repair, response_format fallback, final-answer resume, cancel/stop, history merge, rewind, subagent post and context-recovery paths.",
-  "exclusions": "Scoped per the CI-scoping rule: whole existing files are not listed. test_chat.py, test_chat_tool_loop.py, test_chat_final_synthesis_recovery.py, test_chat_routing_tolerance.py, test_routing_prose_answer.py, test_chat_subagents.py, test_harness_provider_subagents.py, test_context.py, test_deepseek_glm_compat.py, test_native_hook_turn_ends.py, test_chat_goals.py, test_chat_queue.py, test_chat_schedules.py, test_chat_api.py, test_chat_catchup.py, test_chat_reconnection.py, test_temporary_chat.py, test_api_stream_context.py, test_harness_stopped_turns.py, test_malformed_tool_call_feedback.py, test_model_output_budget.py, test_inference_timeouts_probe_budget.py, test_process_results_webhook.py, test_native_hooks.py, test_session_state.py, test_chat_media.py, test_chat_decisions.py, test_specialist_routing_tolerance.py, test_history_content_fidelity.py, test_reasoning_replay.py and test_synthesis_tool_declarations.py were run locally (all pass) and are reported in the PR body. Frontend is limited to the new turnOutcomeNotes.test.ts and chatMessageReconciliation.test.ts, which cover the changed helper and mapping. Playwright is limited to the narrowest assistant entry (desktop mock) because SessionsPage.tsx changed by one mapping line and two list filters; it was run locally (53 passed, 1 skipped; the scroll-intent test failed once under load and passed 3/3 when rerun alone). No native tests: no Tauri or Rust change. No full suites.",
+  "change_digest": "acd875a28110f9f56115b73433c6dce6db2c9f785babbb1dab511b0faea4ebe1",
+  "reviewed_by": "Claude review of in-turn-context-pruning",
+  "reason": "Inside one chat turn every routing request re-sent every earlier tool result with no pruning, so a long agentic turn on a finite window outgrew it and _ensure_request_capacity failed the whole turn with ChatConfigurationError; the operator got nothing and none of the results reached the next turn (HIST-3: 13 tool calls of ~7 KB on a 32K window, 31236 estimated input tokens > 30720, turn failed). A provider-side context-length rejection after a tool ran could not be recovered either: _recover_context_length_rejection only rebuilds the conversation and re-sends the same tool results, its no-repeat guard read prepared.turn, which the routing loop refreshes only after each routing reply (a lag of one step, so a fresh turn rejected at step 2 skipped the guard while a later step or a resumed turn hit it; ROUTE-13), and the final synthesis streamed provider.stream directly with no recovery at all. Now _with_tool_history builds every routing and synthesis request: while the request exceeds the model's target input it replays the oldest results as a compact receipt (status, output_cleared, durable tool_call_id, result_summary, artifact ids, and a note to use tool_output.search/tool_output.read), found by bisection, keeping the newest result whole up to the input capacity; every call keeps its result, id, batch group and replayed reasoning (opencode clears old tool output the same way, Codex compacts mid-turn). A routing request that still cannot fit ends routing and the turn answers from its results instead of failing. _recover_context_length_rejection reads the current turn and, for a request carrying tool results, first returns one retry with all but the newest result cleared (the newest too when nothing else is left), which runs no tool again; the conversation rebuild and its no-repeat refusal are unchanged otherwise. The synthesis stream is wrapped in _stream_with_context_recovery. tests/v3/test_in_turn_context_pruning.py: a 20 x 7 KB turn on a 32K window completes with every request within capacity and the oldest results replaced by receipts; routing-only overhead that cannot fit ends in an answer from the results; the real OpenAI-compatible adapter behind a wire that answers HTTP 400 context_length_exceeded for routing step 3 and for the synthesis retries each once with the older result cleared and no tool rerun; and a rejection with nothing left to clear reads the current turn. All four fail on origin/main (capacity error, capacity error, 'will not repeat tool work', 'could not be reassembled safely'). The selected existing node ids cover the conversation-level context recovery, goal fitting and batching in the routing loop, the synthesis stream paths now inside the recovery wrapper, and the #502 replay grouping, reasoning and screenshot placement that the cleared history must keep.",
+  "exclusions": "Scoped per the CI-scoping rule: test_chat.py, test_chat_tool_loop.py, test_chat_final_synthesis_recovery.py, test_reasoning_replay.py, test_synthesis_tool_declarations.py, test_chat_routing_tolerance.py, test_malformed_tool_call_feedback.py, test_routing_prose_answer.py, test_chat_goals.py, test_chat_media.py, test_chat_subagents.py, test_harness_provider_subagents.py, test_context.py and test_chat_workspace.py were run locally in full and pass but are not selected. No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through chat.py) never runs a tool turn long enough to reach the context window or a provider context rejection; the Python tests drive the tool loop directly. No full suites.",
   "expected_tests": {
-    "python": 28,
-    "frontend": 10,
+    "python": 16,
+    "frontend": 0,
     "native": 0,
-    "playwright": 55
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_turn_outcome_history.py",
-    "tests/v3/test_context.py::test_invalid_provenance_repairs_once_then_fails_closed_with_usage",
-    "tests/v3/test_deepseek_glm_compat.py::test_compaction_falls_back_when_response_format_rejected",
-    "tests/v3/test_deepseek_glm_compat.py::test_compaction_falls_back_only_once",
-    "tests/v3/test_chat.py::test_failed_final_answer_can_resume_without_replaying_the_turn",
-    "tests/v3/test_chat.py::test_cancelled_provider_turn_emits_cancelled_hook_and_stays_bounded",
-    "tests/v3/test_chat.py::test_durable_session_rejects_divergent_or_forged_history",
-    "tests/v3/test_chat_api.py::test_stopping_provider_chat_cancels_the_core_owned_turn",
-    "tests/v3/test_chat_api.py::test_chat_session_rewind_edits_in_place_without_forking",
-    "tests/v3/test_chat_tool_loop.py::test_cancelling_an_inflight_tool_turn_stops_the_owned_worker_once",
+    "tests/v3/test_in_turn_context_pruning.py",
+    "tests/v3/test_chat.py::test_confirmed_context_rejection_refreshes_compacts_and_retries_once",
+    "tests/v3/test_chat_tool_loop.py::test_goal_exhaustion_after_routing_stops_before_tool_effect",
+    "tests/v3/test_chat_tool_loop.py::test_batched_calls_all_run_one_step_at_a_time",
+    "tests/v3/test_chat_tool_loop.py::test_final_synthesis_recovers_from_a_provider_control_frame",
     "tests/v3/test_chat_tool_loop.py::test_final_synthesis_exhaustion_preserves_tools_and_is_retryable_provider_failure",
-    "tests/v3/test_chat_subagents.py::test_failed_parent_resume_fails_the_turn_and_posts_reports",
-    "tests/v3/test_chat_subagents.py::test_stopping_an_interrupted_parent_posts_finished_reports",
-    "tests/v3/test_chat_subagents.py::test_late_report_is_posted_after_parent_reply",
-    "tests/v3/test_history_content_fidelity.py::test_selected_context_survives_context_length_recovery"
+    "tests/v3/test_chat_final_synthesis_recovery.py::test_final_synthesis_recovers_from_a_nameless_tool_call_fragment",
+    "tests/v3/test_chat_final_synthesis_recovery.py::test_final_synthesis_recovers_from_a_rejected_tool_call_event",
+    "tests/v3/test_reasoning_replay.py::test_chat_records_the_batch_group_and_reasoning_once",
+    "tests/v3/test_reasoning_replay.py::test_a_step_core_delivers_is_a_batch_of_its_own",
+    "tests/v3/test_reasoning_replay.py::test_history_without_groups_still_replays_one_call_per_message",
+    "tests/v3/test_reasoning_replay.py::test_screenshot_follows_its_result_on_chat_completions"
   ],
-  "frontend": [
-    "ui/src/pages/turnOutcomeNotes.test.ts",
-    "ui/src/pages/chatMessageReconciliation.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant/desktop"
-  ]
+  "playwright": []
 }

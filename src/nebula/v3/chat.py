@@ -93,6 +93,7 @@ from .context import (
     ContextCapacityError,
     ContextCompactionError,
     ContextCompactor,
+    ContextLimits,
     ContextSource,
     ContextStatus,
     estimate_messages,
@@ -1257,6 +1258,48 @@ def _replays_a_run_call(history: Sequence[dict[str, Any]], call: ModelToolCall) 
         and entry.get("arguments") == call.arguments
         for entry in history
     )
+
+
+def _cleared_tool_result(
+    entry: Mapping[str, Any], output: dict[str, Any] | str
+) -> dict[str, Any] | str:
+    """The receipt an older result is replayed as once a turn outgrows the window.
+
+    It keeps what the step was and where its full output is, as opencode's
+    "[Old tool result content cleared]" and Codex's mid-turn compaction keep a
+    turn going. A result already smaller than its receipt stays as it is.
+    """
+
+    artifact_ids: list[str] = []
+    for reference in entry.get("artifacts") or []:
+        artifact_id = (
+            reference.get("artifact_id") if isinstance(reference, dict) else None
+        )
+        if isinstance(artifact_id, str) and artifact_id not in artifact_ids:
+            artifact_ids.append(artifact_id)
+    result_artifact_id = entry.get("result_artifact_id")
+    if isinstance(result_artifact_id, str) and result_artifact_id not in artifact_ids:
+        artifact_ids.append(result_artifact_id)
+    note = (
+        "This earlier output was cleared from the request to fit the model's "
+        "context window. "
+        + (
+            "Use tool_output.search with this tool_call_id, or tool_output.read "
+            "with one of these artifact_ids, to see it again."
+            if artifact_ids
+            else "Call the tool again if its output is still needed."
+        )
+    )
+    receipt: dict[str, Any] = {
+        "status": str(entry.get("status") or "complete")[:100],
+        "output_cleared": True,
+        "tool_call_id": str(entry.get("tool_call_id") or ""),
+        "summary": str(entry.get("result_summary") or "")[:300],
+        "artifact_ids": artifact_ids[:12],
+        "note": note,
+    }
+    whole = output if isinstance(output, str) else json.dumps(output, sort_keys=True)
+    return receipt if len(json.dumps(receipt)) < len(whole) else output
 
 
 def _decoded_result(value: object) -> dict[str, Any] | None:
@@ -3462,9 +3505,19 @@ class ChatService:
     async def _recover_context_length_rejection(
         self, prepared: PreparedChat, failed_request: ModelRequest
     ) -> ModelRequest:
-        """Refresh exact limits and rebuild canonical context for one safe retry."""
+        """Refresh exact limits and rebuild canonical context for one safe retry.
 
-        turn = prepared.turn
+        A tool turn's results are what grew, so its retry clears older ones
+        instead; nothing runs again.
+        """
+
+        # prepared.turn lags the routing loop by a step; the guard below needs
+        # the turn as it is.
+        turn = self._refresh_turn(prepared.turn) if prepared.turn is not None else None
+        if turn is not None and failed_request.tool_results:
+            cleared = self._cleared_tool_history_retry(prepared, turn, failed_request)
+            if cleared is not None:
+                return cleared
         if turn is not None and (turn.execution_tool_calls or turn.tool_history):
             raise ChatConfigurationError(
                 "the provider rejected the request context after tool routing began; "
@@ -4035,9 +4088,35 @@ class ChatService:
                             # at a time, in the requested order, so every
                             # call keeps its own step, budget, and approval.
                             "parallel_tool_calls": True,
-                            "tool_results": self._replayed_tool_history(prepared, turn),
                         }
                     )
+                    routing = self._with_tool_history(prepared, turn, routing)
+                    if routing.tool_results and not self._fits_request_capacity(
+                        prepared.provider_profile, routing
+                    ):
+                        # Even with its older results cleared the turn no
+                        # longer fits a routing request. It answers from what
+                        # it gathered rather than failing with all of it.
+                        record_diagnostic(
+                            "warning",
+                            "chat",
+                            "chat.routing.context_full",
+                            "Routing stopped because the turn's tool history no "
+                            "longer fits the model's context window; the turn "
+                            "answered from the results it had.",
+                            outcome="fallback",
+                            stage="routing",
+                            retryable=False,
+                            safe_failure_cause=(
+                                "The turn's tool history filled the context window."
+                            ),
+                            metadata={
+                                "provider": prepared.provider_profile.id,
+                                "model_id": prepared.resolved_model,
+                                "tool_steps": len(turn.tool_history),
+                            },
+                        )
+                        break
                     routing = self._fit_turn_goal_request(prepared, routing)
                     self._ensure_request_capacity(prepared.provider_profile, routing)
                     try:
@@ -4509,9 +4588,9 @@ class ChatService:
                     "tools": synthesis_tools,
                     "tool_choice": ToolChoice.NONE,
                     "parallel_tool_calls": False,
-                    "tool_results": self._replayed_tool_history(prepared, turn),
                 }
             )
+            final_request = self._with_tool_history(prepared, turn, final_request)
             final_request = self._fit_turn_goal_request(prepared, final_request)
             self._ensure_request_capacity(prepared.provider_profile, final_request)
             completed = False
@@ -4525,7 +4604,11 @@ class ChatService:
                 tool_call_rejected = False
                 streamed_text: list[str] = []
                 streamed_reasoning: list[str] = []
-                async for event in prepared.provider.stream(final_request):
+                # A context rejection is retried with older results cleared;
+                # no tool runs again.
+                async for event in self._stream_with_context_recovery(
+                    prepared, final_request
+                ):
                     if event.type == StreamEventType.STARTED:
                         continue
                     if event.type == StreamEventType.REASONING_DELTA:
@@ -4899,15 +4982,28 @@ class ChatService:
         yield "done", payload
 
     @staticmethod
-    def _ensure_request_capacity(
+    def _request_limits(
         profile: ProviderProfile, request: ModelRequest
-    ) -> None:
-        limits = resolve_context_limits(
+    ) -> ContextLimits:
+        return resolve_context_limits(
             profile,
             model=request.model,
             requested_output_tokens=request.max_output_tokens,
             required_parameters={"tools"} if request.tools else set(),
         )
+
+    @classmethod
+    def _fits_request_capacity(
+        cls, profile: ProviderProfile, request: ModelRequest
+    ) -> bool:
+        limits = cls._request_limits(profile, request)
+        return estimate_model_request(request) <= limits.input_capacity
+
+    @classmethod
+    def _ensure_request_capacity(
+        cls, profile: ProviderProfile, request: ModelRequest
+    ) -> None:
+        limits = cls._request_limits(profile, request)
         estimated = estimate_model_request(request)
         if estimated > limits.input_capacity:
             raise ChatConfigurationError(
@@ -5146,6 +5242,117 @@ class ChatService:
             else result
             for result in history
         ]
+
+    def _with_tool_history(
+        self, prepared: PreparedChat, turn: ChatTurn, request: ModelRequest
+    ) -> ModelRequest:
+        """``request`` carrying the turn's results, the oldest cut to fit the window.
+
+        Every step re-sends the results before it, so a long turn outgrows any
+        finite window. Instead of failing with all its work unseen, the turn
+        replays its oldest results as receipts (``_cleared_tool_result``) until
+        the request fits the model's target input. Every call keeps a result,
+        so ids, batches and replayed reasoning are unchanged. The newest result
+        stays whole past the target while the request fits the capacity: it is
+        the one the model is deciding on.
+        """
+
+        whole = self._replayed_tool_history(prepared, turn)
+        fitted = request.model_copy(update={"tool_results": whole})
+        limits = self._request_limits(prepared.provider_profile, fitted)
+        target = limits.target_input_tokens
+        if not whole or estimate_model_request(fitted) <= target:
+            return fitted
+        receipts = self._provider_tool_history(turn, cleared=len(whole))
+
+        def clearing(count: int) -> ModelRequest:
+            return fitted.model_copy(
+                update={"tool_results": [*receipts[:count], *whole[count:]]}
+            )
+
+        # A receipt is never larger than its result, so the fewest results to
+        # clear can be found by bisection.
+        low, high = 0, len(whole)
+        while low < high:
+            middle = (low + high) // 2
+            if estimate_model_request(clearing(middle)) <= target:
+                high = middle
+            else:
+                low = middle + 1
+        count = low
+        if count == len(whole) and (
+            estimate_model_request(clearing(count - 1)) <= limits.input_capacity
+        ):
+            count -= 1
+        if count:
+            record_diagnostic(
+                "debug",
+                "chat",
+                "chat.tool_history.cleared",
+                "Older tool results were replayed as receipts so the request "
+                "fits the model's context window.",
+                outcome="success",
+                stage="chat",
+                metadata={
+                    "provider": prepared.provider_profile.id,
+                    "model_id": prepared.resolved_model,
+                    "cleared": count,
+                    "results": len(whole),
+                },
+            )
+        return clearing(count)
+
+    def _cleared_tool_history_retry(
+        self, prepared: PreparedChat, turn: ChatTurn, failed_request: ModelRequest
+    ) -> ModelRequest | None:
+        """One retry of a rejected tool-turn request with its older results cut.
+
+        The provider counted more than Core estimated. Nothing runs again: the
+        retry replays every call the rejected request did, all but the newest
+        result cleared, or the newest too when nothing else is left to clear.
+        None when clearing cannot make the request smaller.
+        """
+
+        whole = self._replayed_tool_history(prepared, turn)
+        if [result.call_id for result in whole] != [
+            result.call_id for result in failed_request.tool_results
+        ]:
+            return None
+        receipts = self._provider_tool_history(turn, cleared=len(whole))
+        rejected = estimate_model_request(failed_request)
+        for kept in (1, 0):
+            cleared = len(whole) - kept
+            retry = failed_request.model_copy(
+                update={
+                    "tool_results": [*receipts[:cleared], *whole[cleared:]],
+                    "metadata": {
+                        **failed_request.metadata,
+                        "context_length_recovery": "cleared_tool_results",
+                    },
+                }
+            )
+            if estimate_model_request(retry) < rejected:
+                record_diagnostic(
+                    "warning",
+                    "chat",
+                    "chat.tool_history.cleared_after_rejection",
+                    "The provider rejected a tool turn's context; the request "
+                    "was sent once more with older tool results cleared.",
+                    outcome="fallback",
+                    stage="routing",
+                    retryable=True,
+                    safe_failure_cause=(
+                        "The provider counted more input tokens than Core estimated."
+                    ),
+                    metadata={
+                        "provider": prepared.provider_profile.id,
+                        "model_id": prepared.resolved_model,
+                        "cleared": cleared,
+                        "results": len(whole),
+                    },
+                )
+                return retry
+        return None
 
     def _browser_screenshot(
         self, prepared: PreparedChat, turn: ChatTurn
@@ -5434,18 +5641,24 @@ class ChatService:
         ]
 
     @staticmethod
-    def _provider_tool_history(turn: ChatTurn) -> list[ModelToolResult]:
+    def _provider_tool_history(
+        turn: ChatTurn, *, cleared: int = 0
+    ) -> list[ModelToolResult]:
+        """The turn's calls and results; the oldest ``cleared`` carry receipts."""
+
         history: list[ModelToolResult] = []
         for entry in turn.tool_history:
             persisted = entry.get("provider_result")
             if not isinstance(persisted, (dict, str)):
                 continue
-            output = sanitize_model_history_result(
+            output: dict[str, Any] | str = sanitize_model_history_result(
                 persisted,
                 tool_call_id=str(entry.get("tool_call_id") or entry["model_call_id"]),
                 tool_name=str(entry["name"]),
                 trusted_result=entry.get("trusted_result") is True,
             )
+            if len(history) < cleared:
+                output = _cleared_tool_result(entry, output)
             # An on-demand tool runs under its own name, but the provider must
             # see the tool_catalog.call it actually issued.
             provider_call = entry.get("provider_call")
