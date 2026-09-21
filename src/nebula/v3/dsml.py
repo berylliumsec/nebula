@@ -12,6 +12,11 @@ ASCII ``|`` or the full-width ``｜`` the protocol normally uses::
       </｜DSML｜ invoke>
     </｜DSML｜ calls>
 
+The outer tag has other spellings too: DeepSeek V3.2's published encoding
+writes ``function_calls`` and marks each parameter ``string="true"`` or
+``string="false"``, and Cline has seen ``tool_calls`` frames whose invoke body
+is one JSON object. All of them are read the same way.
+
 Nothing here executes anything, and nothing here decides a call is allowed:
 recovered calls go to the same broker, policy and approval path every other
 tool call takes. Parsing is all-or-nothing per frame. A frame Core cannot
@@ -35,15 +40,31 @@ _TAG = rf"<{_PIPE}DSML{_PIPE}\s*"
 # and some escape the whole tag; both spellings mean the same close.
 _END = rf"\\?<\\?/{_PIPE}DSML{_PIPE}\s*"
 
-_FRAME = re.compile(rf"{_TAG}calls>(?P<body>.*?){_END}calls>", re.DOTALL)
+# A frame closes with the spelling it opened with.
+_FRAME = re.compile(
+    rf"{_TAG}(?P<kind>(?:tool_|function_)?calls)>(?P<body>.*?){_END}(?P=kind)>",
+    re.DOTALL,
+)
 _INVOKE = re.compile(
     rf'{_TAG}invoke\s+name="(?P<name>[^"]*)"\s*>(?P<body>.*?){_END}invoke>',
     re.DOTALL,
 )
+# Attributes after the name are tolerated; only ``string`` means anything.
 _PARAMETER = re.compile(
-    rf'{_TAG}parameter\s+name="(?P<name>[^"]*)"\s*>(?P<value>.*?){_END}parameter>',
+    rf'{_TAG}parameter\s+name="(?P<name>[^"]*)"(?P<attributes>[^>]*)>'
+    rf"(?P<value>.*?){_END}parameter>",
     re.DOTALL,
 )
+_STRING_ATTRIBUTE = re.compile(r'\bstring\s*=\s*"(?P<declared>true|false)"')
+# Any tag of the protocol, opening or closing, in any spelling. It is how a
+# frame Core cannot read is still found, wherever in the text it starts.
+_ANY_TAG = re.compile(rf"\\?<\\?/?{_PIPE}DSML{_PIPE}")
+# How a tag can begin, pipes read as ASCII. A streamed answer holds back a
+# tail that could still grow into one of these.
+_TAG_OPENINGS = ("<|DSML|", "</|DSML|", "<\\/|DSML|", "\\<|DSML|", "\\</|DSML|")
+_LONGEST_OPENING = max(len(opening) for opening in _TAG_OPENINGS)
+# A value no parameter can have, for a declared JSON value that is not JSON.
+_UNREADABLE = object()
 
 # The identity a recovered call must have to be a tool call at all. It is the
 # same shape providers require, checked here so a frame that cannot produce a
@@ -61,22 +82,40 @@ MAX_CALLS_PER_FRAME = 64
 MAX_CALLS_PER_MESSAGE = 64
 
 
-_FRAME_START = re.compile(rf"^{_TAG}calls>")
-_FRAME_END = re.compile(rf"{_END}calls>$")
+def frame_start(text: str) -> int | None:
+    """Where the first DSML tag in ``text`` begins, or ``None`` without one.
+
+    Any tag counts, in any spelling and whether or not it closes. It is what a
+    caller asks after :func:`recover` has already taken every frame it could
+    read, so a tag still in the text starts a frame Core could not read, and
+    nothing from there on is an answer.
+    """
+
+    if "DSML" not in text:
+        return None
+    match = _ANY_TAG.search(text)
+    return match.start() if match is not None else None
 
 
 def is_frame(text: str) -> bool:
-    """Whether ``text`` is a DSML frame and nothing else.
+    """Whether ``text`` is a DSML frame with no answer before it."""
 
-    This recognizes the outer frame only. It is what a caller asks after
-    :func:`recover` has already taken every frame it could read, so a true
-    answer means the frame could not be read and there is no answer in it.
+    return frame_start(text.strip()) == 0
+
+
+def partial_tag_start(text: str) -> int:
+    """Where a tail of ``text`` that could still become a DSML tag begins.
+
+    A streamed answer can show everything before this index and hold the rest
+    until the next piece settles whether a frame is starting. Without such a
+    tail this is ``len(text)``.
     """
 
-    stripped = text.strip()
-    if "DSML" not in stripped:
-        return False
-    return bool(_FRAME_START.match(stripped)) and bool(_FRAME_END.search(stripped))
+    for start in range(max(0, len(text) - _LONGEST_OPENING + 1), len(text)):
+        tail = text[start:].replace("\uff5c", "|")
+        if any(opening.startswith(tail) for opening in _TAG_OPENINGS):
+            return start
+    return len(text)
 
 
 @dataclass(frozen=True)
@@ -124,9 +163,41 @@ def _decode_value(raw: str) -> Any:
     return value
 
 
+def _parameter_value(raw: str, attributes: str) -> Any:
+    """A parameter's value, as its ``string`` attribute declares it if it does.
+
+    ``string="true"`` keeps the text exactly as written, even text that looks
+    like a number; ``string="false"`` declares JSON, and text that is not JSON
+    is unreadable rather than guessed at.
+    """
+
+    declared = _STRING_ATTRIBUTE.search(attributes)
+    if declared is None:
+        return _decode_value(raw)
+    if declared.group("declared") == "true":
+        return raw
+    try:
+        return json.loads(raw)
+    except ValueError:  # diagnostic-expected: frame left in the text for quarantine
+        return _UNREADABLE
+
+
+def _json_body(body: str) -> dict[str, Any] | None:
+    """An invoke whose whole body is one JSON object carries its arguments so."""
+
+    try:
+        value = json.loads(body)
+    except ValueError:  # diagnostic-expected: frame left in the text for quarantine
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _parse_invoke(name: str, body: str) -> DsmlCall | None:
     if not _TOOL_NAME.match(name):
         return None
+    if body.strip().startswith("{") and not _PARAMETER.search(body):
+        whole = _json_body(body.strip())
+        return None if whole is None else DsmlCall(name=name, arguments=whole)
     arguments: dict[str, Any] = {}
     for match in _PARAMETER.finditer(body):
         parameter = match.group("name")
@@ -134,7 +205,10 @@ def _parse_invoke(name: str, body: str) -> DsmlCall | None:
         # unnamed one has no argument to fill, so neither is guessed at.
         if not parameter or parameter in arguments:
             return None
-        arguments[parameter] = _decode_value(match.group("value"))
+        value = _parameter_value(match.group("value"), match.group("attributes"))
+        if value is _UNREADABLE:
+            return None
+        arguments[parameter] = value
     # Anything outside the parameters is an instruction Core does not
     # understand, so a call is recovered only when the whole invoke is read.
     if _PARAMETER.sub("", body).strip():

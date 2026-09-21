@@ -511,7 +511,7 @@ def test_openai_compatible_logs_exact_malformed_tool_json_without_its_values(
     metadata = record["metadata"]
     assert record["level"] == "ERROR"
     assert record["stage"] == "tool_arguments"
-    assert record["exception_chain"] == ["ProviderError", "JSONDecodeError"]
+    assert record["exception_chain"] == ["ProviderToolCallError", "JSONDecodeError"]
     assert metadata == {
         "adapter": "openrouter",
         "byte_count": len(malformed.encode()),
@@ -2450,6 +2450,156 @@ def test_stream_error_frame_maps_transient_codes_to_overload():
     )
     assert isinstance(rejected, ProviderError)
     assert not isinstance(rejected, ProviderOverloadedError)
+
+
+def test_a_streamed_nameless_tool_fragment_is_reported_as_a_rejected_call():
+    """DeepSeek via OpenRouter: a nameless call carrying two bytes of arguments.
+
+    A request that offered no tools can only get a call the model was not
+    allowed to make, so the stream says a call was attempted and rejected
+    rather than reporting an ordinary provider failure.
+    """
+
+    body = "\n\n".join(
+        [
+            "data: "
+            + json.dumps(
+                {
+                    "id": "gen-s",
+                    "model": "test-model",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [
+                                    {"index": 0, "function": {"arguments": '"x'}}
+                                ]
+                            },
+                        }
+                    ],
+                }
+            ),
+            "data: "
+            + json.dumps(
+                {
+                    "id": "gen-s",
+                    "model": "test-model",
+                    "choices": [
+                        {"index": 0, "delta": {}, "finish_reason": "tool_calls"}
+                    ],
+                }
+            ),
+            "data: [DONE]",
+        ]
+    )
+
+    events = _collect_stream(_sse_provider("stream-nameless-call", body))
+
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.ERROR,
+    ]
+    assert events[-1].tool_call_rejected is True
+    assert events[-1].retryable is False
+    assert "malformed tool arguments" in (events[-1].error or "")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        {
+            "message": "Upstream error from Sail Research: model emitted an "
+            "undeclared or disallowed function name",
+            "code": 400,
+        },
+        {
+            "message": "Upstream error from Sail Research: model emitted an "
+            "undeclared or disallowed function name"
+        },
+        # A refusal relayed with a transient status is still the model's call,
+        # and replaying the identical request invites the same call again.
+        {
+            "message": "Upstream error from Sail Research: model emitted an "
+            "undeclared or disallowed function name",
+            "code": 502,
+        },
+        {
+            "message": "Tool call validation failed: attempted to call tool "
+            "'read_file' which was not in request.tools",
+            "code": "tool_use_failed",
+        },
+    ],
+)
+def test_an_upstream_refusal_of_a_function_call_is_reported_as_a_rejected_call(
+    error,
+):
+    calls: list[int] = []
+    body = (
+        "data: "
+        + json.dumps(
+            {
+                "id": "gen-s",
+                "error": error,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}],
+            }
+        )
+        + "\n\ndata: [DONE]\n\n"
+    )
+
+    events = _collect_stream(_sse_provider("stream-refused-call", body, calls))
+
+    assert calls == [0]
+    assert events[-1].type == StreamEventType.ERROR
+    assert events[-1].tool_call_rejected is True
+    assert events[-1].retryable is False
+    assert error["message"] in (events[-1].error or "")
+
+
+def test_stream_fallback_reports_a_malformed_tool_call_as_a_rejected_call():
+    """Adapters without native streaming say the same thing through the fallback."""
+
+    class MalformedCallProvider(providers.ModelProvider):
+        async def complete(self, request: ModelRequest) -> providers.ModelResponse:
+            del request
+            providers._arguments('"x')
+            raise AssertionError("malformed arguments were accepted")
+
+        async def health(self) -> providers.ProviderHealth:
+            return providers.ProviderHealth(provider_id="fallback", healthy=True)
+
+    provider = MalformedCallProvider(
+        ProviderConfig(
+            id="fallback",
+            kind=ProviderKind.OPENAI_COMPATIBLE,
+            base_url="http://127.0.0.1:8000/v1",
+            default_model="model-a",
+            model_allowlist=["model-a"],
+            local=True,
+        )
+    )
+
+    events = _collect_stream(
+        provider,
+        ModelRequest(
+            model="model-a", messages=[ModelMessage(role="user", content="Reply.")]
+        ),
+    )
+
+    assert [event.type for event in events] == [
+        StreamEventType.STARTED,
+        StreamEventType.ERROR,
+    ]
+    assert events[-1].tool_call_rejected is True
+    # An ordinary provider failure is not a rejected call.
+    assert (
+        _collect_stream(
+            _sse_provider(
+                "stream-plain-failure",
+                'data: {"error":{"message":"bad request","code":400}}\n\n',
+            )
+        )[-1].tool_call_rejected
+        is False
+    )
 
 
 def test_a_retryable_error_frame_before_any_token_is_replayed():

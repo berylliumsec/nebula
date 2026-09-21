@@ -969,7 +969,10 @@ def test_final_synthesis_exhaustion_preserves_tools_and_is_retryable_provider_fa
 
     with pytest.raises(
         ProviderResponseError,
-        match="no operator-facing answer after bounded recovery",
+        match=(
+            "no operator-facing answer after bounded recovery: the model "
+            "returned only reasoning"
+        ),
     ):
         asyncio.run(service.complete(prepared))
 
