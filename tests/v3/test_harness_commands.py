@@ -7,6 +7,7 @@ from nebula.v3.harnesses import (
     CodexAppServerConnection,
     GrokAcpConnection,
     HarnessEvent,
+    _goal_outcome_message,
     _harness_goal_snapshot,
     _run_harness_command,
 )
@@ -186,7 +187,9 @@ def test_grok_goal_continues_vendor_turns_until_goal_is_complete():
             "running",
             "complete",
         ]
-        assert events[-1].message == "Done."
+        assert events[-1].message == (
+            "Goal complete.\nObjective: Ship the clock\n\nGrok's last message:\nDone."
+        )
         assert len([event for event in events if event.type == "completed"]) == 1
 
     asyncio.run(scenario())
@@ -220,7 +223,7 @@ def test_grok_goal_does_not_continue_terminal_or_attention_states(status):
         connection = GrokAcpConnection(
             rpc, external_session_id="grok", permission_handler=None
         )
-        _ = [
+        events = [
             event
             async for event in _run_harness_command(
                 connection,
@@ -230,6 +233,83 @@ def test_grok_goal_does_not_continue_terminal_or_attention_states(status):
             )
         ]
         assert len([call for call in rpc.calls if call[0] == "session/prompt"]) == 1
+        # The reply names how the goal ended, not just Grok's closing words.
+        assert events[-1].message.startswith(
+            {
+                "paused": "Goal paused.",
+                "usageLimited": "Goal stopped at a usage limit.",
+                "budgetLimited": "Goal stopped at its token budget.",
+                "failed": "Goal failed.",
+            }[status]
+        )
+        assert "Objective: Clock" in events[-1].message
+
+    asyncio.run(scenario())
+
+
+def test_grok_goal_outcome_explains_a_bare_verdict():
+    # Live Grok ended a blocked goal with the single word its skeptic returned.
+    goal = _harness_goal_snapshot(
+        {
+            "objective": "Say alpha, beta, gamma",
+            "status": "blocked",
+            "timeUsedSeconds": 339.2,
+            "tokensUsed": 202_584,
+        }
+    )
+
+    message = _goal_outcome_message(goal, "Refuted", vendor="Grok")
+
+    assert message == (
+        "Goal blocked after 5 min 39 s and 202,584 tokens.\n"
+        "Objective: Say alpha, beta, gamma\n\n"
+        "Grok's last message:\nRefuted\n\n"
+        "Grok judged the objective unmet. /goal status shows where it stopped."
+    )
+
+
+def test_grok_goal_outcome_without_vendor_text_or_usage():
+    goal = _harness_goal_snapshot({"objective": "Clock", "status": "paused"})
+
+    assert _goal_outcome_message(goal, "  ", vendor="Grok") == (
+        "Goal paused.\nObjective: Clock\n\nUse /goal resume to continue."
+    )
+
+
+def test_grok_goal_status_query_keeps_grok_s_own_reply():
+    class StatusRpc(Rpc):
+        async def request(self, method, params):
+            if method == "session/prompt":
+                self.calls.append((method, params))
+                await self.events.put(
+                    {
+                        "method": "session/update",
+                        "params": {
+                            "update": {
+                                "sessionUpdate": "goal_updated",
+                                "objective": "Clock",
+                                "status": "blocked",
+                            }
+                        },
+                    }
+                )
+                return {"stopReason": "end_turn", "text": "Status: Blocked"}
+            return await super().request(method, params)
+
+    async def scenario():
+        connection = GrokAcpConnection(
+            StatusRpc({}), external_session_id="grok", permission_handler=None
+        )
+        events = [
+            event
+            async for event in _run_harness_command(
+                connection,
+                ("/goal", "status"),
+                model="model",
+                context_prompt="trusted context",
+            )
+        ]
+        assert events[-1].message == "Status: Blocked"
 
     asyncio.run(scenario())
 
