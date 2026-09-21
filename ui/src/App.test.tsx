@@ -254,9 +254,10 @@ describe("Nebula workspace", () => {
   });
 
   it("keeps diagnostics out of the advanced view while preserving legacy hashes", async () => {
-    window.history.replaceState({}, "", "/settings#security-settings");
+    // The router location owns the settings section, so a legacy hash has to
+    // arrive through it, as it does from the address bar under BrowserRouter.
     const user = userEvent.setup();
-    renderApp("/settings");
+    renderApp("/settings#security-settings");
     expect(await screen.findByRole("link", { name: "Advanced settings" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByRole("heading", { name: "Operator profiles" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "Model providers" })).not.toBeVisible();
