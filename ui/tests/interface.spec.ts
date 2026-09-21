@@ -3410,7 +3410,7 @@ test("assistant live guidance releases stale busy UI when Core reports a termina
   await expect(page.getByText("Harness is working")).toHaveCount(0, { timeout: 6_000 });
   await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Send message" })).toBeVisible();
-  await expect(page.getByPlaceholder("Ask about this project…")).toBeEnabled();
+  await expect(page.locator(".chat-composer textarea").first()).toBeEditable();
 });
 
 test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, testInfo) => {
@@ -9161,4 +9161,100 @@ test("stabilization an operator chooses how much a provider model may think", as
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByText("Answered.")).toBeVisible();
   expect((sent[0] as { reasoning_effort?: string }).reasoning_effort).toBe("none");
+});
+
+const delegated = [
+  {
+    id: "sub-1",
+    name: "Map documented API routes",
+    task: "List every documented route and compare it against the router files.",
+    status: "running",
+    parent_session_id: "subagent-chat",
+    parent_turn_id: "turn-1",
+    child_session_id: "child-1",
+    child_turn_id: "child-turn-1",
+    step_count: 6,
+    recent_steps: [{ tool: "read_file", detail: "openapi.yaml", status: "complete" }],
+    approval: null,
+    usage: { input_tokens: 4000, output_tokens: 2200, total_tokens: 6200 },
+    started_at: "2026-09-20T10:00:00Z",
+    finished_at: null,
+    elapsed_seconds: 38,
+    result: "",
+    error: null,
+    result_message_id: null,
+  },
+  {
+    id: "sub-2",
+    name: "Review session handling code",
+    task: "Read the session store and report anything that weakens it.",
+    status: "waiting_approval",
+    parent_session_id: "subagent-chat",
+    parent_turn_id: "turn-1",
+    child_session_id: "child-2",
+    child_turn_id: "child-turn-2",
+    step_count: 3,
+    recent_steps: [],
+    approval: { id: "approval-1", status: "pending", tool: "run_command", detail: "npm ls --all --json", risk_class: "workspace_write", rationale: "Wants to run a command in the workspace" },
+    usage: { input_tokens: 1000, output_tokens: 200, total_tokens: 1200 },
+    started_at: "2026-09-20T10:00:00Z",
+    finished_at: null,
+    elapsed_seconds: 64,
+    result: "",
+    error: null,
+    result_message_id: null,
+  },
+];
+
+test("stabilization an operator allows delegation and acts on a waiting subagent", async ({ page }) => {
+  const decisions: unknown[] = [];
+  // A ready provider, so "the composer stays usable" is a real assertion.
+  await installReasoningProvider(page);
+  await page.route("**/api/v1/chat/sessions/*/subagents", async route => {
+    await route.fulfill({ json: { session_id: "subagent-chat", subagents: delegated } });
+  });
+  await page.route("**/api/v1/approvals/*/decision", async route => {
+    decisions.push(route.request().postDataJSON());
+    await route.fulfill({ json: { id: "approval-1", status: "approved" } });
+  });
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{ ...entity, id: "subagent-chat", engagement_id: "scratch-project", title: "Assess staging API auth", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/subagent-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/subagent-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await page.goto("/?view=chat&session=subagent-chat");
+
+  // The capability is chosen in the assistant's own settings, beside the others.
+  await page.getByRole("button", { name: "Assistant settings" }).click();
+  const toggle = page.getByRole("checkbox", { name: /Subagents/ });
+  await expect(toggle).toBeVisible();
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await page.getByRole("button", { name: "Close assistant settings" }).click();
+
+  // The rail reports what is delegated without taking over the composer.
+  const rail = page.getByRole("status", { name: "Subagents" });
+  await expect(rail).toContainText("1 running");
+  await expect(rail).toContainText("1 needs approval");
+  await expect(page.locator(".chat-composer textarea").first()).toBeEditable();
+
+  await rail.getByRole("button", { name: "Show subagents" }).click();
+  const pane = page.getByRole("region", { name: "Subagents" }).last();
+  await expect(pane).toContainText("2 of 3 slots active");
+  await expect(pane).toContainText("Map documented API routes");
+
+  // The child waiting on a person shows exactly what it wants to run.
+  await expect(pane).toContainText("Wants to run a command in the workspace");
+  await expect(pane).toContainText("npm ls --all --json");
+  await pane.getByRole("button", { name: "Allow once" }).click();
+  await expect.poll(() => decisions.length).toBe(1);
+  expect((decisions[0] as { decision?: string }).decision).toBe("approve");
+
+  const accessibility = await new AxeBuilder({ page }).include(".chat-subagent-pane").analyze();
+  expect(accessibility.violations).toEqual([]);
 });

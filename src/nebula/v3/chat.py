@@ -1665,7 +1665,8 @@ class ChatService:
             )
             return self.start_provider_turn(continued)
         except ChatHistoryConflict:
-            # An operator message or another valid continuation won the race.
+            # diagnostic-expected: an operator message or another valid
+            # continuation won the race; losing it is the intended outcome.
             return None
         except Exception as exc:
             record_caught_exception(
@@ -1685,7 +1686,9 @@ class ChatService:
                         "Automatic goal continuation could not start. Review the latest "
                         "response and error, then resume the goal to retry.",
                     )
-            except NotFoundError:  # diagnostic-expected: the goal was removed concurrently
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: the goal was removed concurrently
                 pass
             return None
 
@@ -1743,7 +1746,8 @@ class ChatService:
             )
             return self.start_provider_turn(prepared)
         except ChatHistoryConflict:
-            # A user message or another lifecycle trigger won the idle check.
+            # diagnostic-expected: a user message or another lifecycle trigger
+            # won the idle check; losing it is the intended outcome.
             return None
         except Exception as exc:
             record_caught_exception(
@@ -5627,7 +5631,9 @@ class ChatService:
                         reason=reason,
                     ),
                 )
-            except ConflictError as exc:  # diagnostic-expected: reread a concurrent goal update
+            except (
+                ConflictError
+            ) as exc:  # diagnostic-expected: reread a concurrent goal update
                 last_error = exc
         if last_error is not None:
             record_caught_exception(
@@ -6888,6 +6894,9 @@ class ChatService:
             # Absent means the model's own default, which is a real choice and
             # must survive a reload as one.
             "reasoning_effort": prepared.source_request.reasoning_effort,
+            # Delegation is a capability the operator selects per conversation,
+            # so the choice survives a reload like the others.
+            "allow_subagents": prepared.source_request.allow_subagents,
         }
 
     @staticmethod

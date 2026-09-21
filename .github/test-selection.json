@@ -1,26 +1,26 @@
 {
-  "change_digest": "77fd3987230d5018de4ba81e7d32a6fa48dc84b67999bf17e92a9ee72c7e20c5",
-  "reviewed_by": "Codex review of durable provider reasoning effort across the goal lifecycle",
-  "reason": "Provider reasoning effort was transient until a normal message completed, while Start, Resume, and automatic goal continuation built Core-side requests that omitted it. The selection verifies session metadata persistence, exact API serialization, UI prevention of Resume during the save, Core propagation through initial and continued goal turns, and the real production-bundle LAN workflow across desktop Chromium and emulated mobile Chromium/WebKit.",
-  "exclusions": "Full backend and frontend suites, unrelated chat/provider/harness tests, native Rust tests, physical devices, and unrelated Playwright areas are excluded. The selected real-Core goal-lifecycle journey covers the affected UI, persistence, refresh, resume, and continuation boundaries; no origin-sensitive browser API changed.",
+  "change_digest": "39da2fcc6d40156e550375cc203a8f92332df24d54589d24dd3353f804e9b391",
+  "reviewed_by": "Claude review of the delegated-subagent operator surface",
+  "reason": "Provider chats could delegate, but only the model could see it: there was no way to allow delegation, watch the children, answer a command one was waiting on, or stop it. This adds the capability toggle, the composer rail, the drawer pane and the transcript report card, plus the client methods and the durable record of the choice. The frontend selection covers each surface and the request/session mapping; the Python selection covers the durable setting and the subagent lifecycle the surfaces read (test_chat.py, test_chat_subagents.py, test_chat_goals.py, test_chat_api.py). The Playwright selection proves the operator journey end to end on desktop, mobile Chromium and mobile WebKit: choosing the capability, seeing the rail without losing the composer, and approving the command a child is waiting on.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No subagent behaviour changed in Core: starting, running, stopping and reporting are untouched, so provider, harness and container suites are not selected. No native tests are selected because no Rust changed. No real-Core entry is selected: the surfaces read one list endpoint and post two decisions, both covered by the Python API tests, and a real delegated run needs a live provider that CI does not have. tests/v3/test_chat_goals.py is included because this branch formats it: it is unformatted on origin/main, which fails the repository's ruff format gate for every PR based on it. Two goal-continuation except handlers in chat.py are classified for the same reason: origin/main fails the diagnostic blind-spot audit on them.",
   "expected_tests": {
-    "python": 2,
-    "frontend": 84,
+    "python": 112,
+    "frontend": 82,
     "native": 0,
     "playwright": 3
   },
   "python": [
-    "tests/v3/test_chat_api.py::test_chat_api_completes_streams_and_exposes_durable_history",
-    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal"
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_api.py"
   ],
   "frontend": [
-    "ui/src/api/client.test.ts",
-    "ui/src/components/ProviderGoalPanel.test.tsx"
+    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx",
+    "ui/src/api/client.test.ts"
   ],
   "native": [],
   "playwright": [
-    "provider-goal-lifecycle-core/assistant-real-desktop",
-    "provider-goal-lifecycle-core/assistant-real-chromium-390",
-    "provider-goal-lifecycle-core/assistant-real-webkit-390"
+    "area:chat-subagents"
   ]
 }

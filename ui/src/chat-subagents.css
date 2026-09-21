@@ -1,0 +1,80 @@
+/*
+ * Delegated subagents: the composer rail, the docked pane and the report card
+ * in the transcript. Status is always carried by a word, never by colour
+ * alone, and a child's own words are never restyled into a verdict.
+ */
+
+/* Rail: what is delegated, without taking the composer's room. */
+.chat-subagent-rail { display: flex; align-items: center; gap: 8px; min-height: 32px; margin: 2px 0 0 2px; padding: 2px 6px; border: 1px solid var(--border-soft); border-radius: 999px; color: var(--muted); font-size: 11px; }
+.chat-subagent-rail strong { color: var(--text); font-size: 11px; }
+.chat-subagent-counts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.chat-subagent-counts > span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.chat-subagent-rail > small { margin-left: auto; white-space: nowrap; }
+.chat-subagent-rail .icon-button { width: 28px; min-height: 28px; }
+.chat-subagent-dot { display: inline-block; width: 6px; height: 6px; border-radius: 999px; background: var(--muted); }
+[data-tone="running"] .chat-subagent-dot, .chat-subagent-dot[data-tone="running"] { background: var(--blue); }
+[data-tone="waiting_approval"] .chat-subagent-dot, .chat-subagent-dot[data-tone="waiting_approval"] { background: var(--status-warning); }
+
+/* Pane: one card per child, expanded while it needs something. */
+.chat-subagent-pane { display: grid; gap: 10px; min-width: 0; }
+.chat-subagent-pane > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chat-subagent-pane > header > div { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.chat-subagent-pane > header strong { font-size: 12px; }
+.chat-subagent-total { min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--surface-raised); color: var(--muted); font-size: 11px; text-align: center; }
+.chat-subagent-slots { display: grid; gap: 4px; margin: 0; color: var(--muted); font-size: 11px; }
+.chat-subagent-slot-bar { display: block; height: 3px; border-radius: 999px; background: var(--surface-raised); overflow: hidden; }
+.chat-subagent-slot-bar > span { display: block; height: 100%; background: var(--blue); }
+.chat-subagent-error { margin: 0; color: var(--red); font-size: 11px; overflow-wrap: anywhere; }
+
+.chat-subagent-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.chat-subagent-card { border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface); }
+.chat-subagent-card[data-status="waiting_approval"] { border-color: var(--status-warning); }
+.chat-subagent-card-head { display: grid; grid-template-columns: 20px minmax(0, 1fr) 16px; align-items: start; gap: 8px; padding: 8px 10px; }
+.chat-subagent-card-icon { display: grid; place-items: center; color: var(--muted); }
+.chat-subagent-card-icon[data-status="running"] { color: var(--blue); }
+.chat-subagent-card-icon[data-status="completed"] { color: var(--green); }
+.chat-subagent-card-title { display: grid; gap: 2px; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.chat-subagent-card-title strong { font-size: 12px; overflow-wrap: anywhere; }
+.chat-subagent-card-title small { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.chat-subagent-card-title:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 8px; }
+.chat-subagent-card-body { display: grid; gap: 8px; padding: 0 10px 10px; }
+
+.chat-subagent-steps { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.chat-subagent-steps li { display: grid; grid-template-columns: 16px auto minmax(0, 1fr); align-items: baseline; gap: 6px; font-size: 11px; }
+.chat-subagent-step-icon { color: var(--muted); }
+.chat-subagent-steps code { font-family: var(--font-mono); font-size: 11px; }
+.chat-subagent-steps small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-subagent-task, .chat-subagent-result { margin: 0; color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
+
+.chat-subagent-approval { display: grid; gap: 6px; }
+.chat-subagent-approval p { margin: 0; font-size: 11px; overflow-wrap: anywhere; }
+.chat-subagent-approval pre { margin: 0; padding: 6px 8px; overflow: auto; border-radius: 8px; background: var(--surface-muted); }
+.chat-subagent-approval code { font-family: var(--font-mono); font-size: 11px; }
+.chat-subagent-approval-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-subagent-approval-actions .button { min-height: 32px; }
+
+.chat-subagent-card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-subagent-card-actions .button, .chat-subagent-stop-all { min-height: 32px; }
+.chat-subagent-stop, .chat-subagent-stop-all { color: var(--red); }
+.chat-subagent-stop-all { justify-self: stretch; }
+.chat-subagent-note { margin: 0; color: var(--muted); font-size: 11px; }
+
+/* Report card, in the transcript where Core posted it. */
+.chat-subagent-result { display: grid; gap: 6px; margin: 8px 0; padding: 10px; border: 1px solid var(--border-soft); border-radius: 10px; background: var(--surface-muted); }
+.chat-subagent-result > header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.chat-subagent-result strong { font-size: 12px; }
+.chat-subagent-result-icon { color: var(--green); }
+.chat-subagent-result[data-status="failed"] .chat-subagent-result-icon,
+.chat-subagent-result[data-status="stopped"] .chat-subagent-result-icon,
+.chat-subagent-result[data-status="interrupted"] .chat-subagent-result-icon { color: var(--status-warning); }
+.chat-subagent-result-name { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.chat-subagent-result > header small { color: var(--muted); font-size: 11px; }
+.chat-subagent-result p { margin: 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-subagent-result-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.chat-subagent-result-actions .button { min-height: 32px; }
+
+@media (max-width: 760px), (pointer: coarse) {
+  .chat-subagent-rail .icon-button { width: 44px; min-height: 44px; }
+  .chat-subagent-approval-actions .button, .chat-subagent-card-actions .button,
+  .chat-subagent-stop-all, .chat-subagent-result-actions .button { min-height: 44px; }
+}
