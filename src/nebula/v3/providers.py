@@ -94,6 +94,28 @@ class ProviderQuotaError(ProviderError):
     """The account's quota or billing limit is spent; retrying cannot help."""
 
 
+class ProviderRefusalError(ProviderResponseError):
+    """The provider declined to produce the response.
+
+    A vendor refusal, safety or content filter, guardrail, or blocked prompt,
+    reported with HTTP 200. Asking again with the same context gets the same
+    answer, so it is reported to the operator rather than recovered.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(f"provider blocked the response: {reason}")
+        self.reason = reason
+
+
+class ProviderMalformedToolCallError(ProviderError):
+    """The model attempted a tool call its vendor could not parse.
+
+    That is a sampling accident, not a decision that no tool is needed: the
+    identical request usually succeeds, so a caller that offered tools may
+    ask once more.
+    """
+
+
 class UnsupportedCapability(ProviderError):
     """Raised before a request when a required capability is unavailable."""
 
@@ -1563,6 +1585,125 @@ def _stream_error_frame(data: Any) -> ProviderError | None:
     return ProviderError(message)
 
 
+# Vendor stop outcomes that explain why a 200 reply carries no answer. Read as
+# an ordinary empty reply they made chat skip the call the model attempted, or
+# re-ask a safeguard that had already refused.
+_CONTEXT_WINDOW_STOP_REASON = "model_context_window_exceeded"
+_GEMINI_BLOCKED_FINISH_REASONS = frozenset(
+    {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}
+)
+_GEMINI_MALFORMED_CALL_FINISH_REASONS = frozenset(
+    {"MALFORMED_FUNCTION_CALL", "UNEXPECTED_TOOL_CALL"}
+)
+_GEMINI_UNSPECIFIED_BLOCK_REASONS = frozenset(
+    {"BLOCK_REASON_UNSPECIFIED", "BLOCKED_REASON_UNSPECIFIED"}
+)
+_BEDROCK_BLOCKED_STOP_REASONS = frozenset({"guardrail_intervened", "content_filtered"})
+_BEDROCK_MALFORMED_STOP_REASONS = frozenset(
+    {"malformed_tool_use", "malformed_model_output"}
+)
+# Responses `error.code` values that report a transient upstream failure.
+_RESPONSES_TRANSIENT_ERROR_CODES = frozenset(
+    {"server_error", "server_is_overloaded", "rate_limit_exceeded", "slow_down"}
+)
+
+
+def _context_window_stop(reason: str) -> ProviderContextLengthError:
+    return ProviderContextLengthError(
+        f"provider stopped at the model context window ({reason})"
+    )
+
+
+def _raise_malformed_tool_call(request: ModelRequest, reason: str) -> None:
+    """Raise for a botched call when the request offered tools.
+
+    Without tools there was nothing to call: the empty reply goes to the
+    caller's own recovery, which asks again for prose.
+    """
+
+    if request.tools:
+        raise ProviderMalformedToolCallError(
+            f"provider returned a malformed tool call ({reason})"
+        )
+
+
+def _anthropic_refusal(data: dict[str, Any]) -> ProviderRefusalError:
+    details = data.get("stop_details")
+    details = details if isinstance(details, dict) else {}
+    reason = "refusal"
+    category = details.get("category")
+    if isinstance(category, str) and category:
+        reason += f" (category: {category})"
+    explanation = details.get("explanation")
+    if isinstance(explanation, str) and explanation.strip():
+        reason += f": {' '.join(explanation.split())[:300]}"
+    return ProviderRefusalError(reason)
+
+
+def _raise_gemini_outcome(request: ModelRequest, data: dict[str, Any]) -> None:
+    candidates = data.get("candidates") or [{}]
+    finish_reason = candidates[0].get("finishReason")
+    feedback = data.get("promptFeedback")
+    block_reason = feedback.get("blockReason") if isinstance(feedback, dict) else None
+    if (
+        not finish_reason
+        and block_reason
+        and block_reason not in _GEMINI_UNSPECIFIED_BLOCK_REASONS
+    ):
+        raise ProviderRefusalError(f"prompt blocked ({block_reason})")
+    if finish_reason in _GEMINI_BLOCKED_FINISH_REASONS:
+        blocked = [
+            str(rating.get("category"))
+            for rating in candidates[0].get("safetyRatings") or []
+            if isinstance(rating, dict) and rating.get("blocked")
+        ]
+        raise ProviderRefusalError(
+            f"{finish_reason} ({', '.join(blocked)})" if blocked else finish_reason
+        )
+    if finish_reason in _GEMINI_MALFORMED_CALL_FINISH_REASONS:
+        # finishMessage holds the model's half-written call; it stays out of
+        # the error text.
+        _raise_malformed_tool_call(request, finish_reason)
+
+
+def _raise_bedrock_outcome(request: ModelRequest, data: dict[str, Any]) -> None:
+    stop_reason = data.get("stopReason")
+    if stop_reason == _CONTEXT_WINDOW_STOP_REASON:
+        raise _context_window_stop(stop_reason)
+    if stop_reason in _BEDROCK_BLOCKED_STOP_REASONS:
+        raise ProviderRefusalError(stop_reason)
+    if stop_reason in _BEDROCK_MALFORMED_STOP_REASONS:
+        _raise_malformed_tool_call(request, stop_reason)
+
+
+def _raise_responses_outcome(data: dict[str, Any]) -> None:
+    """Type a Responses 200 that failed or was cut by the content filter."""
+
+    if data.get("status") == "failed":
+        detail, error_code = _error_detail(data)
+        described = ": ".join(
+            part
+            for part in (error_code, " ".join(str(detail or "").split())[:400])
+            if part
+        )
+        if error_code and "policy" in error_code:
+            # cyber_policy, bio_policy, misalignment_policy_violation.
+            raise ProviderRefusalError(described)
+        message = "provider reported a failed response" + (
+            f": {described}" if described else ""
+        )
+        if _context_length_error(detail, error_code):
+            raise ProviderContextLengthError(message)
+        if _quota_exhausted(data, detail, error_code):
+            raise ProviderQuotaError(message)
+        if error_code in _RESPONSES_TRANSIENT_ERROR_CODES:
+            raise ProviderOverloadedError(message)
+        raise ProviderError(message)
+    details = data.get("incomplete_details")
+    if isinstance(details, dict) and details.get("reason") == "content_filter":
+        raise ProviderRefusalError("content_filter")
+
+
 def _arguments(
     value: Any, *, diagnostic_metadata: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -1961,10 +2102,17 @@ class OpenAIResponsesProvider(ModelProvider):
         if response.is_error:
             raise _safe_error(response)
         data = response.json()
+        _raise_responses_outcome(data)
         text_parts: list[str] = []
+        commentary: list[str] = []
+        refused = False
         calls: list[ToolCall] = []
         for item in data.get("output", []):
             if item.get("type") == "function_call":
+                if item.get("status") == "incomplete":
+                    # Cut off by the output limit, which finish_reason reports;
+                    # its arguments were never finished.
+                    continue
                 calls.append(
                     _normalized_tool_call(
                         id=item.get("call_id") or item.get("id", ""),
@@ -1973,14 +2121,24 @@ class OpenAIResponsesProvider(ModelProvider):
                     )
                 )
             elif item.get("type") == "message":
+                # Commentary is mid-turn preamble beside tool calls, not the
+                # answer.
+                parts = commentary if item.get("phase") == "commentary" else text_parts
                 for content in item.get("content", []):
                     if content.get("type") in {"output_text", "text"}:
-                        text_parts.append(content.get("text", ""))
+                        parts.append(content.get("text", ""))
+                    elif content.get("type") == "refusal":
+                        refused = True
+                        text_parts.append(content.get("refusal") or "")
+        if refused and not "".join(text_parts).strip():
+            raise ProviderRefusalError("refusal")
+        incomplete = data.get("incomplete_details")
         usage = data.get("usage") or {}
         return ModelResponse(
             provider_id=self.config.id,
             model=data.get("model", model),
             text="".join(text_parts),
+            reasoning="\n\n".join(part for part in commentary if part.strip()),
             tool_calls=calls,
             usage=ModelUsage(
                 input_tokens=usage.get("input_tokens", 0),
@@ -1990,7 +2148,11 @@ class OpenAIResponsesProvider(ModelProvider):
                     usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
                 ),
             ),
-            finish_reason=data.get("status"),
+            # "incomplete" alone hides the output limit chat's recovery acts on.
+            finish_reason=(
+                incomplete.get("reason") if isinstance(incomplete, dict) else None
+            )
+            or data.get("status"),
             provider_request_id=data.get("id"),
             raw=data,
             raw_body=response.content,
@@ -3084,6 +3246,8 @@ class AnthropicProvider(ModelProvider):
         if response.is_error:
             raise _safe_error(response)
         data = response.json()
+        if data.get("stop_reason") == _CONTEXT_WINDOW_STOP_REASON:
+            raise _context_window_stop(_CONTEXT_WINDOW_STOP_REASON)
         text_parts: list[str] = []
         calls: list[ToolCall] = []
         for block in data.get("content", []):
@@ -3097,6 +3261,12 @@ class AnthropicProvider(ModelProvider):
                         arguments=_arguments(block.get("input")),
                     )
                 )
+        if data.get("stop_reason") == "refusal":
+            # Claude's safeguards refuse with HTTP 200. A refusal Claude
+            # explained is its answer; no call from a refused turn runs.
+            calls = []
+            if not "".join(text_parts).strip():
+                raise _anthropic_refusal(data)
         usage = data.get("usage") or {}
         return ModelResponse(
             provider_id=self.config.id,
@@ -3313,6 +3483,7 @@ class GeminiProvider(ModelProvider):
         if response.is_error:
             raise _safe_error(response)
         data = response.json()
+        _raise_gemini_outcome(request, data)
         candidate = (data.get("candidates") or [{}])[0]
         parts = candidate.get("content", {}).get("parts", [])
         text_parts = [part.get("text", "") for part in parts if "text" in part]
@@ -3598,6 +3769,7 @@ class BedrockProvider(ModelProvider):
                 )
             await asyncio.sleep(delay)
             attempt += 1
+        _raise_bedrock_outcome(request, data)
         blocks = data.get("output", {}).get("message", {}).get("content", [])
         calls = [
             _normalized_tool_call(
