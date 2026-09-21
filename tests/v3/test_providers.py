@@ -198,7 +198,9 @@ def test_openai_compatible_uses_chat_completions_shape():
     }
     function = observed["payload"]["tools"][0]["function"]
     assert function["name"] == "lookup_asset"
-    assert function["strict"] is True
+    # strict is OpenAI's contract; a local OpenAI-compatible runtime is not
+    # sent it (pi-mono: compatibility does not imply strict support).
+    assert "strict" not in function
     assert result.tool_calls[0].arguments == {"address": "10.0.0.9"}
 
 

@@ -236,13 +236,11 @@ def test_foundry_reasoning_request_on_the_wire():
         (ProviderFlavor.OPENAI, "gpt-4.1"),
         (ProviderFlavor.MICROSOFT_FOUNDRY, "gpt-5-mini"),
         (ProviderFlavor.OPENROUTER, "openai/gpt-5-mini"),
-        (ProviderFlavor.DEEPSEEK, "deepseek-chat"),
-        (ProviderFlavor.MISTRAL, "mistral-large-latest"),
-        (ProviderFlavor.OLLAMA, "llama3.1"),
-        (ProviderFlavor.VLLM, "Qwen/Qwen3-32B"),
     ],
 )
 def test_chat_completions_strict_only_for_strict_schemas(flavor, model):
+    # Only OpenAI routes are sent strict at all; the others are covered by
+    # test_deepseek_glm_compat.py::test_strict_is_not_sent_outside_openai_routes.
     payload = _payload(flavor, model, tools=[STRICT_TOOL, LOOSE_TOOL])
 
     functions = {
@@ -331,12 +329,13 @@ def test_openrouter_prunes_unadvertised_structured_outputs_under_require_paramet
     assert "response_format" not in payload
     assert payload["tool_choice"] == "required"
 
-    # response_format alone is JSON mode, not json_schema structured output.
+    # response_format alone is JSON mode, not json_schema structured output:
+    # the route gets json_object and the schema travels in the instructions.
     json_mode_only = _openrouter_tool_payload(
         ["tools", "tool_choice", "max_tokens", "response_format"],
         response_schema=RESPONSE_SCHEMA,
     )
-    assert "response_format" not in json_mode_only
+    assert json_mode_only["response_format"] == {"type": "json_object"}
 
     advertised = _openrouter_tool_payload(
         ["tools", "tool_choice", "max_tokens", "response_format", "structured_outputs"],
