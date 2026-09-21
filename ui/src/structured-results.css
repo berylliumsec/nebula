@@ -32,7 +32,7 @@
 .structured-timeline-meta { color: var(--muted); }
 
 /* Dashboard shell. */
-.structured-dashboard { display: grid; gap: 12px; min-width: 0; }
+.structured-dashboard { display: grid; gap: 12px; min-width: 0; container-name: structured-result; container-type: inline-size; }
 .structured-dashboard-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
 .structured-dashboard-body:has(.structured-inspector) { grid-template-columns: minmax(0, 1fr) minmax(260px, 360px); }
 .structured-dashboard-main { display: grid; gap: 12px; min-width: 0; }
@@ -69,7 +69,8 @@
 .structured-property dt { display: grid; gap: 2px; min-width: 0; }
 .structured-property dt small { color: var(--muted); font-size: 11px; }
 .structured-property-name { font-size: 12px; overflow-wrap: anywhere; }
-.structured-property dd { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0; min-width: 0; }
+.structured-property dd { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0; min-width: 0; }
+.structured-property dd > .structured-value, .structured-property dd > .structured-nested, .structured-property dd > .structured-block { flex: 1 1 8rem; min-width: 0; }
 .structured-property-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
 .structured-nested { min-height: 32px; padding: 2px 8px; border: 1px solid var(--border-soft); border-radius: 8px; background: transparent; color: var(--text); font-family: var(--font-mono); font-size: 12px; cursor: pointer; }
 .structured-nested:hover { background: var(--surface-hover); }
@@ -191,6 +192,24 @@
 .structured-dashboard.compact .structured-tree-list { max-height: 320px; }
 .structured-dashboard.compact .structured-raw-text { max-height: 320px; }
 .structured-dashboard.compact .structured-graph-canvas { max-height: 300px; }
+
+/*
+ * A narrow column, not a narrow window: the explorer sits in the conversation
+ * drawer at ~280px inside a wide viewport, where a viewport media query never
+ * matches. Keyed to the dashboard's own width so it holds wherever it renders.
+ */
+@container structured-result (max-width: 460px) {
+  /* Stacked, because a 120px name column leaves a value nothing to wrap in. */
+  .structured-property { grid-template-columns: minmax(0, 1fr); }
+  .structured-property dd { justify-content: flex-start; }
+  .structured-tree-type { display: none; }
+  .structured-tree-value { flex: 1 1 4rem; }
+  .structured-inspector-facts > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .structured-graph-table th:first-child, .structured-graph-table td:first-child { max-width: 8rem; }
+  .structured-table-footer, .structured-pager { width: 100%; }
+  .structured-timeline-entry { grid-template-columns: 22px minmax(0, 1fr); }
+  .structured-timeline-entry > .status-chip { grid-column: 2; justify-self: start; }
+}
 
 @media (max-width: 1100px) {
   .results-layout { grid-template-columns: minmax(0, 1fr); }

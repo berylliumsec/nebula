@@ -1,26 +1,22 @@
 {
-  "change_digest": "39da2fcc6d40156e550375cc203a8f92332df24d54589d24dd3353f804e9b391",
-  "reviewed_by": "Claude review of the delegated-subagent operator surface",
-  "reason": "Provider chats could delegate, but only the model could see it: there was no way to allow delegation, watch the children, answer a command one was waiting on, or stop it. This adds the capability toggle, the composer rail, the drawer pane and the transcript report card, plus the client methods and the durable record of the choice. The frontend selection covers each surface and the request/session mapping; the Python selection covers the durable setting and the subagent lifecycle the surfaces read (test_chat.py, test_chat_subagents.py, test_chat_goals.py, test_chat_api.py). The Playwright selection proves the operator journey end to end on desktop, mobile Chromium and mobile WebKit: choosing the capability, seeing the rail without losing the composer, and approving the command a child is waiting on.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No subagent behaviour changed in Core: starting, running, stopping and reporting are untouched, so provider, harness and container suites are not selected. No native tests are selected because no Rust changed. No real-Core entry is selected: the surfaces read one list endpoint and post two decisions, both covered by the Python API tests, and a real delegated run needs a live provider that CI does not have. tests/v3/test_chat_goals.py is included because this branch formats it: it is unformatted on origin/main, which fails the repository's ruff format gate for every PR based on it. Two goal-continuation except handlers in chat.py are classified for the same reason: origin/main fails the diagnostic blind-spot audit on them.",
+  "change_digest": "5fe32bd0303afcee6a86feaf3cdc9dba2a3273e6b8094a8557e5deb727e10455",
+  "reviewed_by": "Claude review of the structured-result explorer's narrow-column layout",
+  "reason": "The explorer renders in the conversation drawer at about 280px inside a wide window, where its viewport-keyed narrow rules never matched: a property row's fixed name column plus the actions beside the value left the value zero width, and its text rendered one character per line. The fix makes the dashboard its own sizing context and keys those rules to its width, and gives a value a minimum measure so the actions wrap instead of squeezing it out. This is presentation only: no component logic, API surface or Core behaviour changed, so the selection is the Playwright area that renders the explorer, extended with a drawer-width regression test that measures the value, the tree and the inspector and fails without the fix. The frontend unit tests for the explorer are selected because they render every view that the stylesheet now sizes.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python test is selected because no Python changed: this is one stylesheet, one Playwright fixture and one test. No native tests are selected because no Rust changed. No real-Core entry is selected: layout is identical against mock and real Core, and the drawer's data path is unchanged.",
   "expected_tests": {
-    "python": 112,
-    "frontend": 82,
+    "python": 0,
+    "frontend": 69,
     "native": 0,
-    "playwright": 3
+    "playwright": 16
   },
-  "python": [
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_chat_api.py"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx",
-    "ui/src/api/client.test.ts"
+    "ui/src/components/structured-result/StructuredResultDashboard.test.tsx",
+    "ui/src/components/structured-result/ChatResultStream.test.tsx",
+    "ui/src/pages/ResultsPage.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:chat-subagents"
+    "area:structured-results"
   ]
 }
