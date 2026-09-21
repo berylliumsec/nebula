@@ -4514,6 +4514,53 @@ def _goal_item_status(goal: HarnessGoalSnapshot) -> HarnessItemStatus:
     return "failed"
 
 
+_GOAL_OUTCOMES: dict[str, tuple[str, str]] = {
+    "complete": ("Goal complete", ""),
+    "blocked": (
+        "Goal blocked",
+        "{vendor} judged the objective unmet. /goal status shows where it stopped.",
+    ),
+    "failed": (
+        "Goal failed",
+        "{vendor} stopped with an error. /goal status shows where it stopped.",
+    ),
+    "paused": ("Goal paused", "Use /goal resume to continue."),
+    "usage_limited": (
+        "Goal stopped at a usage limit",
+        "Use /goal resume once the limit resets.",
+    ),
+    "budget_limited": (
+        "Goal stopped at its token budget",
+        "/goal status shows what it used.",
+    ),
+}
+
+
+def _goal_outcome_message(
+    goal: HarnessGoalSnapshot, vendor_message: str | None, *, vendor: str
+) -> str:
+    """Say how a goal run ended; the vendor's own last words are often one verdict."""
+
+    outcome, hint = _GOAL_OUTCOMES.get(goal.status, (f"Goal {goal.status}", ""))
+    spent: list[str] = []
+    if goal.elapsed_ms is not None:
+        seconds = round(goal.elapsed_ms / 1_000)
+        spent.append(
+            f"{seconds // 60} min {seconds % 60} s" if seconds >= 60 else f"{seconds} s"
+        )
+    if goal.tokens_used is not None:
+        spent.append(f"{goal.tokens_used:,} tokens")
+    lines = [
+        outcome + (f" after {' and '.join(spent)}." if spent else "."),
+        f"Objective: {goal.objective[:1_000]}",
+    ]
+    if vendor_message and vendor_message.strip():
+        lines += ["", f"{vendor}'s last message:", vendor_message.strip()]
+    if hint:
+        lines += ["", hint.format(vendor=vendor)]
+    return "\n".join(lines)
+
+
 def _connection_commands(connection: HarnessConnection) -> list[dict[str, str]]:
     commands = {item["name"]: item for item in compatibility_commands()}
     if isinstance(connection, GrokAcpConnection):
@@ -4576,6 +4623,16 @@ async def _run_harness_command(
                     yield event
             if not monitor or latest_goal is None or latest_goal.status != "running":
                 if completed_event is not None:
+                    if monitor and latest_goal is not None:
+                        # Grok's roles narrate as commentary, so its closing
+                        # message alone (often "Refuted") would be the answer.
+                        completed_event = completed_event.model_copy(
+                            update={
+                                "message": _goal_outcome_message(
+                                    latest_goal, completed_event.message, vendor="Grok"
+                                )
+                            }
+                        )
                     yield completed_event
                 return
             # ACP's end_turn only terminates one vendor turn. The goal update is
@@ -4927,6 +4984,11 @@ class GrokAcpConnection(HarnessConnection):
                     else "completed",
                     title="Thinking",
                 )
+            if len(pending_agent_parts) > 1 and pending_agent_parts[-1] == "".join(
+                pending_agent_parts[:-1]
+            ):
+                # Goal mode streams its final answer, then sends it again whole.
+                pending_agent_parts.pop()
             for delta in pending_agent_parts:
                 message_parts.append(delta)
                 yield HarnessEvent(
