@@ -1,29 +1,28 @@
 {
-  "change_digest": "4fd419229fdcd2cb0a64ec79acafb55ecadf6efa1facbca7b1ba15e9bae9445e",
-  "reviewed_by": "Claude review of codex-turn-outcomes",
-  "reason": "CodexAppServerConnection.run_turn in harnesses.py misread how Codex app-server turns end. An agentMessage over 200,000 characters (or a /goal run's joined answers) built a completed HarnessEvent that failed pydantic validation, so a finished turn was stored as interrupted with a raw ValidationError; completed messages (and _complete_owner's ChatMessage) are now bounded with a truncation marker and payload.message_truncated. A turn Codex marked failed after its final answer (for example an after_agent hook failure) threw the answer away; it now completes with that answer and shows the TurnError as a warning notice and payload.turn_error. Other failed turns raised HarnessProviderError, a transport error, so stream_turn killed the healthy Codex process and showed a dict repr; they now raise HarnessTurnFailedError(HarnessError) carrying error.message and codexErrorInfo, whose kind maps to the diagnostic reason stream_turn passes to reason_code_for and on to the SSE error frame (usageLimitExceeded quota_exhausted, serverOverloaded/response*/httpConnectionFailed dependency_unavailable and retryable, contextWindowExceeded invalid_input with a compaction hint, unauthorized authentication_failed). Plan-mode answers (a plan item, no agentMessage) were lost and item/plan/delta went through _acp_plan_entries as empty step lists; plan text now streams as answer text and the completed plan item is appended to (or becomes) the message. A whitespace-only trailing agentMessage replaced the real answer; it is ignored, and turn/completed.turn.items (final_answer over phase-less) is preferred when present. Usage reported only the last model request's tokenUsage.last; it is now the growth of the cumulative tokenUsage.total since a total-minus-last baseline, priced per increment, with context_used still from last.inputTokens. _acp_plan_entries now reads Codex TurnPlanStep.step, and consecutive agent messages are separated by a blank line in the live stream. tests/v3/test_codex_turn_outcomes.py (24 tests, all failing on origin/main) proves each case; one existing adapter test was updated because its completed plan item is now part of the answer, and the listed existing node ids exercise the changed completion, goal, usage, plan-entry and stream_turn failure paths.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through harnesses.py) does not drive a Codex app-server turn outcome, which needs a scripted Codex; the Python tests drive CodexAppServerConnection, HarnessRuntimeService and the chat stream API directly. test_harness_adapters.py, test_harnesses.py, test_diagnostic_guidance.py, test_harness_commands.py, test_harness_connection_state.py, test_harness_provider_subagents.py, test_approval_continuation.py, test_approval_handoff.py, test_diagnostics_api.py, test_chat_queue.py, test_chat_decisions.py, test_minimal_agent_instructions.py and the harness tests of test_api.py and test_browser_companion.py were run locally and pass but are not selected. No full suites.",
+  "change_digest": "6516a463fca9ac112238b8dd27656b35263c4f6d5e6d3e48d4ab354c4c9b9117",
+  "reviewed_by": "Claude review of harness-stopped-turns",
+  "reason": "A harness chat turn that stopped without an error event (operator Stop while the POST stream is attached, Codex turn/completed interrupted or cancelled, ACP stopReason cancelled) ended its SSE stream with the internal 'harness turn completed without a durable message' error at error level and dropped the text streamed so far, including completed Codex /goal answers. harness_events and the /chat/turns/{id}/events follower now end such turns with the existing cancelled frame (a turn Core abandoned after restart keeps its error frame), non-streamed requests get a 409, stream_turn saves the partial answer as an assistant message with finish_reason interrupted before the turn goes terminal and on operator stop, and the UI keeps that saved message marked Stopped after reload. stream_turn also left the delta coalescer unclosed, so every interrupted or error-terminated turn logged an unretrieved StopAsyncIteration; it now closes the coalescer last in its finally and the coalescer retrieves a finished read. test_harness_stopped_turns.py drives the real API with create_app and TestClient (six of its seven tests fail on main; the restart guard passes on both); the selected existing tests cover stop/cancel, restart interruption, mid-stream failure, the successful harness stream, the Codex goal stop and the follow endpoint; the vitest case covers the reload state.",
+  "exclusions": "Full test_harnesses.py (93), test_harness_adapters.py (70), test_chat_reconnection.py (5), test_chat_api.py (25) and the App/client vitest files (120) were run locally and pass, but are not selected per CI scoping. Playwright is limited to the narrowest assistant entry (desktop mock) because SessionsPage.tsx changed by one mapping line; the other assistant projects and the real-Core journey do not exercise stopped-turn reloads. No native tests: no Tauri or Rust change. No full suites.",
   "expected_tests": {
-    "python": 35,
-    "frontend": 0,
+    "python": 15,
+    "frontend": 8,
     "native": 0,
-    "playwright": 0
+    "playwright": 55
   },
   "python": [
-    "tests/v3/test_codex_turn_outcomes.py",
-    "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
-    "tests/v3/test_harness_adapters.py::test_codex_turn_controls_use_structured_skill_and_planning_mode",
-    "tests/v3/test_harness_adapters.py::test_codex_filters_commentary_and_declined_elicitation_is_nonterminal",
-    "tests/v3/test_harness_adapters.py::test_codex_reasoning_summary_uses_streams_and_authoritative_completion",
-    "tests/v3/test_harness_adapters.py::test_codex_turn_follows_the_turns_codex_starts_for_an_active_goal",
-    "tests/v3/test_harness_adapters.py::test_codex_goal_turn_completes_when_codex_does_not_continue",
-    "tests/v3/test_harness_adapters.py::test_codex_goal_paused_between_turns_ends_the_wait_at_once",
-    "tests/v3/test_harness_adapters.py::test_grok_connection_normalizes_mode_plan_and_streamed_message",
-    "tests/v3/test_harnesses.py::test_failed_turn_persists_profile_failure_reason",
-    "tests/v3/test_harnesses.py::test_transport_loss_discards_the_dead_connection_before_the_next_turn",
-    "tests/v3/test_harnesses.py::test_nebula_side_failure_mid_stream_interrupts_the_vendor_turn"
+    "tests/v3/test_harness_stopped_turns.py",
+    "tests/v3/test_harnesses.py::test_explicit_stop_cancels_detached_work_without_completing_it",
+    "tests/v3/test_harnesses.py::test_transport_loss_and_restart_interrupt_without_replay",
+    "tests/v3/test_harnesses.py::test_nebula_side_failure_mid_stream_interrupts_the_vendor_turn",
+    "tests/v3/test_harnesses.py::test_harness_stream_exposes_saved_identity_before_runtime_and_optional_naming",
+    "tests/v3/test_harness_adapters.py::test_codex_stop_between_goal_turns_pauses_the_goal",
+    "tests/v3/test_chat_reconnection.py::test_chat_follow_is_read_only_and_returns_saved_completion"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/pages/chatMessageReconciliation.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:assistant/desktop"
+  ]
 }

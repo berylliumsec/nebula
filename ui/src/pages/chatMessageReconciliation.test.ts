@@ -4,6 +4,7 @@ import {
   cancelStreamingAssistantMessage,
   reconcileCompletedAssistantMessage,
   recoverHarnessHistory,
+  savedAssistantState,
   type ReconciledConversationMessage,
 } from "./chatMessageReconciliation";
 
@@ -84,5 +85,24 @@ describe("cancelStreamingAssistantMessage", () => {
     );
     expect(result[0]).toBe(older);
     expect(result[2]).toMatchObject({ state: "cancelled", detail: "Response stopped by the operator." });
+  });
+});
+
+describe("savedAssistantState", () => {
+  it("keeps the saved partial answer of a stopped harness turn marked as stopped after reload", async () => {
+    expect(savedAssistantState("interrupted")).toBe("cancelled");
+    expect(savedAssistantState("stop")).toBe("complete");
+    expect(savedAssistantState(undefined)).toBe("complete");
+    const partial: ReconciledConversationMessage = {
+      ...temporary, id: "assistant-partial", durable: true, harnessTurnId: "stopped",
+      state: savedAssistantState("interrupted"),
+    };
+    const recovered = await recoverHarnessHistory(
+      [{...user, harnessTurnId: "stopped"}, partial],
+      async id => ({id, status: "cancelled"}),
+    );
+    // The saved answer represents the stopped turn: no empty recovery bubble is added.
+    expect(recovered.map(message => message.id)).toEqual(["user-1", "assistant-partial"]);
+    expect(recovered[1]).toMatchObject({content: "Partial", state: "cancelled"});
   });
 });

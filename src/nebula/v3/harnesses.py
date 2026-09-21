@@ -37,7 +37,14 @@ import json
 import os
 import re
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Mapping,
+    Sequence,
+)
 from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -920,7 +927,7 @@ class HarnessActivityEventList(NebulaModel):
 
 async def _coalesce_activity_deltas(
     source: AsyncIterator[HarnessEvent],
-) -> AsyncIterator[HarnessEvent]:
+) -> AsyncGenerator[HarnessEvent, None]:
     """Bound write amplification while keeping live output perceptibly immediate."""
 
     iterator = source.__aiter__()
@@ -987,6 +994,11 @@ async def _coalesce_activity_deltas(
             next_event.cancel()
             with suppress(asyncio.CancelledError, StopAsyncIteration):
                 await next_event
+        elif next_event is not None and not next_event.cancelled():
+            # A consumer that stops after the last event leaves the eager read
+            # finished (usually StopAsyncIteration). Retrieve it so the loop
+            # never reports it as an unhandled task exception.
+            next_event.exception()
 
 
 class HarnessHealth(NebulaModel):
@@ -2607,7 +2619,21 @@ class CodexAppServerConnection(HarnessConnection):
                 self.last_turn_id = self.active_turn_id
                 self.active_turn_id = None
                 if status in {"interrupted", "cancelled"}:
-                    yield HarnessEvent(type="interrupted", message=status)
+                    # Keep what this run already answered, including earlier
+                    # goal turns, so Core can save it with the stopped turn.
+                    answered = [
+                        *earlier_messages,
+                        authoritative_message or "".join(message_parts),
+                    ]
+                    yield HarnessEvent(
+                        type="interrupted",
+                        message=status,
+                        payload={
+                            "answer_so_far": "\n\n".join(
+                                part for part in answered if part
+                            )
+                        },
+                    )
                     return
                 if status != "completed":
                     # A failed turn is Codex's verdict, not a broken transport:
@@ -8397,6 +8423,7 @@ class HarnessRuntimeService:
             interrupted_reason: str | None = None
             terminal_error: str | None = None
             terminal_diagnostic: dict[str, Any] | None = None
+            coalesced: AsyncGenerator[HarnessEvent, None] | None = None
             try:
                 turn_options: dict[str, Any] = {}
                 if isinstance(turn.metadata.get("harness_mode"), str):
@@ -8462,7 +8489,8 @@ class HarnessRuntimeService:
                         **turn_options,
                     )
                 )
-                async for event in _coalesce_activity_deltas(turn_events):
+                coalesced = _coalesce_activity_deltas(turn_events)
+                async for event in coalesced:
                     event = event.model_copy(
                         update={
                             "origin": turn.origin,
@@ -8484,6 +8512,21 @@ class HarnessRuntimeService:
                         interrupted_reason = (
                             event.message or "Harness interrupted the turn"
                         )
+                        answered = event.payload.get("answer_so_far")
+                        if isinstance(answered, str) and answered.strip():
+                            final_message = answered[:MAX_NORMALIZED_TEXT]
+                        if "answer_so_far" in event.payload:
+                            # Saved below as the turn's message; the activity
+                            # record only needs the interruption itself.
+                            event = event.model_copy(
+                                update={
+                                    "payload": {
+                                        key: value
+                                        for key, value in event.payload.items()
+                                        if key != "answer_so_far"
+                                    }
+                                }
+                            )
                     elif event.type == "error":
                         terminal_error = event.message or "Harness reported an error"
                         terminal_exception = HarnessTransportError(terminal_error)
@@ -8543,6 +8586,10 @@ class HarnessRuntimeService:
                     if interrupted_reason or terminal_error:
                         break
                 if interrupted_reason or terminal_error:
+                    if interrupted_reason:
+                        self._keep_stopped_answer(
+                            turn.id, final_message, usage, stopped_by_harness=True
+                        )
                     await self._interrupt_connection(
                         session.id, connection, stage="turn-runtime"
                     )
@@ -8653,6 +8700,7 @@ class HarnessRuntimeService:
                     caught_error,
                     stage="harnesses",
                 )
+                self._keep_stopped_answer(turn.id, final_message, usage)
                 await self._interrupt_connection(
                     session.id, connection, stage="turn-cancel"
                 )
@@ -8748,6 +8796,11 @@ class HarnessRuntimeService:
                     for key, gate in self._gateway_target_gates.items()
                     if key[0] != turn.id
                 }
+                if coalesced is not None:
+                    # Close last: after any vendor interrupt and the cleanup
+                    # above, so a stop racing this await cannot skip either,
+                    # and an early exit never leaves the pending read behind.
+                    await coalesced.aclose()
 
     async def start_mission(
         self,
@@ -13075,6 +13128,86 @@ class HarnessRuntimeService:
                         run_id=run.id,
                         usage=usage,
                     )
+
+    def _keep_stopped_answer(
+        self,
+        turn_id: str,
+        text: str,
+        usage: ChatTokenUsage,
+        *,
+        stopped_by_harness: bool = False,
+    ) -> None:
+        """Save what a stopped chat turn had answered as an interrupted message.
+
+        Call this before the turn goes terminal: followers settle on the
+        terminal status and must find the partial answer and the stop marker.
+        """
+
+        try:
+            turn = self.store.get(HarnessTurn, turn_id)
+            if stopped_by_harness:
+                # The vendor ended the turn itself (Codex interrupted/cancelled,
+                # ACP stopReason cancelled). Viewers settle it as stopped, unlike
+                # a turn Core had to abandon with an uncertain outcome.
+                turn = self.store.update(
+                    HarnessTurn,
+                    turn.id,
+                    {"metadata": {**turn.metadata, "stopped_by_harness": True}},
+                    expected_revision=turn.revision,
+                )
+            if (
+                not text.strip()
+                or turn.origin != HarnessTurnOrigin.CHAT
+                or not turn.chat_turn_id
+                or not turn.chat_session_id
+            ):
+                return
+            existing = self._chat_messages(
+                turn.engagement_id, turn.chat_session_id, include_replaced=True
+            )
+            if any(
+                item.role == ChatRole.ASSISTANT
+                and item.metadata.get("harness_turn_id") == turn.id
+                for item in existing
+            ):
+                return
+            chat_turn = self.store.get(ChatTurn, turn.chat_turn_id)
+            self.store.create(
+                ChatMessage(
+                    id=str(uuid4()),
+                    engagement_id=turn.engagement_id,
+                    session_id=turn.chat_session_id,
+                    sequence=max((item.sequence for item in existing), default=0) + 1,
+                    role=ChatRole.ASSISTANT,
+                    content=text,
+                    model=self.store.get(HarnessSession, turn.harness_session_id).model,
+                    usage=usage,
+                    elapsed_ms=max(
+                        0,
+                        round(
+                            (utc_now() - chat_turn.created_at).total_seconds() * 1000
+                        ),
+                    ),
+                    finish_reason="interrupted",
+                    citations=[
+                        ChatCitation.model_validate(item)
+                        for item in turn.metadata.get("citations", [])
+                        if isinstance(item, dict)
+                    ],
+                    metadata={"harness_turn_id": turn.id, "interrupted": True},
+                )
+            )
+        except Exception as exc:
+            # The stop itself must still complete; the streamed text stays in
+            # the activity log even when the message cannot be saved.
+            record_caught_exception(
+                "harnesses",
+                "harnesses.chat.stopped_answer_not_saved",
+                "The partial answer of a stopped harness turn could not be saved.",
+                exc,
+                stage="turn-stop",
+                metadata={"entity_type": "harness_turn", "entity_id": turn_id},
+            )
 
     def _interrupt_owner(self, turn: HarnessTurn) -> None:
         if turn.origin == HarnessTurnOrigin.CHAT and turn.chat_turn_id:

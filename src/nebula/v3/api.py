@@ -8943,6 +8943,24 @@ def create_app(
                     return
                 completed_turn = store.get(ChatTurn, chat_turn.id)
                 if not completed_turn.final_message_id:
+                    stopped = _stopped_harness_turn_frame(
+                        store, chat_turn.id, harness_turn.id
+                    )
+                    if stopped is not None:
+                        yield stopped
+                        return
+                    if completed_turn.status.value == "interrupted":
+                        # Core abandoned the turn (shutdown or restart recovery);
+                        # report its saved reason as a follower would see it.
+                        yield (
+                            "error",
+                            {
+                                "type": "error",
+                                "detail": completed_turn.error
+                                or "This turn was interrupted. Review its saved state before retrying.",
+                            },
+                        )
+                        return
                     raise HarnessError(
                         "harness turn completed without a durable message"
                     )
@@ -9052,6 +9070,11 @@ def create_app(
                 completion: ChatCompletionResponse | None = None
                 failure: dict[str, Any] | None = None
                 async for event_name, payload in harness_events():
+                    if event_name == "cancelled":
+                        raise HarnessStateError(
+                            "The harness turn was stopped before it completed: "
+                            + str(payload.get("detail") or "response stopped")
+                        )
                     if event_name == "error":
                         failure = payload
                     if event_name == "done":
@@ -9316,6 +9339,14 @@ def create_app(
                     # frame below instead of a torn stream.
                     pass
             completed = store.get(ChatTurn, turn_id)
+            stopped = (
+                _stopped_harness_turn_frame(store, turn_id, completed.harness_turn_id)
+                if completed.harness_turn_id and not completed.final_message_id
+                else None
+            )
+            if stopped is not None:
+                yield _server_sent_event(*stopped)
+                return
             if not completed.final_message_id:
                 yield _server_sent_event(
                     "error",
@@ -11917,6 +11948,35 @@ def _resolve_engagement_workspace_path(workspace_path: str) -> str:
             detail="project workspace must be an existing non-root folder",
         )
     return str(linked_workspace)
+
+
+def _stopped_harness_turn_frame(
+    store: NebulaStore, chat_turn_id: str, harness_turn_id: str
+) -> tuple[str, dict[str, Any]] | None:
+    """Return the terminal frame of a harness turn that stopped without an answer.
+
+    Stopping is not a failure: the operator's Stop and a stop the harness
+    reported itself end the stream with the ``cancelled`` frame viewers already
+    settle on. A turn Core had to abandon with an uncertain outcome keeps its
+    error, so this returns None for it.
+    """
+
+    turn = store.get(HarnessTurn, harness_turn_id)
+    status = turn.status.value
+    if status == "cancelled" or (
+        status == "interrupted" and turn.metadata.get("stopped_by_harness") is True
+    ):
+        return (
+            "cancelled",
+            {
+                "type": "cancelled",
+                "turn_id": chat_turn_id,
+                "harness_turn_id": turn.id,
+                "status": status,
+                "detail": turn.error or "response stopped",
+            },
+        )
+    return None
 
 
 def _server_sent_event(event: str, payload: dict[str, Any]) -> bytes:

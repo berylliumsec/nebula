@@ -170,6 +170,7 @@ import {
   cancelStreamingAssistantMessage,
   reconcileCompletedAssistantMessage,
   recoverHarnessHistory,
+  savedAssistantState,
   type ReconciledConversationMessage,
 } from "./chatMessageReconciliation";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -499,7 +500,7 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
     usage: message.usage,
     elapsedMs: message.elapsedMs,
     approvalWaitMs: message.approvalWaitMs,
-    state: "complete",
+    state: savedAssistantState(message.finishReason),
     durable: true,
     sequence: message.sequence,
     harnessTurnId: message.harnessTurnId,
