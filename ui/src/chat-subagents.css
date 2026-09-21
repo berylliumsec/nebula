@@ -78,3 +78,11 @@
   .chat-subagent-approval-actions .button, .chat-subagent-card-actions .button,
   .chat-subagent-stop-all, .chat-subagent-result-actions .button { min-height: 44px; }
 }
+
+/* Harness chats: the one provider model their subagents run on. */
+.chat-settings-capabilities > .chat-harness-subagents { display: grid; align-items: stretch; gap: 6px; }
+.chat-harness-subagents > .chat-knowledge-toggle { justify-self: start; }
+.chat-harness-subagent-status { color: var(--muted); font-size: 11px; }
+.chat-harness-subagent-status[data-tone="ok"] > span { color: var(--green); }
+.chat-harness-subagent-status[data-tone="error"] { color: var(--red); }
+.chat-subagent-result-model { overflow-wrap: anywhere; }

@@ -3296,6 +3296,9 @@ export function chatRequestBody(
     ...(body.hookIds?.length ? { hook_ids: body.hookIds } : {}),
     ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
     ...(body.allowSubagents ? { allow_subagents: true } : {}),
+    ...(body.allowSubagents && body.subagentProviderId && body.subagentModel
+      ? { subagent_provider_id: body.subagentProviderId, subagent_model: body.subagentModel }
+      : {}),
     ...(body.sshEnvironmentIds !== undefined ? { ssh_environment_ids: body.sshEnvironmentIds } : {}),
     engagement_id: body.engagementId,
     session_id: body.sessionId,
@@ -3363,7 +3366,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     reasoningEffort: REASONING_EFFORTS.includes(value.metadata?.reasoning_effort as ReasoningEffort)
       ? (value.metadata?.reasoning_effort as ReasoningEffort)
       : undefined,
-    allowSubagents: value.metadata?.allow_subagents === true,
+    ...chatSessionSubagents(value.metadata),
     archivedAt: typeof value.metadata?.archived_at === "string" ? value.metadata.archived_at : undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
@@ -3802,6 +3805,23 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
   };
 }
 
+/**
+ * A provider chat remembers its delegation flag; a harness chat remembers the
+ * provider model its subagents run on, and has delegation exactly when set.
+ */
+function chatSessionSubagents(
+  metadata: Record<string, unknown> | undefined,
+): Pick<ChatSessionSummary, "allowSubagents" | "subagentProviderId" | "subagentModel"> {
+  const setting = metadata?.provider_subagent;
+  if (setting && typeof setting === "object") {
+    const { provider_profile_id: providerId, model } = setting as Record<string, unknown>;
+    if (typeof providerId === "string" && typeof model === "string") {
+      return { allowSubagents: true, subagentProviderId: providerId, subagentModel: model };
+    }
+  }
+  return { allowSubagents: metadata?.allow_subagents === true };
+}
+
 interface WireChatSubagent {
   id: string;
   name: string;
@@ -3809,8 +3829,11 @@ interface WireChatSubagent {
   status: string;
   parent_session_id: string;
   parent_turn_id: string;
+  parent_backend?: string;
   child_session_id: string;
   child_turn_id?: string | null;
+  provider_profile_id?: string | null;
+  model?: string | null;
   step_count?: number;
   recent_steps?: { tool?: string; detail?: string; status?: string }[];
   approval?: { id: string; status?: string; tool?: string; detail?: string; risk_class?: string | null; rationale?: string | null } | null;
@@ -3839,8 +3862,11 @@ function mapChatSubagent(value: WireChatSubagent): ChatSubagentView {
       : "running",
     parentSessionId: value.parent_session_id,
     parentTurnId: value.parent_turn_id,
+    parentBackend: value.parent_backend === "harness" ? "harness" : "provider",
     childSessionId: value.child_session_id,
     childTurnId: value.child_turn_id ?? undefined,
+    providerProfileId: value.provider_profile_id ?? undefined,
+    model: value.model ?? undefined,
     stepCount: value.step_count ?? 0,
     recentSteps: (value.recent_steps ?? []).map((step) => ({
       tool: step.tool ?? "",

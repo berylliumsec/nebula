@@ -317,6 +317,47 @@ describe("ApiClient", () => {
     }, true)).not.toHaveProperty("reasoning_effort");
   });
 
+  it("sends a harness chat's subagent model only with delegation on, and reads it back", async () => {
+    expect(chatRequestBody({
+      backend: "harness",
+      harnessProfileId: "codex",
+      allowSubagents: true,
+      subagentProviderId: "openrouter",
+      subagentModel: "deepseek/deepseek-v3.2",
+      messages: [{ role: "user", content: "Split it" }],
+    }, true)).toMatchObject({
+      allow_subagents: true,
+      subagent_provider_id: "openrouter",
+      subagent_model: "deepseek/deepseek-v3.2",
+    });
+    // Without delegation the model is left out, so an older remote Core that
+    // forbids unknown request fields still accepts the turn.
+    const off = chatRequestBody({
+      backend: "harness",
+      harnessProfileId: "codex",
+      subagentProviderId: "openrouter",
+      subagentModel: "deepseek/deepseek-v3.2",
+      messages: [{ role: "user", content: "Just answer" }],
+    }, true);
+    expect(off).not.toHaveProperty("subagent_provider_id");
+    expect(off).not.toHaveProperty("allow_subagents");
+
+    const wire = {
+      created_at: "2026-09-21T10:00:00Z", updated_at: "2026-09-21T10:00:00Z", revision: 2,
+      id: "session-1", engagement_id: "engagement-1", title: "Codex chat", backend: "harness",
+      harness_profile_id: "codex", model: "gpt-5.5",
+      metadata: { provider_subagent: { provider_profile_id: "openrouter", model: "deepseek/deepseek-v3.2" } },
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify([wire, {
+      ...wire, id: "session-2", metadata: { provider_subagent: null },
+    }]), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+    const { items } = await client.listChatSessions("engagement-1");
+    expect(items[0]).toMatchObject({ allowSubagents: true, subagentProviderId: "openrouter", subagentModel: "deepseek/deepseek-v3.2" });
+    expect(items[1]).toMatchObject({ allowSubagents: false });
+    expect(items[1].subagentModel).toBeUndefined();
+  });
+
   it("reads and writes Core-owned guide progress and guide probes", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify([{

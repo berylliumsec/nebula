@@ -9415,6 +9415,128 @@ test("stabilization an operator allows delegation and acts on a waiting subagent
   expect(accessibility.violations).toEqual([]);
 });
 
+test("stabilization a harness chat delegates to a chosen provider model", async ({ page }) => {
+  const codex = {
+    ...entity,
+    id: "harness-codex-subagents",
+    name: "Codex",
+    kind: "codex_app_server",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "codex",
+    endpoint: null,
+    auth_mode: "existing_session",
+    secret_ref: null,
+    default_model: "gpt-5.6",
+    enabled: true,
+    privacy: { local_only: true, permits_sensitive_data: true },
+    native_capabilities: { workspace_access: "write", shell: true },
+    capabilities: { models: ["gpt-5.6"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "0.149.0" },
+  };
+  const subagentProvider = {
+    ...reasoningProvider,
+    id: "provider-subagents",
+    name: "Local subagents",
+    model_allowlist: ["deepseek/deepseek-v3.2"],
+    metadata: { default_model: "deepseek/deepseek-v3.2" },
+    capability_verifications: {
+      "deepseek/deepseek-v3.2": { model: "deepseek/deepseek-v3.2", status: "verified", checked_at: entity.updated_at, contract_version: "required-tool-v1" },
+    },
+  };
+  const harnessChildren = delegated.map((item) => ({
+    ...item,
+    parent_session_id: "harness-subagent-chat",
+    parent_backend: "harness",
+    provider_profile_id: subagentProvider.id,
+    model: "deepseek/deepseek-v3.2",
+  }));
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ json: [subagentProvider] });
+    } else if (path.endsWith("/harnesses") && request.method() === "GET") {
+      await route.fulfill({ json: [codex] });
+    } else if (path.endsWith("/harness-sessions") && request.method() === "GET") {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/harness-sessions/harness-subagent-session/activity")) {
+      await route.fulfill({ json: {
+        session_id: "harness-subagent-session",
+        session_status: "idle",
+        busy: false,
+        live: false,
+        turn_id: null,
+        turn_status: null,
+        turn_origin: null,
+        started_at: null,
+        last_activity_at: entity.updated_at,
+        detail: "This harness session is ready for another turn.",
+      } });
+    } else if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ json: [{ ...entity, id: "harness-subagent-chat", engagement_id: "scratch-project", title: "Assess staging API auth", backend: "harness", harness_profile_id: codex.id, harness_session_id: "harness-subagent-session", model: "gpt-5.6", metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/harness-subagent-chat/subagents")) {
+      await route.fulfill({ json: { session_id: "harness-subagent-chat", subagents: harnessChildren } });
+    } else if (path.endsWith("/chat/sessions/harness-subagent-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/harness-subagent-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const sent = (globalThis as typeof globalThis & { __harnessSubagentRequests?: unknown[] }).__harnessSubagentRequests ??= [];
+      sent.push(JSON.parse(String(init?.body ?? "{}")));
+      const encoder = new TextEncoder();
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          const enqueue = (frame: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`));
+          enqueue({ type: "started", harness_profile_id: "harness-codex-subagents", harness_session_id: "harness-subagent-session", harness_turn_id: "harness-subagent-turn", session_id: "harness-subagent-chat", model: "gpt-5.6" });
+          enqueue({ type: "done", session_id: "harness-subagent-chat", harness_profile_id: "harness-codex-subagents", harness_session_id: "harness-subagent-session", harness_turn_id: "harness-subagent-turn", model: "gpt-5.6", message: { id: "harness-subagent-answer", role: "assistant", content: "Delegated three tracks." }, usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 }, finish_reason: "stop", citations: [] });
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        },
+      }), { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  });
+  await page.goto("/?view=chat&session=harness-subagent-chat");
+
+  // The harness picks one provider model for its subagents in its own settings.
+  await page.getByRole("button", { name: "Assistant settings" }).click();
+  const toggle = page.getByRole("checkbox", { name: /Provider subagents/ });
+  await expect(toggle).not.toBeChecked();
+  await toggle.check();
+  await expect(page.getByRole("combobox", { name: "Subagent provider" })).toHaveValue(subagentProvider.id);
+  await expect(page.getByRole("combobox", { name: "Subagent model" })).toHaveValue("deepseek/deepseek-v3.2");
+  await expect(page.locator(".chat-harness-subagent-status")).toContainText("Tools verified");
+  await page.getByRole("button", { name: "Close assistant settings" }).click();
+
+  // The same rail and pane as a provider chat, naming the subagent model.
+  const rail = page.getByRole("status", { name: "Subagents" });
+  await expect(rail).toContainText("1 running");
+  await rail.getByRole("button", { name: "Show subagents" }).click();
+  const pane = page.getByRole("region", { name: "Subagents" }).last();
+  await expect(pane).toContainText("2 of 3 slots active · deepseek/deepseek-v3.2");
+  await expect(pane).toContainText("Their tool outputs go to Local subagents");
+
+  const composer = page.locator(".chat-composer textarea").first();
+  await composer.fill("Split the auth review.");
+  await composer.press("Enter");
+  await expect.poll(() => page.evaluate(() => ((globalThis as typeof globalThis & { __harnessSubagentRequests?: unknown[] }).__harnessSubagentRequests ?? []).length)).toBe(1);
+  const [sent] = await page.evaluate(() => (globalThis as typeof globalThis & { __harnessSubagentRequests?: unknown[] }).__harnessSubagentRequests ?? []) as Array<Record<string, unknown>>;
+  expect(sent).toMatchObject({
+    backend: "harness",
+    allow_subagents: true,
+    subagent_provider_id: subagentProvider.id,
+    subagent_model: "deepseek/deepseek-v3.2",
+  });
+
+  const accessibility = await new AxeBuilder({ page }).include(".chat-subagent-pane").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 test("stabilization the result explorer stays readable in the conversation drawer", async ({ page }) => {
   // The drawer is ~280px inside a wide window, so a viewport media query never
   // matches it. A name column with a fixed floor left the value nothing to

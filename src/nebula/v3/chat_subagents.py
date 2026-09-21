@@ -1,4 +1,4 @@
-"""Core-owned subagents for provider-backend chats.
+"""Core-owned subagents that run on a provider model.
 
 A parent provider turn delegates a task with ``start_subagent``. Core creates a
 child conversation bound to the same provider, model and capabilities, runs it
@@ -6,20 +6,28 @@ as an ordinary background provider turn, and reports the child's final answer
 back: as a ``wait_subagents`` tool result when the parent is waiting, and as a
 durable result message in the parent conversation once the parent is idle.
 Children cannot start their own subagents.
+
+A harness chat (Codex, Grok) delegates the same way through the Nebula gateway
+tools ``subagent.start``/``wait``/``list``/``stop``. Its children run on the
+provider model the operator picked for that chat. The harness waits inside the
+gateway call for a bounded time, and reports that land after its turn are
+posted to the conversation and handed to the harness at its next turn.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .diagnostics import record_caught_exception
 from .domain import (
     CHAT_SUBAGENT_TERMINAL_STATUSES,
     Approval,
+    ChatBackend,
     ChatGoal,
     ChatGoalStatus,
     ChatMessage,
@@ -29,6 +37,8 @@ from .domain import (
     ChatSubagentStatus,
     ChatTurn,
     ChatTurnStatus,
+    Engagement,
+    ProviderProfile,
     RiskClass,
     ScopePolicy,
     utc_now,
@@ -45,6 +55,13 @@ MAX_ACTIVE_SUBAGENTS = 3
 MAX_SUBAGENTS_PER_TURN = 6
 RESULT_CHARACTERS = 12_000
 RECENT_STEPS = 4
+# A harness waits inside one gateway call, which holds every other Nebula tool
+# call of that session and must end well before the vendor's own tool timeout
+# (Codex: 900 s). Unfinished children come back as still running. Harnesses
+# whose timeout Nebula does not know wait for less (see harnesses.py).
+HARNESS_WAIT_DEFAULT_SECONDS = 300
+HARNESS_WAIT_MAX_SECONDS = 600
+HARNESS_REPORT_CONTEXT_CHARACTERS = 40_000
 SUBAGENT_TOOL_NAMES = frozenset(
     {"start_subagent", "wait_subagents", "list_subagents", "stop_subagent"}
 )
@@ -62,6 +79,26 @@ You are a subagent. Another assistant working with the operator delegated one
 task to you. Complete only that task with the available tools, then finish.
 Your final answer is returned to that assistant as your report: lead with the
 findings, keep it concise and factual, and say what you could not verify."""
+
+
+def harness_subagent_instructions(
+    model: str, wait_seconds: int = HARNESS_WAIT_DEFAULT_SECONDS
+) -> str:
+    """Developer instructions for a harness session with provider subagents."""
+
+    return (
+        "Provider subagents: subagent.start hands one independent, multi-step task "
+        f"to a child assistant on the Nebula provider model {model} with this "
+        "project's command runtime and MCP servers. It returns immediately and "
+        f"runs in parallel; at most {MAX_ACTIVE_SUBAGENTS} run at once. Children "
+        "cannot see this conversation, so give complete, self-contained "
+        "instructions and the expected report. Do not delegate single lookups. "
+        "Call subagent.wait when you need their reports; it waits up to "
+        f"{wait_seconds} seconds and returns anything still "
+        "running, so call it again if needed. Reports that arrive after your "
+        "turn ends are given to you at the start of your next turn. "
+    )
+
 
 _TERMINAL_TURN_STATUS = {
     ChatTurnStatus.COMPLETE: ChatSubagentStatus.COMPLETED,
@@ -106,6 +143,12 @@ class SubagentService:
     def __init__(self, store: NebulaStore, chat: ChatService):
         self.store = store
         self.chat = chat
+        # Replaced on every settle so each harness wait wakes once per change.
+        self._changed = asyncio.Event()
+
+    def _notify(self) -> None:
+        changed, self._changed = self._changed, asyncio.Event()
+        changed.set()
 
     # -- queries -----------------------------------------------------------
 
@@ -189,6 +232,14 @@ class SubagentService:
             else record.usage
         )
         finished = record.finished_at or utc_now()
+        provider_profile_id, model = record.provider_profile_id, record.model
+        if model is None:
+            # Records from before children could run on another model.
+            try:
+                child = self.store.get(ChatSession, record.child_session_id)
+                provider_profile_id, model = child.provider_profile_id, child.model
+            except NotFoundError:  # diagnostic-expected: child conversation deleted; the view omits its model
+                pass
         return {
             "id": record.id,
             "name": record.name,
@@ -196,6 +247,9 @@ class SubagentService:
             "status": state,
             "parent_session_id": record.parent_session_id,
             "parent_turn_id": record.parent_turn_id,
+            "parent_backend": record.parent_backend.value,
+            "provider_profile_id": provider_profile_id,
+            "model": model,
             "child_session_id": record.child_session_id,
             "child_turn_id": record.child_turn_id,
             "step_count": turn.next_step if turn is not None else 0,
@@ -268,23 +322,49 @@ class SubagentService:
                 f"this response already started {MAX_SUBAGENTS_PER_TURN} subagents"
             )
         snapshot = parent_turn.request_snapshot
-        tools_enabled = bool(snapshot.get("include_oci_tools", False))
         mcp_server_ids = [
             item for item in snapshot.get("mcp_server_ids", []) if isinstance(item, str)
         ]
+        if parent_turn.backend == ChatBackend.HARNESS:
+            setting = snapshot.get("provider_subagent")
+            if not isinstance(setting, dict):
+                raise InvalidToolArguments(
+                    "provider subagents are turned off for this conversation"
+                )
+            provider_id = str(setting.get("provider_profile_id") or "")
+            model = str(setting.get("model") or "")
+            # Children use Nebula's command runtime whenever the harness
+            # session has one; its vendor-native shell stays with the harness.
+            runtime_snapshot = snapshot.get("command_runtime_snapshot")
+            tools_enabled = (
+                isinstance(runtime_snapshot, dict)
+                and bool(runtime_snapshot.get("tool_names"))
+                and self.chat.automation_tool_platform is not None
+            )
+            allow_subagents = False
+            # Harness chats have no SSH selection; never hand a child every host.
+            ssh_environment_ids: list[str] | None = []
+        else:
+            provider_id = parent_turn.provider_profile_id or ""
+            model = parent_turn.model
+            tools_enabled = bool(snapshot.get("include_oci_tools", False))
+            allow_subagents = bool(snapshot.get("allow_subagents", False))
+            ssh_environment_ids = None
+        if not provider_id or not model:
+            raise InvalidToolArguments("subagents need a provider model")
         parent_request: dict[str, Any] = {
             "idempotency_key": invocation.idempotency_key,
             "tools_enabled": tools_enabled,
             "mcp_server_ids": mcp_server_ids,
-            "allow_subagents": bool(snapshot.get("allow_subagents", False)),
+            "allow_subagents": allow_subagents,
         }
         subagent_id = str(uuid4())
         child_session = ChatSession(
             id=str(uuid4()),
             engagement_id=parent_session.engagement_id,
             title=f"Subagent · {label}"[:300],
-            provider_profile_id=parent_turn.provider_profile_id,
-            model=parent_turn.model,
+            provider_profile_id=provider_id,
+            model=model,
             parent_session_id=parent_session.id,
             metadata={
                 "subagent_id": subagent_id,
@@ -297,7 +377,10 @@ class SubagentService:
             engagement_id=parent_session.engagement_id,
             parent_session_id=parent_session.id,
             parent_turn_id=parent_turn.id,
+            parent_backend=parent_turn.backend,
             child_session_id=child_session.id,
+            provider_profile_id=provider_id,
+            model=model,
             name=label,
             task=_bounded(task, 20_000),
             parent_request=parent_request,
@@ -316,10 +399,10 @@ class SubagentService:
         try:
             prepared = await self.chat.prepare_async(
                 ChatCompletionRequest(
-                    provider_id=parent_turn.provider_profile_id,
+                    provider_id=provider_id,
                     engagement_id=parent_session.engagement_id,
                     session_id=child_session.id,
-                    model=parent_turn.model,
+                    model=model,
                     messages=[
                         ChatRequestMessage(
                             role=ChatRole.USER, content=_bounded(content, 60_000)
@@ -328,8 +411,11 @@ class SubagentService:
                     include_knowledge=False,
                     tools_enabled=tools_enabled,
                     mcp_server_ids=mcp_server_ids,
-                    # The parent turn only reached tool routing after its own
-                    # cloud-transfer confirmation (or with a local provider).
+                    ssh_environment_ids=ssh_environment_ids,
+                    # A provider parent only reached tool routing after its own
+                    # cloud-transfer confirmation (or with a local provider). A
+                    # harness chat's operator consented by turning on provider
+                    # subagents for this model.
                     allow_cloud_tool_results=True,
                     stream=True,
                 )
@@ -427,6 +513,7 @@ class SubagentService:
                 },
                 expected_revision=record.revision,
             )
+            self._notify()
             await self._deliver(record)
         return record
 
@@ -481,6 +568,153 @@ class SubagentService:
                 if item.status not in CHAT_SUBAGENT_TERMINAL_STATUSES
             ],
         }
+
+    # -- harness parents ---------------------------------------------------
+
+    def validate_harness_setting(
+        self, engagement_id: str, provider_profile_id: str, model: str
+    ) -> dict[str, str]:
+        """Check a harness chat's subagent model before any turn relies on it.
+
+        Children always run with tools, so the model must have passed the tool
+        check, and a cloud provider must accept project data. Turning provider
+        subagents on is the operator's consent to send the tool results.
+        """
+
+        from .chat import ChatConfigurationError, ChatPrivacyError
+
+        provider_profile_id = provider_profile_id.strip()
+        model = model.strip()
+        if not provider_profile_id or not model:
+            raise ChatConfigurationError(
+                "provider subagents need a provider and a model"
+            )
+        try:
+            profile = self.store.get(ProviderProfile, provider_profile_id)
+        except NotFoundError as exc:
+            raise ChatConfigurationError(
+                f"subagent provider {provider_profile_id!r} does not exist"
+            ) from exc
+        if not profile.enabled:
+            raise ChatConfigurationError(
+                f"subagent provider {profile.name!r} is disabled"
+            )
+        if profile.model_allowlist and model not in profile.model_allowlist:
+            raise ChatConfigurationError(
+                f"model {model!r} is not allowed by provider {profile.name!r}"
+            )
+        if not profile.tools_verified_for(model):
+            raise ChatConfigurationError(
+                f"subagent model {model!r} has not passed the tool check; verify it "
+                "before using it for subagents"
+            )
+        provider = self.chat.provider_factory(profile)
+        self.chat._enforce_engagement_privacy(
+            self.store.get(Engagement, engagement_id), provider
+        )
+        if not provider.config.local and not profile.privacy.permits_sensitive_data:
+            raise ChatPrivacyError(
+                f"provider {profile.name!r} does not permit project data, so it "
+                "cannot run subagents"
+            )
+        return {"provider_profile_id": profile.id, "model": model}
+
+    async def wait_for(
+        self,
+        parent_session_id: str,
+        ids: list[str] | None,
+        mode: str,
+        timeout_seconds: float,
+        *,
+        still_waiting: Callable[[], bool],
+    ) -> dict[str, Any]:
+        """Wait inside a harness gateway call, bounded, then report."""
+
+        records = self.resolve_wait(parent_session_id, ids)
+        if not records:
+            raise InvalidToolArguments("there are no subagents to wait for")
+        resolved = [item.id for item in records]
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_seconds
+        while not self.wait_satisfied(resolved, mode) and still_waiting():
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            changed = self._changed
+            try:
+                # Settles wake the wait; the short poll also covers a change
+                # made by another worker or a missed notification.
+                await asyncio.wait_for(changed.wait(), timeout=min(remaining, 2.0))
+            except (
+                asyncio.TimeoutError
+            ):  # diagnostic-expected: poll interval elapsed; re-check the children
+                pass
+        output = self.wait_output(resolved)
+        self.mark_reported(resolved)
+        return output
+
+    def mark_reported(self, ids: Iterable[str]) -> None:
+        """Record that a harness parent received these finished reports."""
+
+        for subagent_id in ids:
+            try:
+                record = self.get(subagent_id)
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: record deleted with its conversation
+                continue
+            if (
+                record.status not in CHAT_SUBAGENT_TERMINAL_STATUSES
+                or record.reported_at is not None
+            ):
+                continue
+            try:
+                self.store.update(
+                    ChatSubagent,
+                    record.id,
+                    {"reported_at": utc_now()},
+                    expected_revision=record.revision,
+                )
+            except ConflictError:  # diagnostic-expected: a concurrent settle or report won; a later turn re-checks it
+                continue
+
+    def unreported_harness_reports(self, parent_session_id: str) -> list[ChatSubagent]:
+        return [
+            item
+            for item in self.for_session(parent_session_id)
+            if item.parent_backend == ChatBackend.HARNESS
+            and item.status in CHAT_SUBAGENT_TERMINAL_STATUSES
+            and item.reported_at is None
+        ]
+
+    @staticmethod
+    def harness_report_context(records: list[ChatSubagent]) -> str:
+        """Reports a harness has not seen yet, for the start of its next turn."""
+
+        if not records:
+            return ""
+        lines: list[str] = []
+        for record in records:
+            body = record.result or record.error or "No report was produced."
+            lines.append(
+                f"- {record.name} (subagent_id {record.id}, {record.status.value}):\n"
+                f"{body}"
+            )
+        text = "\n\n".join(lines)
+        return (
+            "\n\nNebula provider subagent reports that arrived after your last "
+            "turn:\n" + _bounded(text, HARNESS_REPORT_CONTEXT_CHARACTERS)
+        )
+
+    async def harness_turn_settled(
+        self, parent_session_id: str, parent_turn_id: str, *, stopped: bool
+    ) -> None:
+        """A harness chat turn ended: stop its children if it was stopped, and
+        post every finished report now that the conversation is idle."""
+
+        if stopped:
+            await self.stop_for_parent_turn(parent_turn_id)
+        await self.deliver_pending(parent_session_id)
 
     # -- lifecycle hooks ---------------------------------------------------
 
@@ -543,6 +777,7 @@ class SubagentService:
             )
         except ConflictError:  # diagnostic-expected: another settle path already recorded this terminal state
             return
+        self._notify()
         parent_turn = self._parent_turn(record)
         if parent_turn is not None and parent_turn.goal_id and turn.usage.total_tokens:
             try:
@@ -805,6 +1040,7 @@ class SubagentService:
                 },
                 expected_revision=record.revision,
             )
+            self._notify()
             # A parent parked in wait_subagents survives the restart, so deliver
             # the interruption the same way a settled child is: resume a waiting
             # parent, or post the report once the parent is idle.
@@ -979,6 +1215,8 @@ def subagent_components(
 
 
 __all__ = [
+    "HARNESS_WAIT_DEFAULT_SECONDS",
+    "HARNESS_WAIT_MAX_SECONDS",
     "MAX_ACTIVE_SUBAGENTS",
     "MAX_SUBAGENTS_PER_TURN",
     "SUBAGENT_CHILD_INSTRUCTIONS",
@@ -987,6 +1225,7 @@ __all__ = [
     "SubagentBroker",
     "SubagentService",
     "SubagentWaitPending",
+    "harness_subagent_instructions",
     "is_subagent_session",
     "subagent_components",
     "subagent_specs",

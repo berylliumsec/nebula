@@ -26,7 +26,7 @@ import { EnvironmentTargetPicker, environmentIdsForTarget, type EnvironmentTarge
 import { sshApprovalTarget } from "../sshTools";
 import { ChatResults } from "../components/ChatResults";
 import { AgentViewPanel, ChatResultStream, readPlacement, useStructuredResults, useUnseenCount, writePlacement, type AgentViewPlacement } from "../components/structured-result";
-import { ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, useChatSubagents } from "../components/chat-subagents";
+import { ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, useChatSubagents } from "../components/chat-subagents";
 import { ChatRecordedContext } from "../components/ChatRecordedContext";
 import { useChatNavigation } from "./useChatNavigation";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
@@ -688,19 +688,11 @@ export function SessionsPage() {
   const [providerId, setProviderId] = useState("");
   const [runtimeKind, setRuntimeKind] = useState<"provider" | "harness">("provider");
   const [harnesses, setHarnesses] = useState<HarnessProfile[]>([]);
-  // Delegation is opt-in per conversation; Core remembers the choice.
+  // Delegation is opt-in per conversation; Core remembers the choice. A
+  // harness chat also picks the provider model its subagents run on.
   const [allowSubagents, setAllowSubagents] = useState(false);
-  const subagentState = useChatSubagents(api, sessionId, {
-    enabled: runtimeKind === "provider" && Boolean(sessionId),
-  });
-  const subagentResultsByMessage = useMemo(
-    () => new Map(
-      subagentState.subagents
-        .filter((item) => item.resultMessageId)
-        .map((item) => [item.resultMessageId!, item]),
-    ),
-    [subagentState.subagents],
-  );
+  const [subagentProviderId, setSubagentProviderId] = useState("");
+  const [subagentModel, setSubagentModel] = useState("");
 
   const [harnessesLoaded, setHarnessesLoaded] = useState(false);
   // Standing tool-sharing consent lives on the runtime profile; mirror the saved
@@ -826,6 +818,18 @@ export function SessionsPage() {
   const [pendingImages, setPendingImages] = useState<PendingChatImage[]>([]);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [sending, setSending] = useState(false);
+  const subagentState = useChatSubagents(api, sessionId, {
+    enabled: Boolean(sessionId),
+    live: sending && allowSubagents,
+  });
+  const subagentResultsByMessage = useMemo(
+    () => new Map(
+      subagentState.subagents
+        .filter((item) => item.resultMessageId)
+        .map((item) => [item.resultMessageId!, item]),
+    ),
+    [subagentState.subagents],
+  );
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [sessionReadReady, setSessionReadReady] = useState(true);
   const chatPreviews = useMemo(() => new ChatPreviewCache<{
@@ -1106,7 +1110,13 @@ export function SessionsPage() {
   const activeArchivedSession = sessionId ? sessions.find((item) => item.id === sessionId && item.archivedAt) : undefined;
   const activeChatSession = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
   useEffect(() => {
-    if (!activeChatSession || activeChatSession.backend !== "provider") return;
+    if (!activeChatSession) return;
+    if (activeChatSession.backend === "harness") {
+      setAllowSubagents(activeChatSession.allowSubagents === true);
+      setSubagentProviderId(activeChatSession.subagentProviderId ?? "");
+      setSubagentModel(activeChatSession.subagentModel ?? "");
+      return;
+    }
     setSelectedMcpIds(activeChatSession.mcpServerIds);
     setSelectedHookIds(activeChatSession.hookIds);
     setReasoningEffort(activeChatSession.reasoningEffort ?? "");
@@ -1167,6 +1177,12 @@ export function SessionsPage() {
   const canUseKnowledge = Boolean(knowledgeItemCount > 0 && runtimePermitsKnowledge);
   const modelVerification = providerModelVerification(selectedProvider, model);
   const modelVerified = modelVerification?.status === "verified";
+  const subagentProvider = enabledProviders.find((provider) => provider.id === subagentProviderId);
+  const subagentModelVerification = providerModelVerification(subagentProvider, subagentModel);
+  // Only a checked model can run subagents; Core refuses anything else.
+  const harnessSubagentsReady = Boolean(
+    allowSubagents && subagentProvider && subagentModel && subagentModelVerification?.status === "verified",
+  );
   const commandRuntimeAvailable = Boolean(modelVerified && commandRuntimeReady && !toolRuntimeReason);
   const defaultRuntime = useMemo(
     () => defaultModelRuntime(enabledProviders, harnesses),
@@ -1253,6 +1269,14 @@ export function SessionsPage() {
     attemptedToolVerificationRef.current.add(key);
     void reverifyProvider(selectedProvider.id, model).catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_01", "A handled interface operation failed.", caughtError, "sessions_page"); return undefined; });
   }, [coreState, model, modelVerification, reverifyProvider, runtimeKind, selectedProvider, view]);
+
+  useEffect(() => {
+    if (runtimeKind !== "harness" || !allowSubagents || coreState !== "online" || !subagentProvider || !subagentModel.trim() || subagentModelVerification) return;
+    const key = `${subagentProvider.id}:${subagentModel.trim()}`;
+    if (attemptedToolVerificationRef.current.has(key)) return;
+    attemptedToolVerificationRef.current.add(key);
+    void reverifyProvider(subagentProvider.id, subagentModel).catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.subagent_model_verification_failed", "The subagent model could not be checked for tool support.", caughtError, "sessions_page"); return undefined; });
+  }, [allowSubagents, coreState, reverifyProvider, runtimeKind, subagentModel, subagentModelVerification, subagentProvider]);
 
   useEffect(() => {
     if (!assistantDrafts.length) return;
@@ -3450,7 +3474,11 @@ export function SessionsPage() {
       reasoningEffort: runtimeKind === "provider" && reasoningEffort
         ? reasoningEffort
         : undefined,
-      allowSubagents: runtimeKind === "provider" && allowSubagents,
+      allowSubagents: runtimeKind === "provider"
+        ? allowSubagents
+        : harnessSubagentsReady,
+      subagentProviderId: runtimeKind === "harness" && harnessSubagentsReady ? subagentProviderId : undefined,
+      subagentModel: runtimeKind === "harness" && harnessSubagentsReady ? subagentModel : undefined,
       harnessServiceTier: runtimeKind === "harness"
         ? harnessServiceTier
         : undefined,
@@ -4419,6 +4447,18 @@ export function SessionsPage() {
                 {runtimeKind === "provider" && <div className="chat-knowledge-toggle" role="status"><span><strong>Skills</strong><small>{harnessSkillError ?? (harnessSkillsLoading ? "Discovering project skills…" : harnessSkills.length ? "Type $ in the composer to select a skill. Running goals keep its immutable snapshot." : "No project skills were discovered.")}</small></span></div>}
                 {runtimeKind === "provider" && <div className="chat-harness-mcp" data-guide="lifecycle-hooks"><span>Lifecycle hooks</span>{nativeHookError ? <><small role="alert">{nativeHookError}</small><ShowMeHow guide="lifecycle-hooks" step={1} label="Fix with guide" /></> : nativeHooks.length ? nativeHooks.map(hook => <label className="chat-knowledge-toggle" key={hook.id}><input type="checkbox" checked={selectedHookIds.includes(hook.id)} disabled={composerBusy || assistantSettingsBusy} onChange={(event) => void saveProviderAssistantSelections(selectedMcpIds, event.target.checked ? [...selectedHookIds, hook.id] : selectedHookIds.filter(id => id !== hook.id))} /><span>{hook.manifest.name}<small>{hook.manifest.description || hook.id} · {hook.manifest.events.length} events · {hook.manifest.failurePolicy} on failure</small></span></label>) : <><small>No project hooks found in .agents/hooks.</small><ShowMeHow guide="lifecycle-hooks" /></>}</div>}
                 <div className="chat-knowledge-toggle" role="status" data-guide="knowledge-status"><ShieldCheck size={15} aria-hidden="true" /><span>Knowledge<small>{knowledgeItemCount ? runtimePermitsKnowledge ? `${knowledgeItemCount} source${knowledgeItemCount === 1 ? "" : "s"} available automatically` : `${runtimeKind === "provider" ? "Profile" : "Harness"} is text-only` : "No sources loaded"}</small></span></div>
+                {runtimeKind === "harness" && <HarnessSubagentSettings
+                  providers={enabledProviders}
+                  harnessName={selectedHarness?.name ?? "The harness"}
+                  choice={{ enabled: allowSubagents, providerId: subagentProviderId, model: subagentModel }}
+                  disabled={sending || assistantSettingsBusy}
+                  onChange={(choice) => {
+                    setAllowSubagents(choice.enabled);
+                    setSubagentProviderId(choice.providerId);
+                    setSubagentModel(choice.model);
+                    setAssistantSettingsStatus(choice.enabled ? "Provider subagents on. Applies to your next message." : "Provider subagents off. Applies to your next message.");
+                  }}
+                />}
                 {runtimeKind === "provider" && <label className="chat-knowledge-toggle" data-guide="subagents"><input type="checkbox" checked={allowSubagents} disabled={sending || assistantSettingsBusy} onChange={(event) => { setAllowSubagents(event.target.checked); setAssistantSettingsStatus(event.target.checked ? "Subagents allowed. Applies to your next message." : "Subagents turned off. Applies to your next message."); }} /><span><strong>Subagents</strong><small>Let the assistant delegate independent work to parallel children on this model, tools and approval policy</small></span></label>}
                 {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><McpServerChoices api={api} projectId={engagement?.id} servers={mcpServers} selectedIds={selectedMcpIds} disabled={sending || assistantSettingsBusy} onChange={(nextIds) => void saveProviderAssistantSelections(nextIds, selectedHookIds)} /></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>
@@ -4642,7 +4682,7 @@ export function SessionsPage() {
               <form className="chat-composer" onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
               <div className="chat-composer-context" role="region" aria-label="Composer context and activity" tabIndex={0}>
               {runtimeKind === "provider" && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <ProviderGoalPanel api={api} sessionId={sessionId || undefined} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} settingsBusy={assistantSettingsBusy} onCreate={createGoalConversation} onChange={setProviderGoal} onWorkDispatched={async () => { if (sessionId) await selectSession(sessionId, false); }} />}</>}
-              {runtimeKind === "provider" && sessionId && <ChatSubagentRail
+              {sessionId && <ChatSubagentRail
                 subagents={subagentState.subagents}
                 open={sessionInspectorOpen && drawerTab === "subagents"}
                 onToggle={() => updateSearchParams(next => {
@@ -4906,6 +4946,11 @@ export function SessionsPage() {
             onClose={() => setSessionInspectorOpen(false)}
             onChanged={subagentState.refresh}
             onOpenConversation={id => void selectSession(id)}
+            harnessDelegation={runtimeKind === "harness" ? {
+              harnessName: selectedHarness?.name ?? "The harness",
+              providerName: subagentProvider?.name,
+              model: allowSubagents && subagentModel ? subagentModel : undefined,
+            } : undefined}
           /> : <p>Subagents appear after the first saved turn.</p>
           : drawerTab === "visuals" ? api && engagement && sessionId ? <ChatResultStream key={`visuals:${sessionId}`} api={api} projectId={engagement.id} sessionId={sessionId} onPopOut={() => { placeAgentView("floating"); setAgentView("floating"); updateSearchParams(next => {next.delete("drawer");}); }} focusPopOut={agentViewJustDocked} onPopOutFocused={agentViewPopOutFocused} /> : <p>Published snapshots appear after the first saved turn.</p>
           : drawerTab === "results" ? api && sessionId ? <ChatResults key={sessionId} api={api} sessionId={sessionId} onMessage={openDrawerMessage} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} /> : <p>Results appear after the first saved turn.</p> : <>
