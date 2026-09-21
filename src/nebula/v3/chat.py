@@ -419,6 +419,12 @@ class ChatRuntimeSwitchPreflight(NebulaModel):
     metadata_revision: str | None = None
 
 
+class ChatRuntimeSwitchRequest(ChatRuntimeSwitchPreflightRequest):
+    """Apply a provider/model switch the operator reviewed with a preflight."""
+
+    confirmation_token: str | None = Field(default=None, max_length=200)
+
+
 class ChatResponseMessage(NebulaModel):
     id: str | None = Field(default=None, max_length=200)
     role: ChatRole = ChatRole.ASSISTANT
@@ -1625,14 +1631,17 @@ class ChatService:
             or self.pending_turn(turn.session_id) is not None
         ):
             return None
+        # The operator may have picked another model or effort while the turn
+        # ran; the conversation holds that choice, the settled turn does not.
+        session = self.store.get(ChatSession, turn.session_id)
         try:
             continued = await self.prepare_async(
                 ChatCompletionRequest(
-                    provider_id=turn.provider_profile_id,
+                    provider_id=session.provider_profile_id or turn.provider_profile_id,
                     engagement_id=turn.engagement_id,
                     session_id=turn.session_id,
                     goal_id=goal.id,
-                    model=turn.model,
+                    model=session.model or turn.model,
                     messages=[
                         ChatRequestMessage(
                             role=ChatRole.USER,
@@ -1659,7 +1668,9 @@ class ChatService:
                     allow_cloud_tool_results=source.allow_cloud_tool_results,
                     max_output_tokens=source.max_output_tokens,
                     temperature=source.temperature,
-                    reasoning_effort=source.reasoning_effort,
+                    reasoning_effort=session.metadata.get(
+                        "reasoning_effort", source.reasoning_effort
+                    ),
                     stream=True,
                 )
             )
@@ -6124,10 +6135,8 @@ class ChatService:
             raise ChatHistoryConflict(
                 "conversation changed; reload it before changing provider or model"
             )
-        if self.pending_turn(session.id) is not None:
-            raise ChatHistoryConflict(
-                "conversation has an active response; wait for it before changing provider or model"
-            )
+        # An active response does not block the switch: its turn keeps the
+        # provider and model it started with, and the switch applies next turn.
         profile = self.store.get(ProviderProfile, request.provider_id)
         current: dict[str, Any] = {
             "session_id": session.id,
@@ -6213,6 +6222,36 @@ class ChatService:
             target_input_tokens=limits.target_input_tokens,
             target_max_output_tokens=limits.max_output_tokens,
             metadata_revision=limits.metadata_revision,
+        )
+
+    def apply_runtime_switch(
+        self, session_id: str, request: ChatRuntimeSwitchRequest
+    ) -> ChatSession:
+        """Make a reviewed provider/model the conversation's runtime.
+
+        The switch is durable at once rather than riding on the next message,
+        because the next turn is not always one the operator sends: a running
+        goal continues itself, and queued follow-ups and schedules start turns
+        too. Each of them reads the conversation's runtime. A response that is
+        already running keeps the provider and model its turn recorded.
+        """
+
+        switch = self.runtime_switch_preflight(session_id, request)
+        if not switch.compatible:
+            raise ChatConfigurationError(
+                switch.reason or "the selected provider/model is incompatible"
+            )
+        if switch.requires_compaction_confirmation and (
+            request.confirmation_token != switch.confirmation_token
+        ):
+            raise ChatConfigurationError(
+                "switching to this provider/model requires confirmed context compaction; review the switch again"
+            )
+        return self.store.update(
+            ChatSession,
+            session_id,
+            {"provider_profile_id": request.provider_id, "model": request.model},
+            expected_revision=switch.session_revision,
         )
 
     @staticmethod
@@ -7375,6 +7414,21 @@ class ChatService:
                         latest_session = self.store.get(
                             ChatSession, prepared.session.id
                         )
+                        # A turn recorded its runtime and assistant settings on
+                        # the conversation when it started. Anything different
+                        # now is what the operator chose for the next turn while
+                        # this one ran, so settling must not write it back.
+                        runtime = (
+                            {}
+                            if prepared.turn is not None
+                            else {
+                                "backend": ChatBackend.PROVIDER,
+                                "provider_profile_id": prepared.provider_profile.id,
+                                "harness_profile_id": None,
+                                "harness_session_id": None,
+                                "model": prepared.resolved_model,
+                            }
+                        )
                         metadata = {
                             **latest_session.metadata,
                             **(
@@ -7383,7 +7437,11 @@ class ChatService:
                                 or "tools_enabled" in latest_session.metadata
                                 else {}
                             ),
-                            **self._assistant_settings(prepared),
+                            **(
+                                self._assistant_settings(prepared)
+                                if prepared.turn is None
+                                else {}
+                            ),
                             "message_count": messages[-1].sequence,
                             "last_sequence": messages[-1].sequence,
                         }
@@ -7394,11 +7452,7 @@ class ChatService:
                             ChatSession,
                             latest_session.id,
                             {
-                                "backend": ChatBackend.PROVIDER,
-                                "provider_profile_id": prepared.provider_profile.id,
-                                "harness_profile_id": None,
-                                "harness_session_id": None,
-                                "model": prepared.resolved_model,
+                                **runtime,
                                 "title": latest_session.title,
                                 "metadata": metadata,
                             },

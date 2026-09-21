@@ -464,6 +464,19 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
     await expect(composer).toHaveValue("");
     await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible({ timeout: 20_000 });
+    // A running goal is always mid-response, so its model and effort stay
+    // editable; Core applies the change to the next turn.
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    const liveSettings = page.getByRole("dialog", { name: "Assistant settings" });
+    await expect(liveSettings.getByRole("combobox", { name: "Chat model" })).toBeEnabled();
+    const liveEffortSave = page.waitForResponse(response =>
+      response.request().method() === "PATCH"
+      && response.url().endsWith(`/chat-sessions/${sessionId}`),
+    );
+    await liveSettings.getByRole("combobox", { name: "Reasoning effort" }).selectOption("low");
+    expect((await liveEffortSave).ok()).toBe(true);
+    await expect(liveSettings.getByRole("status").filter({ hasText: "the next turn uses the new one" })).toBeVisible();
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
     await page.getByRole("button", { name: "Stop response" }).click();
     const goalPanel = page.getByRole("region", { name: "Conversation goal" });
     await expect(goalPanel).toContainText("paused", { timeout: 20_000 });
@@ -478,6 +491,9 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     const sessionState = await (await api.get(`chat/sessions/${sessionId}/state`)).json() as { execution: string; busy: boolean; actions: string[] };
     expect(sessionState).toMatchObject({ execution: "cancelled", busy: false });
     expect(sessionState.actions).not.toContain("stop");
+    // Ending the turn did not write its own effort back over the operator's.
+    const stoppedSession = (await (await api.get(`chat-sessions?engagement_id=${projectId}`)).json() as Array<{ id: string; metadata: { reasoning_effort?: string } }>).find(item => item.id === sessionId);
+    expect(stoppedSession?.metadata.reasoning_effort).toBe("low");
 
     await page.reload();
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("paused");

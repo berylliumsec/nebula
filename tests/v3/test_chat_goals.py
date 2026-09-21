@@ -6,7 +6,12 @@ from fastapi import HTTPException
 from pydantic import ValidationError
 
 import nebula.v3.chat_goals as chat_goals_module
-from nebula.v3.chat import ChatCompletionRequest, ChatConfigurationError, ChatService
+from nebula.v3.chat import (
+    ChatCompletionRequest,
+    ChatConfigurationError,
+    ChatRuntimeSwitchRequest,
+    ChatService,
+)
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.context import estimate_model_request
 from nebula.v3.domain import (
@@ -296,6 +301,88 @@ def test_successful_provider_turn_automatically_continues_running_goal(tmp_path)
             and "continue making concrete progress" in message.content
             for message in messages
         )
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_model_and_effort_picked_mid_turn_drive_the_goal_continuation(tmp_path):
+    """A running goal is always mid-response, so a switch has to land next turn."""
+
+    async def scenario() -> None:
+        store, goals = setup_goal(tmp_path)
+        draft = goals.create(
+            "session",
+            GoalCreate(
+                objective="Finish two bounded steps",
+                completion_criteria=["Both steps are evidenced"],
+                step_budget=2,
+            ),
+        )
+        goals.write(
+            "session", GoalWrite(expected_revision=draft.revision, action="start")
+        )
+
+        class OperatorSwitchesMidTurn(FakeProvider):
+            switched = False
+
+            async def complete(self, request):
+                if not request.metadata.get("operation") and not self.switched:
+                    self.switched = True
+                    assert chat.pending_turn("session") is not None
+                    session = store.get(ChatSession, "session")
+                    chat.apply_runtime_switch(
+                        "session",
+                        ChatRuntimeSwitchRequest(
+                            provider_id="provider",
+                            model="model-b",
+                            expected_session_revision=session.revision,
+                        ),
+                    )
+                    session = store.get(ChatSession, "session")
+                    store.update(
+                        ChatSession,
+                        session.id,
+                        {"metadata": {**session.metadata, "reasoning_effort": "low"}},
+                        expected_revision=session.revision,
+                    )
+                return await super().complete(request)
+
+        provider = OperatorSwitchesMidTurn("provider", local=False)
+        provider.config.model_allowlist.extend(["model", "model-b"])
+        chat = ChatService(store, provider_factory=lambda _: provider)
+        await chat.dispatch_running_goal(
+            "session",
+            "Begin work on the active conversation goal without another operator message.",
+        )
+
+        for _ in range(200):
+            turns = store.list_entities(ChatTurn, engagement_id="project")
+            if len(turns) == 2 and all(
+                turn.status.value == "complete" for turn in turns
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("the automatic goal continuation did not settle")
+
+        turns.sort(key=lambda turn: turn.created_at)
+        # The running turn kept what it started with; the next one switched.
+        assert [turn.model for turn in turns] == ["model", "model-b"]
+        goal_requests = [
+            request
+            for request in provider.requests
+            if not request.metadata.get("operation")
+        ]
+        assert [request.model for request in goal_requests] == ["model", "model-b"]
+        assert [request.reasoning_effort for request in goal_requests] == [
+            None,
+            "low",
+        ]
+        # Settling either turn never wrote the operator's choice back.
+        session = store.get(ChatSession, "session")
+        assert session.model == "model-b"
+        assert session.metadata["reasoning_effort"] == "low"
         await chat.shutdown()
 
     asyncio.run(scenario())

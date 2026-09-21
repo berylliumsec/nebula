@@ -1,20 +1,28 @@
 {
-  "change_digest": "17acc5f9809c85a62fe85f58010d71d8186e2d1eab3e3570bc742b7b9ecf0a2d",
-  "reviewed_by": "Claude review of the conversation-details declutter",
-  "reason": "The conversation drawer's Context tab restated three things the operator already had in front of them: the context pack the composer shows above the message box, the knowledge posture Assistant settings carries, and the execution boundary its Command runtime row carries. Those three sections are removed, the working-context readout is moved to the top of the tab because the composer's context gauge opens into it, and Continue as mission moves from the reading panel to the conversation's actions menu where the rest of that conversation's actions live. Nothing gains a new source of truth: each removed readout's information stays on the control that owns it. The Playwright selection is a new conversation-details area with two tests: one proves the tab now leads with working context and no longer repeats the three settings, then opens Assistant settings and finds the knowledge and command-runtime rows still there; the other proves Continue as mission left the drawer and is enabled in the actions menu of a harness conversation. Both run on desktop and narrow because the drawer is a docked aside on one and a sheet on the other. The guide catalog's mission step is selected as a frontend test because its copy and route changed with the control it points at.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python test is selected because no Python changed: this is one page component, one guide step and two tests. No native tests are selected because no Rust changed. No real-Core entry is selected: tests/real-core.spec.ts changes by one assertion, re-pointed from the removed section to the working-context heading in the same drawer, and the surrounding test proves an unsent draft survives a tab switch, which no backend touches. The assistant and chat-subagents areas are not selected: this removes and relocates presentation in the drawer without changing the conversation, its transcript, its settings or delegation.",
+  "change_digest": "7c1131f70f272951299d85813ecc18222554de392e9b0d483dc7a44290757e6f",
+  "reviewed_by": "Claude review of changing model and reasoning effort while a response runs",
+  "reason": "The chat's Model, Provider and Effort pickers were disabled for the whole of an active response and Core refused both changes then, so a running goal (always mid-response) could never change its model or effort. Core now accepts an effort-only session update and a runtime switch while a turn is active; the switch is saved on the conversation through a new apply endpoint after the existing preflight and compaction confirmation; settling a turn keeps the conversation's newer runtime and settings instead of writing the turn's back; goal continuations and queued provider follow-ups read the conversation's current model and effort; a follow-up whose conversation changed provider is routed to review; harness follow-ups may carry a newly picked model. The selected Python files cover the runtime switch and compaction gate (test_chat), the API guard and new endpoint (test_chat_api), goal continuation across a mid-turn switch (test_chat_goals), queue adoption, provider review and harness model follow-ups (test_chat_queue), and schedules, which follow the conversation's runtime (test_chat_schedules). The client unit tests cover the new apply call and the effort-only save. Playwright selects the provider runtime switch area (the confirmed and verified switches now save on the conversation, plus a new mid-response test that also exercises the stale-revision retry), the provider reasoning area that drives the effort picker, and the real-Core goal lifecycle entry, which now changes the effort during a live goal turn and checks the stop does not overwrite it.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. Harness runtime code is unchanged; the harness follow-up path is covered by the queue test that drives a real harness turn with a new model. No native tests are selected because no Rust changed. The broad assistant Playwright area is excluded because the only controls whose behaviour changed are the assistant settings pickers, which the selected areas render on desktop and both phone projects.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 12,
+    "python": 133,
+    "frontend": 75,
     "native": 0,
-    "playwright": 4
+    "playwright": 18
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_queue.py",
+    "tests/v3/test_chat_schedules.py"
+  ],
   "frontend": [
-    "ui/src/guides/guides.test.tsx"
+    "ui/src/api/client.test.ts"
   ],
   "native": [],
   "playwright": [
-    "area:conversation-details"
+    "area:provider-runtime-switch",
+    "area:provider-reasoning",
+    "area:provider-goal-lifecycle-core"
   ]
 }
