@@ -290,7 +290,6 @@ from .domain import (
     HarnessWorkspaceAccess,
     KnowledgeSource,
     LibraryItem,
-    McpApprovalMode,
     McpServerProfile,
     MissionGrant,
     NebulaModel,
@@ -413,6 +412,7 @@ from .mcp import (
     McpProbeReport,
     McpProbeService,
     mcp_tool_runtime_name,
+    usable_mcp_tools,
 )
 from .mcp_import import (
     McpExportReport,
@@ -7044,14 +7044,8 @@ def create_app(
         for profile in store.list_entities(McpServerProfile, limit=1000):
             if not profile.enabled or profile.capabilities.checked_at is None:
                 continue
-            for tool in profile.capabilities.tools:
-                # The same selection the runtime makes when it builds plugins.
-                if profile.enabled_tools and tool.name not in profile.enabled_tools:
-                    continue
-                if tool.name in profile.disabled_tools:
-                    continue
-                if profile.tool_overrides.get(tool.name) == McpApprovalMode.DENY:
-                    continue
+            # The same selection the runtime makes when it builds plugins.
+            for tool in usable_mcp_tools(profile):
                 candidates.append(
                     ScopeToolCandidate(
                         name=mcp_tool_runtime_name(profile.id, tool.name),

@@ -12,9 +12,13 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompletionRequest, ChatService
 from nebula.v3.domain import (
     Engagement,
+    McpCapabilitySnapshot,
+    McpServerProfile,
+    McpToolSnapshot,
     ProviderProfile,
     RiskClass,
     ScopePolicy,
+    utc_now,
 )
 from nebula.v3.runtime_platform import RuntimeToolComponents
 from nebula.v3.storage import NebulaStore
@@ -536,27 +540,89 @@ def test_local_only_scope_never_enables_suggestions():
     assert not suggestions_enabled(ScopePolicy(engagement_id="e"))
 
 
-class _McpPlatform:
-    def __init__(self, workspace):
-        self.workspace = workspace
+NOTES_TOOL = "mcp.notes.read_note"
 
-    def chat_components(self, *, engagement_id, **_):
-        return RuntimeToolComponents(
-            broker=RecordingBroker(),
-            scope=ScopePolicy(
+
+class _McpPlatform:
+    """Builds one spec per usable tool of the servers it is handed.
+
+    The scope is the project's stored one when it has one, else a Jev opt-in,
+    so a test can turn on-demand loading off where the chat service reads it.
+    """
+
+    def __init__(self, workspace, store):
+        self.workspace = workspace
+        self.store = store
+        self.calls: list[list[str]] = []
+
+    def chat_components(self, *, engagement_id, mcp_profiles=(), **_):
+        self.calls.append([profile.id for profile in mcp_profiles])
+        engagement = self.store.get(Engagement, engagement_id)
+        scope = (
+            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            if engagement.scope_policy_id
+            else ScopePolicy(
                 id=f"scope:{engagement_id}",
                 engagement_id=engagement_id,
                 tool_suggestions=True,
-            ),
+            )
+        )
+        return RuntimeToolComponents(
+            broker=RecordingBroker(),
+            scope=scope,
             workspace=self.workspace,
-            specs={MCP_TOOL: _spec(MCP_TOOL, "Search tracker issues.")},
+            specs={
+                f"mcp.{profile.id}.{tool.name}": _spec(
+                    f"mcp.{profile.id}.{tool.name}",
+                    tool.description,
+                    source=f"mcp:{profile.id}",
+                )
+                for profile in mcp_profiles
+                for tool in profile.capabilities.tools
+            },
             runtime_digest="mcp-runtime",
         )
 
 
-def _mcp_service(tmp_path, monkeypatch, client_factory, skill: str | None = None):
+def _server(identifier, name, tool, description, *, instructions=None, **fields):
+    return McpServerProfile(
+        id=identifier,
+        name=name,
+        transport="stdio",
+        command=f"/usr/bin/{identifier}",
+        enabled=True,
+        trusted_stdio=True,
+        capabilities=McpCapabilitySnapshot(
+            checked_at=utc_now(),
+            instructions=instructions,
+            tools=[McpToolSnapshot(name=tool, description=description)],
+        ),
+        **fields,
+    )
+
+
+def _mcp_service(
+    tmp_path,
+    monkeypatch,
+    client_factory,
+    skill: str | None = None,
+    *,
+    selected=("notes",),
+    scope: dict | None = None,
+):
+    """A project with two probed servers: ``notes`` is selected for the chat,
+    ``tracker`` (MCP_TOOL) is only offered on demand."""
+
     store = NebulaStore(tmp_path / "chat-suggestions.db")
-    engagement = store.create(Engagement(id="eng-jev", name="Jev"))
+    if scope is not None:
+        store.create(ScopePolicy(id="scope-jev", engagement_id="eng-jev", **scope))
+    engagement = store.create(
+        Engagement(
+            id="eng-jev",
+            name="Jev",
+            scope_policy_id="scope-jev" if scope is not None else None,
+        )
+    )
     payload = _profile(local=True).model_dump(mode="python")
     payload["capabilities"]["tool_calling"] = True
     payload["capability_verifications"] = {
@@ -567,16 +633,19 @@ def _mcp_service(tmp_path, monkeypatch, client_factory, skill: str | None = None
     provider.config.capabilities.tools = True
     provider.config.capabilities.strict_tools = True
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
-    profile_stub = _mcp_profile(
-        "tracker", "issue-tracker", instructions="Issue tracker for this codebase."
-    )
-    profile_stub.model_dump = lambda **_: {"id": "tracker"}
-    monkeypatch.setattr(
-        chat_module, "resolve_mcp_profiles", lambda store, ids: (profile_stub,)
+    store.create(_server("notes", "notes", "read_note", "Read a saved note."))
+    store.create(
+        _server(
+            "tracker",
+            "issue-tracker",
+            "search_issues",
+            "Search tracker issues.",
+            instructions="Issue tracker for this codebase.",
+        )
     )
     service = ChatService(
         store,
-        tool_platform=_McpPlatform(tmp_path),
+        tool_platform=_McpPlatform(tmp_path, store),
         tool_suggestion_client=client_factory,
         workspace_resolver=lambda _: tmp_path,
     )
@@ -589,7 +658,7 @@ def _mcp_service(tmp_path, monkeypatch, client_factory, skill: str | None = None
     request = ChatCompletionRequest(
         provider_id=profile.id,
         engagement_id=engagement.id,
-        mcp_server_ids=["tracker"],
+        mcp_server_ids=list(selected),
         skill=selection,
         messages=[{"role": "user", "content": "find the login bug"}],
         include_knowledge=False,
@@ -614,10 +683,12 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
 
     assert len(calls) == 1
     assert calls[0]["state"]["operator_request"] == "find the login bug"
-    # The selected servers are described to Jev and ranked alongside the tools.
-    assert calls[0]["questions"]["sources_0"]["criteria"]["mcp:tracker"] == (
-        "issue-tracker. Issue tracker for this codebase."
-    )
+    # The on-demand servers are described to Jev and ranked alongside their
+    # tools; the selected one is already loaded, so Jev never sees it.
+    criteria = calls[0]["questions"]["sources_0"]["criteria"]
+    assert set(criteria) == {"mcp:tracker", NONE_OPTION}
+    assert criteria["mcp:tracker"] == "issue-tracker. Issue tracker for this codebase."
+    assert NOTES_TOOL not in json.dumps(calls[0]["questions"])
     receipt = prepared.turn.request_snapshot["tool_suggestions"]
     assert receipt["status"] == "suggested"
     assert receipt["preloaded"] == [MCP_TOOL]
@@ -625,9 +696,12 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
     catalog = prepared.turn.request_snapshot["tool_catalog"]
     assert catalog["ranker"] == "jev" and catalog["preloaded"] == [MCP_TOOL]
     assert catalog["source_hints"] == ["issue-tracker"]
-    assert {CATALOG_SEARCH, CATALOG_LOAD, CATALOG_CALL, MCP_TOOL} == set(
+    assert {CATALOG_SEARCH, CATALOG_LOAD, CATALOG_CALL, MCP_TOOL, NOTES_TOOL} == set(
         prepared.tool_components.specs
     )
+    snapshot = prepared.turn.request_snapshot
+    assert snapshot["mcp_server_ids"] == ["notes"]
+    assert [item["id"] for item in snapshot["mcp_catalog_snapshot"]] == ["tracker"]
     instructions = catalog_instructions(catalog, prepared.tool_components.specs)
     assert "Already loaded" in instructions
     assert '"issue-tracker"' in instructions

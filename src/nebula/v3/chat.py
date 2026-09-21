@@ -19,7 +19,7 @@ import json
 import logging
 import re
 import threading
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -106,7 +106,7 @@ from .model_catalog import (
 )
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
 from .environments import resolve_ssh_environments
-from .mcp import McpProbeError, resolve_mcp_profiles
+from .mcp import McpProbeError, catalog_mcp_profiles, resolve_mcp_profiles
 from .native_hooks import NativeHookError, NativeHookRunner, NativeHookSnapshot
 from .operator_help import CORPUS_ID, search_operator_help
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
@@ -2402,6 +2402,15 @@ class ChatService:
                         "cloud command-result transfer requires explicit confirmation "
                         "for this turn"
                     )
+            # Selected servers go out in full on every request; every other
+            # usable server joins the on-demand catalog for the ranker. The
+            # catalog never turns tools on by itself, so a plain chat stays
+            # one.
+            catalog_profiles = (
+                self._mcp_catalog(engagement_id, mcp_profiles)
+                if self.tool_platform is not None
+                else ()
+            )
             turn_id = str(uuid4())
             try:
                 extra_components = (
@@ -2410,12 +2419,17 @@ class ChatService:
                         turn_id=turn_id,
                         provider=provider,
                         model=selected_model,
-                        mcp_profiles=mcp_profiles,
+                        mcp_profiles=(*mcp_profiles, *catalog_profiles),
                         ssh_environments=ssh_environments,
                         include_oci=False,
                         allow_empty=True,
                     )
-                    if (mcp_profiles or ssh_environments or web_search_selected)
+                    if (
+                        mcp_profiles
+                        or catalog_profiles
+                        or ssh_environments
+                        or web_search_selected
+                    )
                     and self.tool_platform is not None
                     else None
                 )
@@ -2528,6 +2542,7 @@ class ChatService:
                 deferrable_specs(
                     tool_components.specs,
                     always_loaded=tool_components.scope.always_loaded_tools,
+                    always_loaded_sources=[f"mcp:{item.id}" for item in mcp_profiles],
                 )
                 if on_demand_enabled(tool_components.scope)
                 else {}
@@ -2553,7 +2568,7 @@ class ChatService:
                         deferred=deferred_specs,
                         operator_messages=operator_messages,
                         skills=skill_snapshots,
-                        sources=mcp_sources(mcp_profiles),
+                        sources=mcp_sources(catalog_profiles),
                         cache=self.suggestion_cache,
                     )
                     tool_suggestions = receipt.model_dump(mode="json")
@@ -2626,6 +2641,12 @@ class ChatService:
                     "mcp_server_ids": [item.id for item in mcp_profiles],
                     "mcp_snapshot": [
                         item.model_dump(mode="json") for item in mcp_profiles
+                    ],
+                    # Offered on demand, not selected: a resumed turn rebuilds
+                    # the same catalog, but schedules and subagents that
+                    # repeat the selection read only mcp_server_ids.
+                    "mcp_catalog_snapshot": [
+                        item.model_dump(mode="json") for item in catalog_profiles
                     ],
                     "ssh_environment_snapshot": [
                         item.model_dump(mode="json") for item in ssh_environments
@@ -4366,6 +4387,27 @@ class ChatService:
             )
         return history
 
+    def _mcp_catalog(
+        self, engagement_id: str, selected: Sequence[McpServerProfile]
+    ) -> tuple[McpServerProfile, ...]:
+        """Usable MCP servers the operator did not select, for on-demand use.
+
+        Only a project that defers tools gets a catalog: with on-demand loading
+        off, every tool of every enabled server would land in every request.
+        The scope defaults the way the tool platform's does when a project has
+        none recorded.
+        """
+
+        engagement = self.store.get(Engagement, engagement_id)
+        scope = (
+            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            if engagement.scope_policy_id
+            else ScopePolicy(id=f"scope:{engagement.id}", engagement_id=engagement.id)
+        )
+        if not on_demand_enabled(scope):
+            return ()
+        return catalog_mcp_profiles(self.store, exclude={item.id for item in selected})
+
     def _web_search_selected(self, engagement_id: str | None) -> bool:
         """Whether this project opted into the local search runtime.
 
@@ -5071,7 +5113,8 @@ class ChatService:
         try:
             mcp_profiles = tuple(
                 McpServerProfile.model_validate(item)
-                for item in turn.request_snapshot.get("mcp_snapshot", [])
+                for key in ("mcp_snapshot", "mcp_catalog_snapshot")
+                for item in turn.request_snapshot.get(key, [])
             )
             ssh_environments = tuple(
                 SshEnvironment.model_validate(item)

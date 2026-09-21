@@ -15,7 +15,7 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any
 
@@ -851,13 +851,7 @@ def build_mcp_tool_plugins(
     for profile in profiles:
         if not profile.enabled:
             raise McpProbeError(f"selected MCP server {profile.id!r} is disabled")
-        for tool in profile.capabilities.tools:
-            if profile.enabled_tools and tool.name not in profile.enabled_tools:
-                continue
-            if tool.name in profile.disabled_tools:
-                continue
-            if profile.tool_overrides.get(tool.name) == McpApprovalMode.DENY:
-                continue
+        for tool in usable_mcp_tools(profile):
             plugins.append(McpToolPlugin(profile, tool))
     return plugins
 
@@ -876,18 +870,50 @@ def resolve_mcp_profiles(
             raise McpProbeError(
                 f"selected MCP server {profile.id!r} must be probed before use"
             )
-        selected = [
-            tool
-            for tool in profile.capabilities.tools
-            if (not profile.enabled_tools or tool.name in profile.enabled_tools)
-            and tool.name not in profile.disabled_tools
-            and profile.tool_overrides.get(tool.name) != McpApprovalMode.DENY
-        ]
-        if not selected:
+        if not usable_mcp_tools(profile):
             raise McpProbeError(
                 f"selected MCP server {profile.id!r} exposes no enabled tools"
             )
     return profiles
+
+
+def usable_mcp_tools(profile: McpServerProfile) -> list[McpToolSnapshot]:
+    """The probed tools an operator left on: enabled, not disabled, not denied."""
+
+    return [
+        tool
+        for tool in profile.capabilities.tools
+        if (not profile.enabled_tools or tool.name in profile.enabled_tools)
+        and tool.name not in profile.disabled_tools
+        and profile.tool_overrides.get(tool.name) != McpApprovalMode.DENY
+    ]
+
+
+def catalog_mcp_profiles(
+    store: NebulaStore, *, exclude: Collection[str] = ()
+) -> tuple[McpServerProfile, ...]:
+    """Every other usable server, offered on demand next to the selected ones.
+
+    Nobody chose these for the message, so a server that is disabled, never
+    probed, or left with no usable tool is skipped rather than failing the
+    turn the way ``resolve_mcp_profiles`` does. Ordered by name so the
+    catalog, and any ranking request built from it, is stable across turns.
+    """
+
+    skip = set(exclude)
+    return tuple(
+        sorted(
+            (
+                profile
+                for profile in store.list_entities(McpServerProfile, limit=1000)
+                if profile.id not in skip
+                and profile.enabled
+                and profile.capabilities.checked_at is not None
+                and usable_mcp_tools(profile)
+            ),
+            key=lambda profile: (profile.name, profile.id),
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -1128,7 +1154,9 @@ __all__ = [
     "McpProbeReport",
     "McpProbeService",
     "build_mcp_tool_plugins",
+    "catalog_mcp_profiles",
     "encode_gateway_frame",
     "mcp_tool_display_name",
     "resolve_mcp_profiles",
+    "usable_mcp_tools",
 ]

@@ -148,8 +148,17 @@ the file wins over the Tool approval chosen for the import.
 
 ## How the assistant uses MCP tools
 
-MCP tools are not sent to the model with every request. The assistant sees
-three fixed tools instead:
+In a provider chat, the servers ticked under MCP servers in Assistant settings
+are always sent: every usable tool they offer is in the function list of every
+request. Every other enabled, probed server with at least one usable tool is
+available on demand. Its tools are not sent with the request. A server that is
+disabled, has not been probed, or has no usable tool left is not offered and
+does not fail the turn. The on-demand servers join only a turn that already
+uses tools, such as a command-runtime chat or one with a ticked server, so a
+plain chat stays one. A harness chat hands only its ticked servers to the
+harness.
+
+Instead of on-demand tools, the assistant sees three fixed tools:
 
 - `tool_catalog.search` finds MCP tools by what they do.
 - `tool_catalog.load` returns the full description and input schema for up to
@@ -173,16 +182,18 @@ operator's latest message: a strong match has its schema included for that
 turn, and weaker matches are named as hints.
 
 Loading on demand is on for every project. Set `on_demand_tools` to `false` on
-a project's scope (`PUT /api/v1/engagements/{id}/scope`) to send every tool
-with every request again. A project that opts into Jev suggestions from
+a project's scope (`PUT /api/v1/engagements/{id}/scope`) to turn it off: only
+the ticked servers are then offered, and all their tools go out with every
+request. A tool listed in the scope's `always_loaded_tools` is sent with every
+request whenever its server is offered, ticked or on demand. A project that opts into Jev suggestions from
 TypeSafe uses Jev's picks instead of the local ranking, and falls back to the
 local ranking when Jev is unavailable. Jev is sent the redacted operator
 messages, the expanded instructions of the skills selected for the turn,
 server names and descriptions, and tool names and descriptions — never tool
 output.
 
-Jev ranks two things in one call: the selected servers and the individual
-tools. It is never asked whether the turn needs a tool at all; every question
+Jev ranks two things in one call: the on-demand servers and their individual
+tools. Ticked servers are already loaded, so Jev is not asked about them. It is never asked whether the turn needs a tool at all; every question
 carries a "none of these" option instead. A server's rank weights the tools
 that come from it — the top-ranked server's tools keep their full score and
 the bottom-ranked server's tools keep half — and at most three tools survive:
