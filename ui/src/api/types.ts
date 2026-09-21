@@ -329,6 +329,8 @@ export interface EngagementScopePolicy {
   localOnly: boolean;
   /** Opt-in: send redacted operator messages, selected skills and tool names to TypeSafe Jev. */
   toolSuggestions: boolean;
+  /** Connected-source tools load on demand (Core default); off sends only a chat's ticked MCP servers. */
+  onDemandTools?: boolean;
   /** Opt-in: let the agent research the public web through the local search runtime. */
   webSearch: boolean;
   /** Opt-in: permit search queries that name an in-scope host, address or range. */

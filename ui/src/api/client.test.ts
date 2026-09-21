@@ -2548,6 +2548,8 @@ describe("project scope tool pinning", () => {
 
     const loaded = await client.getEngagementScope("project");
     expect(loaded.alwaysLoadedTools).toEqual(["mcp.abc123abc123.search"]);
+    // Older Core omits the field; on-demand loading is its default.
+    expect(loaded.onDemandTools).toBe(true);
     await expect(client.listScopeToolCandidates("project")).resolves.toEqual([{
       name: "mcp.abc123abc123.search", serverId: "mcp-1", serverName: "tracker",
       toolName: "search", description: "Search issues.",
@@ -2556,6 +2558,20 @@ describe("project scope tool pinning", () => {
 
     await client.updateEngagementScope("project", { ...loaded, alwaysLoadedTools: [], expectedRevision: 3 });
     expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toMatchObject({ always_loaded_tools: [] });
+  });
+
+  it("reads a project's on-demand loading switch without ever writing it back", async () => {
+    const scope = { id: "scope:project", engagement_id: "project", on_demand_tools: false, revision: 4 };
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(scope), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(scope), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const loaded = await client.getEngagementScope("project");
+    expect(loaded.onDemandTools).toBe(false);
+    await client.updateEngagementScope("project", { ...loaded, expectedRevision: 4 });
+    // Core keeps a field an update omits, so saving other settings never flips it.
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).not.toHaveProperty("on_demand_tools");
   });
 });
 

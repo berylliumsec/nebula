@@ -1041,6 +1041,11 @@ kbd { font-size: 11px; }
 .chat-settings-capabilities > .chat-harness-mcp { min-height: 38px; padding: 7px 9px; border: 0; border-radius: 0; background: transparent; }
 .chat-settings-capabilities > * + * { border-top: 1px solid var(--border-soft); }
 .chat-settings-capabilities > .chat-knowledge-toggle > span, .chat-knowledge-toggle small { font-size: 11px; }
+/* The label and hint take their own lines above the server rows. */
+.chat-mcp-choices > span:first-child, .chat-mcp-choices > .chat-mcp-hint { flex-basis: 100%; }
+.chat-mcp-choices > .chat-mcp-hint { color: var(--muted); }
+.chat-mcp-choice[data-state="always"] .chat-mcp-state { color: var(--blue); }
+.chat-mcp-choice[data-state="not-sent"] > span, .chat-mcp-choice[data-state="not-sent"] small { color: var(--muted); }
 .chat-settings-trigger { position: relative; flex: 0 0 auto; }
 .chat-settings-trigger[aria-expanded="true"] { color: var(--blue); background: var(--blue-muted); }
 .chat-settings-trigger.needs-attention::after { content: ""; position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border: 2px solid var(--surface-muted); border-radius: 50%; background: var(--orange); }

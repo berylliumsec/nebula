@@ -283,7 +283,7 @@ export const guideCatalog: GuideDefinition[] = [
   {
     id: "mcp-tools",
     title: "Give the assistant MCP tools",
-    summary: "Register an MCP server once, then choose it for the turns that need it.",
+    summary: "Register an MCP server once; tick it to send it with every message, or leave it on demand.",
     category: "assistant",
     pages: ["workbench", "settings"],
     keywords: "mcp server tools model context protocol burp stdio http approval probe import json claude cursor vscode",
@@ -297,9 +297,9 @@ export const guideCatalog: GuideDefinition[] = [
         target: "mcp-settings",
       },
       {
-        title: "Choose it for a turn",
+        title: "Send it with every message",
         body: [
-          "Tick the server under MCP servers in Assistant settings. Only ticked servers’ tools are offered to the assistant for your next messages.",
+          "Tick the server under MCP servers in Assistant settings to send its tools with every message. The assistant loads tools from your other enabled servers only when a message needs them.",
         ],
         route: context => workbench(context, { view: "chat" }),
         action: "open-assistant-settings",
