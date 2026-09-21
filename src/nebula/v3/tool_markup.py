@@ -3,7 +3,7 @@
 A serving runtime that does not run a model's tool parser leaves the call in
 the Chat Completions ``content`` field. vLLM and SGLang skip the parser for
 a request that declares no tools or sets ``tool_choice: "none"``, and some
-OpenRouter upstreams never run it. Three grammars arrive this way:
+OpenRouter upstreams never run it. Four grammars arrive this way:
 
 - DeepSeek's DSML, read by :mod:`nebula.v3.dsml`;
 - GLM 4.5 and later::
@@ -12,6 +12,12 @@ OpenRouter upstreams never run it. Three grammars arrive this way:
 
   GLM-4.5's template puts a newline after the name and after each element,
   and the 4.7 and 5.x templates put none;
+- Qwen 2.5 and 3, and the Hermes templates they follow (vLLM's ``hermes``
+  tool parser reads the same shape)::
+
+      <tool_call>
+      {"name": "name", "arguments": {"key": "value"}}
+      </tool_call>
 - DeepSeek V3 and R1 special tokens::
 
       <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>name
@@ -28,9 +34,10 @@ Parsing is all-or-nothing per frame, and a frame Core cannot read stays in
 the text for the caller's quarantine, which :func:`frame_start` finds
 wherever it begins.
 
-GLM's tag is plain enough for an answer to mention, so a GLM frame starts
-only where the tag is followed by a tool name and then a line break, an
-argument or the close, or where argument tags follow it before it closes.
+GLM's and Qwen's tag is plain enough for an answer to mention, so a frame
+starts only where the tag is followed by a tool name and then a line break,
+an argument or the close, where argument tags follow it before it closes, or
+where it opens a JSON object whose first key is ``name`` or ``arguments``.
 DSML tags and DeepSeek's special tokens are never prose.
 """
 
@@ -43,7 +50,7 @@ from typing import Any, Callable, Literal
 
 from . import dsml
 
-Markup = Literal["dsml", "glm", "deepseek"]
+Markup = Literal["dsml", "glm", "deepseek", "hermes"]
 
 _TOOL_NAME = re.compile(r"^[a-z][a-z0-9_.-]{1,127}$")
 
@@ -67,6 +74,15 @@ _GLM_ARGUMENT = re.compile(
 # A pending GLM start is only ever this long: a name is at most 128
 # characters. A longer tail is released rather than held indefinitely.
 _GLM_PENDING_WINDOW = 256
+
+# Qwen and Hermes put one JSON object in the same tag. A frame starts where
+# the tag opens an object whose first key is one a call has.
+_HERMES_KEYS = ("name", "arguments")
+_HERMES_START = re.compile(r'<tool_call>\s*\{\s*"(?:name|arguments)"\s*:')
+# A tail that is still on its way to such a start.
+_HERMES_PENDING = re.compile(
+    r'<tool_call>\s*(?:\{\s*(?:"(?P<key>[a-z]*)(?P<closed>")?\s*)?)?'
+)
 
 # DeepSeek writes U+FF5C pipes and U+2581 word separators; routes that
 # normalize text turn the pipes into ASCII, which is read the same way.
@@ -141,6 +157,13 @@ def _glm_start(text: str) -> int | None:
     return first
 
 
+def _hermes_start(text: str) -> int | None:
+    if _GLM_OPEN not in text:
+        return None
+    match = _HERMES_START.search(text)
+    return match.start() if match is not None else None
+
+
 def _deepseek_start(text: str) -> int | None:
     if "tool\u2581" not in text:
         return None
@@ -158,7 +181,12 @@ def frame_start(text: str) -> int | None:
 
     starts = [
         start
-        for start in (dsml.frame_start(text), _glm_start(text), _deepseek_start(text))
+        for start in (
+            dsml.frame_start(text),
+            _glm_start(text),
+            _hermes_start(text),
+            _deepseek_start(text),
+        )
         if start is not None
     ]
     return min(starts, default=None)
@@ -182,11 +210,24 @@ def _glm_pending(tail: str) -> bool:
     )
 
 
-def _glm_partial_start(text: str) -> int:
+def _hermes_pending(tail: str) -> bool:
+    match = _HERMES_PENDING.fullmatch(tail)
+    if match is None:
+        return False
+    key = match.group("key")
+    if key is None:
+        return True
+    if match.group("closed"):
+        return key in _HERMES_KEYS
+    return any(name.startswith(key) for name in _HERMES_KEYS)
+
+
+def _tool_call_partial_start(text: str) -> int:
     window = max(0, len(text) - _GLM_PENDING_WINDOW)
     start = text.find("<", window)
     while start >= 0:
-        if _glm_pending(text[start:]):
+        tail = text[start:]
+        if _glm_pending(tail) or _hermes_pending(tail):
             return start
         start = text.find("<", start + 1)
     return len(text)
@@ -208,7 +249,7 @@ def partial_tag_start(text: str) -> int:
 
     return min(
         dsml.partial_tag_start(text),
-        _glm_partial_start(text),
+        _tool_call_partial_start(text),
         _deepseek_partial_start(text),
     )
 
@@ -241,6 +282,48 @@ def _parse_glm(body: str) -> list[MarkupCall] | None:
         arguments[key] = dsml.decode_value(argument.group("value"))
         cursor = argument.end()
     return [MarkupCall(name=head.group("name"), arguments=arguments, markup="glm")]
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    keys = [key for key, _value in pairs]
+    if len(set(keys)) != len(keys):
+        # A repeated key is ambiguous about which value wins.
+        raise ValueError("repeated key")
+    return dict(pairs)
+
+
+def _json_object(source: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(source, object_pairs_hook=_unique_object)
+    except ValueError:  # diagnostic-expected: frame left in the text for quarantine
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _parse_hermes(body: str) -> list[MarkupCall] | None:
+    call = _json_object(body.strip())
+    # Any other key is an instruction Core does not understand, so the call
+    # is read whole or not at all.
+    if call is None or sorted(call) != sorted(_HERMES_KEYS):
+        return None
+    name, arguments = call["name"], call["arguments"]
+    if not isinstance(name, str) or not _TOOL_NAME.match(name):
+        return None
+    # A template that renders history arguments as a JSON string teaches the
+    # model to write them that way.
+    if isinstance(arguments, str):
+        arguments = _json_object(arguments)
+    if not isinstance(arguments, dict):
+        return None
+    return [MarkupCall(name=name, arguments=arguments, markup="hermes")]
+
+
+def _parse_tool_call(body: str) -> list[MarkupCall] | None:
+    """GLM names the tool first; Qwen and Hermes write one JSON object."""
+
+    if body.lstrip().startswith("{"):
+        return _parse_hermes(body)
+    return _parse_glm(body)
 
 
 def _fenced_call(rest: str) -> tuple[str, str] | None:
@@ -330,7 +413,7 @@ def recover(text: str) -> MarkupRecovery:
     grammars: list[
         tuple[str, re.Pattern[str], Callable[[str], list[MarkupCall] | None]]
     ] = [
-        (_GLM_OPEN, _GLM_FRAME, _parse_glm),
+        (_GLM_OPEN, _GLM_FRAME, _parse_tool_call),
         ("tool\u2581calls\u2581begin", _DS_FRAME, _parse_deepseek),
     ]
     for marker, frames, parse in grammars:

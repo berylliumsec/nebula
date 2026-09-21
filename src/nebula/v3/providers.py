@@ -38,12 +38,17 @@ from urllib.parse import quote, urlsplit
 
 import boto3  # type: ignore[import-untyped]
 from botocore.config import Config as BotocoreConfig  # type: ignore[import-untyped]
+from botocore.exceptions import (  # type: ignore[import-untyped]
+    ConnectTimeoutError as BotocoreConnectTimeoutError,
+    EndpointConnectionError as BotocoreEndpointConnectionError,
+)
 import httpx
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
     SecretStr,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -109,6 +114,9 @@ class ProviderQuotaError(ProviderError):
     """The account's quota or billing limit is spent; retrying cannot help."""
 
 
+_REFUSAL_PREFIX = "provider blocked the response: "
+
+
 class ProviderRefusalError(ProviderResponseError):
     """The provider declined to produce the response.
 
@@ -118,7 +126,7 @@ class ProviderRefusalError(ProviderResponseError):
     """
 
     def __init__(self, reason: str) -> None:
-        super().__init__(f"provider blocked the response: {reason}")
+        super().__init__(f"{_REFUSAL_PREFIX}{reason}")
         self.reason = reason
 
 
@@ -133,6 +141,29 @@ class ProviderMalformedToolCallError(ProviderError):
 
 class UnsupportedCapability(ProviderError):
     """Raised before a request when a required capability is unavailable."""
+
+
+StreamErrorKind = Literal[
+    "refusal",
+    "context_length",
+    "quota",
+    "overloaded",
+    "tool_call",
+    "malformed_tool_call",
+    "response",
+]
+"""Which typed provider failure ended a stream."""
+
+# A subclass comes before its base: a refusal is also a response error.
+_STREAM_ERROR_TYPES: dict[StreamErrorKind, type[ProviderError]] = {
+    "refusal": ProviderRefusalError,
+    "context_length": ProviderContextLengthError,
+    "quota": ProviderQuotaError,
+    "overloaded": ProviderOverloadedError,
+    "tool_call": ProviderToolCallError,
+    "malformed_tool_call": ProviderMalformedToolCallError,
+    "response": ProviderResponseError,
+}
 
 
 class ProviderKind(str, Enum):
@@ -585,6 +616,11 @@ class ModelUsage(BaseModel):
     total_tokens: int = 0
 
 
+# The validation context key under which an adapter hands its request to the
+# response it builds (see ``_adapter_response``).
+_RESPONSE_REQUEST = "request"
+
+
 class ModelResponse(BaseModel):
     provider_id: str
     model: str
@@ -616,29 +652,41 @@ class ModelResponse(BaseModel):
         )
 
     @model_validator(mode="after")
-    def _recover_serialized_tool_calls(self) -> "ModelResponse":
+    def _recover_serialized_tool_calls(self, info: ValidationInfo) -> "ModelResponse":
         """Read tool calls a route serialized into ``text``.
 
         A route that does not run the model's tool parser puts the model's
         own tool markup in the Chat Completions ``content`` field: DeepSeek's
-        DSML, GLM's ``<tool_call>`` arguments or DeepSeek's special tokens.
+        DSML, GLM's or Qwen's ``<tool_call>`` or DeepSeek's special tokens.
         They are tool calls wherever they arrive, so Core reads them into
         ``tool_calls`` and every caller treats them the same as a call the
         route reported properly: the broker, the policy engine and approvals
         all still apply. A frame Core cannot read completely is left in
         ``text`` untouched, for the caller's quarantine to refuse.
+
+        The model writes the names it was shown, which are wire names for a
+        tool a vendor cannot name as Nebula does (``tool_output.search`` goes
+        out as ``tool_output_search``). An adapter builds its response with
+        :func:`_adapter_response`, so a recovered name decodes against the
+        request exactly as a structured call's does.
         """
 
         found = _recover_tool_markup(self.text)
         if not found.recovered:
             return self
+        context = info.context if isinstance(info.context, dict) else {}
+        request = context.get(_RESPONSE_REQUEST)
         recovered: list[ToolCall] = []
         for index, call in enumerate(found.calls):
             try:
                 recovered.append(
                     ToolCall(
                         id=f"{call.markup}-{uuid.uuid4().hex[:24]}",
-                        name=call.name,
+                        name=(
+                            _decode_tool_name(request, call.name)
+                            if isinstance(request, ModelRequest)
+                            else call.name
+                        ),
                         arguments=call.arguments,
                     )
                 )
@@ -701,6 +749,52 @@ class ModelStreamEvent(BaseModel):
     # The model attempted a function call that was malformed or refused
     # upstream. A request that offered no tools can recover the answer.
     tool_call_rejected: bool = False
+    # The typed failure behind an ERROR event, so a consumer raises what
+    # ``complete()`` would have: a refusal with its reason, spent quota, an
+    # overflow. ``None`` for a failure the adapter did not classify.
+    error_kind: StreamErrorKind | None = None
+
+    @classmethod
+    def failure(cls, exc: BaseException) -> "ModelStreamEvent":
+        """The ERROR event that reports ``exc`` to a stream's consumer."""
+
+        return cls(
+            type=StreamEventType.ERROR,
+            error=str(exc),
+            # Chat recovers from an overflow (compact, then retry once) only
+            # when the event says so.
+            context_length_exceeded=isinstance(exc, ProviderContextLengthError),
+            # A transient upstream failure is the operator's to retry; chat
+            # reports it as a provider overload rather than a chat defect.
+            retryable=isinstance(exc, ProviderOverloadedError),
+            tool_call_rejected=isinstance(exc, ProviderToolCallError),
+            error_kind=next(
+                (
+                    kind
+                    for kind, error_type in _STREAM_ERROR_TYPES.items()
+                    if isinstance(exc, error_type)
+                ),
+                None,
+            ),
+        )
+
+    def provider_error(self) -> ProviderError | None:
+        """The typed provider error an ERROR event reports, if it names one."""
+
+        if self.type != StreamEventType.ERROR:
+            return None
+        message = self.error or "provider stream failed"
+        kind = self.error_kind
+        # An event that sets only the older flags still means these.
+        if kind is None and self.context_length_exceeded:
+            kind = "context_length"
+        elif kind is None and self.retryable:
+            kind = "overloaded"
+        if kind is None:
+            return None
+        if kind == "refusal":
+            return ProviderRefusalError(message.removeprefix(_REFUSAL_PREFIX))
+        return _STREAM_ERROR_TYPES[kind](message)
 
 
 class ProviderHealth(BaseModel):
@@ -742,8 +836,9 @@ class ProviderRouteRequest(BaseModel):
 
 
 # A base URL path that ends in its API version: ``/v1``, ``/v1beta``, Z.ai's
-# and BigModel's ``/api/paas/v4``.
-_VERSIONED_BASE_PATH = re.compile(r"/v\d+[a-z0-9]*$")
+# and BigModel's ``/api/paas/v4``, DeepSeek's ``/beta`` (LiteLLM's DeepSeek
+# base, which takes ``/chat/completions`` directly).
+_VERSIONED_BASE_PATH = re.compile(r"/(?:v\d+[a-z0-9]*|beta)$")
 
 
 class ModelProvider(ABC):
@@ -801,9 +896,9 @@ class ModelProvider(ABC):
     def _path(self, path: str) -> str:
         """Avoid duplicating `/v1` when users provide an SDK-style base URL.
 
-        A base that already ends in its API version (``/v1``, or Z.ai's and
-        BigModel's ``/api/paas/v4``) takes the operation path without a
-        second version segment.
+        A base that already ends in its API version (``/v1``, Z.ai's and
+        BigModel's ``/api/paas/v4``, DeepSeek's ``/beta``) takes the operation
+        path without a second version segment.
         """
 
         normalized = "/" + path.lstrip("/")
@@ -868,13 +963,7 @@ class ModelProvider(ABC):
                 exc,
                 stage="providers",
             )
-            yield ModelStreamEvent(
-                type=StreamEventType.ERROR,
-                error=str(exc),
-                context_length_exceeded=isinstance(exc, ProviderContextLengthError),
-                retryable=isinstance(exc, ProviderOverloadedError),
-                tool_call_rejected=isinstance(exc, ProviderToolCallError),
-            )
+            yield ModelStreamEvent.failure(exc)
             return
         if response.reasoning:
             yield ModelStreamEvent(
@@ -3001,7 +3090,8 @@ class OpenAIResponsesProvider(ModelProvider):
             raise ProviderRefusalError("refusal")
         incomplete = data.get("incomplete_details")
         usage = data.get("usage") or {}
-        return ModelResponse(
+        return _adapter_response(
+            request,
             provider_id=self.config.id,
             model=data.get("model", model),
             text="".join(text_parts),
@@ -3113,6 +3203,16 @@ def _decode_tool_name(request: ModelRequest, wire: Any) -> str:
         if match is not None:
             return match
     return sent
+
+
+def _adapter_response(request: ModelRequest, **fields: Any) -> ModelResponse:
+    """An adapter's response to ``request``.
+
+    Tool calls recovered from the reply's text decode against the request's
+    tools, the same as the calls the route reported properly.
+    """
+
+    return ModelResponse.model_validate(fields, context={_RESPONSE_REQUEST: request})
 
 
 def _tool_call(
@@ -3749,7 +3849,8 @@ class OpenAICompatibleProvider(ModelProvider):
             _openai_message_content(message) or _openai_refusal(message),
             template_opened=not routed_reasoning and template_opens_thinking(model),
         )
-        return ModelResponse(
+        return _adapter_response(
+            request,
             provider_id=self.config.id,
             model=data.get("model") or model,
             text=text.strip(),
@@ -4250,7 +4351,8 @@ async def _stream_openai_compatible(
         for call in calls:
             yield ModelStreamEvent(type=StreamEventType.TOOL_CALL, tool_call=call)
         replay_message["reasoning_details"] = replay_details
-        final = ModelResponse(
+        final = _adapter_response(
+            request,
             provider_id=provider.config.id,
             model=response_model,
             text="".join(text_parts).strip(),
@@ -4284,17 +4386,7 @@ async def _stream_openai_compatible(
             exc,
             stage="providers",
         )
-        yield ModelStreamEvent(
-            type=StreamEventType.ERROR,
-            error=str(exc),
-            # Chat recovers from an overflow (compact, then retry once) only
-            # when the event says so; the non-streaming fallback already does.
-            context_length_exceeded=isinstance(exc, ProviderContextLengthError),
-            # A transient upstream failure is the operator's to retry; chat
-            # reports it as a provider overload rather than a chat defect.
-            retryable=isinstance(exc, ProviderOverloadedError),
-            tool_call_rejected=isinstance(exc, ProviderToolCallError),
-        )
+        yield ModelStreamEvent.failure(exc)
 
 
 # ``claude-<family>-<major>[-<minor>]`` anywhere after a Bedrock provider or
@@ -4661,7 +4753,8 @@ class AnthropicProvider(ModelProvider):
             if not "".join(text_parts).strip():
                 raise _anthropic_refusal(data)
         usage = data.get("usage") or {}
-        return ModelResponse(
+        return _adapter_response(
+            request,
             provider_id=self.config.id,
             model=data.get("model", model),
             text="".join(text_parts),
@@ -5079,7 +5172,8 @@ class GeminiProvider(ModelProvider):
                 )
             )
         usage = data.get("usageMetadata") or {}
-        return ModelResponse(
+        return _adapter_response(
+            request,
             provider_id=self.config.id,
             model=model,
             text="".join(text_parts),
@@ -5182,11 +5276,23 @@ _BEDROCK_TRANSIENT_ERRORS = frozenset(
 )
 
 
+# A connection that never opened cannot have reached Bedrock, so the request
+# is resent, as the httpx adapters resend ``ConnectError`` and
+# ``ConnectTimeout``. botocore's own retries are off, and a read timeout is
+# still never resent.
+_BEDROCK_UNOPENED_CONNECTION_ERRORS = (
+    BotocoreEndpointConnectionError,
+    BotocoreConnectTimeoutError,
+)
+
+
 def _bedrock_failure(exc: BaseException) -> ProviderError:
     """Type a Converse failure so chat can compact and retry an overflow."""
 
     detail = _bedrock_error_detail(exc)
     message = f"Bedrock request failed: {detail}"
+    if isinstance(exc, _BEDROCK_UNOPENED_CONNECTION_ERRORS):
+        return ProviderOverloadedError(message)
     if _context_length_error(detail, None):
         return ProviderContextLengthError(message)
     response = getattr(exc, "response", None)
@@ -5436,7 +5542,8 @@ class BedrockProvider(ModelProvider):
             thought = text.get("text") if isinstance(text, dict) else None
             if isinstance(thought, str) and thought.strip():
                 thoughts.append(thought)
-        return ModelResponse(
+        return _adapter_response(
+            request,
             provider_id=self.config.id,
             model=model,
             text="".join(block.get("text", "") for block in blocks),
