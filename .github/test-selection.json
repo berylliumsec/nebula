@@ -1,19 +1,24 @@
 {
-  "change_digest": "dde601105821f2eab95bcffe499888a15c4dcb99f386a27f985f7772f04e3400",
-  "reviewed_by": "Claude review of subagent reasoning-level selection",
-  "reason": "Subagents always ran at the provider model's default reasoning level: neither start tool took a level and the child request never carried one, so a parent set to high delegated at the default. The selected files cover both parents end to end. A provider parent's child inherits the conversation's level, an explicit level overrides it, an unknown level is refused without a child, and the start result and list view report the level. A harness parent's child inherits the harness session's level, takes an explicit override through the gateway schema, and keeps the model default under a vendor-only level. A goal continuing on late reports now sends the conversation's current level (the new goal test fails on the old code with None). The remaining cases in both files guard the unchanged start, wait, stop, restart and delivery paths that the changed start and continuation code runs through.",
-  "exclusions": "No frontend, Playwright, native or production-build gates apply: the UI does not read the new view field, and the operator settings, persistence schema (one optional record field, no migration) and packaging are unchanged. test_chat_goals.py is excluded because chat.py's own goal continuation is untouched; its subagent-report sibling is covered by the new case. test_harnesses.py and test_harness_adapters.py are excluded because the harness change is limited to the subagent.start gateway schema and pass-through, which the selected harness subagent file exercises. Full suites and live provider calls are excluded.",
+  "change_digest": "55e797ac4246fd4a2571dcfaed591cc5c1aed048371b7b80a61f5c0e9f239155",
+  "reviewed_by": "Claude review of the settings legacy-hash test",
+  "reason": "App.test.tsx 'keeps diagnostics out of the advanced view while preserving legacy hashes' failed on origin/main whenever the file ran. #407 (0244d71) made the router location own the SettingsPage section, but the test still planted #security-settings with window.history.replaceState and rendered a MemoryRouter at a bare /settings, so the router effect correctly settled on Setup. Under BrowserRouter the router hash is the address-bar hash, so that state cannot occur in the app; the test now passes the legacy hash through the router. It passed alone only because the lazy SettingsPage seeded its first render from window.location.hash and findByRole read the DOM before the router effect ran; the initial section and advanced group now come from the router location, so the first paint agrees with the effect (the old test now fails deterministically alone too). Frontend: App.test.tsx carries the fixed test; SettingsPage.test.tsx and SettingsLens.test.tsx cover section routing from the router, tab/group hash rewrites and the embedded lens path that keeps using embeddedTarget. Playwright: appearance-settings deep-links /settings#appearance-settings and asserts Advanced is aria-current (the production legacy-hash path); settings-search covers catalog routes into sections; critical-workspaces screenshots /settings on first paint at desktop, compact and narrow.",
+  "exclusions": "No Python or native changes. The whole ui vitest suite (159 files, 1042 tests) was run locally and passes. After merging main (#471 refreshed the narrow Project baselines), area:critical-workspaces was run locally on narrow and all 7 pass, including the Settings screenshots the loop previously never reached. Other areas SettingsPage.tsx falls back to (desktop-interface, mobile-layout) are broad fallbacks; the section-state change is covered by the selected areas.",
   "expected_tests": {
-    "python": 28,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 46,
     "native": 0,
-    "playwright": 0
+    "playwright": 25
   },
-  "python": [
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_harness_provider_subagents.py"
+  "python": [],
+  "frontend": [
+    "ui/src/App.test.tsx",
+    "ui/src/pages/SettingsPage.test.tsx",
+    "ui/src/components/SettingsLens.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:appearance-settings",
+    "area:settings-search",
+    "area:critical-workspaces"
+  ]
 }

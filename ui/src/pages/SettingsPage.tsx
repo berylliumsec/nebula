@@ -201,8 +201,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const locationHash = location.hash;
   const rootRef = useRef<HTMLDivElement>(null);
   const embeddedAdvancedGroup = advancedGroupFromHash(embeddedTarget);
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => embedded ? sectionFromTarget(embeddedTarget) : sectionFromHash());
-  const [openAdvancedGroup, setOpenAdvancedGroup] = useState<AdvancedSettingsGroup>(() => embedded ? embeddedAdvancedGroup : advancedGroupFromHash());
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>(() => embedded ? sectionFromTarget(embeddedTarget) : sectionFromHash(locationHash.slice(1)));
+  const [openAdvancedGroup, setOpenAdvancedGroup] = useState<AdvancedSettingsGroup>(() => embedded ? embeddedAdvancedGroup : advancedGroupFromHash(locationHash.slice(1)));
   const [checkingTerminal, setCheckingTerminal] = useState(false);
   const [preparationClock, setPreparationClock] = useState(Date.now());
   const [selectingRuntime, setSelectingRuntime] = useState<string>();
