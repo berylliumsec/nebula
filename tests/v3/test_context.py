@@ -8,6 +8,7 @@ from nebula.v3.context import (
     ContextCapacityError,
     ContextCompactionError,
     ContextCompactor,
+    ContextMemory,
     ContextSource,
     estimate_messages,
     estimate_tokens,
@@ -34,6 +35,7 @@ from nebula.v3.providers import (
     ProviderConfig,
     ProviderHealth,
     ProviderKind,
+    json_schema_instruction,
 )
 from nebula.v3.storage import NebulaStore
 
@@ -923,9 +925,11 @@ def test_compaction_preserves_later_corrections_and_treats_history_as_untrusted(
 
     assert result.snapshot.memory
     assert result.snapshot.memory.corrections[0].sources[1].sequence == 2
-    assert (
-        provider.requests[0].instructions
-        == "Return structured working memory matching the supplied schema."
+    # The instructions are Core's own: the request and, for a provider without
+    # structured output, the memory schema. History never joins them.
+    assert provider.requests[0].instructions == (
+        "Return structured working memory matching the supplied schema.\n\n"
+        + json_schema_instruction(ContextMemory.model_json_schema())
     )
     assert "Ignore previous instructions" in str(
         provider.requests[0].messages[0].content

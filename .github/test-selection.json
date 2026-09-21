@@ -1,29 +1,35 @@
 {
-  "change_digest": "acd875a28110f9f56115b73433c6dce6db2c9f785babbb1dab511b0faea4ebe1",
-  "reviewed_by": "Claude review of in-turn-context-pruning",
-  "reason": "Inside one chat turn every routing request re-sent every earlier tool result with no pruning, so a long agentic turn on a finite window outgrew it and _ensure_request_capacity failed the whole turn with ChatConfigurationError; the operator got nothing and none of the results reached the next turn (HIST-3: 13 tool calls of ~7 KB on a 32K window, 31236 estimated input tokens > 30720, turn failed). A provider-side context-length rejection after a tool ran could not be recovered either: _recover_context_length_rejection only rebuilds the conversation and re-sends the same tool results, its no-repeat guard read prepared.turn, which the routing loop refreshes only after each routing reply (a lag of one step, so a fresh turn rejected at step 2 skipped the guard while a later step or a resumed turn hit it; ROUTE-13), and the final synthesis streamed provider.stream directly with no recovery at all. Now _with_tool_history builds every routing and synthesis request: while the request exceeds the model's target input it replays the oldest results as a compact receipt (status, output_cleared, durable tool_call_id, result_summary, artifact ids, and a note to use tool_output.search/tool_output.read), found by bisection, keeping the newest result whole up to the input capacity; every call keeps its result, id, batch group and replayed reasoning (opencode clears old tool output the same way, Codex compacts mid-turn). A routing request that still cannot fit ends routing and the turn answers from its results instead of failing. _recover_context_length_rejection reads the current turn and, for a request carrying tool results, first returns one retry with all but the newest result cleared (the newest too when nothing else is left), which runs no tool again; the conversation rebuild and its no-repeat refusal are unchanged otherwise. The synthesis stream is wrapped in _stream_with_context_recovery. tests/v3/test_in_turn_context_pruning.py: a 20 x 7 KB turn on a 32K window completes with every request within capacity and the oldest results replaced by receipts; routing-only overhead that cannot fit ends in an answer from the results; the real OpenAI-compatible adapter behind a wire that answers HTTP 400 context_length_exceeded for routing step 3 and for the synthesis retries each once with the older result cleared and no tool rerun; and a rejection with nothing left to clear reads the current turn. All four fail on origin/main (capacity error, capacity error, 'will not repeat tool work', 'could not be reassembled safely'). The selected existing node ids cover the conversation-level context recovery, goal fitting and batching in the routing loop, the synthesis stream paths now inside the recovery wrapper, and the #502 replay grouping, reasoning and screenshot placement that the cleared history must keep.",
-  "exclusions": "Scoped per the CI-scoping rule: test_chat.py, test_chat_tool_loop.py, test_chat_final_synthesis_recovery.py, test_reasoning_replay.py, test_synthesis_tool_declarations.py, test_chat_routing_tolerance.py, test_malformed_tool_call_feedback.py, test_routing_prose_answer.py, test_chat_goals.py, test_chat_media.py, test_chat_subagents.py, test_harness_provider_subagents.py, test_context.py and test_chat_workspace.py were run locally in full and pass but are not selected. No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through chat.py) never runs a tool turn long enough to reach the context window or a provider context rejection; the Python tests drive the tool loop directly. No full suites.",
+  "change_digest": "e504649ec3dbc1800f369c45528f81ff49c554ad4fc477c8c8999585b18f0b32",
+  "reviewed_by": "Claude review of chat-leftovers",
+  "reason": "Five gaps left by #492, #499, #502, #504 and #505. (1) chat._routing_thoughts hid a provider control frame only when the routing text started with one, so commentary followed by an unreadable DSML, GLM or DeepSeek frame beside a real tool call put the raw frame into the operator's reasoning; it now keeps only the text before the first frame anywhere (_operator_answer_text / tool_markup.frame_start). (2) ContextCompactor._request_memory told the model to match 'the supplied schema' but sent it only as response_format, so a provider without structured output never saw it; the schema now goes in the instructions via json_schema_instruction whenever it is not on the wire, and _hierarchical_memory reserves room for it when sizing segments (the two small-window mission compaction tests in test_orchestration.py exercise that reserve). (3) _recover_context_length_rejection rebuilt the retry from the stored transcript only; a non-streamed complete() has no durable turn and stores its messages with the answer, so a brand-new conversation failed with 'could not be reassembled safely' and an existing one was retried without the operator's current message; recovery now appends the unstored new messages (with selected context). (4) The mission specialist loop replayed each earlier call as its own assistant message with no reasoning; agent_tooling now tags each routing response's records with response_group, reasoning_state (first record) and provider_metadata and _provider_tool_history passes them on, so #502's adapters replay one message per batch with its reasoning; a deviation-blocked result drops those fields. (5) The Settings provider dialog's 'Maximum output tokens' placeholder said '2048 default', wrong since #492; it now says the value is sized from the model with a help note. tests/v3/test_chat_leftovers.py (11 tests, 9 fail on origin/main 710b785; the 2 guards pass before and after) drives each path; the other node ids are the edited test_context assertion and the closest existing tests of the changed functions. SettingsPage.test.tsx gains a test that fails on main.",
+  "exclusions": "No native tests: no Tauri or Rust change. Playwright: only entry:workbench-view-authority/desktop, the narrowest catalogued entry whose tests open the Add model provider dialog ('stabilization audit every primary workspace view'); no screenshot baseline shows the collapsed Advanced provider options, so no baseline changes. Frontend: only SettingsPage.test.tsx, the component's own vitest file. Python: whole large files (test_chat.py, test_chat_tool_loop.py, test_orchestration.py, test_context.py and others) ran locally and are excluded; only the node ids listed are selected. No full suites.",
   "expected_tests": {
-    "python": 16,
-    "frontend": 0,
+    "python": 26,
+    "frontend": 6,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python": [
-    "tests/v3/test_in_turn_context_pruning.py",
+    "tests/v3/test_chat_leftovers.py",
+    "tests/v3/test_chat_routing_tolerance.py::test_routing_prose_beside_tool_calls_runs_the_calls",
+    "tests/v3/test_chat_routing_tolerance.py::test_unreadable_routing_control_frame_finishes_through_synthesis",
+    "tests/v3/test_context.py::test_compaction_preserves_later_corrections_and_treats_history_as_untrusted",
+    "tests/v3/test_deepseek_glm_compat.py::test_compaction_falls_back_when_response_format_rejected",
+    "tests/v3/test_deepseek_glm_compat.py::test_compaction_falls_back_only_once",
+    "tests/v3/test_orchestration.py::test_mission_compacts_only_model_facing_dependency_context_and_charges_usage",
+    "tests/v3/test_orchestration.py::test_mission_rejects_compaction_before_call_when_budget_is_insufficient",
     "tests/v3/test_chat.py::test_confirmed_context_rejection_refreshes_compacts_and_retries_once",
-    "tests/v3/test_chat_tool_loop.py::test_goal_exhaustion_after_routing_stops_before_tool_effect",
-    "tests/v3/test_chat_tool_loop.py::test_batched_calls_all_run_one_step_at_a_time",
-    "tests/v3/test_chat_tool_loop.py::test_final_synthesis_recovers_from_a_provider_control_frame",
-    "tests/v3/test_chat_tool_loop.py::test_final_synthesis_exhaustion_preserves_tools_and_is_retryable_provider_failure",
-    "tests/v3/test_chat_final_synthesis_recovery.py::test_final_synthesis_recovers_from_a_nameless_tool_call_fragment",
-    "tests/v3/test_chat_final_synthesis_recovery.py::test_final_synthesis_recovers_from_a_rejected_tool_call_event",
-    "tests/v3/test_reasoning_replay.py::test_chat_records_the_batch_group_and_reasoning_once",
-    "tests/v3/test_reasoning_replay.py::test_a_step_core_delivers_is_a_batch_of_its_own",
-    "tests/v3/test_reasoning_replay.py::test_history_without_groups_still_replays_one_call_per_message",
-    "tests/v3/test_reasoning_replay.py::test_screenshot_follows_its_result_on_chat_completions"
+    "tests/v3/test_history_content_fidelity.py::test_selected_context_survives_context_length_recovery",
+    "tests/v3/test_specialist_tool_batches.py::test_specialist_replays_every_batched_result_to_the_next_turn",
+    "tests/v3/test_specialist_tool_batches.py::test_specialist_keeps_completed_calls_when_a_batch_pauses_for_approval",
+    "tests/v3/test_specialist_tool_batches.py::test_mission_persists_a_partial_batch_when_a_task_pauses_for_approval",
+    "tests/v3/test_specialist_routing_tolerance.py::test_consecutive_routing_deviations_block_the_task_after_three"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/pages/SettingsPage.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:workbench-view-authority/desktop"
+  ]
 }

@@ -719,9 +719,14 @@ class ContextCompactor:
             )
         complete_prompt_capacity = limits.input_capacity - summary_output_tokens
         # Every compactor request (each segment and every roll-up) embeds the
-        # objective beside the sources, so the segment budget is carved from
-        # what remains after that reservation rather than the whole capacity.
-        segment_capacity = complete_prompt_capacity - self._objective_reserve(objective)
+        # objective beside the sources, and the memory schema when it cannot go
+        # on the wire, so the segment budget is carved from what remains after
+        # those reservations rather than the whole capacity.
+        segment_capacity = (
+            complete_prompt_capacity
+            - self._objective_reserve(objective)
+            - self._schema_reserve(provider)
+        )
         if segment_capacity < COMPACTOR_MIN_OUTPUT_TOKENS:
             raise ContextCapacityError(
                 "compaction objective leaves too little room for context segments"
@@ -815,6 +820,16 @@ class ContextCompactor:
                 )
             )
             + COMPACTOR_PROMPT_OVERHEAD_TOKENS
+        )
+
+    @staticmethod
+    def _schema_reserve(provider: ModelProvider) -> int:
+        """Instruction room the memory schema takes without structured output."""
+
+        if provider.capabilities.structured_output:
+            return 0
+        return estimate_tokens(
+            json_schema_instruction(ContextMemory.model_json_schema())
         )
 
     @classmethod
@@ -923,10 +938,11 @@ class ContextCompactor:
         last_error = "invalid structured memory"
         previous_output = ""
         schema = ContextMemory.model_json_schema()
-        # Whether the schema goes on the wire (response_format) or, once the
-        # provider has refused that parameter, in the instructions.
+        # Whether the schema goes on the wire (response_format) or in the
+        # instructions: for a provider without structured output, and once a
+        # provider has refused that parameter.
         wire_schema = provider.capabilities.structured_output
-        schema_in_prompt = False
+        schema_in_prompt = not wire_schema
         attempt = 0
         while attempt < 2:
             messages = [ModelMessage(role="user", content=prompt)]
