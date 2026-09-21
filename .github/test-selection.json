@@ -1,28 +1,21 @@
 {
-  "change_digest": "35d4f8b5b6119b702f3febc0708ed1312fe5d7a2a8a2c418c0392fca8026e6b0",
-  "reviewed_by": "Claude review of MCP server descriptions",
-  "reason": "McpServerProfile gains an operator-written description (up to 500 characters). Jev ranks an on-demand server by it, falling back to its handshake instructions and then its tool names as before. Once tools are picked for a turn, by Jev or by the local ranker, the catalog receipt records the servers behind the picks and Jev's ranked servers (ToolSuggestionReceipt.source_ids is new), and catalog_instructions tells the model which server each pick comes from and, as JSON data, what the operator says each of those servers is for. Handshake instructions still never reach the model. The mcp.json importer now maps `description` (previously skipped), truncating past 500 characters with a warning; a re-import without one keeps the Nebula-written value, and export writes it. Settings gets a Description field in the Add/Edit MCP server dialog and a two-line description on the server card, per the approved Figma mockup. test_tool_catalog.py covers the instruction text (server names on picks, the description line, old receipts without sources), picked_sources ordering, and the local-ranker path through ChatService.prepare. test_tool_suggestions.py covers the description beating handshake instructions in Jev's criteria, source_ids on the receipt, and the Jev path through prepare into the model's instructions. test_mcp_import.py covers import, truncation, keep-on-silent-reimport, replace-on-described-reimport, export round trip, type errors, the regenerated schema, and the REST create/patch/length limit. test_operator_help.py is selected because the MCP help entry changed; test_chat.py because chat.py changed. HarnessSettings.test.tsx covers editing, saving and showing the description; client.test.ts covers the wire mapping. The mcp-import real-Core journey drives the MCP settings section and edit dialog on desktop and at 390px.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust changed. The mcp-import area is limited to its desktop and chromium-390 entries, both run locally and passing; the other widths render the same dialog and card markup. The assistant, provider-reasoning and tool-suggestions areas that chat.py and tool_suggestions.py map to are not selected: the chat.py change only attaches server details to the catalog receipt, which the selected Python tests assert through ChatService.prepare, and no chat UI changed. The core-api area that domain.py maps to is not selected: the new field is optional with a default, and the REST path is covered by test_mcp_import.py. ui/src/api/types.ts and components-domain.css are covered by the HarnessSettings and client tests plus the selected real-Core journey. Missions, schedules, subagents and harness chats do not read the catalog receipt, so their suites are not selected; test_chat_tool_loop, test_chat_goals, test_chat_schedules, test_chat_subagents, test_harnesses, test_exporter, test_mcp_probe and test_mcp_gateway were run locally and pass.",
+  "change_digest": "985c84c7c45c2533015d0019549b4e735809f8b98a190fbbec52e0f024957f2f",
+  "reviewed_by": "Claude review of the Ask Nebula popup WebKit flake",
+  "reason": "SelectionActionsProvider ends a selected-text action with a 180ms exit that called document.getSelection().removeAllRanges(). Ask Nebula focuses its question box before the exit finishes, so the selection being cleared is that box's caret; WebKit then keeps focus on the box but drops every keystroke until it is clicked (3/3 in Playwright's WebKit, Chromium kept the text). The exit now leaves the selection alone when the action moved focus into a text box, and still clears it when focus stayed put. selectionActions.test.tsx covers both paths and fails on the old provider. The same race caused the popup e2e's toHaveValue flake (fill's insertText landing after the caret was cleared) and a 30s timeout when the second popup's fill lost its text and Ask question stayed disabled. The e2e now types into the auto-focused box after the toolbar has gone, which fails every run on WebKit without the fix. The mobile-webkit CI failure in run 35597735135 was not a timeout: its traces show the page closing about 5s into the test, and locally the WPEWebProcess core shows a SIGSEGV on a WebKit RunLoop thread. Drag loops crashed it within 20 drags every time (launcher 3/3, launcher without pointer capture 2/2, popup handle 2/2), while keyboard loops, a plain page drag and a tap never did, so WebKit projects move the launcher and popup with the keyboard and Chromium projects keep the pointer drags. The assistant entries on mobile-webkit and mobile-chromium run the popup test and both selected-context tests that go through the toolbar.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python or native code changed. The assistant/desktop entry and the ask-nebula-popup area on its other six projects are not selected: locally the desktop assistant entry passed (52 passed, 1 existing skip) and the popup test passed 3/3 on compact, mobile-chromium-small, mobile-chromium-wide, mobile-chromium-ledger-390, mobile-webkit-small and mobile-webkit-wide. The popup test also passed with --repeat-each 10 on mobile-webkit and mobile-chromium, and the selected entries passed in full locally (mobile-webkit 48, mobile-chromium 45 plus 4 existing skips). The real-Core journeys that use the selection toolbar are not selected: the provider change only skips clearing a selection that a newly focused text box owns, which the unit test covers. AskNebulaPopup.test.tsx and the WorkbenchDraftContext tests were run locally and pass; neither file changed.",
   "expected_tests": {
-    "python": 168,
-    "frontend": 91,
+    "python": 0,
+    "frontend": 15,
     "native": 0,
-    "playwright": 2
+    "playwright": 97
   },
-  "python": [
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_mcp_import.py",
-    "tests/v3/test_operator_help.py",
-    "tests/v3/test_chat.py"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/components/HarnessSettings.test.tsx",
-    "ui/src/api/client.test.ts"
+    "ui/src/components/selection/selectionActions.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:mcp-import/assistant-real-desktop",
-    "entry:mcp-import/assistant-real-chromium-390"
+    "entry:assistant/mobile-webkit",
+    "entry:assistant/mobile-chromium"
   ]
 }
