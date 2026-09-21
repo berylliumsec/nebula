@@ -1,28 +1,28 @@
 {
-  "change_digest": "7c1131f70f272951299d85813ecc18222554de392e9b0d483dc7a44290757e6f",
-  "reviewed_by": "Claude review of changing model and reasoning effort while a response runs",
-  "reason": "The chat's Model, Provider and Effort pickers were disabled for the whole of an active response and Core refused both changes then, so a running goal (always mid-response) could never change its model or effort. Core now accepts an effort-only session update and a runtime switch while a turn is active; the switch is saved on the conversation through a new apply endpoint after the existing preflight and compaction confirmation; settling a turn keeps the conversation's newer runtime and settings instead of writing the turn's back; goal continuations and queued provider follow-ups read the conversation's current model and effort; a follow-up whose conversation changed provider is routed to review; harness follow-ups may carry a newly picked model. The selected Python files cover the runtime switch and compaction gate (test_chat), the API guard and new endpoint (test_chat_api), goal continuation across a mid-turn switch (test_chat_goals), queue adoption, provider review and harness model follow-ups (test_chat_queue), and schedules, which follow the conversation's runtime (test_chat_schedules). The client unit tests cover the new apply call and the effort-only save. Playwright selects the provider runtime switch area (the confirmed and verified switches now save on the conversation, plus a new mid-response test that also exercises the stale-revision retry), the provider reasoning area that drives the effort picker, and the real-Core goal lifecycle entry, which now changes the effort during a live goal turn and checks the stop does not overwrite it.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. Harness runtime code is unchanged; the harness follow-up path is covered by the queue test that drives a real harness turn with a new model. No native tests are selected because no Rust changed. The broad assistant Playwright area is excluded because the only controls whose behaviour changed are the assistant settings pickers, which the selected areas render on desktop and both phone projects.",
+  "change_digest": "2e9476f991429c6bc87ca6f54a93802df30f65343d2eaf764e1c46e83ea35810",
+  "reviewed_by": "Claude review of the always-send MCP servers change",
+  "reason": "A provider chat's ticked MCP servers are now always sent (their tools are pinned out of the on-demand catalog), and every other enabled, probed server with a usable tool joins the catalog that Jev or the local ranker picks from. chat.py builds the catalog only for a turn that already uses tools and only when the project defers tools, records it as mcp_catalog_snapshot so prepare_resume rebuilds the same catalog, and asks Jev only about catalog servers. mcp.py gains usable_mcp_tools (the one tool filter now shared by resolve_mcp_profiles, build_mcp_tool_plugins and the tool-candidates endpoint) and catalog_mcp_profiles; tool_catalog.deferrable_specs gains always_loaded_sources. The Python selection is test_tool_catalog.py and test_tool_suggestions.py, whose prepare tests now run on real stored server profiles (a ticked notes server and an on-demand tracker server) and cover the always-sent split, on-demand off, a plain chat, resume from the snapshot and the catalog lookup; test_mcp_probe.py for the shared tool filter; and test_chat.py for the prepare path the catalog joins. The frontend selection is the new McpServerChoices component test (row states, hint, Jev implying deferral, scope failure, empty state), client.test.ts for mapping on_demand_tools without writing it back, and guides.test.tsx for the edited MCP guide step. Playwright selects the assistant-settings-navigation area, which opens the provider Assistant settings popover on desktop and both phones, and the assistant-viewer desktop entry, whose browser Assistant test asserts the popover's empty MCP state stays in view.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust changed. The broad assistant, provider-reasoning, provider-thinking and chat-edit-in-place areas that chat.py and SessionsPage.tsx map to are not selected: the SessionsPage change swaps one inline checklist for McpServerChoices with the same props, and the chat.py change is confined to which MCP profiles feed the tool components, which the selected Python tests exercise directly. The mcp-import area is not selected: mcp.py changes only the tool filter shared by runtime and candidates, not import. ui/src/App.test.tsx is not selected; its 'keeps diagnostics out of the advanced view while preserving legacy hashes' test fails only when the whole file runs and is already red on main. Missions, schedules, subagents and harness chats read only mcp_server_ids, which keeps its meaning, so their suites are not selected.",
   "expected_tests": {
-    "python": 133,
-    "frontend": 75,
+    "python": 138,
+    "frontend": 93,
     "native": 0,
-    "playwright": 18
+    "playwright": 6
   },
   "python": [
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_chat_queue.py",
-    "tests/v3/test_chat_schedules.py"
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_tool_suggestions.py",
+    "tests/v3/test_mcp_probe.py",
+    "tests/v3/test_chat.py"
   ],
   "frontend": [
-    "ui/src/api/client.test.ts"
+    "ui/src/components/McpServerChoices.test.tsx",
+    "ui/src/api/client.test.ts",
+    "ui/src/guides/guides.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:provider-runtime-switch",
-    "area:provider-reasoning",
-    "area:provider-goal-lifecycle-core"
+    "area:assistant-settings-navigation",
+    "entry:assistant-viewer/desktop"
   ]
 }
