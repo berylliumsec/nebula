@@ -1,21 +1,21 @@
 {
-  "change_digest": "3f3df75790a682e368530f83ed79e27add30284908a740393546e8ea6d2c350a",
-  "reviewed_by": "Claude review of DSML tool-call recovery",
-  "reason": "Some OpenRouter routes serialize a DeepSeek model's DSML tool calls into the Chat Completions content field instead of tool_calls. Core recognised the frame and quarantined it, which discarded the work the model had asked for and sent the turn into final-answer recovery. This adds a parser (src/nebula/v3/dsml.py) that reads a complete frame back into ordinary tool calls, and a ModelResponse validator that applies it wherever a response is built, so every adapter, streaming or not, reports the calls in tool_calls and the frame leaves the text. Recovered calls take the same broker, policy and approval path as any other call; the parser executes nothing. Parsing is all-or-nothing per frame: a fragment, prose inside a call, a repeated or unnamed argument, an identity no tool can have, or an oversized frame is left in the text exactly as it arrived, and the existing quarantine, now sharing the parser's grammar, still refuses it. test_dsml.py covers the grammar (both pipes, both escape spellings, several invokes and frames, prose around a frame, JSON-typed and literal values, every unreadable shape, the size bound) and the ModelResponse hook (idempotent on re-validation, merging with route-reported calls, leaving unreadable text for quarantine). test_chat_tool_loop.py proves a frame at a routing step runs its tool through the broker, that a readable frame at final synthesis is recovered as a late tool call, and that an unreadable one is still quarantined. test_chat.py and test_providers.py are selected because they construct ModelResponse on every path the validator now runs on.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No frontend or Playwright test is selected because no UI changed: a recovered call reaches the transcript as the ordinary tool call it already renders. No native tests are selected because no Rust changed. No real-Core entry is selected: reproducing the route requires a live OpenRouter DeepSeek endpoint that CI does not have, and the provider contract the parser relies on is exercised directly on ModelResponse.",
+  "change_digest": "55960a92ca016e7e110351aa876ce49b12d6c59fcb3b320950443e7d90b4c059",
+  "reviewed_by": "Claude review of the floating Agent view",
+  "reason": "The Agent view was reachable only as a tab in the conversation drawer. The composer's Agent view button now opens it as a floating, non-modal panel over the conversation that can be moved, resized, minimized to a launcher, docked back into the conversation's details and popped out again, with its placement and geometry remembered per device and a bottom sheet on phones. The timeline, snapshot body, follow/stop logic and status line moved into a shared AgentViewBody so the floating and docked placements render the same view; ChatResultStream is now the docked placement with a Pop out control. The frontend selection covers the panel (placement and geometry storage, clamping, first placement clear of the toolbar and composer, keyboard move and resize, Escape to minimize, the launcher and its counts, the phone sheet) and the docked stream (follow, stop, back to newest, pop out). The Playwright selection is the structured-results area, which renders the explorer in every placement and now includes an end-to-end journey on desktop, narrow, mobile Chromium and mobile WebKit: open from the composer with focus inside, the composer usable underneath, axe on the panel, keyboard move, Escape to a launcher and back to the same place, dock with focus on Pop out, the choice surviving a reload, pop out, and close returning focus to the composer button, plus the sheet on phones.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python test is selected because no Python changed: publishing, retention and the REST API are untouched. No native tests are selected because no Rust changed. No real-Core entry is selected: the view reads the same list and detail endpoints as before, which the structured-results Python tests and mock-backed journeys cover, and placement is purely client-side. The assistant area was run locally on desktop: 49 passed, and the 2 failures (conversation More actions on mobile Workbench navigation; a provider turn that thinks without answering) fail identically on origin/main without this change. The critical-workspaces area passed locally on desktop.",
   "expected_tests": {
-    "python": 181,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 19,
     "native": 0,
-    "playwright": 0
+    "playwright": 24
   },
-  "python": [
-    "tests/v3/test_dsml.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_providers.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/structured-result/AgentViewPanel.test.tsx",
+    "ui/src/components/structured-result/ChatResultStream.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:structured-results"
+  ]
 }
