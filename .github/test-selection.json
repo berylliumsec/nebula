@@ -1,21 +1,28 @@
 {
-  "change_digest": "4e7f3f8d0a9d49f182517f083c3b8e1261a81f111feb518917592b84c36af008",
-  "reviewed_by": "Claude review of two chat regressions from #456 and #460",
-  "reason": "Two chat tests have been failing on main because of my own earlier changes, unseen because each of those receipts selected only its own Playwright area. #460 rendered Continue as mission first in the conversation actions menu as a hidden item for non-harness conversations; opening the menu focused that hidden button and arrow keys counted it, so 'conversation More actions remain usable on mobile Workbench navigation' failed. The item is now rendered only for harness conversations, after Export transcript so the first item is the same in every conversation, and first focus and arrow order skip hidden or disabled items; a disabled mission item explains why. #456 replaced the 'Retry final answer' error with a calm 'Finish the answer' status that deliberately has no Reload conversation button, and 'assistant upgrade names a provider turn that thinks without answering' still looked for the old controls; it now asserts the status the operator sees and completes the turn with Finish the answer. The conversation-details test for the mission item now also proves the keyboard order. The selection is the whole assistant area on its three mock projects, the area both regressions escaped, where it passed locally in full (desktop 51, mobile Chromium 44, mobile WebKit 47, none failing), plus conversation-details for the narrow sheet.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python test is selected because no Python changed. No frontend unit test is selected: the only source change is the menu markup and its focus selectors in SessionsPage, which no unit test renders, and the Playwright journeys exercise them in a browser. No native tests are selected because no Rust changed. The assistant area's real-Core entry (assistant-real-desktop) is not selected: neither the menu nor the recovery notice changes anything Core serves, and the mock entries cover both in a browser. The provider-thinking test also fails on the narrow 390px desktop-Chrome project, where something covers the Thinking summary; that project is not in its area, it passes on the real phone projects, and it is outside this repair.",
+  "change_digest": "35d4f8b5b6119b702f3febc0708ed1312fe5d7a2a8a2c418c0392fca8026e6b0",
+  "reviewed_by": "Claude review of MCP server descriptions",
+  "reason": "McpServerProfile gains an operator-written description (up to 500 characters). Jev ranks an on-demand server by it, falling back to its handshake instructions and then its tool names as before. Once tools are picked for a turn, by Jev or by the local ranker, the catalog receipt records the servers behind the picks and Jev's ranked servers (ToolSuggestionReceipt.source_ids is new), and catalog_instructions tells the model which server each pick comes from and, as JSON data, what the operator says each of those servers is for. Handshake instructions still never reach the model. The mcp.json importer now maps `description` (previously skipped), truncating past 500 characters with a warning; a re-import without one keeps the Nebula-written value, and export writes it. Settings gets a Description field in the Add/Edit MCP server dialog and a two-line description on the server card, per the approved Figma mockup. test_tool_catalog.py covers the instruction text (server names on picks, the description line, old receipts without sources), picked_sources ordering, and the local-ranker path through ChatService.prepare. test_tool_suggestions.py covers the description beating handshake instructions in Jev's criteria, source_ids on the receipt, and the Jev path through prepare into the model's instructions. test_mcp_import.py covers import, truncation, keep-on-silent-reimport, replace-on-described-reimport, export round trip, type errors, the regenerated schema, and the REST create/patch/length limit. test_operator_help.py is selected because the MCP help entry changed; test_chat.py because chat.py changed. HarnessSettings.test.tsx covers editing, saving and showing the description; client.test.ts covers the wire mapping. The mcp-import real-Core journey drives the MCP settings section and edit dialog on desktop and at 390px.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust changed. The mcp-import area is limited to its desktop and chromium-390 entries, both run locally and passing; the other widths render the same dialog and card markup. The assistant, provider-reasoning and tool-suggestions areas that chat.py and tool_suggestions.py map to are not selected: the chat.py change only attaches server details to the catalog receipt, which the selected Python tests assert through ChatService.prepare, and no chat UI changed. The core-api area that domain.py maps to is not selected: the new field is optional with a default, and the REST path is covered by test_mcp_import.py. ui/src/api/types.ts and components-domain.css are covered by the HarnessSettings and client tests plus the selected real-Core journey. Missions, schedules, subagents and harness chats do not read the catalog receipt, so their suites are not selected; test_chat_tool_loop, test_chat_goals, test_chat_schedules, test_chat_subagents, test_harnesses, test_exporter, test_mcp_probe and test_mcp_gateway were run locally and pass.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 168,
+    "frontend": 91,
     "native": 0,
-    "playwright": 144
+    "playwright": 2
   },
-  "python": [],
-  "frontend": [],
+  "python": [
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_tool_suggestions.py",
+    "tests/v3/test_mcp_import.py",
+    "tests/v3/test_operator_help.py",
+    "tests/v3/test_chat.py"
+  ],
+  "frontend": [
+    "ui/src/components/HarnessSettings.test.tsx",
+    "ui/src/api/client.test.ts"
+  ],
   "native": [],
   "playwright": [
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit",
-    "entry:conversation-details/narrow"
+    "entry:mcp-import/assistant-real-desktop",
+    "entry:mcp-import/assistant-real-chromium-390"
   ]
 }
