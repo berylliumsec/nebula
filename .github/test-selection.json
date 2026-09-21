@@ -1,26 +1,21 @@
 {
-  "change_digest": "51981d3e950e1dfe40d7cf69035b7a85117ad77896bdf730a6f192f9fa7ce186",
-  "reviewed_by": "Codex focused selection review",
-  "reason": "The change saves Subagents assistant settings immediately on existing provider and harness conversations and restores them from Core on refresh. Select exact API behavior tests, a focused API client test, the catalogued desktop/mobile Subagents journeys, and a production LAN journey against real Core storage.",
-  "exclusions": "No native code changed, so native tests are excluded. Unrelated chat streaming, providers, goals, browser, terminal, and workspace journeys and all full suites are excluded. The desktop/mobile browser matrix mocks Core; the focused production LAN test and Python API tests exercise durable Core storage.",
+  "change_digest": "d93f4bda0b85b4bfadb5456bf76ce6ddb6d60aa1d0e2e95915a18a8ff0d3ac90",
+  "reviewed_by": "Claude review of openai-compatible-parameters",
+  "reason": "OpenAICompatibleProvider._payload sent parameters some routes reject. OpenAI reasoning models (o-series, gpt-5) reached over Chat Completions through OpenAI, Azure/Microsoft Foundry or a LiteLLM/Custom gateway got max_tokens and temperature, both HTTP 400 for those models, and every tool was sent strict: true even when its schema has optional properties or defaults, which strict mode rejects for the whole request (the Responses adapter already guarded all three); response_format json_schema was likewise always strict, so context compaction (ContextMemory has optional properties and defaults) failed with 400 on strict-honouring routes. Under OpenRouter require_parameters only reasoning and temperature were pruned, so tool_choice, max_tokens or a json_schema response_format that the route does not advertise left no eligible endpoint (404). Mistral-family routes received replayed tool-call ids verbatim although Mistral accepts only nine alphanumerics. The payload now sends max_completion_tokens and no temperature for OpenAI reasoning models (OpenRouter keeps its normalized max_tokens), requests strict (tools and response_format) only for schemas _openai_strict_schema accepts, prunes the unadvertised parameters when the route's list is known, and maps replayed ids to a stable nine-character digest for Mistral. tests/v3/test_openai_compatible_parameters.py drives _payload and complete() directly (25 of its 34 tests fail on main); the existing provider, contract and reasoning recovery suites guard the unchanged payload shapes.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through src/nebula/v3/providers.py) does not exercise request-parameter shaping for OpenAI reasoning models, strict schemas, OpenRouter route parameters or Mistral ids; the Python tests drive it directly. No full suites.",
   "expected_tests": {
-    "python": 2,
-    "frontend": 1,
+    "python": 145,
+    "frontend": 0,
     "native": 0,
-    "playwright": 7
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_api.py::test_model_and_effort_change_while_a_response_is_active",
-    "tests/v3/test_chat_api.py::test_harness_subagent_choice_is_saved_before_model_verification"
+    "tests/v3/test_openai_compatible_parameters.py",
+    "tests/v3/test_providers.py",
+    "tests/v3/test_provider_contracts.py",
+    "tests/v3/test_reasoning_recovery.py"
   ],
-  "frontend": [
-    "ui/src/api/chatSubagentsSettings.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:chat-subagents/desktop",
-    "entry:chat-subagents/mobile-chromium",
-    "entry:chat-subagents/mobile-webkit",
-    "entry:chat-subagents-core/real-core"
-  ]
+  "playwright": []
 }

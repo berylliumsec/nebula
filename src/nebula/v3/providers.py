@@ -1774,6 +1774,46 @@ def _decode_tool_name(request: ModelRequest, wire: str) -> str:
     return reverse.get(wire, wire)
 
 
+# Mistral AI model families, served by Mistral itself or by any runtime that
+# applies Mistral's chat template (vLLM, OpenRouter, a gateway).
+_MISTRAL_MODEL = re.compile(
+    r"mistral|mixtral|codestral|devstral|pixtral|magistral|ministral|voxtral",
+    re.IGNORECASE,
+)
+_MISTRAL_TOOL_CALL_ID = re.compile(r"[a-zA-Z0-9]{9}")
+_BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def _mistral_tool_call_id(call_id: str) -> str:
+    """A tool-call id Mistral accepts: exactly nine ``[a-zA-Z0-9]`` characters.
+
+    Replayed ids can come from DSML recovery or from another provider after a
+    mid-chat model switch. An id Mistral issued is kept; any other maps to a
+    digest of itself, so the call and its result still pair up and every
+    request of a turn replays the same id.
+    """
+
+    if _MISTRAL_TOOL_CALL_ID.fullmatch(call_id):
+        return call_id
+    number = int.from_bytes(hashlib.sha256(call_id.encode("utf-8")).digest(), "big")
+    characters = []
+    for _ in range(9):
+        number, index = divmod(number, 62)
+        characters.append(_BASE62[index])
+    return "".join(characters)
+
+
+def _mistral_tool_call_ids(messages: list[dict[str, Any]]) -> None:
+    for message in messages:
+        for call in message.get("tool_calls") or ():
+            if isinstance(call, dict) and isinstance(call.get("id"), str):
+                call["id"] = _mistral_tool_call_id(call["id"])
+        if message.get("role") == "tool" and isinstance(
+            message.get("tool_call_id"), str
+        ):
+            message["tool_call_id"] = _mistral_tool_call_id(message["tool_call_id"])
+
+
 class OpenAICompatibleProvider(ModelProvider):
     """Adapter for Chat Completions-compatible hosted and local runtimes."""
 
@@ -1821,11 +1861,20 @@ class OpenAICompatibleProvider(ModelProvider):
             payload["messages"].insert(
                 0, {"role": "system", "content": request.instructions}
             )
-        if request.max_output_tokens:
-            payload["max_tokens"] = request.max_output_tokens
-        if request.temperature is not None:
-            payload["temperature"] = request.temperature
         openrouter = self.config.flavor == ProviderFlavor.OPENROUTER
+        if request.max_output_tokens:
+            # OpenAI's reasoning families answer 400 to max_tokens ("use
+            # max_completion_tokens instead"), directly and via Azure/Foundry
+            # or a gateway. OpenRouter normalizes max_tokens, the name its
+            # routes advertise, and translates it for every upstream.
+            ceiling = (
+                "max_completion_tokens"
+                if not openrouter and _openai_reasoning_model(model)
+                else "max_tokens"
+            )
+            payload[ceiling] = request.max_output_tokens
+        if request.temperature is not None and not _openai_reasoning_model(model):
+            payload["temperature"] = request.temperature
         if (
             not openrouter
             and request.reasoning_effort is not None
@@ -1857,7 +1906,10 @@ class OpenAICompatibleProvider(ModelProvider):
                             if vllm_grammar
                             else tool.input_schema
                         ),
-                        "strict": tool.strict,
+                        # Strict mode is a request-level contract: one schema
+                        # it rejects fails every tool in the call.
+                        "strict": tool.strict
+                        and _openai_strict_schema(tool.input_schema),
                     },
                 }
                 for tool in request.tools
@@ -1869,7 +1921,9 @@ class OpenAICompatibleProvider(ModelProvider):
                 "type": "json_schema",
                 "json_schema": {
                     "name": "nebula_response",
-                    "strict": True,
+                    # A schema strict mode rejects (optional properties,
+                    # defaults) fails the request; callers validate the reply.
+                    "strict": _openai_strict_schema(request.response_schema),
                     "schema": (
                         _vllm_grammar_schema(request.response_schema)
                         if vllm_grammar
@@ -1904,6 +1958,21 @@ class OpenAICompatibleProvider(ModelProvider):
                 for optional in ("reasoning", "temperature"):
                     if optional in payload and optional not in supported:
                         payload.pop(optional)
+                if supported:
+                    # The tool contract's own controls and the ceiling are
+                    # dropped only when the catalog says the route lacks them.
+                    # A routing step that returns no call is recoverable; a
+                    # request no endpoint accepts (404) fails the turn.
+                    for optional in ("tool_choice", "max_tokens"):
+                        if optional in payload and optional not in supported:
+                            payload.pop(optional)
+                    # A json_schema response_format is advertised as
+                    # structured_outputs alongside response_format.
+                    structured = {"response_format", "structured_outputs"}
+                    if "response_format" in payload and not structured <= supported:
+                        payload.pop("response_format")
+        if self.config.flavor == ProviderFlavor.MISTRAL or _MISTRAL_MODEL.search(model):
+            _mistral_tool_call_ids(payload["messages"])
         return payload
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
