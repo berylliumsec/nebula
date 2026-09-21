@@ -76,20 +76,34 @@ export function SelectionActionsProvider({
     setIsExiting(false);
     setDraft(createSelectionDraft(selection, limit));
   }, [limit]);
-  const dismissSelection = useCallback(() => {
+  const closeActions = useCallback(() => {
     if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
     exitTimerRef.current = undefined;
-    document.getSelection()?.removeAllRanges();
     setIsExiting(false);
     setDraft(undefined);
   }, []);
+  const dismissSelection = useCallback(() => {
+    document.getSelection()?.removeAllRanges();
+    closeActions();
+  }, [closeActions]);
+  const exitFocusRef = useRef<Element | null>(null);
+  const finishExit = useCallback(() => {
+    const focused = document.activeElement;
+    // An action such as Ask Nebula can focus its own text box before the exit
+    // finishes. The document selection is then that box's caret, and WebKit
+    // drops every keystroke once it is cleared, so the box keeps it.
+    const tookTyping = isSelectableTextControl(focused) || (focused instanceof HTMLElement && focused.isContentEditable);
+    if (focused !== exitFocusRef.current && tookTyping) closeActions();
+    else dismissSelection();
+  }, [closeActions, dismissSelection]);
   const dismissSelectionElegantly = useCallback(() => {
     if (isExiting) return;
+    exitFocusRef.current = document.activeElement;
     setIsExiting(true);
     // animationend handles normal browsers; the timer also covers interrupted
     // animations and DOM environments that do not dispatch animation events.
-    exitTimerRef.current = setTimeout(dismissSelection, 180);
-  }, [dismissSelection, isExiting]);
+    exitTimerRef.current = setTimeout(finishExit, 180);
+  }, [finishExit, isExiting]);
 
   useEffect(() => () => {
     if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
@@ -162,7 +176,7 @@ export function SelectionActionsProvider({
       data-placement={showAbove ? "above" : "below"}
       onPointerDown={preserveSelection}
       onAnimationEnd={(event) => {
-        if (isExiting && event.target === event.currentTarget) dismissSelection();
+        if (isExiting && event.target === event.currentTarget) finishExit();
       }}
     >
       {draft.truncated && <span className={styles.notice} title={`${draft.originalLength.toLocaleString()} characters selected`}>

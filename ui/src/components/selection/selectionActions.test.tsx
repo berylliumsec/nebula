@@ -142,6 +142,30 @@ describe("selection actions", () => {
     await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull());
   });
 
+  it("leaves the caret to a text box the action focused", async () => {
+    const user = userEvent.setup();
+    render(<SelectionActionsProvider onAsk={() => screen.getByRole("textbox", { name: "Question" }).focus()} onAddNote={vi.fn()}>
+      <p>selected title</p>
+      <textarea aria-label="Question" />
+    </SelectionActionsProvider>);
+    const paragraph = screen.getByText("selected title");
+    selectNodeText(paragraph.firstChild as Text);
+    fireEvent.pointerUp(paragraph);
+    await user.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    fireEvent.animationEnd(screen.getByRole("toolbar", { name: "Selected text actions" }));
+    await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull());
+    expect(screen.getByRole("textbox", { name: "Question" })).toHaveFocus();
+    // WebKit uses the document selection as the focused box's caret; clearing it drops typing.
+    expect(document.getSelection()?.rangeCount).toBe(1);
+
+    selectNodeText(paragraph.firstChild as Text);
+    fireEvent.pointerUp(paragraph);
+    await user.click(screen.getByRole("button", { name: "Take note" }));
+    fireEvent.animationEnd(screen.getByRole("toolbar", { name: "Selected text actions" }));
+    await waitFor(() => expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull());
+    expect(document.getSelection()?.rangeCount).toBe(0);
+  });
+
   it("keeps actions available while the selected surface scrolls", () => {
     render(<SelectionActionsProvider onAsk={vi.fn()}>
       <p>selection that remains actionable</p>
