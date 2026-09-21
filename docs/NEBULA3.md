@@ -193,6 +193,18 @@ capability probe allows 2,048 output tokens (less when the model's output limit
 or served window is smaller), so a model that thinks anyway still has room for
 its one call.
 
+The operator's Effort level, a subagent's level and that request to skip
+reasoning reach each provider family in its own shape: OpenRouter's `reasoning`
+object (never `none` for a model its catalog marks as always reasoning),
+OpenAI's `reasoning_effort` and the Responses `reasoning.effort` with summaries,
+DeepSeek's and Z.ai's `thinking` switch (Z.ai keeping earlier steps' reasoning)
+with `reasoning_effort` on DeepSeek and GLM-5.2+, the `chat_template_kwargs`
+thinking switch on vLLM and SGLang and `reasoning_effort` on Ollama for GLM 4.5+,
+DeepSeek V3.1+ and Qwen3, Claude's `output_config.effort` with adaptive or
+disabled thinking on Anthropic and Bedrock (Fable and Mythos always think, so
+they get the lowest effort instead), and Gemini's `thinkingLevel` or
+`thinkingBudget`. A route with no such control keeps the model's default.
+
 ## Import and export
 
 ```bash

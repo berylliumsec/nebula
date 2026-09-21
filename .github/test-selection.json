@@ -1,35 +1,36 @@
 {
-  "change_digest": "e504649ec3dbc1800f369c45528f81ff49c554ad4fc477c8c8999585b18f0b32",
-  "reviewed_by": "Claude review of chat-leftovers",
-  "reason": "Five gaps left by #492, #499, #502, #504 and #505. (1) chat._routing_thoughts hid a provider control frame only when the routing text started with one, so commentary followed by an unreadable DSML, GLM or DeepSeek frame beside a real tool call put the raw frame into the operator's reasoning; it now keeps only the text before the first frame anywhere (_operator_answer_text / tool_markup.frame_start). (2) ContextCompactor._request_memory told the model to match 'the supplied schema' but sent it only as response_format, so a provider without structured output never saw it; the schema now goes in the instructions via json_schema_instruction whenever it is not on the wire, and _hierarchical_memory reserves room for it when sizing segments (the two small-window mission compaction tests in test_orchestration.py exercise that reserve). (3) _recover_context_length_rejection rebuilt the retry from the stored transcript only; a non-streamed complete() has no durable turn and stores its messages with the answer, so a brand-new conversation failed with 'could not be reassembled safely' and an existing one was retried without the operator's current message; recovery now appends the unstored new messages (with selected context). (4) The mission specialist loop replayed each earlier call as its own assistant message with no reasoning; agent_tooling now tags each routing response's records with response_group, reasoning_state (first record) and provider_metadata and _provider_tool_history passes them on, so #502's adapters replay one message per batch with its reasoning; a deviation-blocked result drops those fields. (5) The Settings provider dialog's 'Maximum output tokens' placeholder said '2048 default', wrong since #492; it now says the value is sized from the model with a help note. tests/v3/test_chat_leftovers.py (11 tests, 9 fail on origin/main 710b785; the 2 guards pass before and after) drives each path; the other node ids are the edited test_context assertion and the closest existing tests of the changed functions. SettingsPage.test.tsx gains a test that fails on main.",
-  "exclusions": "No native tests: no Tauri or Rust change. Playwright: only entry:workbench-view-authority/desktop, the narrowest catalogued entry whose tests open the Add model provider dialog ('stabilization audit every primary workspace view'); no screenshot baseline shows the collapsed Advanced provider options, so no baseline changes. Frontend: only SettingsPage.test.tsx, the component's own vitest file. Python: whole large files (test_chat.py, test_chat_tool_loop.py, test_orchestration.py, test_context.py and others) ran locally and are excluded; only the node ids listed are selected. No full suites.",
+  "change_digest": "99c49c9bd7ec4603e7db1faea9a707b8b1d0e293a64b7e14ace9fa329275b87d",
+  "reviewed_by": "Claude review of reasoning-controls",
+  "reason": "The operator's Effort level, subagent reasoning_effort and Core's own reasoning_effort='none' (final-answer recovery, the capability probe, naming, compaction, retrieval planning, scope import) were translated only for OpenRouter's reasoning object and OpenAI o*/gpt-5 names, and silently dropped everywhere else (audit MODEL-3, NAT-12), so thinking could be neither turned down nor off: recovery from a reasoning-only synthesis re-thought on DeepSeek, Z.ai and local runtimes, and native adapters ignored the level. providers.py now translates the level per family: DeepSeek flavor/host thinking.type + reasoning_effort low|high|max; Z.ai/BigModel GLM 4.5+ thinking with clear_thinking:false (which turns on #502's Z.ai reasoning replay) + reasoning_effort high|max on GLM-5.2+; vLLM/SGLang chat_template_kwargs enable_thinking (GLM 4.5+, Qwen3) or thinking (DeepSeek V3.1+) and Ollama reasoning_effort; Anthropic and Bedrock Claude output_config.effort with adaptive (4.6+, summarized) or budget thinking (pre-4.6), none -> thinking disabled except Fable/Mythos (lowest effort instead), no thinking beside a forced tool choice, Bedrock's forced-choice disable kept and Opus 5's effort capped at high there; Gemini thinkingLevel (3.x) / thinkingBudget (2.5) with includeThoughts and thought parts read as reasoning; Responses reasoning.effort + summary auto with summaries read as reasoning. OpenRouter stores the catalog's reasoning.mandatory per model and never sends it (or Fable/Mythos) effort none, and Fable 5.1/Mythos get tool_choice auto on Chat Completions routes. #498's resend-without-the-disable now covers every family's disable and the Responses and Anthropic adapters, and Responses resends without summary when summaries are refused. tests/v3/test_reasoning_controls.py (90 tests; 72 fail on origin/main, the other 18 are guards that a route with no control, or an unset level, is sent nothing) proves it; the selected node ids are the existing tests that directly drive _openrouter_reasoning, _refused_reasoning_off_retry, the Chat Completions reasoning/tool_choice branches, the Anthropic/Bedrock temperature and forced-choice gating, Z.ai/DeepSeek host detection, reasoning replay and the OpenRouter catalog parser.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through providers.py/model_catalog.py) runs no DeepSeek, Z.ai, local-runtime, Anthropic, Bedrock, Gemini or Responses profile and never inspects reasoning fields; the Python tests drive the payloads directly. test_providers.py, test_chat.py, test_api.py, test_chat_tool_loop.py, test_chat_routing_tolerance.py, test_native_adapter_requests.py, test_native_adapter_outcomes.py, test_inference_timeouts_probe_budget.py, test_deepseek_glm_compat.py, test_reasoning_replay.py, test_reasoning_recovery.py, test_openai_compatible_parameters.py, test_openai_compatible_robustness.py, test_provider_contracts.py, test_provider_verification.py, test_synthesis_tool_declarations.py, test_native_tool_markup.py, test_chat_final_synthesis_recovery.py, test_model_output_budget.py and test_context.py were run locally in full (854 passed) but are not selected. No full suites.",
   "expected_tests": {
-    "python": 26,
-    "frontend": 6,
+    "python": 145,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_chat_leftovers.py",
-    "tests/v3/test_chat_routing_tolerance.py::test_routing_prose_beside_tool_calls_runs_the_calls",
-    "tests/v3/test_chat_routing_tolerance.py::test_unreadable_routing_control_frame_finishes_through_synthesis",
-    "tests/v3/test_context.py::test_compaction_preserves_later_corrections_and_treats_history_as_untrusted",
-    "tests/v3/test_deepseek_glm_compat.py::test_compaction_falls_back_when_response_format_rejected",
-    "tests/v3/test_deepseek_glm_compat.py::test_compaction_falls_back_only_once",
-    "tests/v3/test_orchestration.py::test_mission_compacts_only_model_facing_dependency_context_and_charges_usage",
-    "tests/v3/test_orchestration.py::test_mission_rejects_compaction_before_call_when_budget_is_insufficient",
-    "tests/v3/test_chat.py::test_confirmed_context_rejection_refreshes_compacts_and_retries_once",
-    "tests/v3/test_history_content_fidelity.py::test_selected_context_survives_context_length_recovery",
-    "tests/v3/test_specialist_tool_batches.py::test_specialist_replays_every_batched_result_to_the_next_turn",
-    "tests/v3/test_specialist_tool_batches.py::test_specialist_keeps_completed_calls_when_a_batch_pauses_for_approval",
-    "tests/v3/test_specialist_tool_batches.py::test_mission_persists_a_partial_batch_when_a_task_pauses_for_approval",
-    "tests/v3/test_specialist_routing_tolerance.py::test_consecutive_routing_deviations_block_the_task_after_three"
+    "tests/v3/test_reasoning_controls.py",
+    "tests/v3/test_reasoning_recovery.py::test_openrouter_carries_a_reasoning_level_a_route_advertises",
+    "tests/v3/test_reasoning_recovery.py::test_a_route_that_does_not_advertise_the_control_is_not_sent_one",
+    "tests/v3/test_reasoning_recovery.py::test_openai_reasoning_families_take_the_scalar_shorthand",
+    "tests/v3/test_inference_timeouts_probe_budget.py::test_capability_probe_asks_a_reasoning_route_to_skip_thinking",
+    "tests/v3/test_inference_timeouts_probe_budget.py::test_a_route_that_refuses_reasoning_off_answers_with_its_default",
+    "tests/v3/test_inference_timeouts_probe_budget.py::test_other_refusals_and_chosen_levels_are_not_resent",
+    "tests/v3/test_native_adapter_requests.py::test_anthropic_omits_temperature_for_models_that_reject_sampling",
+    "tests/v3/test_native_adapter_requests.py::test_bedrock_omits_temperature_for_claude_models_that_reject_sampling",
+    "tests/v3/test_native_adapter_requests.py::test_anthropic_forced_tool_choice_falls_back_to_auto_where_rejected",
+    "tests/v3/test_native_adapter_requests.py::test_bedrock_forced_tool_choice_is_model_gated",
+    "tests/v3/test_native_adapter_requests.py::test_bedrock_auto_tool_choice_keeps_default_thinking",
+    "tests/v3/test_deepseek_glm_compat.py::test_deepseek_and_zai_structured_output_uses_json_object",
+    "tests/v3/test_reasoning_replay.py::test_glm_reasoning_is_replayed_only_when_preserved_thinking_is_on",
+    "tests/v3/test_reasoning_replay.py::test_anthropic_replays_thinking_blocks_unchanged_before_the_batch",
+    "tests/v3/test_reasoning_replay.py::test_responses_replays_encrypted_reasoning_items_before_their_calls",
+    "tests/v3/test_reasoning_replay.py::test_gemini_replays_thought_signatures_with_the_whole_batch",
+    "tests/v3/test_openai_compatible_parameters.py::test_openrouter_prunes_unadvertised_tool_choice_under_require_parameters",
+    "tests/v3/test_providers.py::test_openrouter_catalog_records_the_model_an_alias_redirects_to"
   ],
-  "frontend": [
-    "ui/src/pages/SettingsPage.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:workbench-view-authority/desktop"
-  ]
+  "playwright": []
 }

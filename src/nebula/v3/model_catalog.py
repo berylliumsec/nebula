@@ -24,6 +24,9 @@ class ModelDescriptor(BaseModel):
     expiration_date: str | None = None
     # Exact model an alias ("~author/family-latest") currently redirects to.
     alias_target: str | None = None
+    # OpenRouter's ``reasoning.mandatory``: the model always reasons and
+    # refuses a request to skip it, so ``effort: none`` is never sent to it.
+    reasoning_mandatory: bool = False
     route_limits: list["ModelRouteDescriptor"] = Field(default_factory=list)
     route_limits_verified: bool = False
     route_limits_checked_at: str | None = None
@@ -151,6 +154,8 @@ def openrouter_models(payload: Any) -> list[ModelDescriptor]:
         expiration_date = item.get("expiration_date")
         alias_target = item.get("alias_target")
         alias_target = alias_target if isinstance(alias_target, dict) else {}
+        reasoning = item.get("reasoning")
+        reasoning = reasoning if isinstance(reasoning, dict) else {}
         models.setdefault(
             identity,
             ModelDescriptor(
@@ -179,6 +184,7 @@ def openrouter_models(payload: Any) -> list[ModelDescriptor]:
                     else None
                 ),
                 alias_target=_slug(alias_target.get("slug")),
+                reasoning_mandatory=reasoning.get("mandatory") is True,
             ),
         )
     return list(models.values())
