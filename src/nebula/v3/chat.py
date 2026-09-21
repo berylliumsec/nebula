@@ -86,9 +86,6 @@ from .domain import (
     ToolCallStatus,
     utc_now,
 )
-from .dsml import frame_start as dsml_frame_start
-from .dsml import is_frame as dsml_is_frame
-from .dsml import partial_tag_start as dsml_partial_tag_start
 from .context import (
     ContextCallBudget,
     ContextCapacityError,
@@ -136,6 +133,9 @@ from .providers import (
 )
 from .redaction import redact_text, sanitize_display_text
 from .storage import ConflictError, NebulaStore, NotFoundError
+from .tool_markup import frame_start as tool_frame_start
+from .tool_markup import is_frame as tool_frame_is_frame
+from .tool_markup import partial_tag_start as tool_frame_partial_start
 from .tools import (
     ApprovalRequired,
     InvalidToolArguments,
@@ -746,28 +746,30 @@ def _joined_reasoning(collected: str, addition: str) -> str:
 def _is_provider_control_frame(text: str) -> bool:
     """Quarantine a wire-level frame that arrived as assistant prose.
 
-    Some OpenRouter routes serialize DeepSeek's DSML tool protocol into the
-    Chat Completions ``content`` field. A frame Core can read completely is
-    recovered into ordinary tool calls before a response reaches here, so what
-    is left is a frame Core could not read: a fragment, an unknown identity or
-    prose dressed as a call. It is not an operator answer and Core will not
-    guess at half of one, so the whole frame is refused.
+    A route that does not run the model's tool parser serializes the model's
+    own tool markup into the Chat Completions ``content`` field: DeepSeek's
+    DSML, GLM's ``<tool_call>`` arguments or DeepSeek's special tokens. A
+    frame Core can read completely is recovered into ordinary tool calls
+    before a response reaches here, so what is left is a frame Core could not
+    read: a fragment, an unknown identity or prose dressed as a call. It is
+    not an operator answer and Core will not guess at half of one, so the
+    whole frame is refused.
     """
 
-    return dsml_is_frame(text)
+    return tool_frame_is_frame(text)
 
 
 def _operator_answer_text(text: str) -> str:
     """The answer in assistant text: everything before its first control frame.
 
-    A model may write its answer and then reach for a tool in DSML. A frame
-    Core could read is a tool call by now, so one still in the text is a frame
-    Core could not read, in whatever spelling. It and everything after it are
-    protocol, not an answer; the answer written before it stands.
+    A model may write its answer and then reach for a tool in its own markup.
+    A frame Core could read is a tool call by now, so one still in the text is
+    a frame Core could not read, in whatever spelling. It and everything after
+    it are protocol, not an answer; the answer written before it stands.
     """
 
     content = text.strip()
-    start = dsml_frame_start(content)
+    start = tool_frame_start(content)
     return content if start is None else content[:start].rstrip()
 
 
@@ -843,10 +845,11 @@ def _record_final_answer_fallback(response: ModelResponse) -> None:
 class _StreamedAnswer:
     """Tool-free answer text, shown as it arrives until a control frame starts.
 
-    A route can serialize a tool call into the answer as DSML. Text before it
-    streams as usual, a tail that could still become a frame tag waits for the
-    next piece, and nothing is shown once a frame begins. The completed
-    response decides the answer, which ``done`` carries in full.
+    A route can serialize a tool call into the answer in the model's own
+    markup. Text before it streams as usual, a tail that could still become a
+    frame tag waits for the next piece, and nothing is shown once a frame
+    begins. The completed response decides the answer, which ``done`` carries
+    in full.
     """
 
     def __init__(self) -> None:
@@ -864,12 +867,12 @@ class _StreamedAnswer:
         if self._stopped:
             return ""
         pending = self._held + delta
-        start = dsml_frame_start(pending)
+        start = tool_frame_start(pending)
         if start is not None:
             self._stopped = True
             visible = pending[:start]
         else:
-            visible = pending[: dsml_partial_tag_start(pending)]
+            visible = pending[: tool_frame_partial_start(pending)]
         self._held = pending[len(visible) :]
         self.shown += visible
         return visible
@@ -1096,10 +1099,11 @@ def _is_routing_answer(response: ModelResponse) -> bool:
     return (
         not response.tool_calls
         and (not finish_reason or finish_reason in _ANSWER_FINISH_REASONS)
-        # A DSML tag anywhere starts a call Core could not read. The answer
+        # A native tool frame (DSML, GLM or DeepSeek markup) anywhere starts
+        # a call Core could not read. The answer
         # written before it may be a preamble to that call, so it goes to
         # synthesis rather than ending the turn.
-        and dsml_frame_start(response.text) is None
+        and tool_frame_start(response.text) is None
         and _final_answer_problem(response) is None
     )
 

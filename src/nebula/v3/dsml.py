@@ -143,7 +143,7 @@ class DsmlRecovery:
         return bool(self.calls)
 
 
-def _decode_value(raw: str) -> Any:
+def decode_value(raw: str) -> Any:
     """A parameter body as the value it stands for.
 
     DSML carries every value as text, so a structured argument arrives as its
@@ -173,7 +173,7 @@ def _parameter_value(raw: str, attributes: str) -> Any:
 
     declared = _STRING_ATTRIBUTE.search(attributes)
     if declared is None:
-        return _decode_value(raw)
+        return decode_value(raw)
     if declared.group("declared") == "true":
         return raw
     try:

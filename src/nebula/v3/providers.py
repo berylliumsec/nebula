@@ -49,7 +49,12 @@ from pydantic import (
 )
 
 from .domain import ProviderProfile
-from .dsml import recover as _recover_dsml
+from .inline_reasoning import (
+    Piece,
+    ReplySplitter,
+    split_reply,
+    template_opens_thinking,
+)
 from .model_catalog import (
     ModelDescriptor,
     ModelRouteDescriptor,
@@ -59,6 +64,7 @@ from .model_catalog import (
     openrouter_upstream_providers,
 )
 from .redaction import redact_text
+from .tool_markup import recover as _recover_tool_markup
 
 
 class ProviderError(RuntimeError):
@@ -520,20 +526,19 @@ class ModelResponse(BaseModel):
 
     @model_validator(mode="after")
     def _recover_serialized_tool_calls(self) -> "ModelResponse":
-        """Read DSML tool calls a route serialized into ``text``.
+        """Read tool calls a route serialized into ``text``.
 
-        Some OpenRouter routes put a model's DSML tool calls in the Chat
-        Completions ``content`` field. They are tool calls wherever they
-        arrive, so Core reads them into ``tool_calls`` and every caller
-        treats them the same as a call the route reported properly: the
-        broker, the policy engine and approvals all still apply. A frame
-        Core cannot read completely is left in ``text`` untouched, for the
-        caller's quarantine to refuse.
+        A route that does not run the model's tool parser puts the model's
+        own tool markup in the Chat Completions ``content`` field: DeepSeek's
+        DSML, GLM's ``<tool_call>`` arguments or DeepSeek's special tokens.
+        They are tool calls wherever they arrive, so Core reads them into
+        ``tool_calls`` and every caller treats them the same as a call the
+        route reported properly: the broker, the policy engine and approvals
+        all still apply. A frame Core cannot read completely is left in
+        ``text`` untouched, for the caller's quarantine to refuse.
         """
 
-        if "DSML" not in self.text:
-            return self
-        found = _recover_dsml(self.text)
+        found = _recover_tool_markup(self.text)
         if not found.recovered:
             return self
         recovered: list[ToolCall] = []
@@ -541,7 +546,7 @@ class ModelResponse(BaseModel):
             try:
                 recovered.append(
                     ToolCall(
-                        id=f"dsml-{uuid.uuid4().hex[:24]}",
+                        id=f"{call.markup}-{uuid.uuid4().hex[:24]}",
                         name=call.name,
                         arguments=call.arguments,
                     )
@@ -550,10 +555,11 @@ class ModelResponse(BaseModel):
                 record_caught_exception(
                     "providers",
                     "providers.dsml.invalid_recovered_call",
-                    "A DSML frame parsed into a call the tool schema rejects.",
+                    "A tool frame in assistant content parsed into a call the "
+                    "tool schema rejects.",
                     exc,
                     stage="providers",
-                    metadata={"call_index": index},
+                    metadata={"call_index": index, "markup": call.markup},
                 )
                 # One unusable call makes the whole frame untrustworthy, so
                 # the text is left exactly as it arrived.
@@ -572,6 +578,7 @@ class ModelResponse(BaseModel):
                 "model": self.model,
                 "recovered_calls": len(recovered),
                 "unparsed_frames": found.unparsed_frames,
+                "markup": ",".join(sorted({call.markup for call in found.calls})),
             },
         )
         # An after-validator has to settle the model in place; a copy is
@@ -3127,11 +3134,19 @@ class OpenAICompatibleProvider(ModelProvider):
                     },
                 )
             )
+        routed_reasoning = _openai_message_reasoning(message).strip()
+        # A runtime without a reasoning parser leaves the thought in the reply.
+        inline_reasoning, text = split_reply(
+            _openai_message_content(message) or _openai_refusal(message),
+            template_opened=not routed_reasoning and template_opens_thinking(model),
+        )
         return ModelResponse(
             provider_id=self.config.id,
             model=data.get("model") or model,
-            text=(_openai_message_content(message) or _openai_refusal(message)).strip(),
-            reasoning=_openai_message_reasoning(message).strip(),
+            text=text.strip(),
+            reasoning="\n\n".join(
+                part for part in (routed_reasoning, inline_reasoning.strip()) if part
+            ),
             tool_calls=calls,
             usage=_openai_usage(data.get("usage")),
             finish_reason=choice.get("finish_reason"),
@@ -3460,6 +3475,26 @@ class OpenAICompatibleProvider(ModelProvider):
             raise ProviderError("OpenRouter endpoint discovery failed") from exc
 
 
+def _reply_piece_events(
+    pieces: list[Piece], text_parts: list[str], reasoning_parts: list[str]
+) -> list[ModelStreamEvent]:
+    """Stream events for reply text a :class:`ReplySplitter` has settled."""
+
+    events: list[ModelStreamEvent] = []
+    for channel, piece in pieces:
+        if channel == "reasoning":
+            reasoning_parts.append(piece)
+            events.append(
+                ModelStreamEvent(type=StreamEventType.REASONING_DELTA, delta=piece)
+            )
+        else:
+            text_parts.append(piece)
+            events.append(
+                ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta=piece)
+            )
+    return events
+
+
 async def _stream_openai_compatible(
     provider: OpenAICompatibleProvider, request: ModelRequest
 ) -> AsyncIterator[ModelStreamEvent]:
@@ -3471,6 +3506,8 @@ async def _stream_openai_compatible(
     yield ModelStreamEvent(type=StreamEventType.STARTED)
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
+    # A runtime without a reasoning parser leaves the thought in the reply.
+    splitter = ReplySplitter(template_opened=template_opens_thinking(model))
     call_parts: dict[int, dict[str, str]] = {}
     legacy_call = {"name": "", "arguments": ""}
     usage = ModelUsage()
@@ -3526,16 +3563,20 @@ async def _stream_openai_compatible(
                         delta = {}
                     reasoning = _openai_message_reasoning(delta)
                     if reasoning:
+                        for event in _reply_piece_events(
+                            splitter.route_reasoning(), text_parts, reasoning_parts
+                        ):
+                            yield event
                         reasoning_parts.append(reasoning)
                         yield ModelStreamEvent(
                             type=StreamEventType.REASONING_DELTA, delta=reasoning
                         )
                     content = _openai_message_content(delta) or _openai_refusal(delta)
                     if content:
-                        text_parts.append(content)
-                        yield ModelStreamEvent(
-                            type=StreamEventType.TEXT_DELTA, delta=content
-                        )
+                        for event in _reply_piece_events(
+                            splitter.push(content), text_parts, reasoning_parts
+                        ):
+                            yield event
                     _merge_tool_call_deltas(call_parts, delta.get("tool_calls"))
                     _merge_function_call_delta(legacy_call, delta.get("function_call"))
         if not terminated and finish_reason is None:
@@ -3546,6 +3587,10 @@ async def _stream_openai_compatible(
                 "provider stream ended before the reply completed: no finish "
                 "reason or [DONE] frame arrived"
             )
+        for event in _reply_piece_events(
+            splitter.finish(), text_parts, reasoning_parts
+        ):
+            yield event
         calls = _assembled_tool_calls(
             request,
             call_parts,
