@@ -19,6 +19,7 @@ import json
 import os
 import random
 import re
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import (
     AsyncGenerator,
@@ -47,6 +48,7 @@ from pydantic import (
 )
 
 from .domain import ProviderProfile
+from .dsml import recover as _recover_dsml
 from .model_catalog import (
     ModelDescriptor,
     ModelRouteDescriptor,
@@ -484,6 +486,68 @@ class ModelResponse(BaseModel):
     finish_reason: str | None = None
     provider_request_id: str | None = None
     raw: dict[str, Any] | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="after")
+    def _recover_serialized_tool_calls(self) -> "ModelResponse":
+        """Read DSML tool calls a route serialized into ``text``.
+
+        Some OpenRouter routes put a model's DSML tool calls in the Chat
+        Completions ``content`` field. They are tool calls wherever they
+        arrive, so Core reads them into ``tool_calls`` and every caller
+        treats them the same as a call the route reported properly: the
+        broker, the policy engine and approvals all still apply. A frame
+        Core cannot read completely is left in ``text`` untouched, for the
+        caller's quarantine to refuse.
+        """
+
+        if "DSML" not in self.text:
+            return self
+        found = _recover_dsml(self.text)
+        if not found.recovered:
+            return self
+        recovered: list[ToolCall] = []
+        for index, call in enumerate(found.calls):
+            try:
+                recovered.append(
+                    ToolCall(
+                        id=f"dsml-{uuid.uuid4().hex[:24]}",
+                        name=call.name,
+                        arguments=call.arguments,
+                    )
+                )
+            except ValueError as exc:
+                record_caught_exception(
+                    "providers",
+                    "providers.dsml.invalid_recovered_call",
+                    "A DSML frame parsed into a call the tool schema rejects.",
+                    exc,
+                    stage="providers",
+                    metadata={"call_index": index},
+                )
+                # One unusable call makes the whole frame untrustworthy, so
+                # the text is left exactly as it arrived.
+                return self
+        record_diagnostic(
+            "warning",
+            "providers",
+            "providers.dsml.recovered_tool_calls",
+            "A route serialized tool calls into assistant content; Core "
+            "recovered them instead of discarding the turn.",
+            outcome="fallback",
+            stage="providers",
+            retryable=False,
+            metadata={
+                "provider_id": self.provider_id,
+                "model": self.model,
+                "recovered_calls": len(recovered),
+                "unparsed_frames": found.unparsed_frames,
+            },
+        )
+        # An after-validator has to settle the model in place; a copy is
+        # discarded when the model is built through ``__init__``.
+        self.text = found.text
+        self.tool_calls = [*self.tool_calls, *recovered]
+        return self
 
 
 class StreamEventType(str, Enum):

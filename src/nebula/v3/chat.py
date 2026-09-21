@@ -85,6 +85,7 @@ from .domain import (
     ToolCallStatus,
     utc_now,
 )
+from .dsml import is_frame as dsml_is_frame
 from .context import (
     ContextCallBudget,
     ContextCapacityError,
@@ -709,18 +710,17 @@ def _joined_reasoning(collected: str, addition: str) -> str:
 
 
 def _is_provider_control_frame(text: str) -> bool:
-    """Quarantine a known wire-level frame that arrived as assistant prose.
+    """Quarantine a wire-level frame that arrived as assistant prose.
 
     Some OpenRouter routes serialize DeepSeek's DSML tool protocol into the
-    Chat Completions ``content`` field. It is neither an operator answer nor a
-    safe alternate tool-call transport, so Core recognizes only the complete
-    outer frame and never parses or executes its contents.
+    Chat Completions ``content`` field. A frame Core can read completely is
+    recovered into ordinary tool calls before a response reaches here, so what
+    is left is a frame Core could not read: a fragment, an unknown identity or
+    prose dressed as a call. It is not an operator answer and Core will not
+    guess at half of one, so the whole frame is refused.
     """
 
-    normalized = text.strip().replace("｜", "|").replace("\\</", "</")
-    return normalized.startswith("<|DSML| calls>") and normalized.endswith(
-        "</|DSML| calls>"
-    )
+    return dsml_is_frame(text)
 
 
 def _final_answer_problem(response: ModelResponse) -> str | None:
