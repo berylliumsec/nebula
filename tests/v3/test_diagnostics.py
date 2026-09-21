@@ -1000,6 +1000,56 @@ def test_live_reload_reconfigures_protected_detail_capture(
         manager.close()
 
 
+def test_explicit_sensitive_detail_never_enters_exportable_log(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from nebula.v3 import diagnostic_sensitive
+
+    monkeypatch.setattr(diagnostic_sensitive.keyring, "get_keyring", lambda: None)
+    settings_path = tmp_path / "diagnostics-settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "schema": SETTINGS_SCHEMA,
+                "global_level": "error",
+                "feature_levels": {},
+                "sensitive_detail_capture": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = DiagnosticManager(tmp_path, watch_settings=False)
+    try:
+        error_id = manager.record(
+            "error",
+            "providers",
+            "providers.test.raw_response",
+            "A provider response was invalid.",
+            exception=RuntimeError("safe failure"),
+            sensitive_detail='{"raw":"secret-provider-response"}',
+        )
+        assert error_id is not None
+        assert manager.flush()
+        record = _records(manager.log_dir / "providers.log")[-1]
+        assert record["sensitive_detail_available"] is True
+        assert (
+            "secret-provider-response"
+            not in (manager.log_dir / "providers.log").read_text()
+        )
+        assert (
+            "secret-provider-response"
+            not in (manager.log_dir / "errors.log").read_text()
+        )
+        assert (
+            manager.reveal_sensitive_detail(
+                error_id, operator_id="operator", action="reveal"
+            )
+            == '{"raw":"secret-provider-response"}'
+        )
+    finally:
+        manager.close()
+
+
 def test_settings_save_keeps_session_memory_protected_detail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

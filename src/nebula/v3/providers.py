@@ -486,6 +486,7 @@ class ModelResponse(BaseModel):
     finish_reason: str | None = None
     provider_request_id: str | None = None
     raw: dict[str, Any] | None = Field(default=None, exclude=True)
+    raw_body: bytes | None = Field(default=None, exclude=True, repr=False)
 
     @model_validator(mode="after")
     def _recover_serialized_tool_calls(self) -> "ModelResponse":
@@ -1338,6 +1339,11 @@ def _arguments(
             failure,
             stage="tool_arguments",
             metadata=metadata,
+            sensitive_detail=(
+                f"Exact provider tool arguments (UTF-8):\n{value}"
+                if isinstance(value, str)
+                else None
+            ),
         )
         raise failure from exc
     if not isinstance(parsed, dict):
@@ -1702,6 +1708,7 @@ class OpenAIResponsesProvider(ModelProvider):
             finish_reason=data.get("status"),
             provider_request_id=data.get("id"),
             raw=data,
+            raw_body=response.content,
         )
 
     async def health(self) -> ProviderHealth:
@@ -1945,6 +1952,7 @@ class OpenAICompatibleProvider(ModelProvider):
             finish_reason=choice.get("finish_reason"),
             provider_request_id=data.get("id"),
             raw=data,
+            raw_body=response.content,
         )
 
     async def stream(self, request: ModelRequest) -> AsyncIterator[ModelStreamEvent]:

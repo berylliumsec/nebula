@@ -1,7 +1,11 @@
 import asyncio
+import base64
+import json
 from pathlib import Path
 
 import pytest
+
+from nebula.v3 import diagnostic_sensitive, diagnostics
 
 from nebula.v3.chat import (
     _CHAT_BASE_INSTRUCTIONS,
@@ -251,6 +255,85 @@ def test_malformed_routing_never_reaches_the_tool_broker(tmp_path, routing, deta
     failed = store.get(ChatTurn, "turn")
     assert failed.status == ChatTurnStatus.FAILED
     assert failed.execution_claim_id is None
+
+
+def test_routing_prose_captures_exact_provider_response_only_in_protected_detail(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(diagnostic_sensitive.keyring, "get_keyring", lambda: None)
+    diagnostic_dir = tmp_path / "diagnostics"
+    diagnostic_dir.mkdir()
+    (diagnostic_dir / "diagnostics-settings.json").write_text(
+        json.dumps(
+            {
+                "schema": diagnostics.SETTINGS_SCHEMA,
+                "global_level": "error",
+                "feature_levels": {},
+                "sensitive_detail_capture": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = diagnostics.DiagnosticManager(diagnostic_dir, watch_settings=False)
+    monkeypatch.setattr(diagnostics, "_manager", manager)
+    raw = {
+        "id": "gen-routing-1",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": "private routing text",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "function": {"name": "safe_read", "arguments": "{}"},
+                        }
+                    ],
+                },
+            }
+        ],
+    }
+    raw_body = b'{ "id" : "gen-routing-1", "choices":[] }'
+    routing = _response(
+        text="private routing text",
+        calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})],
+    ).model_copy(
+        update={
+            "raw": raw,
+            "raw_body": raw_body,
+            "provider_request_id": "gen-routing-1",
+        }
+    )
+    broker = RecordingBroker()
+    store, service, prepared, _ = _prepared(tmp_path, [routing], broker)
+    try:
+        with pytest.raises(ChatError, match="routing prose"):
+            asyncio.run(service.complete(prepared))
+        assert manager.flush()
+        records = [
+            json.loads(line)
+            for line in (manager.log_dir / "chat.log").read_text().splitlines()
+        ]
+        record = next(
+            item
+            for item in records
+            if item["event_code"] == "chat.routing.prose_with_required_tool"
+        )
+        assert record["sensitive_detail_available"] is True
+        assert record["metadata"]["status"] == "text_with_tool_calls"
+        assert "private routing text" not in json.dumps(records)
+        detail = json.loads(
+            manager.reveal_sensitive_detail(
+                record["error_id"], operator_id="operator", action="reveal"
+            )
+        )
+        assert detail["provider_response"] == raw
+        assert base64.b64decode(detail["provider_response_body_base64"]) == raw_body
+        assert detail["normalized"]["text"] == "private routing text"
+        assert broker.calls == []
+        assert store.get(ChatTurn, "turn").status == ChatTurnStatus.FAILED
+    finally:
+        manager.close()
 
 
 def test_tool_turn_prompts_never_claim_the_turn_has_no_tools(tmp_path):
