@@ -2721,17 +2721,24 @@ def test_quota_exhaustion_is_not_retried_or_called_an_overload():
 
 
 def test_transport_failures_become_provider_errors_with_a_reason():
+    timeouts: list[int] = []
+
     def timeout(_request: httpx.Request) -> httpx.Response:
+        timeouts.append(1)
         raise httpx.ReadTimeout("")
 
     provider = OpenAICompatibleProvider(
         _retrying_config("read-timeout"), transport=httpx.MockTransport(timeout)
     )
 
-    with pytest.raises(ProviderError) as failure:
+    # Inference has no side effects, so a timed-out request is resent and an
+    # exhausted one is the operator's to retry.
+    with pytest.raises(ProviderOverloadedError) as failure:
         asyncio.run(provider.complete(_chat_request()))
-    assert not isinstance(failure.value, ProviderOverloadedError)
-    assert str(failure.value) == "provider request timed out (ReadTimeout)"
+    assert len(timeouts) == 3
+    assert str(failure.value) == (
+        "provider request timed out (ReadTimeout) after 3 attempts"
+    )
 
     events = _collect_stream(provider)
 
@@ -2739,7 +2746,11 @@ def test_transport_failures_become_provider_errors_with_a_reason():
         StreamEventType.STARTED,
         StreamEventType.ERROR,
     ]
-    assert events[-1].error == "provider request timed out (ReadTimeout)"
+    assert len(timeouts) == 6
+    assert events[-1].error == (
+        "provider request timed out (ReadTimeout) after 3 attempts"
+    )
+    assert events[-1].retryable is True
 
     refused: list[int] = []
 
@@ -2776,6 +2787,7 @@ def test_transport_failures_become_provider_errors_with_a_reason():
 
     events = _collect_stream(provider)
 
+    # After output a torn stream is named, never replayed.
     assert [event.type for event in events] == [
         StreamEventType.STARTED,
         StreamEventType.TEXT_DELTA,
@@ -2785,6 +2797,7 @@ def test_transport_failures_become_provider_errors_with_a_reason():
         "provider request failed (RemoteProtocolError): peer closed connection "
         "without sending complete message body"
     )
+    assert events[-1].retryable is False
 
 
 def test_streaming_tool_calls_are_keyed_by_index_or_arrival_order():
