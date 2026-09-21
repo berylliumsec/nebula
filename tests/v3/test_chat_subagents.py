@@ -30,6 +30,7 @@ from nebula.v3.providers import (
     ProviderHealth,
     ProviderKind,
     ToolCall,
+    ToolChoice,
 )
 from nebula.v3.storage import ConflictError, NebulaStore
 
@@ -96,12 +97,13 @@ class RoutedProvider(ModelProvider):
                 raise AssertionError("child script was exhausted")
             upcoming = self.child[0]
             if (
-                request.tools
+                request.tool_choice != ToolChoice.NONE
                 and isinstance(upcoming, ModelResponse)
                 and not upcoming.tool_calls
             ):
                 # Every subagent routes tools, so a scripted answer first
-                # finishes routing.
+                # finishes routing. The synthesis keeps its tools declared
+                # with calling off.
                 return _finish(f"child-finish-{len(self.child_requests)}")
             return await _play(self.child.pop(0), request)
         self.parent_requests.append(request)

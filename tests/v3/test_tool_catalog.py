@@ -24,7 +24,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.knowledge_index import ChromaKnowledgeIndex
 from nebula.v3.mcp import catalog_mcp_profiles, mcp_tool_runtime_name
-from nebula.v3.providers import ToolCall
+from nebula.v3.providers import ToolCall, ToolChoice
 from nebula.v3.runtime_platform import RuntimeToolComponents
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tool_catalog import (
@@ -497,7 +497,9 @@ def test_tools_array_is_identical_across_search_load_and_call(tmp_path):
 
     asyncio.run(service.complete(prepared))
 
-    routing = [item for item in provider.requests if item.tools]
+    routing = [
+        item for item in provider.requests if item.tool_choice != ToolChoice.NONE
+    ]
     assert len(routing) == 4
     assert all(_tools(item) == _tools(routing[0]) for item in routing)
     assert all(item.instructions == routing[0].instructions for item in routing)
@@ -520,9 +522,12 @@ def test_tools_array_is_identical_across_search_load_and_call(tmp_path):
     replayed = next(item for item in routing[3].tool_results if item.call_id == "c3")
     assert replayed.name == CATALOG_CALL
     assert replayed.arguments == {"name": MCP_TOOL, "arguments": {"value": "x"}}
-    # Final synthesis lists the used tool but no unused on-demand tools.
+    # Final synthesis declares the routing list, with calling off, and names
+    # the used on-demand tool in its inventory, not unused ones.
     final = provider.requests[-1]
-    assert not final.tools and MCP_TOOL in final.instructions
+    assert final.tool_choice == ToolChoice.NONE
+    assert _tools(final) == _tools(routing[0])
+    assert MCP_TOOL in final.instructions
 
 
 def test_final_synthesis_omits_on_demand_tools_that_were_never_loaded(tmp_path):
@@ -617,7 +622,9 @@ def test_discovery_limit_is_refused_without_changing_the_tools_array(tmp_path):
 
     asyncio.run(service.complete(prepared))
 
-    routing = [item for item in provider.requests if item.tools]
+    routing = [
+        item for item in provider.requests if item.tool_choice != ToolChoice.NONE
+    ]
     assert all(_tools(item) == _tools(routing[0]) for item in routing)
     history = store.get(ChatTurn, "turn").tool_history
     assert [item["status"] for item in history][-1] == "failed"

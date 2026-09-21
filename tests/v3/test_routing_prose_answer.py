@@ -221,7 +221,7 @@ def test_glm_prose_reply_after_a_tool_step_answers_from_its_results(tmp_path):
     # Two routing requests and no synthesis; the answering one carried the
     # tool result it answered from.
     assert len(seen) == 2
-    assert all(payload.get("tools") for payload in seen)
+    assert all(payload.get("tool_choice") != "none" for payload in seen)
     replayed = [message for message in seen[1]["messages"] if message["role"] == "tool"]
     assert [message["tool_call_id"] for message in replayed] == ["call_-8231"]
     assert json.loads(replayed[0]["content"])["value"] == "a"
@@ -266,7 +266,8 @@ def test_prose_that_is_not_a_usable_answer_still_goes_to_synthesis(tmp_path, rou
     assert _shown(events, "delta") == "The value is a."
     assert "DSML" not in _shown(events, "reasoning_delta")
     assert len(seen) == 2
-    assert seen[1].get("tools") in (None, [])
+    # The second request is the synthesis: tools declared, calling off.
+    assert seen[1].get("tool_choice") == "none"
     assert broker.calls == []
     assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
 
@@ -284,7 +285,7 @@ def test_reasoning_only_routing_reply_still_goes_to_synthesis(tmp_path):
 
     assert _shown(events, "delta") == "The value is a."
     assert len(seen) == 2
-    assert seen[1].get("tools") in (None, [])
+    assert seen[1].get("tool_choice") == "none"
     turn = store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.reasoning == "Nothing to call; the value is known."

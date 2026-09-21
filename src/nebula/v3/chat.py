@@ -696,7 +696,9 @@ tool_output.search and tool_output.read."""
 )
 
 _CHAT_TOOL_RESULT_INSTRUCTIONS = (
-    """Answer the operator using the supplied tool results. """
+    """Answer the operator using the supplied tool results. Tool calling has
+ended for this turn; the functions stay listed only so earlier calls read
+correctly. """
     + _CHAT_BASE_INSTRUCTIONS
 )
 
@@ -776,7 +778,7 @@ def _operator_answer_text(text: str) -> str:
 
 def _final_answer_problem(response: ModelResponse) -> str | None:
     # An answer is kept even when the model also reached for a tool. The
-    # request offered none, so the call is dropped instead of the answer.
+    # request allowed no call, so the call is dropped instead of the answer.
     if _operator_answer_text(response.text):
         return None
     if response.tool_calls:
@@ -3904,21 +3906,7 @@ class ChatService:
                             + "\n\n"
                             + (prepared.model_request.instructions or "")
                             + catalog_instructions(catalog_receipt, components.specs),
-                            "tools": [
-                                ToolDefinition(
-                                    name=spec.name,
-                                    description=spec.description,
-                                    input_schema=_routing_input_schema(spec),
-                                    # The call envelope's arguments are
-                                    # free-form; the real tool's schema is
-                                    # enforced by Core.
-                                    strict=spec.name != CATALOG_CALL,
-                                )
-                                for spec in sorted(
-                                    available_specs, key=lambda item: item.name
-                                )
-                            ]
-                            + [self._finish_tool()],
+                            "tools": self._routing_tools(available_specs),
                             "tool_choice": ToolChoice.AUTO
                             if auto_routing
                             else ToolChoice.REQUIRED,
@@ -4369,6 +4357,18 @@ class ChatService:
             )
             # Unused on-demand tools stay out of the synthesis inventory too.
             loaded_names = loaded_tool_names(catalog_receipt, turn.tool_history)
+            # The replayed history calls functions, so the synthesis declares
+            # them, with calling off. Without declarations models call
+            # functions the request never declared or print their native call
+            # markup, and Anthropic and Bedrock reject replayed tool blocks
+            # outright. It is the routing list in full rather than whatever a
+            # spent budget left of it: no call can run now, and the same
+            # definitions in the same order keep the prefix routing cached.
+            synthesis_tools = self._routing_tools(
+                spec
+                for spec in components.specs.values()
+                if spec.name not in deferred_names
+            )
             final_request = prepared.model_request.model_copy(
                 update={
                     "instructions": (
@@ -4386,8 +4386,8 @@ class ChatService:
                             operator_help_chunks, trusted_operator_help=True
                         )
                     ),
-                    "tools": [],
-                    "tool_choice": ToolChoice.AUTO,
+                    "tools": synthesis_tools,
+                    "tool_choice": ToolChoice.NONE,
                     "parallel_tool_calls": False,
                     "tool_results": self._replayed_tool_history(prepared, turn),
                 }
@@ -4438,7 +4438,7 @@ class ChatService:
                         continue
                     if event.type == StreamEventType.ERROR:
                         if event.tool_call_rejected:
-                            # The request offered no tools, so a malformed call
+                            # The request allowed no call, so a malformed call
                             # or one the upstream refused is the model reaching
                             # for a tool: recovered, not a failed turn.
                             tool_call_rejected = True
@@ -4698,6 +4698,22 @@ class ChatService:
                 return True
         return False
 
+    @classmethod
+    def _routing_tools(cls, specs: Iterable[Any]) -> list[ToolDefinition]:
+        """The functions a routing step declares, in their stable order."""
+
+        return [
+            ToolDefinition(
+                name=spec.name,
+                description=spec.description,
+                input_schema=_routing_input_schema(spec),
+                # The call envelope's arguments are free-form; the real tool's
+                # schema is enforced by Core.
+                strict=spec.name != CATALOG_CALL,
+            )
+            for spec in sorted(specs, key=lambda item: item.name)
+        ] + [cls._finish_tool()]
+
     @staticmethod
     def _finish_tool() -> ToolDefinition:
         return ToolDefinition(
@@ -4904,6 +4920,9 @@ class ChatService:
                 prepared.provider_profile,
                 model=request.model,
                 requested_output_tokens=desired,
+                # A request that declares tools is served only by routes that
+                # take them, as _ensure_request_capacity holds it to below.
+                required_parameters={"tools"} if retry.tools else set(),
             )
             available = max(1, limits.context_window - estimate_model_request(retry))
             max_output_tokens = min(desired, limits.max_output_tokens, available)
@@ -8199,14 +8218,14 @@ class ChatService:
                 )
             raise ChatError("provider returned no operator-facing chat response")
         if response.tool_calls or content != response.text.strip():
-            # A final answer is requested with no tools, so a call made beside
-            # it, or a frame after it, is dropped and the answer stands.
+            # A final answer is requested with no call allowed, so a call made
+            # beside it, or a frame after it, is dropped and the answer stands.
             record_diagnostic(
                 "warning",
                 "chat",
                 "chat.final_answer.tool_call_dropped",
                 "The final answer arrived with a tool call the request did not "
-                "offer; Core kept the answer and dropped the call.",
+                "allow; Core kept the answer and dropped the call.",
                 outcome="fallback",
                 stage="chat",
                 retryable=False,

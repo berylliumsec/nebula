@@ -178,6 +178,10 @@ class ToolChoice(str, Enum):
 
     AUTO = "auto"
     REQUIRED = "required"
+    # The tools stay declared, so replayed calls to them read as valid
+    # history, but the model may not call one. A route with no such control
+    # (Bedrock Converse) is sent its automatic default instead.
+    NONE = "none"
 
 
 class ModelCapabilities(BaseModel):
@@ -1764,13 +1768,14 @@ def _context_window_stop(reason: str) -> ProviderContextLengthError:
 
 
 def _raise_malformed_tool_call(request: ModelRequest, reason: str) -> None:
-    """Raise for a botched call when the request offered tools.
+    """Raise for a botched call when the request offered tools to call.
 
-    Without tools there was nothing to call: the empty reply goes to the
-    caller's own recovery, which asks again for prose.
+    Without tools, or with calling turned off, there was nothing to call: the
+    empty reply goes to the caller's own recovery, which asks again for prose.
+    Gemini reports a call made with calling off as UNEXPECTED_TOOL_CALL.
     """
 
-    if request.tools:
+    if request.tools and request.tool_choice != ToolChoice.NONE:
         raise ProviderMalformedToolCallError(
             f"provider returned a malformed tool call ({reason})"
         )
@@ -2678,8 +2683,8 @@ class OpenAIResponsesProvider(ModelProvider):
                 }
                 for tool in request.tools
             ]
-            if request.tool_choice == ToolChoice.REQUIRED:
-                payload["tool_choice"] = "required"
+            if request.tool_choice in {ToolChoice.REQUIRED, ToolChoice.NONE}:
+                payload["tool_choice"] = request.tool_choice.value
         if request.response_schema:
             payload["text"] = {
                 "format": {
@@ -2957,6 +2962,23 @@ def _tool_call(
         name=decoded,
         arguments=parsed,
         provider_metadata=provider_metadata,
+    )
+
+
+# Anthropic and Bedrock reject replayed tool blocks in a request that declares
+# no tools. LiteLLM (add_dummy_tool) and opencode (_noop) declare a placeholder
+# for the same reason; declaring the replayed names keeps the history's calls
+# to declared functions.
+_REPLAYED_TOOL_DESCRIPTION = (
+    "Called earlier in this conversation. Not available to call in this request."
+)
+
+
+def _replayed_wire_names(
+    request: ModelRequest, wire_names: dict[str, str]
+) -> list[str]:
+    return sorted(
+        {wire_names.get(result.name, result.name) for result in request.tool_results}
     )
 
 
@@ -3318,8 +3340,8 @@ class OpenAICompatibleProvider(ModelProvider):
                 }
                 for tool in request.tools
             ]
-            if request.tool_choice == ToolChoice.REQUIRED:
-                payload["tool_choice"] = "required"
+            if request.tool_choice in {ToolChoice.REQUIRED, ToolChoice.NONE}:
+                payload["tool_choice"] = request.tool_choice.value
         if json_object:
             payload["response_format"] = {"type": "json_object"}
         elif request.response_schema:
@@ -4199,6 +4221,23 @@ class AnthropicProvider(ModelProvider):
                     "type": "auto" if rejects_forced_tool_choice(model) else "any",
                     "disable_parallel_tool_use": not request.parallel_tool_calls,
                 }
+            elif request.tool_choice == ToolChoice.NONE:
+                # Not a forced choice: every Claude model takes it, thinking
+                # included.
+                payload["tool_choice"] = {"type": "none"}
+        elif request.tool_results:
+            # Messages rejects tool_use/tool_result blocks in a request that
+            # declares no tools, so a caller replaying history without them
+            # gets each replayed name declared, with calling off.
+            payload["tools"] = [
+                {
+                    "name": name,
+                    "description": _REPLAYED_TOOL_DESCRIPTION,
+                    "input_schema": {"type": "object"},
+                }
+                for name in _replayed_wire_names(request, wire_names)
+            ]
+            payload["tool_choice"] = {"type": "none"}
         async with self._client(
             self._headers(), timeout=_native_http_timeout(self.config)
         ) as client:
@@ -4481,6 +4520,8 @@ class GeminiProvider(ModelProvider):
             ]
             if request.tool_choice == ToolChoice.REQUIRED:
                 payload["toolConfig"] = {"functionCallingConfig": {"mode": "ANY"}}
+            elif request.tool_choice == ToolChoice.NONE:
+                payload["toolConfig"] = {"functionCallingConfig": {"mode": "NONE"}}
         generation: dict[str, Any] = {}
         if request.max_output_tokens:
             generation["maxOutputTokens"] = request.max_output_tokens
@@ -4753,6 +4794,10 @@ class BedrockProvider(ModelProvider):
                     for tool in request.tools
                 ]
             }
+            # Converse has no "none" choice, so ToolChoice.NONE is sent as its
+            # default, auto: the declarations the replayed toolUse blocks need
+            # stay, and a call the model makes anyway is the caller's to
+            # recover, as on any route that ignores the control.
             if request.tool_choice == ToolChoice.REQUIRED:
                 if rejects_forced_tool_choice(model):
                     kwargs["toolConfig"]["toolChoice"] = {"auto": {}}
@@ -4763,6 +4808,22 @@ class BedrockProvider(ModelProvider):
                         kwargs["additionalModelRequestFields"] = {
                             "thinking": {"type": "disabled"}
                         }
+        elif request.tool_results:
+            # Converse rejects toolUse/toolResult blocks without a toolConfig,
+            # so a caller replaying history without tools gets each replayed
+            # name declared.
+            kwargs["toolConfig"] = {
+                "tools": [
+                    {
+                        "toolSpec": {
+                            "name": name,
+                            "description": _REPLAYED_TOOL_DESCRIPTION,
+                            "inputSchema": {"json": {"type": "object"}},
+                        }
+                    }
+                    for name in _replayed_wire_names(request, wire_names)
+                ]
+            }
         inference: dict[str, Any] = {}
         if request.max_output_tokens:
             inference["maxTokens"] = request.max_output_tokens
