@@ -45,6 +45,7 @@ from nebula.v3.harnesses import (
     _AcpRpc,
     _CodexRpc,
     _harness_goal_snapshot,
+    _codex_process_overrides,
     _codex_thread_config,
 )
 
@@ -1696,6 +1697,7 @@ def test_codex_gateway_thread_disables_vendor_execution_and_environment():
     assert config["features"]["unified_exec"] is False
     assert config["features"]["plugins"] is False
     assert config["features"]["browser_use"] is False
+    assert config["features"]["goals"] is True
     assert config["web_search"] == "disabled"
     assert config["shell_environment_policy"] == {
         "inherit": "none",
@@ -1727,6 +1729,209 @@ def test_codex_native_capabilities_are_explicit_and_keep_shell_environment_minim
     assert config["web_search"] == "live"
     assert config["shell_environment_policy"]["inherit"] == "all"
     assert config["shell_environment_policy"]["set"]["PATH"] != "/nonexistent"
+
+
+def test_codex_process_enables_goals_for_the_goal_command():
+    # Codex rejects thread/goal/* with "goals feature is disabled" otherwise.
+    overrides = _codex_process_overrides(HarnessNativeCapabilities())
+
+    assert "features.goals=true" in overrides
+    assert "features.goals=false" not in overrides
+
+
+def _goal_turn(method: str, turn_id: str, status: str, thread: str = "thread-goal"):
+    return {
+        "method": method,
+        "params": {"threadId": thread, "turn": {"id": turn_id, "status": status}},
+    }
+
+
+def _goal_update(turn_id: str | None, status: str) -> dict[str, Any]:
+    return {
+        "method": "thread/goal/updated",
+        "params": {
+            "threadId": "thread-goal",
+            "turnId": turn_id,
+            "goal": {
+                "threadId": "thread-goal",
+                "objective": "count to two",
+                "status": status,
+            },
+        },
+    }
+
+
+def _goal_answer(turn_id: str, text: str) -> dict[str, Any]:
+    return {
+        "method": "item/agentMessage/delta",
+        "params": {"turnId": turn_id, "itemId": f"answer-{turn_id}", "delta": text},
+    }
+
+
+class GoalRpc(FixtureCodexRpc):
+    def __init__(self, script: list[dict[str, Any]]) -> None:
+        super().__init__()
+        self.script = script
+        self.running_turns: dict[str, str] = {}
+
+    async def request(self, method: str, params: dict[str, Any]) -> Any:
+        self.calls.append((method, params))
+        if method != "turn/start":
+            return {}
+        for event in self.script:
+            await self.events.put(event)
+        return {"turn": {"id": "turn-1"}}
+
+
+def _goal_connection(rpc: GoalRpc) -> CodexAppServerConnection:
+    async def permission(_):
+        raise AssertionError("no permission request expected")
+
+    return CodexAppServerConnection(
+        rpc, external_session_id="thread-goal", permission_handler=permission
+    )
+
+
+def test_codex_turn_follows_the_turns_codex_starts_for_an_active_goal():
+    rpc = GoalRpc(
+        [
+            _goal_answer("turn-1", "alpha"),
+            _goal_update("turn-1", "active"),
+            _goal_turn("turn/completed", "turn-1", "completed"),
+            # A Codex subagent thread shares the connection; it is not a goal turn.
+            _goal_turn("turn/started", "child-turn", "inProgress", thread="child"),
+            _goal_turn("turn/started", "turn-2", "inProgress"),
+            _goal_answer("turn-2", "beta"),
+            _goal_update("turn-2", "complete"),
+            _goal_turn("turn/completed", "turn-2", "completed"),
+        ]
+    )
+
+    async def scenario() -> list[Any]:
+        connection = _goal_connection(rpc)
+        return [event async for event in connection.run_turn("go", model="gpt-test")]
+
+    events = asyncio.run(asyncio.wait_for(scenario(), timeout=5))
+
+    assert [method for method, _ in rpc.calls] == ["turn/start"]
+    assert [e.external_turn_id for e in events if e.type == "started"] == [
+        "turn-1",
+        "turn-2",
+    ]
+    assert "".join(e.delta for e in events if e.type == "message_delta") == (
+        "alpha\n\nbeta"
+    )
+    assert [e.goal.status for e in events if e.goal is not None] == [
+        "running",
+        "complete",
+    ]
+    assert events[-1].type == "completed"
+    assert events[-1].message == "alpha\n\nbeta"
+    assert events[-1].external_turn_id == "turn-2"
+
+
+def test_codex_goal_turn_completes_when_codex_does_not_continue(monkeypatch):
+    monkeypatch.setattr(harness_module, "CODEX_GOAL_CONTINUATION_TIMEOUT_SECONDS", 0.01)
+    rpc = GoalRpc(
+        [
+            _goal_answer("turn-1", "alpha"),
+            _goal_update("turn-1", "active"),
+            _goal_turn("turn/completed", "turn-1", "completed"),
+        ]
+    )
+
+    async def scenario() -> list[Any]:
+        connection = _goal_connection(rpc)
+        return [event async for event in connection.run_turn("go", model="gpt-test")]
+
+    events = asyncio.run(asyncio.wait_for(scenario(), timeout=5))
+
+    assert events[-1].type == "completed"
+    assert events[-1].message == "alpha"
+    assert events[-1].external_turn_id == "turn-1"
+
+
+def test_codex_goal_paused_between_turns_ends_the_wait_at_once():
+    rpc = GoalRpc(
+        [
+            _goal_answer("turn-1", "alpha"),
+            _goal_update("turn-1", "active"),
+            _goal_turn("turn/completed", "turn-1", "completed"),
+            _goal_update(None, "paused"),
+        ]
+    )
+
+    async def scenario() -> list[Any]:
+        connection = _goal_connection(rpc)
+        return [event async for event in connection.run_turn("go", model="gpt-test")]
+
+    # Far below the 15 s continuation wait.
+    events = asyncio.run(asyncio.wait_for(scenario(), timeout=2))
+
+    assert events[-1].type == "completed"
+    assert events[-1].message == "alpha"
+    assert [e.goal.status for e in events if e.goal is not None] == [
+        "running",
+        "paused",
+    ]
+
+
+@pytest.mark.parametrize("started", [None, "turn-2"])
+def test_codex_stop_between_goal_turns_pauses_the_goal(started):
+    rpc = GoalRpc(
+        [
+            _goal_update("turn-1", "active"),
+            _goal_turn("turn/completed", "turn-1", "completed"),
+        ]
+    )
+
+    async def scenario() -> None:
+        connection = _goal_connection(rpc)
+
+        async def consume() -> None:
+            async for _ in connection.run_turn("go", model="gpt-test"):
+                pass
+
+        # The runtime cancels the turn task, then interrupts the connection.
+        task = asyncio.create_task(consume())
+        while not connection._awaiting_goal_turn:
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        if started:
+            rpc.running_turns["thread-goal"] = started
+        await connection.interrupt()
+
+    asyncio.run(asyncio.wait_for(scenario(), timeout=5))
+
+    stop_calls = rpc.calls[1:]
+    assert stop_calls[0] == (
+        "thread/goal/set",
+        {"threadId": "thread-goal", "status": "paused"},
+    )
+    assert stop_calls[1:] == (
+        [("turn/interrupt", {"threadId": "thread-goal", "turnId": started})]
+        if started
+        else []
+    )
+
+
+def test_codex_rpc_records_the_running_turn_of_each_thread():
+    async def scenario() -> None:
+        rpc = _CodexRpc()
+        await rpc._dispatch(
+            json.dumps(_goal_turn("turn/started", "turn-2", "inProgress"))
+        )
+        assert rpc.running_turns == {"thread-goal": "turn-2"}
+        await rpc._dispatch(
+            json.dumps(_goal_turn("turn/completed", "turn-2", "completed"))
+        )
+        assert rpc.running_turns == {}
+        # Recording never swallows the notification.
+        assert rpc.events.qsize() == 2
+
+    asyncio.run(scenario())
 
 
 class StreamEvent:

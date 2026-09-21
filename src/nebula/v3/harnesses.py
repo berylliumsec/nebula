@@ -197,6 +197,9 @@ ACTIVITY_DELTA_FLUSH_CHARS = 16 * 1024
 HARNESS_STARTUP_TIMEOUT_SECONDS = 60.0
 HARNESS_INTERRUPT_TIMEOUT_SECONDS = 5.0
 CODEX_SESSION_LIST_TIMEOUT_SECONDS = 15.0
+# Codex starts the next turn of an active goal itself, about 1-2 s after the
+# previous one completes. A goal that stays active without one is left alone.
+CODEX_GOAL_CONTINUATION_TIMEOUT_SECONDS = 15.0
 GROK_SESSION_LIST_TIMEOUT_SECONDS = 30.0
 
 GATEWAY_CATALOG_PAGE_BYTES = MAX_MCP_MESSAGE_BYTES - 64 * 1024
@@ -1463,6 +1466,8 @@ class _CodexRpc:
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self.events: asyncio.Queue[dict[str, Any] | BaseException] = asyncio.Queue()
+        # Thread id -> the turn Codex is running, even one it started itself.
+        self.running_turns: dict[str, str] = {}
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self.stderr_tail = ""
@@ -1690,6 +1695,15 @@ class _CodexRpc:
         )
 
     def _capture_notification(self, message: dict[str, Any]) -> bool:
+        # Recorded as they arrive, so Stop can find a turn nothing is reading.
+        params = message.get("params")
+        if isinstance(params, dict) and isinstance(params.get("threadId"), str):
+            turn = params.get("turn")
+            turn_id = turn.get("id") if isinstance(turn, dict) else None
+            if message["method"] == "turn/started" and isinstance(turn_id, str):
+                self.running_turns[params["threadId"]] = turn_id
+            elif message["method"] == "turn/completed":
+                self.running_turns.pop(params["threadId"], None)
         return False
 
     async def _drain_stderr(self) -> None:
@@ -1763,6 +1777,8 @@ class CodexAppServerConnection(HarnessConnection):
         self.approval_policy = approval_policy
         self.trusted_mcp_servers = trusted_mcp_servers
         self.active_turn_id: str | None = None
+        self.last_turn_id: str | None = None
+        self._awaiting_goal_turn = False
 
     async def run_turn(
         self,
@@ -1776,6 +1792,7 @@ class CodexAppServerConnection(HarnessConnection):
         # Resumed harnesses own their conversation state. Notifications queued
         # while opening that session are historical replay, not this turn's output.
         _discard_queued_session_replay(self.rpc.events)
+        self._awaiting_goal_turn = False
         turn_input: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         for image in images or []:
             turn_input.append(
@@ -1815,13 +1832,57 @@ class CodexAppServerConnection(HarnessConnection):
         message_phases: dict[str, str] = {}
         reasoning_items: set[str] = set()
         reasoning_summary_parts: dict[str, dict[int, str]] = {}
+        # While a goal is active Codex keeps working in turns it starts itself.
+        # They belong to this Nebula turn, so follow them until the goal stops.
+        goal_running = False
+        earlier_messages: list[str] = []
+        continuation_deadline: float | None = None
         while True:
-            raw = await self.rpc.events.get()
+            if continuation_deadline is None:
+                raw = await self.rpc.events.get()
+            else:
+                try:
+                    raw = await asyncio.wait_for(
+                        self.rpc.events.get(),
+                        max(
+                            0.0,
+                            continuation_deadline - asyncio.get_running_loop().time(),
+                        ),
+                    )
+                except TimeoutError:
+                    # diagnostic-expected: no continuation means Codex is done with this turn.
+                    self._awaiting_goal_turn = False
+                    yield HarnessEvent(
+                        type="completed",
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        message="\n\n".join(earlier_messages),
+                        external_turn_id=self.last_turn_id,
+                    )
+                    return
             if isinstance(raw, BaseException):
                 raise raw
             method = raw.get("method")
             raw_params = raw.get("params")
             params: dict[str, Any] = raw_params if isinstance(raw_params, dict) else {}
+            if method == "turn/started" and continuation_deadline is not None:
+                started = params.get("turn")
+                if (
+                    params.get("threadId") != self.external_session_id
+                    or not isinstance(started, dict)
+                    or not isinstance(started.get("id"), str)
+                ):
+                    continue
+                continuation_deadline = None
+                self._awaiting_goal_turn = False
+                self.active_turn_id = started["id"]
+                message_parts = []
+                authoritative_message = None
+                yield HarnessEvent(
+                    type="started",
+                    external_session_id=self.external_session_id,
+                    external_turn_id=self.active_turn_id,
+                )
+                continue
             if method in {
                 "item/commandExecution/requestApproval",
                 "item/fileChange/requestApproval",
@@ -1994,11 +2055,13 @@ class CodexAppServerConnection(HarnessConnection):
                             delta=chunk,
                         )
                     continue
+                # Each goal turn's answer streams as its own paragraph.
+                separator = "\n\n" if earlier_messages and not message_parts else ""
                 message_parts.append(delta)
                 yield HarnessEvent(
                     type="message_delta",
                     vendor=HarnessKind.CODEX_APP_SERVER,
-                    delta=delta,
+                    delta=separator + delta,
                     item_id=item_id or None,
                     external_turn_id=self.active_turn_id,
                 )
@@ -2140,6 +2203,8 @@ class CodexAppServerConnection(HarnessConnection):
                     else params
                 )
                 if goal is not None:
+                    if params.get("threadId") in {None, self.external_session_id}:
+                        goal_running = goal.status == "running"
                     yield HarnessEvent(
                         type="item_upsert",
                         vendor=HarnessKind.CODEX_APP_SERVER,
@@ -2152,6 +2217,15 @@ class CodexAppServerConnection(HarnessConnection):
                         goal=goal,
                         payload={"goal": goal.model_dump(mode="json")},
                     )
+                    if continuation_deadline is not None and not goal_running:
+                        self._awaiting_goal_turn = False
+                        yield HarnessEvent(
+                            type="completed",
+                            vendor=HarnessKind.CODEX_APP_SERVER,
+                            message="\n\n".join(earlier_messages),
+                            external_turn_id=self.last_turn_id,
+                        )
+                        return
                 continue
             if method == "turn/diff/updated":
                 yield HarnessEvent(
@@ -2443,6 +2517,7 @@ class CodexAppServerConnection(HarnessConnection):
                 ):
                     continue
                 status = str(completed.get("status") or "failed")
+                self.last_turn_id = self.active_turn_id
                 self.active_turn_id = None
                 if status in {"interrupted", "cancelled"}:
                     yield HarnessEvent(type="interrupted", message=status)
@@ -2455,10 +2530,20 @@ class CodexAppServerConnection(HarnessConnection):
                         "Codex turn failed: "
                         + str(_bounded(error or status, limit=1_000))
                     )
+                message = authoritative_message or "".join(message_parts)
+                if message:
+                    earlier_messages.append(message)
+                if goal_running:
+                    continuation_deadline = (
+                        asyncio.get_running_loop().time()
+                        + CODEX_GOAL_CONTINUATION_TIMEOUT_SECONDS
+                    )
+                    self._awaiting_goal_turn = True
+                    continue
                 yield HarnessEvent(
                     type="completed",
                     vendor=HarnessKind.CODEX_APP_SERVER,
-                    message=(authoritative_message or "".join(message_parts)),
+                    message="\n\n".join(earlier_messages),
                     external_turn_id=str(completed.get("id") or "") or None,
                 )
                 return
@@ -2562,6 +2647,23 @@ class CodexAppServerConnection(HarnessConnection):
             await self.rpc.request(
                 "turn/interrupt",
                 {"threadId": self.external_session_id, "turnId": self.active_turn_id},
+            )
+            return
+        if not self._awaiting_goal_turn:
+            return
+        # Stopped between two goal turns. Nothing reads events once the turn
+        # task is cancelled, so pause the goal to keep Codex from starting
+        # another turn, then stop one it already started. /goal resume goes on.
+        self._awaiting_goal_turn = False
+        await self.rpc.request(
+            "thread/goal/set",
+            {"threadId": self.external_session_id, "status": "paused"},
+        )
+        started = self.rpc.running_turns.get(self.external_session_id or "")
+        if started:
+            await self.rpc.request(
+                "turn/interrupt",
+                {"threadId": self.external_session_id, "turnId": started},
             )
 
     async def close(self) -> None:
@@ -3300,6 +3402,8 @@ def _codex_feature_policy(
     enabled = {
         # The stable host dispatches MCP calls even when code mode is disabled.
         "code_mode_host": True,
+        # /goal is always offered; Codex rejects thread/goal/* without it.
+        "goals": True,
         "shell_tool": shell,
         "unified_exec": shell,
         "browser_use": capabilities.browser,
