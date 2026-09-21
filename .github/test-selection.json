@@ -1,13 +1,13 @@
 {
-  "change_digest": "a8af5b4a76adb2feb04246bc9dca7ac6692626c50d79d498515fec6d0e5f1477",
-  "reviewed_by": "Codex review of saved-chat provider-to-harness switching",
-  "reason": "Selecting a saved provider conversation clears its harness identity, so switching to Agent harness must acquire an available harness and model even when the catalog resolves later. The selection verifies deterministic React state plus the assistant-settings journey across desktop Chromium and emulated mobile Chromium/WebKit.",
-  "exclusions": "Full backend and frontend suites, unrelated chat/provider/harness tests, Python and native tests, physical devices, and unrelated Playwright areas are excluded. The server runtime handoff contract and API shapes are unchanged; this defect is confined to UI catalog/session state ownership. No origin-sensitive browser API changed.",
+  "change_digest": "10ebe2200e0a624a3731d0bb29157a94ac0ea121d68adc5716b026a4809498d1",
+  "reviewed_by": "Codex focused selection review",
+  "reason": "The change is limited to conversation deletion reconciliation in SessionsPage, its diagnostic presentation, and permanent focused UI and real-Core regression coverage.",
+  "exclusions": "No Python or native implementation changed, so backend and native tests are excluded. Unrelated chat streaming, provider, mission, browser, terminal, workspace, and full-suite journeys are excluded.",
   "expected_tests": {
     "python": 0,
-    "frontend": 40,
+    "frontend": 3,
     "native": 0,
-    "playwright": 6
+    "playwright": 11
   },
   "python": [],
   "frontend": [
@@ -15,8 +15,16 @@
   ],
   "native": [],
   "playwright": [
-    "entry:assistant-settings-navigation/desktop",
-    "entry:assistant-settings-navigation/mobile-chromium",
-    "entry:assistant-settings-navigation/mobile-webkit"
+    "entry:conversation-delete-reconciliation/desktop",
+    "entry:conversation-delete-reconciliation/compact",
+    "entry:conversation-delete-reconciliation/mobile-chromium-small",
+    "entry:conversation-delete-reconciliation/mobile-chromium-ledger-390",
+    "entry:conversation-delete-reconciliation/mobile-chromium-wide",
+    "entry:conversation-delete-reconciliation/mobile-webkit-small",
+    "entry:conversation-delete-reconciliation/mobile-webkit",
+    "entry:conversation-delete-reconciliation/mobile-webkit-wide",
+    "entry:conversation-delete-reconciliation-core/assistant-real-desktop",
+    "entry:conversation-delete-reconciliation-core/assistant-real-chromium-390",
+    "entry:conversation-delete-reconciliation-core/assistant-real-webkit-390"
   ]
 }

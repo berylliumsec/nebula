@@ -3752,6 +3752,59 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
 });
 
 const reliabilityTest = test.extend({serviceWorkers: "block"});
+reliabilityTest("assistant upgrade conversation bulk delete clears rows already absent from real Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "settings");
+  try {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const pairing = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Conversation delete reconciliation"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+
+    const sessionIds: string[] = [];
+    for (const message of ["Keep the first conversation", "Keep the second conversation"]) {
+      await page.getByRole("button", {name: "New chat", exact: true}).click();
+      const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+      await composer.fill(message);
+      await page.getByRole("button", {name: "Send message", exact: true}).click();
+      await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS fixture low", {timeout: 20_000});
+      await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeVisible({timeout: 20_000});
+      const sessionId = new URL(page.url()).searchParams.get("session");
+      expect(sessionId).toBeTruthy();
+      sessionIds.push(sessionId!);
+    }
+
+    const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+    await page.getByRole("button", {name: mobile ? "Open conversations" : "Show conversations", exact: true}).click();
+    const conversations = page.getByRole("complementary", {name: "Conversations"});
+    await expect(conversations.getByText("2 saved", {exact: true})).toBeVisible();
+    for (const sessionId of sessionIds) {
+      const removed = await core.api.delete(`chat-sessions/${sessionId}`);
+      expect(removed.ok(), await removed.text()).toBe(true);
+    }
+    expect(await (await core.api.get("chat-sessions")).json()).toEqual([]);
+
+    await conversations.getByRole("button", {name: "More conversation actions"}).click();
+    await page.getByRole("menuitem", {name: "Delete all conversations"}).click();
+    await page.getByRole("dialog", {name: "Delete all conversations?"}).getByRole("button", {name: "Delete all conversations"}).click();
+
+    if (mobile) {
+      await page.getByRole("button", {name: "Open conversations", exact: true}).click();
+    }
+    await expect(page.getByRole("complementary", {name: "Conversations"}).getByText("0 saved", {exact: true})).toBeVisible();
+    await expect(page.getByText("Reference: pending local diagnostic")).toHaveCount(0);
+    await page.reload();
+    const reloadedConversations = page.getByRole("complementary", {name: "Conversations"});
+    const reopen = page.getByRole("button", {name: mobile ? "Open conversations" : "Show conversations", exact: true});
+    await expect(reloadedConversations.or(reopen)).toBeVisible({timeout: 20_000});
+    if (await reopen.isVisible()) await reopen.click();
+    await expect(page.getByRole("complementary", {name: "Conversations"}).getByText("0 saved", {exact: true})).toBeVisible();
+    await testInfo.attach("conversation-delete-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), deletedSessionIds: sessionIds}), contentType: "application/json"});
+  } finally {await core.stop();}
+});
+
 reliabilityTest("assistant upgrade reliability settings and quiet activity survive refresh", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   page.setDefaultTimeout(10_000);
