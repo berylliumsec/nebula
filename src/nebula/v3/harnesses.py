@@ -3773,6 +3773,56 @@ def _codex_thread_config(
     return result
 
 
+@dataclass(frozen=True)
+class _ClaudeStreamFailure:
+    """A failure of the CLI message stream, filed in order with its messages.
+
+    ``error`` is None when the CLI closed its output. Only a message the SDK
+    could not parse leaves the stream behind it usable (``transport=False``).
+    """
+
+    error: BaseException | None
+    transport: bool
+
+
+def _claude_sdk_error(exc: BaseException, name: str) -> bool:
+    return any(cls.__name__ == name for cls in type(exc).__mro__)
+
+
+def _claude_client_state(
+    client: Any,
+) -> Literal["connected", "disconnected", "unknown"]:
+    """Probe the SDK client's CLI process through optional private attributes.
+
+    The SDK exposes no liveness API, so every probe is a defensive ``getattr``;
+    a client without them (another SDK version or a test double) is "unknown".
+    """
+
+    probed = False
+    if hasattr(client, "_query"):
+        query = getattr(client, "_query", None)
+        if query is None:
+            return "disconnected"
+        probed = True
+        if getattr(query, "_closed", False) is True:
+            return "disconnected"
+        done = getattr(getattr(query, "_read_task", None), "done", None)
+        if callable(done) and done() is True:
+            return "disconnected"
+    if hasattr(client, "_transport"):
+        transport = getattr(client, "_transport", None)
+        if transport is None:
+            return "disconnected"
+        probed = True
+        is_ready = getattr(transport, "is_ready", None)
+        if callable(is_ready) and is_ready() is False:
+            return "disconnected"
+        process = getattr(transport, "_process", None)
+        if getattr(process, "returncode", None) is not None:
+            return "disconnected"
+    return "connected" if probed else "unknown"
+
+
 class ClaudeAgentSdkConnection(HarnessConnection):
     adapter_version = ADAPTER_CONTRACT_VERSION + "/claude-sdk"
 
@@ -3791,6 +3841,28 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         self.external_session_id = external_session_id
         self.workspace = workspace
         self.active = False
+        # The CLI is one long-lived, ordered stream shared by every turn. A
+        # vendor turn stays open from an accepted query() until its
+        # ResultMessage is read, even after Nebula's turn generator is gone, so
+        # a stop or failure can still interrupt it and drain its tail; left in
+        # the stream, that tail would answer the next prompt.
+        self._vendor_turn_open = False
+        self._consumer_idle = asyncio.Event()
+        self._consumer_idle.set()
+        self._settle_lock = asyncio.Lock()
+        self._inbox: asyncio.Queue[Any] = asyncio.Queue()
+        self._reader: asyncio.Task[None] | None = None
+        # Set when a stop could not settle the stream: its position is unknown.
+        self._desynchronized = False
+        self._closed = False
+
+    @property
+    def connection_state(self) -> Literal["connected", "disconnected", "unknown"]:
+        if self._closed or self._desynchronized:
+            return "disconnected"
+        if self._reader is not None and self._reader.done():
+            return "disconnected"
+        return _claude_client_state(self.client)
 
     async def run_turn(
         self,
@@ -3807,26 +3879,57 @@ class ClaudeAgentSdkConnection(HarnessConnection):
             )
         del mode, skill  # Claude receives skills through its configured Skill tool.
         del model  # Locked into ClaudeAgentOptions for the connected session.
-        await self.client.query(prompt)
+        self._start_reader()
+        out_of_band = await self._prepare_for_query()
+        await self._sdk_call(self.client.query(prompt))
         # A rejected query leaves nothing to interrupt; ``active`` is cleared by
         # the ``finally`` below only once the turn body has started.
-        self.active = True
-        yield HarnessEvent(
-            type="started",
-            vendor=HarnessKind.CLAUDE_AGENT_SDK,
-            external_session_id=self.external_session_id,
-        )
+        self._vendor_turn_open = True
+        # Text since the last top-level tool use: the answer so far. Text that
+        # a tool use follows was narration and moves to commentary.
         parts: list[str] = []
         fallback_parts: list[str] = []
+        streamed_text = False
+        commentary_sequence = 0
+        result_text: str | None = None
         tool_identities: dict[str, tuple[str | None, str, Any, str | None]] = {}
-        stream_blocks: dict[int, dict[str, Any]] = {}
+        # Stream block indexes restart with every model call (and differ per
+        # subagent), so blocks are keyed by (parent tool use, index) under the
+        # message that ``message_start`` opened.
+        stream_blocks: dict[tuple[str | None, int], dict[str, Any]] = {}
+        stream_message_ids: dict[str | None, str] = {}
+        stream_messages = 0
+        streamed_thinking: dict[str | None, int] = {}
         reasoning_items: set[str] = set()
         usage = ChatTokenUsage()
         detailed_usage = HarnessDetailedUsage()
         checkpoint_id: str | None = None
         before = _workspace_snapshot(self.workspace)
+
+        def close_narration() -> list[HarnessEvent]:
+            nonlocal commentary_sequence
+            narration = "".join(parts) or (
+                "" if streamed_text else "".join(fallback_parts)
+            )
+            parts.clear()
+            fallback_parts.clear()
+            if not narration:
+                return []
+            commentary_sequence += 1
+            return _claude_commentary_events(narration, commentary_sequence)
+
+        self.active = True
+        self._consumer_idle.clear()
         try:
-            async for message in self.client.receive_response():
+            yield HarnessEvent(
+                type="started",
+                vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                external_session_id=self.external_session_id,
+            )
+            for out_of_band_event in out_of_band:
+                yield out_of_band_event
+            while True:
+                message = await self._next_message()
                 class_name = type(message).__name__
                 if class_name == "StreamEvent":
                     event = getattr(message, "event", None)
@@ -3834,27 +3937,50 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                         continue
                     event_type = str(event.get("type") or "")
                     index = int(event.get("index") or 0)
+                    parent = getattr(message, "parent_tool_use_id", None) or None
+                    if event_type == "message_start":
+                        stream_messages += 1
+                        started = event.get("message")
+                        stream_message_ids[parent] = str(
+                            (started.get("id") if isinstance(started, dict) else None)
+                            or f"message-{stream_messages}"
+                        )
+                        for stale in [key for key in stream_blocks if key[0] == parent]:
+                            del stream_blocks[stale]
+                        continue
+                    message_key = stream_message_ids.get(parent)
+                    default_id = (
+                        f"{message_key}-block-{index}"
+                        if message_key
+                        else f"block-{index}"
+                    )
+                    block_key = (parent, index)
                     if event_type == "content_block_start":
                         block = event.get("content_block")
                         if not isinstance(block, dict):
                             continue
                         block_type = str(block.get("type") or "")
-                        item_id = str(block.get("id") or f"block-{index}")
-                        stream_blocks[index] = {
+                        item_id = str(block.get("id") or default_id)
+                        stream_blocks[block_key] = {
                             "id": item_id,
                             "type": block_type,
                             "name": block.get("name"),
-                            "parent": getattr(message, "parent_tool_use_id", None),
+                            "parent": parent,
+                            "reasoning": block_type == "thinking",
                         }
                         if block_type == "thinking":
-                            reasoning_items.add(item_id)
+                            streamed_thinking[parent] = (
+                                streamed_thinking.get(parent, 0) + 1
+                            )
                             yield _claude_reasoning_event(item_id, "streaming")
                         elif block_type in {"tool_use", "server_tool_use"}:
+                            if parent is None:
+                                for commentary in close_narration():
+                                    yield commentary
                             vendor_name = str(block.get("name") or "unknown")
                             server_name, tool_name = _parse_claude_mcp_name(vendor_name)
                             normalized_server = server_name or "claude"
                             kind = _claude_item_kind(tool_name)
-                            parent = getattr(message, "parent_tool_use_id", None)
                             tool_identities[item_id] = (
                                 normalized_server,
                                 tool_name,
@@ -3894,11 +4020,13 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                         if not isinstance(delta, dict):
                             continue
                         delta_type = str(delta.get("type") or "")
-                        block = stream_blocks.get(index, {})
-                        item_id = str(block.get("id") or f"block-{index}")
+                        block = stream_blocks.get(block_key, {})
+                        item_id = str(block.get("id") or default_id)
                         if delta_type == "text_delta":
                             text = str(delta.get("text") or "")
-                            if text:
+                            # A subagent's text is its own work, not this answer.
+                            if text and parent is None:
+                                streamed_text = True
                                 parts.append(text)
                                 yield HarnessEvent(
                                     type="message_delta",
@@ -3907,8 +4035,15 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                                     delta=text,
                                 )
                         elif delta_type in {"thinking_delta", "signature_delta"}:
-                            if item_id not in reasoning_items:
-                                reasoning_items.add(item_id)
+                            if not block.get("reasoning"):
+                                stream_blocks[block_key] = {
+                                    **block,
+                                    "id": item_id,
+                                    "reasoning": True,
+                                }
+                                streamed_thinking[parent] = (
+                                    streamed_thinking.get(parent, 0) + 1
+                                )
                                 yield _claude_reasoning_event(item_id, "streaming")
                         elif delta_type == "input_json_delta":
                             yield HarnessEvent(
@@ -3943,10 +4078,11 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                             )
                         continue
                     if event_type == "content_block_stop":
-                        block = stream_blocks.get(index, {})
-                        item_id = str(block.get("id") or f"block-{index}")
-                        if item_id in reasoning_items:
-                            yield _claude_reasoning_event(item_id, "completed")
+                        block = stream_blocks.get(block_key, {})
+                        if block.get("reasoning"):
+                            yield _claude_reasoning_event(
+                                str(block.get("id") or default_id), "completed"
+                            )
                     elif event_type not in {
                         "message_start",
                         "message_delta",
@@ -3960,50 +4096,8 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                             payload={"event_type": event_type or "unknown"},
                         )
                     continue
-                if class_name in {
-                    "TaskStartedMessage",
-                    "TaskProgressMessage",
-                    "TaskNotificationMessage",
-                    "TaskUpdatedMessage",
-                }:
-                    task_id = str(getattr(message, "task_id", "") or "task")
-                    raw_status = str(
-                        getattr(message, "status", "")
-                        or getattr(message, "patch", {}).get("status", "")
-                    )
-                    status = _claude_task_status(class_name, raw_status)
-                    task_usage = getattr(message, "usage", None)
-                    yield HarnessEvent(
-                        type="item_upsert",
-                        vendor=HarnessKind.CLAUDE_AGENT_SDK,
-                        item_id=task_id,
-                        parent_item_id=(
-                            str(getattr(message, "tool_use_id", "") or "") or None
-                        ),
-                        item_kind="subagent",
-                        item_status=status,
-                        title=str(
-                            getattr(message, "description", "")
-                            or getattr(message, "summary", "")
-                            or "Claude task"
-                        ),
-                        summary=str(getattr(message, "summary", "") or "") or None,
-                        payload=_bounded(
-                            {
-                                "task_id": task_id,
-                                "task_type": getattr(message, "task_type", None),
-                                "last_tool_name": getattr(
-                                    message, "last_tool_name", None
-                                ),
-                                "output_file": getattr(message, "output_file", None),
-                                "usage": task_usage,
-                                "patch": getattr(message, "patch", None),
-                                "stoppable": status
-                                in {"queued", "running", "streaming"},
-                            },
-                            limit=MAX_TOOL_RESULT_TEXT,
-                        ),
-                    )
+                if class_name in CLAUDE_TASK_MESSAGES:
+                    yield _claude_task_event(message, class_name)
                     continue
                 if class_name == "HookEventMessage":
                     subtype = str(getattr(message, "subtype", "") or "")
@@ -4089,9 +4183,13 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                             and class_name == "AssistantMessage"
                         ):
                             text = str(getattr(block, "text", ""))
-                            if text:
+                            if text and parent is None:
                                 fallback_parts.append(text)
                         elif block_name == "ThinkingBlock":
+                            if streamed_thinking.get(parent, 0) > 0:
+                                # The partial stream already reported this block.
+                                streamed_thinking[parent] -= 1
+                                continue
                             item_id = str(
                                 getattr(message, "uuid", "")
                                 or f"reasoning-{len(reasoning_items)}"
@@ -4100,6 +4198,9 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                                 reasoning_items.add(item_id)
                                 yield _claude_reasoning_event(item_id, "completed")
                         elif block_name in {"ToolUseBlock", "ServerToolUseBlock"}:
+                            if parent is None:
+                                for commentary in close_narration():
+                                    yield commentary
                             vendor_name = str(getattr(block, "name", ""))
                             server_name, tool_name = _parse_claude_mcp_name(vendor_name)
                             normalized_server = server_name or "claude"
@@ -4192,9 +4293,8 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                         )
                     continue
                 if class_name == "ResultMessage":
-                    session_id = getattr(message, "session_id", None)
-                    if isinstance(session_id, str) and session_id:
-                        self.external_session_id = session_id
+                    self._vendor_turn_open = False
+                    self._learn_session(message)
                     raw_usage = getattr(message, "usage", None) or {}
                     detailed_usage = _claude_detailed_usage(
                         raw_usage,
@@ -4204,14 +4304,19 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                     denials = getattr(message, "permission_denials", None)
                     errors = getattr(message, "errors", None)
                     deferred = getattr(message, "deferred_tool_use", None)
-                    if denials or errors:
+                    is_error = bool(getattr(message, "is_error", False))
+                    if denials or errors or is_error:
                         yield HarnessEvent(
                             type="notice",
                             vendor=HarnessKind.CLAUDE_AGENT_SDK,
                             title="Claude turn notices",
                             summary="Claude reported permission denials or errors.",
                             payload=_bounded(
-                                {"permission_denials": denials, "errors": errors},
+                                {
+                                    "permission_denials": denials,
+                                    "errors": errors,
+                                    **_claude_result_status(message),
+                                },
                                 limit=MAX_TOOL_RESULT_TEXT,
                             ),
                         )
@@ -4230,16 +4335,13 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                                 deferred_values, limit=MAX_TOOL_ARGUMENT_TEXT
                             ),
                         )
-                    if getattr(message, "is_error", False):
-                        raise HarnessTransportError(
-                            "Claude turn failed: "
-                            + str(
-                                _bounded(
-                                    getattr(message, "result", "error"), limit=1_000
-                                )
-                            )
-                        )
-                    continue
+                    if is_error:
+                        raise _claude_turn_failure(message)
+                    # Claude Code puts only the final assistant text here.
+                    raw_result = getattr(message, "result", None)
+                    if isinstance(raw_result, str) and raw_result.strip():
+                        result_text = raw_result
+                    break
                 yield HarnessEvent(
                     type="notice",
                     vendor=HarnessKind.CLAUDE_AGENT_SDK,
@@ -4281,11 +4383,12 @@ class ClaudeAgentSdkConnection(HarnessConnection):
             yield HarnessEvent(
                 type="completed",
                 vendor=HarnessKind.CLAUDE_AGENT_SDK,
-                message="".join(parts),
+                message=result_text or "".join(parts),
                 external_session_id=self.external_session_id,
             )
         finally:
             self.active = False
+            self._consumer_idle.set()
 
     async def steer(self, text: str) -> None:
         if not self.active:
@@ -4293,8 +4396,14 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         await self.client.query(text)
 
     async def interrupt(self) -> None:
-        if self.active:
-            await self.client.interrupt()
+        async with self._settle_lock:
+            if self.connection_state == "disconnected":
+                # Nothing is left to stop; the runtime replaces this connection.
+                return
+            if self._vendor_turn_open:
+                await self._interrupt_and_drain()
+            elif self.active:
+                await self._sdk_call(self.client.interrupt())
 
     async def stop_subagent(self, task_id: str) -> None:
         await self.client.stop_task(task_id)
@@ -4305,6 +4414,9 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         await self.client.rewind_files(checkpoint_id)
 
     async def close(self) -> None:
+        self._closed = True
+        if self._reader is not None and not self._reader.done():
+            self._reader.cancel()
         close = getattr(self.client, "disconnect", None) or getattr(
             self.client, "close", None
         )
@@ -4312,6 +4424,339 @@ class ClaudeAgentSdkConnection(HarnessConnection):
             result = close()
             if inspect.isawaitable(result):
                 await result
+
+    def _start_reader(self) -> None:
+        if self._reader is None:
+            self._reader = create_diagnostic_task(
+                self._read_stream(),
+                feature="harnesses",
+                event_code="harnesses.claude.reader",
+                failure_message="The Claude message reader stopped unexpectedly.",
+                name="claude-sdk-reader",
+            )
+
+    async def _read_stream(self) -> None:
+        """Own the CLI's single ordered stream and file every message in order.
+
+        Messages that arrive between turns (a turn the CLI runs on its own, the
+        tail of a stopped turn) wait in order for the next reader instead of
+        being mistaken for its answer, and a dead CLI is noticed while idle.
+        """
+
+        while True:
+            try:
+                async for message in self.client.receive_messages():
+                    self._inbox.put_nowait(message)
+            except Exception as exc:  # diagnostic-expected: filed in order; the turn that reads it raises and records it
+                # The SDK skips past one message it cannot parse; everything
+                # else means the CLI's stream is gone.
+                parse_failure = _claude_sdk_error(exc, "MessageParseError")
+                self._inbox.put_nowait(
+                    _ClaudeStreamFailure(exc, transport=not parse_failure)
+                )
+                if parse_failure:
+                    continue
+                return
+            self._inbox.put_nowait(_ClaudeStreamFailure(None, transport=True))
+            return
+
+    def _unwrap(self, item: Any) -> Any:
+        if not isinstance(item, _ClaudeStreamFailure):
+            return item
+        if item.transport or item.error is None:
+            # The end of the stream stays in place for every later reader.
+            self._inbox.put_nowait(item)
+            detail = (
+                "closed its message stream"
+                if item.error is None
+                else f"stopped: {item.error}"
+            )
+            raise HarnessTransportError(f"The Claude CLI {detail}"[:1_000]) from (
+                item.error
+            )
+        raise item.error
+
+    async def _next_message(self) -> Any:
+        return self._unwrap(await self._inbox.get())
+
+    async def _sdk_call(self, call: Awaitable[Any]) -> Any:
+        """Await an SDK call, reporting a gone CLI as a transport failure."""
+
+        try:
+            return await call
+        except Exception as exc:
+            if _claude_sdk_error(exc, "ClaudeSDKError") and not _claude_sdk_error(
+                exc, "MessageParseError"
+            ):
+                raise HarnessTransportError(
+                    f"The Claude CLI is unavailable: {exc}"[:1_000]
+                ) from exc
+            raise
+
+    def _learn_session(self, message: Any) -> None:
+        session_id = getattr(message, "session_id", None)
+        if isinstance(session_id, str) and session_id:
+            self.external_session_id = session_id
+
+    async def _prepare_for_query(self) -> list[HarnessEvent]:
+        """Settle the stream so the next ResultMessage answers this prompt."""
+
+        async with self._settle_lock:
+            if self._desynchronized:
+                raise HarnessTransportError(
+                    "The Claude CLI stream is out of step with Nebula; reconnecting."
+                )
+            if self._vendor_turn_open:
+                # The previous turn ended on Nebula's side without a stop that
+                # settled it (its generator was closed or its stop failed).
+                await self._settle_open_turn()
+            return await self._drain_injected_turns()
+
+    async def _settle_open_turn(self) -> None:
+        try:
+            await asyncio.wait_for(
+                self._interrupt_and_drain(), timeout=HARNESS_INTERRUPT_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError as exc:
+            raise HarnessTransportError(
+                "Claude did not finish its previous turn after an interrupt."
+            ) from exc
+
+    async def _interrupt_and_drain(self) -> None:
+        """Stop the open vendor turn and discard the rest of it.
+
+        The SDK's contract: after ``interrupt()`` the caller consumes through
+        the aborted turn's ResultMessage before sending another query.
+        """
+
+        settled = False
+        try:
+            await self._sdk_call(self.client.interrupt())
+            # A turn generator that is still reading consumes the aborted turn
+            # itself; the stream must never be split between two readers.
+            await self._consumer_idle.wait()
+            while self._vendor_turn_open:
+                item = await self._inbox.get()
+                if isinstance(item, _ClaudeStreamFailure) and not item.transport:
+                    continue  # An unreadable message of the discarded tail.
+                message = self._unwrap(item)
+                if type(message).__name__ == "ResultMessage":
+                    self._learn_session(message)
+                    self._vendor_turn_open = False
+            settled = True
+        finally:
+            if not settled:
+                self._desynchronized = True
+
+    async def _drain_injected_turns(self) -> list[HarnessEvent]:
+        """File turns Claude ran on its own while idle as out-of-band activity.
+
+        A finished background task makes the CLI start a turn of its own that
+        ends in its own ResultMessage. Read before the prompt is sent, it can
+        never become the prompt's answer. A turn still running gets a bounded
+        wait for its result, then an interrupt.
+        """
+
+        events: list[HarnessEvent] = []
+        loop = asyncio.get_running_loop()
+        deadline: float | None = None
+        while deadline is not None or not self._inbox.empty():
+            if deadline is None:
+                item = self._inbox.get_nowait()
+            else:
+                try:
+                    item = await asyncio.wait_for(
+                        self._inbox.get(), timeout=max(0.0, deadline - loop.time())
+                    )
+                except asyncio.TimeoutError:  # diagnostic-expected: Claude's own turn outlived the wait; it is interrupted and drained next
+                    self._vendor_turn_open = True
+                    await self._settle_open_turn()
+                    return events
+            if isinstance(item, _ClaudeStreamFailure) and not item.transport:
+                events.append(
+                    HarnessEvent(
+                        type="notice",
+                        vendor=HarnessKind.CLAUDE_AGENT_SDK,
+                        title="Claude activity",
+                        summary=str(
+                            _bounded(
+                                f"Claude sent a message Nebula could not read: {item.error}",
+                                limit=1_000,
+                            )
+                        ),
+                        payload={"out_of_band": True},
+                    )
+                )
+                continue
+            message = self._unwrap(item)
+            class_name = type(message).__name__
+            if class_name == "ResultMessage":
+                deadline = None
+                self._learn_session(message)
+                events.append(_claude_background_result_event(message))
+            elif class_name in CLAUDE_TASK_MESSAGES:
+                events.append(_claude_task_event(message, class_name))
+            elif deadline is None and (
+                class_name in {"StreamEvent", "AssistantMessage", "UserMessage"}
+                or (
+                    class_name == "SystemMessage"
+                    and getattr(message, "subtype", None) == "init"
+                )
+            ):
+                deadline = loop.time() + HARNESS_INTERRUPT_TIMEOUT_SECONDS
+        return events
+
+
+CLAUDE_TASK_MESSAGES = frozenset(
+    {
+        "TaskStartedMessage",
+        "TaskProgressMessage",
+        "TaskNotificationMessage",
+        "TaskUpdatedMessage",
+    }
+)
+
+
+def _claude_task_event(message: Any, class_name: str) -> HarnessEvent:
+    task_id = str(getattr(message, "task_id", "") or "task")
+    raw_status = str(
+        getattr(message, "status", "")
+        or getattr(message, "patch", {}).get("status", "")
+    )
+    status = _claude_task_status(class_name, raw_status)
+    return HarnessEvent(
+        type="item_upsert",
+        vendor=HarnessKind.CLAUDE_AGENT_SDK,
+        item_id=task_id,
+        parent_item_id=str(getattr(message, "tool_use_id", "") or "") or None,
+        item_kind="subagent",
+        item_status=status,
+        title=str(
+            getattr(message, "description", "")
+            or getattr(message, "summary", "")
+            or "Claude task"
+        ),
+        summary=str(getattr(message, "summary", "") or "") or None,
+        payload=_bounded(
+            {
+                "task_id": task_id,
+                "task_type": getattr(message, "task_type", None),
+                "last_tool_name": getattr(message, "last_tool_name", None),
+                "output_file": getattr(message, "output_file", None),
+                "usage": getattr(message, "usage", None),
+                "patch": getattr(message, "patch", None),
+                "stoppable": status in {"queued", "running", "streaming"},
+            },
+            limit=MAX_TOOL_RESULT_TEXT,
+        ),
+    )
+
+
+def _claude_commentary_events(text: str, sequence: int) -> list[HarnessEvent]:
+    return [
+        HarnessEvent(
+            type="output_delta",
+            vendor=HarnessKind.CLAUDE_AGENT_SDK,
+            item_id=f"commentary-{sequence}",
+            item_kind="reasoning",
+            item_status="streaming",
+            title="Commentary",
+            stream="commentary",
+            delta=chunk,
+        )
+        for chunk in _display_delta_chunks(text)
+    ]
+
+
+def _claude_background_result_event(message: Any) -> HarnessEvent:
+    raw_result = getattr(message, "result", None)
+    text = raw_result.strip() if isinstance(raw_result, str) else ""
+    return HarnessEvent(
+        type="notice",
+        vendor=HarnessKind.CLAUDE_AGENT_SDK,
+        title="Claude background turn",
+        summary=str(
+            _bounded(
+                text or "Claude finished a turn it started on its own.", limit=1_000
+            )
+        ),
+        payload=_bounded(
+            {
+                "out_of_band": True,
+                "result": text or None,
+                **_claude_result_status(message),
+            },
+            limit=MAX_TOOL_RESULT_TEXT,
+        ),
+    )
+
+
+_CLAUDE_API_STATUS_REASON_CODES = {
+    401: "authentication_failed",
+    402: "quota_exhausted",
+    403: "permission_denied",
+    408: "timeout",
+    429: "rate_limited",
+    500: "dependency_unavailable",
+    502: "dependency_unavailable",
+    503: "dependency_unavailable",
+    504: "timeout",
+    529: "dependency_unavailable",
+}
+
+
+def _claude_turn_failure(message: Any) -> HarnessTurnFailedError:
+    """Describe a Claude error result; the CLI stream stays in step.
+
+    Budget, max-turn and API failures are turn outcomes rather than transport
+    failures, so the runtime keeps the connection for the next turn.
+    """
+
+    status = _claude_result_status(message)
+    api_status = status["api_error_status"]
+    return HarnessTurnFailedError(
+        "Claude turn failed: "
+        + str(_bounded(_claude_result_error_text(message), limit=1_000)),
+        reason_code=(
+            _CLAUDE_API_STATUS_REASON_CODES.get(api_status)
+            if isinstance(api_status, int)
+            else None
+        ),
+        vendor_error_info=status,
+    )
+
+
+def _claude_result_error_text(message: Any) -> str:
+    """The SDK's precedence: ``errors[]``, ``result``, non-success subtype, HTTP status."""
+
+    raw_errors = getattr(message, "errors", None)
+    if isinstance(raw_errors, str):
+        raw_errors = [raw_errors]
+    errors = (
+        [item.strip() for item in raw_errors if isinstance(item, str) and item.strip()]
+        if isinstance(raw_errors, list)
+        else []
+    )
+    if errors:
+        return "; ".join(errors)
+    raw_result = getattr(message, "result", None)
+    if isinstance(raw_result, str) and raw_result.strip():
+        return raw_result.strip()
+    subtype = getattr(message, "subtype", None)
+    if isinstance(subtype, str) and subtype and subtype != "success":
+        return subtype
+    status = getattr(message, "api_error_status", None)
+    if status is not None:
+        return f"API error (HTTP {status})"
+    return "unknown error"
+
+
+def _claude_result_status(message: Any) -> dict[str, Any]:
+    return {
+        "subtype": getattr(message, "subtype", None),
+        "terminal_reason": getattr(message, "terminal_reason", None),
+        "api_error_status": getattr(message, "api_error_status", None),
+    }
 
 
 def _claude_reasoning_event(item_id: str, status: Any) -> HarnessEvent:
@@ -9069,6 +9514,12 @@ class HarnessRuntimeService:
                             "A failed harness turn could not interrupt the vendor turn.",
                             interrupt_error,
                             stage="turn-failure",
+                        )
+                        # The vendor may still be running the abandoned turn, and
+                        # its tail would answer the next prompt; a fresh
+                        # connection resumes the saved session instead.
+                        await self._discard_connection(
+                            session.id, connection, reason="interrupt_failed"
                         )
                 error = _safe_error(exc)
                 reason = reason_code_for(

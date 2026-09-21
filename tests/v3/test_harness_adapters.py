@@ -2004,6 +2004,7 @@ class FakeClaudeClient:
         self.queries: list[str] = []
         self.interrupted = False
         self.disconnected = False
+        self.pending_turns: asyncio.Queue[str] = asyncio.Queue()
         FakeClaudeClient.latest = self
 
     async def connect(self) -> None:
@@ -2011,6 +2012,14 @@ class FakeClaudeClient:
 
     async def query(self, prompt: str) -> None:
         self.queries.append(prompt)
+        self.pending_turns.put_nowait(prompt)
+
+    async def receive_messages(self) -> AsyncIterator[Any]:
+        # Like the SDK: one ordered stream for the session, one reply per query.
+        while True:
+            await self.pending_turns.get()
+            async for message in self.receive_response():
+                yield message
 
     async def receive_response(self) -> AsyncIterator[Any]:
         yield StreamEvent(
@@ -2050,15 +2059,20 @@ class FakeClaudeClient:
 
 def test_claude_reasoning_text_is_discarded_and_future_messages_are_notices(tmp_path):
     class ReasoningClient:
-        async def query(self, _prompt: str) -> None:
-            return None
+        def __init__(self) -> None:
+            self.pending_turns: asyncio.Queue[str] = asyncio.Queue()
 
-        async def receive_response(self) -> AsyncIterator[Any]:
-            yield AssistantMessage(
-                [ThinkingBlock("private reasoning marker", "private signature")]
-            )
-            yield FutureClaudeMessage()
-            yield ResultMessage()
+        async def query(self, prompt: str) -> None:
+            self.pending_turns.put_nowait(prompt)
+
+        async def receive_messages(self) -> AsyncIterator[Any]:
+            while True:
+                await self.pending_turns.get()
+                yield AssistantMessage(
+                    [ThinkingBlock("private reasoning marker", "private signature")]
+                )
+                yield FutureClaudeMessage()
+                yield ResultMessage()
 
     async def permission(_request):
         raise AssertionError("no permission request expected")
@@ -2201,11 +2215,14 @@ def test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages(
         assert [event.type for event in events] == [
             "started",
             "message_delta",
+            "output_delta",
             "tool_started",
             "tool_completed",
             "usage",
             "completed",
         ]
+        # Text a tool use follows is narration, not the answer.
+        assert (events[2].stream, events[2].delta) == ("commentary", "ok")
         tool_started = next(event for event in events if event.type == "tool_started")
         assert tool_started.server_id == "workspace_server"
         assert tool_started.tool_name == "read_file"
