@@ -15,8 +15,8 @@
   ],
   "native": [],
   "playwright": [
-    "assistant-settings-navigation/desktop",
-    "assistant-settings-navigation/mobile-chromium",
-    "assistant-settings-navigation/mobile-webkit"
+    "entry:assistant-settings-navigation/desktop",
+    "entry:assistant-settings-navigation/mobile-chromium",
+    "entry:assistant-settings-navigation/mobile-webkit"
   ]
 }
