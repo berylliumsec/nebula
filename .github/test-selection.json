@@ -1,23 +1,24 @@
 {
-  "change_digest": "4d65d4518f3087eca5dc436a5247852f65f8d56cd2f5a19393ac8d1449e25446",
-  "reviewed_by": "Claude review of Grok /goal final messages",
-  "reason": "Live Grok (1.0.34, grok-4.6) /goal runs showed two defects in the chat reply. (1) Grok's goal mode runs planner, implementer and skeptic roles that narrate as commentary, so a monitored /goal run's only answer text was the final role's closing word: a blocked goal ended the chat with just 'Refuted'. _run_harness_command now replaces that reply, for monitored Grok goals that stop, with _goal_outcome_message: outcome, elapsed time and tokens from the goal snapshot, the objective, Grok's last message, and a next step (/goal status or /goal resume). /goal status, pause and clear keep Grok's own reply. (2) After streaming its final answer in chunks, goal mode sent the whole answer again as one chunk (recorded: 70 chunks then one 214-character chunk equal to their join), so the reply appeared twice; ordinary Grok turns were checked live and do not do this. GrokAcpConnection.run_turn now drops a closing chunk that exactly repeats the text streamed since the last tool call. Verified end to end through a scratch Core built from this branch (project in host mode, Grok profile with workspace write and shell): '/goal add f_to_c and pytest tests' completed in 270 s and 125k tokens, the project's 3 tests pass, and the reply read 'Goal complete after 4 min 24 s and 124,939 tokens' with the objective and Grok's summary; replaying the recorded 71 chunks through the fixed code yields the summary once. test_harness_commands.py carries the new and updated tests; the other files are the suites that drive the Grok and Codex connections, _run_harness_command and the harness runtime.",
-  "exclusions": "Backend-only change inside the Grok connection and the harness /goal command path; no UI, API shape or native code changed, so no frontend, Playwright or native tests apply. test_browser_companion.py is left out: it only lists Codex models and needs a real Chromium.",
+  "change_digest": "b39f6a5ac49eb39f13325178f565120069d1674bcd1859b6c11177725c4176ca",
+  "reviewed_by": "Claude review of the Context tab declutter",
+  "reason": "The operator asked to remove everything in the conversation-details Context tab below Working context except subagents: Workspace controls (checkpoint files, Save checkpoint, Schedule hourly), Operator context, Recorded prior-turn context and Technical session details. SessionsPage stops rendering them and drops the 'Save as decision' message action that seeded Operator context; ChatDecisions, ChatRecordedContext and ProviderSessionAdvanced are deleted with their unit tests. Goal children (Start child / Delegated children) are kept as ProviderGoalChildren, which renders only while a running goal may delegate or has delegated children. The operator-context and workspace-checkpoints guides are removed with their targets, and the unused checkpoint and schedule client methods go. Core is unchanged: the decisions, checkpoint, schedule and context-sources APIs remain, so real-Core journeys that used the removed editor to seed operator context now write it through PUT chat/sessions/{id}/decisions/{id}. The live Core database holds no chat_decisions entities, so no active operator context becomes invisible.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python or native tests: no Python or Rust changed. Frontend selects the new ProviderGoalChildren tests and the guide catalog tests whose anchor list changed; the deleted component tests go with their components. Playwright selects conversation-details (the drawer) and the assistant entries on desktop, mobile-chromium and mobile-webkit because SessionsPage changed (message actions and the drawer). The real-Core assistant entry is not selected: its edited journeys ('interactive guides reach every assistant control', 'foundation production LAN reads durable conversation') were run locally against a Core from this branch and pass; the deployed-service and live-OpenRouter journeys need external services and skip in CI.",
   "expected_tests": {
-    "python": 228,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 15,
     "native": 0,
-    "playwright": 0
+    "playwright": 157
   },
-  "python": [
-    "tests/v3/test_harness_commands.py",
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_harnesses.py",
-    "tests/v3/test_harness_connection_state.py",
-    "tests/v3/test_approval_handoff.py",
-    "tests/v3/test_harness_provider_subagents.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/ProviderGoalChildren.test.tsx",
+    "ui/src/guides/guides.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:conversation-details",
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit"
+  ]
 }

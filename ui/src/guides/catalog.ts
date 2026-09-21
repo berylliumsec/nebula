@@ -223,37 +223,6 @@ export const guideCatalog: GuideDefinition[] = [
     ],
   },
   {
-    id: "operator-context",
-    title: "Pin decisions the assistant must follow",
-    summary: "Save decisions, constraints and open questions that go with every turn.",
-    category: "assistant",
-    pages: ["workbench"],
-    keywords: "decision constraint assumption question context pin memory save as decision rules",
-    steps: [
-      {
-        title: "Save a decision from any message",
-        body: [
-          "Choose Save as decision under a message, or select part of it first to save just that text. Nebula keeps it as operator context for this conversation.",
-        ],
-        route: context => workbench(context, { view: "chat" }),
-        target: "message-actions",
-        targetMissing: "Message actions appear under each saved message. Send a message first.",
-        requiresProject: true,
-      },
-      {
-        title: "Review operator context",
-        body: [
-          "Entries can be a decision, constraint, assumption or question. They are sent with every turn and outrank summaries. A question stays open until you supersede or remove it.",
-          "Promote to project shares an entry with every conversation in the project. Edits keep a revision history.",
-        ],
-        route: context => workbench(context, { view: "chat", drawer: "context" }),
-        target: "operator-context",
-        targetMissing: "Operator context appears in the session details panel once the conversation has a saved turn.",
-        requiresProject: true,
-      },
-    ],
-  },
-  {
     id: "conversation-goals",
     title: "Let the assistant work toward a goal",
     summary: "Objectives with completion criteria, budgets and a verified finish.",
@@ -532,27 +501,6 @@ export const guideCatalog: GuideDefinition[] = [
         ],
         route: () => "/settings#native-skill-settings",
         target: "shared-skills",
-      },
-    ],
-  },
-  {
-    id: "workspace-checkpoints",
-    title: "Save and restore workspace checkpoints",
-    summary: "Snapshot files before risky edits; preview conflicts before restoring.",
-    category: "workspace",
-    pages: ["workbench"],
-    keywords: "checkpoint snapshot restore rewind files backup",
-    steps: [
-      {
-        title: "Open Workspace controls",
-        body: [
-          "List up to 64 project files, one relative path per line, and choose Save checkpoint. Nebula copies them (1 MiB each at most) to `.agents/checkpoints`.",
-          "Preview compares each file with its checkpoint copy. Restore is refused while any file changed since, so later edits are never overwritten.",
-        ],
-        route: context => workbench(context, { view: "chat", drawer: "context" }),
-        target: "workspace-controls",
-        targetMissing: "Workspace controls appear in a provider conversation’s details panel. Start or open a conversation that uses a provider model.",
-        requiresProject: true,
       },
     ],
   },

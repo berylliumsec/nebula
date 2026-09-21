@@ -898,7 +898,7 @@ test("assistant upgrade interactive guides reach every assistant control on real
     await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", { name: "New chat", exact: true }).click();
-    // A saved provider turn makes message actions, goals and operator context available.
+    // A saved provider turn makes message actions and goals available.
     await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Summarize the scope");
     await page.getByRole("button", { name: "Send message", exact: true }).click();
     await expect(page.locator('[data-guide="message-actions"]').first()).toBeAttached({ timeout: 30_000 });
@@ -912,7 +912,6 @@ test("assistant upgrade interactive guides reach every assistant control on real
       "Decide what the assistant may run",
       "Keep talking while the assistant works",
       "Branch, fork and find earlier messages",
-      "Pin decisions the assistant must follow",
       "Let the assistant work toward a goal",
       "Give the assistant MCP tools",
       "Answer from your project’s documents",
@@ -2450,47 +2449,6 @@ test("assistant upgrade project creation switches canonical project and isolates
   }
 });
 
-test("assistant upgrade real Core retains unresolved operator questions until removal", async ({ page }) => {
-  test.setTimeout(90_000);
-  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
-  const stub = await startLocalModelStub();
-  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-  try {
-    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
-    const provider = await (await api.post("providers", {data: {name: "Question acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}})).json() as {id: string};
-    const response = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Create question context"}], include_knowledge: false, stream: false}});
-    expect(response.ok(), await response.text()).toBe(true);
-    const chat = await response.json() as {session_id: string};
-    const url = `${core.origin}/?view=chat&session=${chat.session_id}#token=${encodeURIComponent(core.token)}`;
-    await page.goto(url);
-    const operator = page.locator(".chat-message.operator").first();
-    await operator.getByRole("button", {name: "Save as decision", exact: true}).click();
-    let context = page.getByRole("region", {name: "Saved operator context"});
-    await context.getByRole("combobox", {name: "Context type"}).selectOption("question");
-    await context.getByRole("textbox", {name: "Operator context text"}).fill("Which production region is authoritative?");
-    await context.getByRole("button", {name: "Save operator context"}).click();
-    await expect(context).toContainText("question · conversation");
-    expect((await new AxeBuilder({page}).include(".chat-decisions").withTags(["wcag2a", "wcag2aa"]).analyze()).violations).toEqual([]);
-
-    await page.goto(url);
-    await page.getByRole("button", {name: "Results", exact: true}).click();
-    await page.getByRole("button", {name: "Context", exact: true}).click();
-    context = page.getByRole("region", {name: "Saved operator context"});
-    await expect(context).toContainText("Which production region is authoritative?");
-    await context.getByRole("button", {name: "Remove context"}).click();
-    await expect(context).toContainText("No binding context saved");
-    await expect(context.getByRole("button", {name: "Remove context"})).toHaveCount(0);
-    await page.goto(url);
-    await page.getByRole("button", {name: "Results", exact: true}).click();
-    await page.getByRole("button", {name: "Context", exact: true}).click();
-    await expect(page.getByRole("region", {name: "Saved operator context"})).toContainText("No binding context saved");
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(stub);
-    await stopRealCore(core);
-  }
-});
-
 test("assistant upgrade edits a sent message in place on real Core", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   const core = await startRealCore();
@@ -2617,18 +2575,14 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await expect(page.getByText("Working context", {exact: true})).toBeVisible();
     await page.getByRole("button", {name: "Close details"}).click();
     await expect(composer).toHaveValue("Preserve this unsent draft");
-    await operator.getByRole("button", {name: "Save as decision", exact: true}).click();
-    const decisions = page.getByRole("region", {name: "Saved operator context"});
-    await decisions.getByRole("textbox", {name: "Operator context text", exact: true}).fill("Keep future responses concise");
-    await decisions.getByRole("button", {name: "Save operator context", exact: true}).click();
-    await expect(decisions).toContainText("Keep future responses concise");
-    await decisions.getByRole("button", {name: "Edit context", exact: true}).click();
-    await decisions.getByRole("textbox", {name: "Operator context text", exact: true}).fill("Use concise plain language");
-    await decisions.getByRole("button", {name: "Save operator context", exact: true}).click();
-    await expect(decisions).toContainText("revision 2");
-    await decisions.getByRole("button", {name: "Promote to project", exact: true}).click();
-    await expect(decisions).toContainText("decision · project");
-    await page.getByRole("button", {name: "Close details"}).click();
+    // Operator context has no drawer editor; it is Core state every turn carries.
+    const decision = `chat/sessions/${chat.session_id}/decisions/concise-replies`;
+    const created = await api.put(decision, {data: {expected_revision: 0, text: "Keep future responses concise"}});
+    expect(created.ok(), await created.text()).toBe(true);
+    const revised = await api.put(decision, {data: {expected_revision: 1, text: "Use concise plain language"}});
+    expect((await revised.json() as {revision: number}).revision).toBe(2);
+    const promoted = await api.put(decision, {data: {expected_revision: 2, action: "promote"}});
+    expect((await promoted.json() as {scope: string}).scope).toBe("project");
     await composer.fill("Queue first task");
     await page.getByRole("button", {name: "Queue for later", exact: true}).click();
     const queue = page.getByRole("region", {name: "Core follow-up queue"});
@@ -3046,12 +3000,9 @@ test("assistant upgrade deployed local service retains operator workflow", async
     await page.goto(savedUrl);
     const operator = page.locator(".chat-message.operator").first();
     await operator.getByRole("button", {name: "Bookmark", exact: true}).click();
-    await operator.getByRole("button", {name: "Save as decision", exact: true}).click();
-    const decisions = page.getByRole("region", {name: "Saved operator context"});
-    await decisions.getByRole("textbox", {name: "Operator context text"}).fill("This validation conversation uses text-only replies and no tools.");
-    await decisions.getByRole("button", {name: "Save operator context"}).click();
-    await expect(decisions).toContainText("This validation conversation uses text-only replies and no tools.");
-    await page.getByRole("button", {name: "Close details"}).click();
+    const validationContext = "This validation conversation uses text-only replies and no tools.";
+    const saved = await api.put(`chat/sessions/${session}/decisions/validation-context`, {data: {expected_revision: 0, text: validationContext}});
+    expect(saved.ok(), await saved.text()).toBe(true);
     await composer.fill("Reply exactly NEBULA_QUEUE_VALIDATED. Do not use tools or access files.");
     await page.getByRole("button", {name: "Queue for later", exact: true}).click();
     const queue = page.getByRole("region", {name: "Core follow-up queue"});
@@ -3071,7 +3022,8 @@ test("assistant upgrade deployed local service retains operator workflow", async
     await page.getByRole("button", {name: "Results", exact: true}).click();
     await expect(page.getByRole("region", {name: "Conversation results"})).toBeVisible();
     await page.getByRole("button", {name: "Context", exact: true}).click();
-    await expect(decisions).toContainText("This validation conversation uses text-only replies and no tools.");
+    const contexts = await (await api.get(`chat/sessions/${session}/decisions`)).json() as Array<{text: string; status: string}>;
+    expect(contexts.some(item => item.text === validationContext && item.status === "active")).toBe(true);
     await page.getByRole("button", {name: "Close details"}).click();
     await testInfo.attach("deployed-build", {body: JSON.stringify({origin, session, assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
     await testInfo.attach("deployed-chat", {body: await page.screenshot(), contentType: "image/png"});
@@ -4444,13 +4396,7 @@ test("assistant upgrade live OpenRouter Flash operator clickthrough", async ({ p
     await expect(page.locator(".chat-message.assistant").last()).toContainText("SKILL_MARKER_FLASH");
 
     await page.getByRole("button", { name: "Show session details" }).click();
-    const workspace = page.getByRole("region", { name: "Workspace controls" });
-    await expect(workspace).toBeVisible();
-    await workspace.getByRole("textbox", { name: "Checkpoint files" }).fill("notes.md");
-    await workspace.getByRole("button", { name: "Save checkpoint" }).click();
-    await expect(workspace.getByText("Operator checkpoint")).toBeVisible();
-    await workspace.getByRole("button", { name: "Schedule hourly" }).click();
-    await expect(workspace.getByText(/Scheduled · next/)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Working context" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Open context details/ })).toBeVisible();
     expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
   } finally {
