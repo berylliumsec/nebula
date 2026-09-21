@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .diagnostics import record_caught_exception
+from .diagnostics import record_caught_exception, record_diagnostic
 
 import asyncio
 import json
@@ -10,6 +10,7 @@ import re
 import shlex
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
@@ -31,8 +32,10 @@ from .providers import (
     ModelProvider,
     ModelRequest,
     ModelToolResult,
+    ToolCall,
     ToolChoice,
     ToolDefinition,
+    _GEMINI_SYNTHETIC_CALL_ID,
 )
 from .redaction import redact_text
 from .tools import ApprovalRequired, PolicyDenied, ToolBroker, ToolInvocation, ToolSpec
@@ -57,14 +60,28 @@ _ROLE_BY_PREFIX: tuple[tuple[str, SpecialistRole], ...] = (
     ("semgrep.", SpecialistRole.CODE_ANALYSIS),
 )
 FINISH_TOOL = "nebula.finish_task"
+_FINISH_FIELDS = frozenset({"status", "summary", "rationale"})
+# Stop reasons that mean the response was cut off by the output-token limit,
+# as the adapters report them (compared case-insensitively).
+_OUTPUT_LIMIT_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
+# Routing responses in a row that ran nothing before the task stops as blocked.
+_MAX_CONSECUTIVE_ROUTING_DEVIATIONS = 3
+_NO_ACTION_FEEDBACK = (
+    "Your previous response contained no routing action. Call one of the "
+    f"supplied tools, or call {FINISH_TOOL} with status, summary and rationale "
+    "once the task is done or blocked."
+)
 
 
-def _recorded_call_ids(output: Mapping[str, Any]) -> list[str]:
-    return [
-        str(record["model_call_id"])
-        for record in call_records(output)
-        if isinstance(record.get("model_call_id"), str)
-    ]
+@dataclass(frozen=True)
+class _RoutingAction:
+    """One call of a routing response, and why Core answers it unrun, if it does."""
+
+    call: ToolCall
+    routing_error: str | None = None
+    detail: str = ""
+    # The id the provider sent, when Core replaced a reused one.
+    provider_call_id: str | None = None
 
 
 _RISK_PRIORITY = {
@@ -279,15 +296,29 @@ class BrokeredToolSpecialist:
 
         response = await self.provider.complete(self._routing_request(context, allowed))
         usage = (response.usage.input_tokens, response.usage.output_tokens)
-        # The whole response is validated before any of it reaches the broker,
-        # so a malformed batch still produces no partial effect.
-        batch = self._routing_batch(response, context, allowed)
-        if batch[0].name == FINISH_TOOL:
-            return self._finish_result(context, batch[0].arguments, usage)
+        commentary = self._routing_commentary(response, context)
+        # The whole response is classified before any of it reaches the broker.
+        # A call Core will not run is answered with a failed observation the
+        # model reads on its next turn; the calls around it still run.
+        actions = self._routing_batch(response, context, allowed)
+        if not actions:
+            return self._no_action_turn(context, response, commentary, usage)
+        if actions[0].call.name == FINISH_TOOL and actions[0].routing_error is None:
+            finished = self._finish_result(context, actions[0].call.arguments, usage)
+            return self._with_commentary(finished, commentary)
 
         executed: list[SpecialistResult] = []
+        brokered = False
         slots = context.remaining_tool_calls
-        for call in batch:
+        for action in actions:
+            call = action.call
+            if action.routing_error is not None:
+                executed.append(
+                    self._routing_error_result(
+                        action, usage=usage if not executed else (0, 0)
+                    )
+                )
+                continue
             if self.specs[call.name].budget_class != "artifact_query":
                 if slots is not None and slots <= 0:
                     # An earlier call in this batch spent the last slot. The
@@ -320,29 +351,37 @@ class BrokeredToolSpecialist:
                 requested_by=self.role.value,
             )
             try:
-                executed.append(
-                    await self._execute_invocation(
-                        context,
-                        invocation,
-                        model_call_id=call.id,
-                        # One routing call produced the batch, so its spend is
-                        # charged once, to the first call that runs.
-                        usage=usage if not executed else (0, 0),
-                    )
+                result = await self._execute_invocation(
+                    context,
+                    invocation,
+                    model_call_id=call.id,
+                    # One routing call produced the batch, so its spend is
+                    # charged once, to the first call that runs.
+                    usage=usage if not executed else (0, 0),
                 )
+                if action.provider_call_id is not None:
+                    result.output["provider_call_id"] = action.provider_call_id
+                executed.append(result)
+                brokered = True
             except SpecialistApprovalRequired as pause:
                 # The calls that already ran are handed to the mission with the
                 # checkpoint, so their observations survive the pause and are
                 # never executed a second time on resume.
                 if executed:
-                    pause.partial_result = self._merge_turn(executed)
+                    pause.partial_result = self._with_commentary(
+                        self._merge_turn(executed), commentary
+                    )
                 raise
         if not executed:
             raise MissionError(
                 "the routing batch could not run a call within the mission "
                 "tool-call budget"
             )
-        return self._merge_turn(executed)
+        turn = self._with_commentary(self._merge_turn(executed), commentary)
+        if brokered:
+            return turn
+        # Nothing ran: every call in the response was answered unrun.
+        return self._routing_deviation_turn(context, turn, usage)
 
     def _routing_request(
         self, context: SpecialistContext, allowed: frozenset[str]
@@ -372,10 +411,7 @@ class BrokeredToolSpecialist:
         model_call_id: str,
         usage: tuple[int, int],
     ) -> SpecialistResult:
-        spec = self.specs[invocation.tool_name]
-        arguments = dict(invocation.arguments)
-        if "cwd" in spec.path_arguments:
-            arguments["cwd"] = "."
+        arguments = self._brokered_arguments(invocation.tool_name, invocation.arguments)
         invocation = invocation.model_copy(update={"arguments": arguments})
         self._reject_unchanged_failed_invocation(
             context, invocation.tool_name, invocation.arguments
@@ -549,7 +585,28 @@ class BrokeredToolSpecialist:
         arguments: dict[str, Any],
         usage: tuple[int, int],
     ) -> SpecialistResult:
-        if set(arguments) != {"status", "summary", "rationale"}:
+        extra = sorted(set(arguments) - _FINISH_FIELDS)
+        if extra:
+            # The finish action has no effect of its own, so fields beyond its
+            # schema carry no authority: they are dropped, not a failed turn.
+            record_diagnostic(
+                "warning",
+                "missions",
+                "missions.routing.finish_extra_arguments",
+                "A specialist finished with fields outside the finish schema; "
+                "they were ignored.",
+                outcome="recovered",
+                stage="routing",
+                run_id=context.run_id,
+                metadata={
+                    "task_id": context.task.id,
+                    "argument_keys": [key[:64] for key in extra[:20]],
+                },
+            )
+            arguments = {
+                key: value for key, value in arguments.items() if key in _FINISH_FIELDS
+            }
+        if set(arguments) != _FINISH_FIELDS:
             raise MissionError("finish_task returned invalid fields")
         status = arguments.get("status")
         summary = arguments.get("summary")
@@ -561,10 +618,13 @@ class BrokeredToolSpecialist:
         if not isinstance(rationale, str) or not rationale.strip():
             raise MissionError("finish_task requires a non-empty rationale")
 
+        # A call Core answered without running it is not an unresolved tool
+        # result: nothing ran, and the model has already read why.
         recorded = [
             record
             for turn in context.prior_turns
             for record in call_records(turn.output)
+            if record.get("routing_error") is None
         ]
         if status == "complete" and recorded:
             last_status = recorded[-1].get("status")
@@ -621,46 +681,380 @@ class BrokeredToolSpecialist:
             cost_usd=self._cost(*usage),
         )
 
-    @staticmethod
     def _routing_batch(
+        self,
         response: Any,
         context: SpecialistContext,
         allowed: frozenset[str],
-    ) -> list[Any]:
-        """Validate a whole routing response before any of it reaches the broker.
+    ) -> list[_RoutingAction]:
+        """Classify a whole routing response before any of it reaches the broker.
 
-        A response may carry several independent routing actions. Rejecting a
-        malformed batch as a unit keeps the guarantee that a bad routing step
-        never produces a partial effect.
+        A response may carry several independent routing actions. A call Core
+        will not run (a tool that is not offered, a call cut off by the output
+        limit, a repeat of a call that already ran) is kept in order, flagged
+        with the reason, and answered with a failed observation instead of
+        failing the turn. The broker never sees it.
         """
 
-        if response.text.strip():
-            raise MissionError("specialist returned prose during required routing")
-        if not response.tool_calls:
-            raise MissionError("specialist returned no routing action")
-        seen = {
-            call_id
-            for turn in context.prior_turns
-            for call_id in _recorded_call_ids(turn.output)
-        }
-        batch: list[Any] = []
-        for call in response.tool_calls:
-            if call.id in seen:
-                raise MissionError(
-                    "specialist repeated a completed routing call id; "
-                    "refusing duplicate execution"
+        seen: set[str] = set()
+        # Brokered calls by every id they went by: Core's and, for a call whose
+        # reused id Core replaced, the provider's.
+        ran: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        for turn in context.prior_turns:
+            for record in call_records(turn.output):
+                call_ids = {
+                    value
+                    for value in (
+                        record.get("model_call_id"),
+                        record.get("provider_call_id"),
+                    )
+                    if isinstance(value, str)
+                }
+                seen.update(call_ids)
+                arguments = record.get("arguments")
+                if record.get("routing_error") is None and isinstance(arguments, dict):
+                    for call_id in call_ids:
+                        ran.setdefault(call_id, []).append(
+                            (str(record.get("tool")), arguments)
+                        )
+        truncated = (
+            response.finish_reason or ""
+        ).lower() in _OUTPUT_LIMIT_FINISH_REASONS
+        if truncated and response.tool_calls:
+            self._routing_warning(
+                "missions.routing.output_limit_calls",
+                "A specialist routing response hit the output-token limit; its "
+                "calls were answered unrun so the model re-issues them.",
+                response,
+                context,
+                calls=len(response.tool_calls),
+            )
+        actions: list[_RoutingAction] = []
+        for position, issued in enumerate(response.tool_calls):
+            call = issued
+            identity = (
+                issued.name,
+                self._brokered_arguments(issued.name, issued.arguments),
+            )
+            if issued.id in seen:
+                # Providers reuse ids (per-response counters, synthetic Gemini
+                # ids). The call keeps its place under an id Core makes unique,
+                # so history still pairs every call with its own result.
+                call = issued.model_copy(
+                    update={
+                        "id": self._core_call_id(context, position, issued.id, seen)
+                    }
                 )
-            seen.add(call.id)
+                self._routing_warning(
+                    "missions.routing.repeated_call_id",
+                    "A specialist reused a routing call id; the call was given "
+                    "a Core-unique id.",
+                    response,
+                    context,
+                )
+                if identity in ran.get(issued.id, []):
+                    actions.append(
+                        _RoutingAction(
+                            call,
+                            "already_ran",
+                            f"This call repeats call {issued.id!r}, which already "
+                            "ran with the same tool and arguments; its result is "
+                            "in the history. It was not run again.",
+                            provider_call_id=issued.id,
+                        )
+                    )
+                    seen.add(call.id)
+                    continue
+            seen.update({issued.id, call.id})
+            reissued = issued.id if call.id != issued.id else None
+            if truncated:
+                actions.append(
+                    _RoutingAction(
+                        call,
+                        "output_limit",
+                        f"Tool call {call.name!r} was not run: the response hit "
+                        "the output token limit, so its arguments may be cut "
+                        "off. Re-issue it with complete arguments, in a shorter "
+                        "response if needed.",
+                        provider_call_id=reissued,
+                    )
+                )
+                continue
             if call.name == FINISH_TOOL:
-                if not batch:
-                    batch.append(call)
+                if not actions:
+                    actions.append(_RoutingAction(call))
                 # A finish queued behind tool calls never runs: the next turn
                 # must inspect those observations before finishing.
                 break
             if call.name not in allowed:
-                raise MissionError(f"model requested unavailable tool {call.name!r}")
-            batch.append(call)
-        return batch
+                self._routing_warning(
+                    "missions.routing.unavailable_tool",
+                    "A specialist requested a tool it was not offered; the call "
+                    "was answered with a failed observation.",
+                    response,
+                    context,
+                    tool=call.name,
+                )
+                actions.append(
+                    _RoutingAction(
+                        call,
+                        "unavailable_tool",
+                        self._unavailable_detail(call.name, context, allowed),
+                        provider_call_id=reissued,
+                    )
+                )
+                continue
+            ran.setdefault(issued.id, []).append(identity)
+            actions.append(_RoutingAction(call, provider_call_id=reissued))
+        return actions
+
+    def _brokered_arguments(
+        self, tool_name: str, arguments: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """The arguments the broker receives for a model call."""
+
+        brokered = dict(arguments)
+        spec = self.specs.get(tool_name)
+        if spec is not None and "cwd" in spec.path_arguments:
+            brokered["cwd"] = "."
+        return brokered
+
+    @staticmethod
+    def _core_call_id(
+        context: SpecialistContext,
+        position: int,
+        call_id: str,
+        seen: set[str],
+    ) -> str:
+        """A unique replacement for a reused provider call id.
+
+        Deterministic, so a replayed turn derives the same invocation id and
+        idempotency key. Nine alphanumerics fit the strictest provider call-id
+        format. An id Core synthesized for Gemini keeps its prefix, because
+        such ids are never echoed back to Gemini.
+        """
+
+        attempt = 0
+        while True:
+            digest = uuid5(
+                NAMESPACE_URL,
+                (
+                    f"nebula:model-call-id:{context.run_id}:{context.task.id}:"
+                    f"{context.turn_index}:{len(context.prior_turns)}:{position}:"
+                    f"{attempt}:{call_id}"
+                ),
+            ).hex
+            candidate = (
+                f"{_GEMINI_SYNTHETIC_CALL_ID}core:{digest[:16]}"
+                if call_id.startswith(_GEMINI_SYNTHETIC_CALL_ID)
+                else f"n{digest[:8]}"
+            )
+            if candidate not in seen:
+                return candidate
+            attempt += 1
+
+    def _unavailable_detail(
+        self,
+        tool_name: str,
+        context: SpecialistContext,
+        allowed: frozenset[str],
+    ) -> str:
+        spec = self.specs.get(tool_name)
+        if spec is None:
+            reason = "this specialist is not offered a tool by that name"
+        elif (
+            context.remaining_tool_calls is not None
+            and context.remaining_tool_calls <= 0
+            and spec.budget_class != "artifact_query"
+        ):
+            reason = "the mission tool-call budget is spent"
+        else:
+            reason = "it is not enabled for this task"
+        available = [*sorted(allowed), FINISH_TOOL]
+        listed = ", ".join(available[:24]) + (", ..." if len(available) > 24 else "")
+        return (
+            f"Tool {tool_name!r} is not available: {reason}. It was not run. "
+            f"Available: {listed}."
+        )
+
+    def _routing_error_result(
+        self, action: _RoutingAction, *, usage: tuple[int, int]
+    ) -> SpecialistResult:
+        """A failed observation for a call Core answered without running it."""
+
+        call = action.call
+        output: dict[str, Any] = {
+            "model_call_id": call.id,
+            "tool": call.name,
+            "arguments": dict(call.arguments),
+            "status": "failed",
+            "provider_result": {"status": "failed", "detail": action.detail},
+            "trusted_result": False,
+            "exit_code": None,
+            "output_truncated": False,
+            "routing_error": action.routing_error,
+        }
+        if action.provider_call_id is not None:
+            output["provider_call_id"] = action.provider_call_id
+        return SpecialistResult(
+            summary=f"{call.name} was not run: {action.detail}"[:8_000],
+            rationale=(
+                f"routing call {call.id} was answered without running it; the "
+                "next turn sees why"
+            ),
+            outcome=SpecialistOutcome.CONTINUE,
+            output=output,
+            input_tokens=usage[0],
+            output_tokens=usage[1],
+            cost_usd=self._cost(*usage),
+            tool_calls=0,
+        )
+
+    def _no_action_turn(
+        self,
+        context: SpecialistContext,
+        response: Any,
+        commentary: str,
+        usage: tuple[int, int],
+    ) -> SpecialistResult:
+        """Ask again when a routing reply carried prose or nothing, not a call.
+
+        The finish action needs an explicit complete or blocked status, which
+        prose does not carry, and a reply such as "I'll scan the host next"
+        is a plan rather than an answer. So the reply is kept as commentary
+        and the model is asked again, bounded by the deviation limit.
+        """
+
+        self._routing_warning(
+            "missions.routing.no_action",
+            "A specialist routing response carried no routing action; the model "
+            "was asked again.",
+            response,
+            context,
+            status=(
+                "text_without_tool_calls" if commentary else "empty_without_tool_calls"
+            ),
+        )
+        turn = SpecialistResult(
+            summary="The specialist replied without a routing action.",
+            rationale="the next turn asks the model to call a tool or finish",
+            outcome=SpecialistOutcome.CONTINUE,
+            output={
+                "status": "failed",
+                "routing_error": "no_action",
+                "routing_feedback": _NO_ACTION_FEEDBACK,
+            },
+            input_tokens=usage[0],
+            output_tokens=usage[1],
+            cost_usd=self._cost(*usage),
+            tool_calls=0,
+        )
+        return self._routing_deviation_turn(
+            context, self._with_commentary(turn, commentary), usage
+        )
+
+    def _routing_deviation_turn(
+        self,
+        context: SpecialistContext,
+        turn: SpecialistResult,
+        usage: tuple[int, int],
+    ) -> SpecialistResult:
+        """Continue after a turn that ran nothing, or stop once it keeps happening."""
+
+        turn.output["routing_deviation"] = True
+        streak = 1
+        for prior in reversed(context.prior_turns):
+            if prior.output.get("routing_deviation") is not True:
+                break
+            streak += 1
+        if streak < _MAX_CONSECUTIVE_ROUTING_DEVIATIONS:
+            return turn
+        record_diagnostic(
+            "warning",
+            "missions",
+            "missions.routing.deviation_limit",
+            "A specialist returned routing responses Core could not run several "
+            "times in a row; the task stopped as blocked.",
+            outcome="blocked",
+            stage="routing",
+            run_id=context.run_id,
+            metadata={"task_id": context.task.id, "responses": streak},
+        )
+        records = call_records(turn.output)
+        last = (
+            records[-1].get("provider_result", {}).get("detail")
+            if records
+            else turn.output.get("routing_feedback")
+        )
+        blocked = self._finish_result(
+            context,
+            {
+                "status": "blocked",
+                "summary": (
+                    f"The specialist stopped after {streak} routing responses in "
+                    f"a row that Core could not run. Last: {last}"
+                )[:8_000],
+                "rationale": (
+                    "the model kept returning routing responses with no runnable "
+                    "action after being told why each one was not run"
+                ),
+            },
+            usage,
+        )
+        blocked.output["routing_deviation"] = True
+        if records:
+            blocked.output["calls"] = [dict(record) for record in records]
+        commentary = turn.output.get("commentary")
+        return self._with_commentary(
+            blocked, commentary if isinstance(commentary, str) else ""
+        )
+
+    def _routing_commentary(self, response: Any, context: SpecialistContext) -> str:
+        """Prose a routing response carried, bounded; never a result."""
+
+        if not response.text.strip():
+            return ""
+        if response.tool_calls:
+            self._routing_warning(
+                "missions.routing.prose_with_tool_calls",
+                "A specialist returned prose beside its routing actions; the "
+                "actions were routed and the prose was kept as commentary.",
+                response,
+                context,
+            )
+        return self._safe_text(response.text)
+
+    @staticmethod
+    def _with_commentary(result: SpecialistResult, commentary: str) -> SpecialistResult:
+        if commentary:
+            result.output["commentary"] = commentary
+        return result
+
+    @staticmethod
+    def _routing_warning(
+        event_code: str,
+        message: str,
+        response: Any,
+        context: SpecialistContext,
+        **metadata: Any,
+    ) -> None:
+        record_diagnostic(
+            "warning",
+            "missions",
+            event_code,
+            message,
+            outcome="recovered",
+            stage="routing",
+            run_id=context.run_id,
+            metadata={
+                "task_id": context.task.id,
+                "provider": response.provider_id,
+                "model_id": response.model,
+                "vendor_request_id": response.provider_request_id or "",
+                "finish_reason": response.finish_reason or "",
+                **metadata,
+            },
+        )
 
     def _merge_turn(self, results: list[SpecialistResult]) -> SpecialistResult:
         """Fold the calls a batch executed into the turn's single result."""
@@ -760,6 +1154,13 @@ class BrokeredToolSpecialist:
                 "Prior runtime/verification feedback: "
                 + json.dumps(context.retry_errors[-5:], ensure_ascii=False)
             )
+        feedback = (
+            context.prior_turns[-1].output.get("routing_feedback")
+            if context.prior_turns
+            else None
+        )
+        if isinstance(feedback, str) and feedback:
+            parts.append(f"Routing feedback on your previous response: {feedback}")
         if earlier_summaries:
             parts.append(
                 "Earlier bounded turn summaries: "
@@ -776,11 +1177,13 @@ class BrokeredToolSpecialist:
             range(max(0, len(context.prior_turns) - 8), len(context.prior_turns))
         )
         for index in range(len(context.prior_turns) - 1, -1, -1):
-            if context.prior_turns[index].output.get("status") in {
-                "failed",
-                "denied",
-                "incomplete",
-            }:
+            # The latest real tool failure stays in view however old it is. A
+            # call Core answered without running it is not one.
+            if any(
+                record.get("status") in {"failed", "denied", "incomplete"}
+                and record.get("routing_error") is None
+                for record in call_records(context.prior_turns[index].output)
+            ):
                 selected_indexes.add(index)
                 break
         for index in sorted(selected_indexes):
@@ -863,6 +1266,10 @@ class BrokeredToolSpecialist:
         for turn in reversed(context.prior_turns):
             for record in call_records(turn.output):
                 if record.get("status") not in {"failed", "denied", "incomplete"}:
+                    continue
+                if record.get("routing_error") is not None:
+                    # Core answered that call without running it, so repeating
+                    # it (a re-issued cut-off call, say) is not a retry.
                     continue
                 if (
                     record.get("tool") == tool_name

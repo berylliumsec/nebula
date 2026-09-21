@@ -14,7 +14,6 @@ from nebula.v3.domain import (
     TaskStatus,
 )
 from nebula.v3.orchestration import (
-    MissionError,
     call_records,
     MissionPlan,
     MissionRuntime,
@@ -326,7 +325,7 @@ def test_specialist_stops_a_batch_when_the_tool_call_budget_runs_out(tmp_path):
     assert result.tool_calls == 1
 
 
-def test_specialist_rejects_a_repeated_call_id_before_running_any_of_the_batch(
+def test_specialist_runs_a_batched_call_that_reuses_an_id_under_a_core_id(
     tmp_path,
 ):
     provider = ScriptedRoutingProvider(
@@ -335,13 +334,20 @@ def test_specialist_rejects_a_repeated_call_id_before_running_any_of_the_batch(
     broker = RecordingBroker()
     specialist = _specialist(tmp_path, provider, broker)
 
-    with pytest.raises(MissionError, match="repeated a completed routing call id"):
-        asyncio.run(specialist.run(_context()))
+    result = asyncio.run(specialist.run(_context()))
 
-    assert broker.calls == []
+    # A different call under a reused id is a new call: it runs under an id
+    # Core makes unique, so history still pairs each call with its result.
+    assert [invocation.tool_name for invocation in broker.calls] == [
+        "nmap.tcp",
+        "browser.fetch",
+    ]
+    call_ids = [record["model_call_id"] for record in call_records(result.output)]
+    assert call_ids[0] == "call-1"
+    assert len(set(call_ids)) == 2
 
 
-def test_specialist_rejects_an_unavailable_tool_before_running_any_of_the_batch(
+def test_specialist_answers_an_unavailable_tool_and_still_runs_the_batch(
     tmp_path,
 ):
     provider = ScriptedRoutingProvider(
@@ -354,10 +360,15 @@ def test_specialist_rejects_an_unavailable_tool_before_running_any_of_the_batch(
         update={"allowed_tools": frozenset({"nmap.tcp", "tool_output.search"})}
     )
 
-    with pytest.raises(MissionError, match="unavailable tool"):
-        asyncio.run(specialist.run(context))
+    result = asyncio.run(specialist.run(context))
 
-    assert broker.calls == []
+    # The unavailable call never reaches the broker; it is answered with a
+    # failed observation the model reads on its next turn.
+    assert [invocation.tool_name for invocation in broker.calls] == ["nmap.tcp"]
+    records = call_records(result.output)
+    assert [record["status"] for record in records] == ["complete", "failed"]
+    assert "not available" in records[1]["provider_result"]["detail"]
+    assert result.tool_calls == 1
 
 
 def test_specialist_keeps_completed_calls_when_a_batch_pauses_for_approval(tmp_path):
