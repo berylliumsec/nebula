@@ -690,6 +690,7 @@ class ModelProvider(ABC):
         payload: dict[str, Any],
         *,
         operation: str,
+        inspect: Callable[[httpx.Response], ProviderError | None] | None = None,
     ) -> httpx.Response:
         """POST one provider request, retrying transient upstream failures."""
 
@@ -697,6 +698,7 @@ class ModelProvider(ABC):
             self.config,
             lambda: client.post(path, json=payload),
             operation=operation,
+            inspect=inspect,
         )
 
     @abstractmethod
@@ -756,6 +758,26 @@ _DEFAULT_RETRY_ATTEMPTS = 3
 _MAX_RETRY_ATTEMPTS = 8
 _DEFAULT_RETRY_BACKOFF_SECONDS = 0.5
 _MAX_RETRY_DELAY_SECONDS = 20.0
+# Model inference has no side effects: resending a request whose connection
+# timed out or tore only costs tokens. Discovery and credential probes are not
+# resent after the connection opened.
+_MODEL_INFERENCE_OPERATIONS = frozenset(
+    {
+        "chat_completions",
+        "chat_completions_stream",
+        "responses",
+        "messages",
+        "generate_content",
+    }
+)
+# Transport failures after the connection opened that an inference request
+# may be resent after (httpx's ConnectTimeout is retried for every request).
+_RESENDABLE_TRANSPORT_ERRORS: tuple[type[httpx.HTTPError], ...] = (
+    httpx.TimeoutException,
+    httpx.RemoteProtocolError,
+    httpx.ReadError,
+    httpx.WriteError,
+)
 
 
 @dataclass(frozen=True)
@@ -916,6 +938,7 @@ async def _send_with_retry(
     *,
     operation: str,
     retry_transient_statuses: bool = True,
+    inspect: Callable[[httpx.Response], ProviderError | None] | None = None,
 ) -> httpx.Response:
     """Send a provider request, retrying only transient upstream failures.
 
@@ -923,7 +946,9 @@ async def _send_with_retry(
     transient failure is raised here, so its message can name the attempts.
     Health probes pass ``retry_transient_statuses=False``: a 429 or 5xx from a
     discovery endpoint is handed back with its status instead of being retried
-    to exhaustion, while a refused connection is still retried.
+    to exhaustion, while a refused connection is still retried. ``inspect``
+    reads a successful response for a failure its body reports (an error
+    object inside an HTTP 200); a transient one is retried like its status.
     """
 
     policy = retry_policy(config)
@@ -947,7 +972,8 @@ async def _send_with_retry(
             delay = _retry_delay(policy, attempt, None)
         except httpx.HTTPError as exc:
             # Anything after the connection opened (a read timeout, a torn
-            # body) may have reached the provider: name it, never replay it.
+            # body) may have reached the provider. Only model inference is
+            # resent: it has no side effects, so a resend costs tokens alone.
             record_caught_exception(
                 "providers",
                 "providers.providers.caught_failure_018",
@@ -955,20 +981,29 @@ async def _send_with_retry(
                 exc,
                 stage="providers",
             )
-            raise _transport_failure(exc) from exc
-        else:
-            if not response.is_error:
-                return response
-            error = _safe_error(response)
-            if not retry_transient_statuses or not isinstance(
-                error, ProviderOverloadedError
+            if operation not in _MODEL_INFERENCE_OPERATIONS or not isinstance(
+                exc, _RESENDABLE_TRANSPORT_ERRORS
             ):
+                raise _transport_failure(exc) from exc
+            interrupted = _interrupted_transport(exc)
+            if attempt >= policy.attempts:
+                raise (
+                    _exhausted(interrupted, attempt) if attempt > 1 else interrupted
+                ) from exc
+            delay = _retry_delay(policy, attempt, None)
+        else:
+            error: ProviderError | None
+            if response.is_error:
+                error = _safe_error(response) if retry_transient_statuses else None
+            else:
+                error = inspect(response) if inspect is not None else None
+            if not isinstance(error, ProviderOverloadedError):
                 return response
             if attempt >= policy.attempts:
                 if attempt == 1:
                     return response
                 raise _exhausted(error, attempt)
-            status_code = response.status_code
+            status_code = error.status_code
             delay = _retry_delay(policy, attempt, error.retry_after)
         _record_retry(
             config,
@@ -993,6 +1028,12 @@ def _transport_failure(exc: httpx.HTTPError) -> ProviderError:
     )
 
 
+def _interrupted_transport(exc: httpx.HTTPError) -> ProviderOverloadedError:
+    """A timed-out or torn inference request: transient, so retryable."""
+
+    return ProviderOverloadedError(str(_transport_failure(exc)))
+
+
 _SSE_LINE_END = re.compile(r"\r\n|\r|\n")
 
 
@@ -1005,19 +1046,43 @@ async def _sse_data_frames(response: httpx.Response) -> AsyncGenerator[str, None
     strings; one frame would then arrive as two unparsable halves. Several
     ``data:`` lines in one event are joined with a newline, as the format
     requires; comments and other fields are skipped.
+
+    Two gateway habits are read as what they mean. A gateway that separates
+    events with a single LF makes one event of several JSON chunks; when the
+    joined text does not parse but every line does, each line is its own
+    frame. An ``event: error`` whose data is plain text is handed on as an
+    ``{"error": ...}`` frame, so its text reaches the operator.
     """
 
     buffer = ""
     data_lines: list[str] = []
+    event = ""
 
-    def take(line: str) -> str | None:
+    def dispatch() -> list[str]:
+        nonlocal event
+        name, event = event, ""
+        if not data_lines:
+            return []
+        lines = list(data_lines)
+        data_lines.clear()
+        payload = "\n".join(lines)
+        if name == "error":
+            return [_error_event_payload(payload)]
+        if len(lines) > 1 and not _is_json(payload):
+            pieces = [line for line in lines if line.strip()]
+            if all(_is_json(piece) or piece.strip() == "[DONE]" for piece in pieces):
+                return pieces
+        return [payload]
+
+    def take(line: str) -> list[str]:
+        nonlocal event
         if not line:
-            payload = "\n".join(data_lines) if data_lines else None
-            data_lines.clear()
-            return payload
+            return dispatch()
         if line.startswith("data:"):
             data_lines.append(line[5:].removeprefix(" "))
-        return None
+        elif line.startswith("event:"):
+            event = line[6:].strip()
+        return []
 
     async for chunk in response.aiter_text():
         buffer += chunk
@@ -1029,16 +1094,103 @@ async def _sse_data_frames(response: httpx.Response) -> AsyncGenerator[str, None
             if match.group() == "\r" and match.end() == len(buffer):
                 # A trailing CR may be the first half of a CRLF; wait for more.
                 break
-            payload = take(buffer[start : match.start()])
+            payloads = take(buffer[start : match.start()])
             start = match.end()
-            if payload is not None:
+            for payload in payloads:
                 yield payload
         buffer = buffer[start:]
     tail = buffer.rstrip("\r")
     if tail:
         take(tail)
-    if data_lines:
-        yield "\n".join(data_lines)
+    for payload in dispatch():
+        yield payload
+
+
+def _is_json(text: str) -> bool:
+    try:
+        json.loads(text)
+    except ValueError:  # diagnostic-expected: the answer is that it is not JSON
+        return False
+    return True
+
+
+def _error_event_payload(payload: str) -> str:
+    """Hand an ``event: error`` on as an in-band error frame."""
+
+    text = payload.strip()
+    try:
+        data = json.loads(text)
+    except ValueError:  # diagnostic-expected: plain-text error events are wrapped below
+        data = None
+    if isinstance(data, dict):
+        return payload if data.get("error") else json.dumps({"error": data})
+    return json.dumps({"error": {"message": text or "provider sent an error event"}})
+
+
+def _stream_frame_data(encoded: str) -> dict[str, Any] | None:
+    """Decode one Chat Completions SSE payload.
+
+    ``None`` is a keepalive: a payload that is not JSON at all (``ping``) or
+    JSON that is not a chunk object. A payload that starts like JSON but does
+    not parse is a damaged chunk; dropping it could silently lose part of the
+    reply, so it is a typed failure instead.
+    """
+
+    try:
+        data = json.loads(encoded)
+    except json.JSONDecodeError as exc:
+        if encoded.startswith(("{", "[")):
+            raise ProviderResponseError(
+                f"provider sent a malformed stream chunk: {exc.msg}"
+            ) from exc
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _record_keepalive_skipped(config: ProviderConfig, encoded: str) -> None:
+    record_diagnostic(
+        "warning",
+        "providers",
+        "providers.stream.keepalive_skipped",
+        "A provider stream carried a data frame that is not a reply chunk; "
+        "Core skipped it.",
+        outcome="fallback",
+        stage="providers",
+        retryable=False,
+        metadata={
+            "provider_id": config.id,
+            "byte_count": len(encoded.encode("utf-8", errors="surrogatepass")),
+        },
+    )
+
+
+async def _frames_until_finished_close(
+    frames: AsyncIterator[str], finished: Callable[[], bool], config: ProviderConfig
+) -> AsyncIterator[str]:
+    """Pass frames on; a transport failure after the finish reason ends them.
+
+    A reply is whole once its finish reason has arrived. A proxy that then
+    tears the connection or stalls until the read timeout, instead of sending
+    ``[DONE]``, must not turn the finished reply into an error.
+    """
+
+    try:
+        async for frame in frames:
+            yield frame
+    except httpx.HTTPError as exc:
+        if not finished():
+            raise
+        record_diagnostic(
+            "warning",
+            "providers",
+            "providers.stream.closed_after_finish",
+            "The provider connection failed after the reply finished; Core "
+            "kept the finished reply.",
+            outcome="fallback",
+            stage="providers",
+            retryable=False,
+            metadata={"provider_id": config.id, "exception_type": type(exc).__name__},
+        )
 
 
 def _frame_has_output(data: Any) -> bool:
@@ -1059,7 +1211,9 @@ def _frame_has_output(data: Any) -> bool:
             continue
         if (
             delta.get("tool_calls")
+            or delta.get("function_call")
             or _openai_message_content(delta)
+            or _openai_refusal(delta)
             or _openai_message_reasoning(delta)
         ):
             return True
@@ -1086,17 +1240,18 @@ async def _leading_frames(
         if stripped == "[DONE]":
             return buffered, None
         try:
-            data = json.loads(stripped)
+            data = _stream_frame_data(stripped)
         except (
-            ValueError
+            ProviderResponseError
         ):  # diagnostic-expected: the parser reports the malformed frame
             return buffered, None
+        # A keepalive (``data`` of None) is not output; keep looking.
         failure = _stream_error_frame(data)
         if isinstance(failure, ProviderOverloadedError):
             return buffered, failure
         if (
             failure is not None
-            or _frame_has_output(data)
+            or (data is not None and _frame_has_output(data))
             or len(buffered) >= _LEADING_FRAME_LIMIT
         ):
             return buffered, None
@@ -1129,7 +1284,8 @@ async def _stream_with_retry(
     has already sent its 200, as a leading ``{"error": {...}}`` frame; both
     are replayed while attempts remain. Once any output frame has been read
     the stream is never replayed: a partial answer must not be silently
-    restarted underneath the operator. Transport failures are raised as
+    restarted underneath the operator. A timed-out or torn connection before
+    any output is resent the same way. Transport failures are raised as
     provider errors that name the failure, since httpx's own text is often
     empty.
     """
@@ -1172,7 +1328,20 @@ async def _stream_with_retry(
                 exc,
                 stage="providers",
             )
-            raise _transport_failure(exc) from exc
+            # Before any output a timed-out or torn stream is resent like a
+            # transient status; after output it never is.
+            if (
+                started
+                or operation not in _MODEL_INFERENCE_OPERATIONS
+                or not isinstance(exc, _RESENDABLE_TRANSPORT_ERRORS)
+            ):
+                raise _transport_failure(exc) from exc
+            interrupted = _interrupted_transport(exc)
+            if attempt >= policy.attempts:
+                raise (
+                    _exhausted(interrupted, attempt) if attempt > 1 else interrupted
+                ) from exc
+            delay = _retry_delay(policy, attempt, None)
         else:
             # A consumed stream already returned, so only an error reaches here.
             assert error is not None
@@ -1202,6 +1371,9 @@ _CONTEXT_ERROR_CODES = frozenset(
         "context_window_exceeded",
         "max_tokens_exceeded",
         "prompt_too_long",
+        # llama.cpp's error ``type``; Anthropic's HTTP 413 ``type``.
+        "exceed_context_size_error",
+        "request_too_large",
     }
 )
 _CONTEXT_ERROR_MARKERS = (
@@ -1215,11 +1387,37 @@ _CONTEXT_ERROR_MARKERS = (
     # allowed (M)."; Bedrock: "Input is too long for requested model."
     "input token count",
     "input is too long",
+    # xAI: "This model's maximum prompt length is N but the request contains
+    # M tokens"; llama.cpp: "the request exceeds the available context size";
+    # Kimi: "Your request exceeded model token limit"; OpenRouter (Poolside):
+    # "exceeds the maximum allowed input length"; Anthropic HTTP 413:
+    # "Request exceeds the maximum size".
+    "maximum prompt length",
+    "context size",
+    "exceeded model token limit",
+    "maximum allowed input length",
+    "request exceeds the maximum size",
 )
 # A 429 carrying one of these is spent quota or billing, not a busy upstream.
 _QUOTA_ERROR_CODES = frozenset(
     {"insufficient_quota", "billing_not_active", "billing_hard_limit_reached"}
 )
+# String error codes (``code`` or ``type``) that name a transient upstream
+# failure where no HTTP status is given, as in OpenRouter's mid-stream frames.
+_TRANSIENT_ERROR_CODES = frozenset(
+    {
+        "server_error",
+        "internal_error",
+        "internal_server_error",
+        "service_unavailable",
+        "overloaded",
+        "overloaded_error",
+        "timeout",
+        "upstream_error",
+    }
+)
+# OpenRouter's wording for an upstream that failed or dropped the connection.
+_TRANSIENT_ERROR_MARKERS = ("provider returned error", "provider disconnected")
 
 
 def _error_detail(body: Any) -> tuple[str | None, str | None]:
@@ -1272,6 +1470,23 @@ def _quota_exhausted(body: Any, detail: str | None, error_code: str | None) -> b
     )
 
 
+def _error_type(body: Any) -> str | None:
+    """The body's ``error.type``, which some vendors send in place of a code."""
+
+    error = body.get("error") if isinstance(body, dict) else None
+    kind = error.get("type") if isinstance(error, dict) else None
+    return kind.casefold() if isinstance(kind, str) else None
+
+
+def _transient_error(body: Any, detail: str | None, error_code: str | None) -> bool:
+    """Whether an error that carries no HTTP status names a transient failure."""
+
+    normalized = str(detail or "").casefold()
+    return bool({error_code, _error_type(body)} & _TRANSIENT_ERROR_CODES) or any(
+        marker in normalized for marker in _TRANSIENT_ERROR_MARKERS
+    )
+
+
 def _safe_error(response: httpx.Response) -> ProviderError:
     request_id = response.headers.get("x-request-id") or response.headers.get(
         "request-id"
@@ -1294,9 +1509,15 @@ def _safe_error(response: httpx.Response) -> ProviderError:
     message = f"provider returned HTTP {response.status_code}{suffix}" + (
         f": {detail}" if detail else ""
     )
-    if response.status_code in {400, 413, 422} and _context_length_error(
-        detail, error_code
-    ):
+    context_overflow = (
+        _context_length_error(detail, error_code)
+        or _error_type(body) in _CONTEXT_ERROR_CODES
+    )
+    # Some runtimes (Ollama) answer an overflow with a 5xx; it is checked
+    # before the overload branch, because resending it cannot succeed.
+    if (
+        response.status_code in {400, 413, 422} or response.status_code >= 500
+    ) and context_overflow:
         return ProviderContextLengthError(message)
     if response.status_code == 429 and _quota_exhausted(body, detail, error_code):
         # Retrying spent quota only burns attempts and then mislabels the
@@ -1335,7 +1556,9 @@ def _stream_error_frame(data: Any) -> ProviderError | None:
     status = int(error_code) if error_code and error_code.isdigit() else None
     if status == 429 and _quota_exhausted(data, detail, error_code):
         return ProviderQuotaError(message)
-    if status in _RETRYABLE_STATUS_CODES:
+    if status in _RETRYABLE_STATUS_CODES or (
+        status is None and _transient_error(data, detail, error_code)
+    ):
         return ProviderOverloadedError(message, status_code=status)
     return ProviderError(message)
 
@@ -1385,6 +1608,12 @@ def _arguments(
             ),
         )
         raise failure from exc
+    if isinstance(parsed, str):
+        # Some gateways encode the arguments string twice ("\"{...}\"").
+        try:
+            parsed = json.loads(parsed)
+        except ValueError:  # diagnostic-expected: a plain string is refused just below
+            pass
     if not isinstance(parsed, dict):
         raise ProviderError("provider returned non-object tool arguments")
     return parsed
@@ -1491,6 +1720,18 @@ def _openai_message_content(message: dict[str, Any]) -> str:
     """Reply text only. Reasoning fields are not a substitute for content."""
 
     return _openai_text_parts(message.get("content"))
+
+
+def _openai_refusal(message: dict[str, Any]) -> str:
+    """The model's own explanation when it declines, sent in place of content.
+
+    It is the reply the operator should read: shown as text, the turn ends
+    with the model's words instead of an empty answer that recovery would
+    keep asking the same model to fill.
+    """
+
+    value = message.get("refusal")
+    return value if isinstance(value, str) else ""
 
 
 def _openrouter_reasoning(
@@ -1858,6 +2099,106 @@ def _mistral_tool_call_ids(messages: list[dict[str, Any]]) -> None:
             message["tool_call_id"] = _mistral_tool_call_id(message["tool_call_id"])
 
 
+def _first_choice(data: dict[str, Any]) -> dict[str, Any]:
+    """``choices[0]``, or nothing when a server sends null or a non-object."""
+
+    choices = data.get("choices")
+    first = choices[0] if isinstance(choices, list) and choices else None
+    return first if isinstance(first, dict) else {}
+
+
+def _finish_reason_failure(choice: dict[str, Any]) -> ProviderError | None:
+    """A finish reason that ends the reply as a failure, not an answer."""
+
+    reason = choice.get("finish_reason")
+    if reason == "error":
+        # OpenRouter may name the cause in the choice's own ``error`` object.
+        error = choice.get("error")
+        detail = _error_detail({"error": error})[0] if error else None
+        return ProviderOverloadedError(
+            "provider ended the reply with an error" + (f": {detail}" if detail else "")
+        )
+    if reason == "content_filter":
+        verdicts = choice.get("content_filter_results")
+        flagged = (
+            sorted(
+                str(category)
+                for category, verdict in verdicts.items()
+                if isinstance(verdict, dict) and verdict.get("filtered")
+            )
+            if isinstance(verdicts, dict)
+            else []
+        )
+        return ProviderResponseError(
+            "the provider's content filter stopped the reply"
+            + (f" (filtered: {', '.join(flagged)})" if flagged else "")
+        )
+    return None
+
+
+def _chat_completion_failure(data: dict[str, Any]) -> ProviderError | None:
+    """The failure a Chat Completions HTTP 200 body reports, if any.
+
+    OpenRouter and other gateways answer an upstream failure with a 200 whose
+    body is ``{"error": {...}}``; read as a reply it is an empty answer.
+    """
+
+    failure = _stream_error_frame(data)
+    if failure is not None:
+        detail, _code = _error_detail(data)
+        # Keep the classified type and status; only the wording differs.
+        failure.args = (
+            "provider returned an error instead of a reply"
+            + (f": {detail}" if detail else ""),
+        )
+        return failure
+    return _finish_reason_failure(_first_choice(data))
+
+
+def _chat_completion_body_failure(response: httpx.Response) -> ProviderError | None:
+    """Retry inspector: a transient failure inside a 200 is resent like a 5xx."""
+
+    if b'"error"' not in response.content:
+        return None
+    try:
+        data = response.json()
+    except ValueError:  # diagnostic-expected: complete() reports the unreadable body
+        return None
+    return _chat_completion_failure(data) if isinstance(data, dict) else None
+
+
+def _merge_function_call_delta(call: dict[str, str], delta: Any) -> None:
+    """Fold one legacy ``function_call`` delta into the single call it builds."""
+
+    if not isinstance(delta, dict):
+        return
+    call["name"] = call["name"] or str(delta.get("name") or "")
+    arguments = delta.get("arguments")
+    call["arguments"] += (
+        json.dumps(arguments) if isinstance(arguments, dict) else str(arguments or "")
+    )
+
+
+def _legacy_function_call(
+    request: ModelRequest, function: dict[str, Any], metadata: dict[str, Any]
+) -> ToolCall:
+    """Read a legacy ``function_call`` as the single tool call it is.
+
+    It carries no id, so one is minted; the call is otherwise treated exactly
+    like a ``tool_calls`` entry.
+    """
+
+    name = _decode_tool_name(request, str(function.get("name") or ""))
+    return _normalized_tool_call(
+        id=f"call_{uuid.uuid4().hex[:24]}",
+        name=name,
+        arguments=_arguments(
+            function.get("arguments"),
+            diagnostic_metadata={**metadata, "tool_id": name},
+        ),
+    )
+
+
 class OpenAICompatibleProvider(ModelProvider):
     """Adapter for Chat Completions-compatible hosted and local runtimes."""
 
@@ -2028,15 +2369,42 @@ class OpenAICompatibleProvider(ModelProvider):
                 self._path("/v1/chat/completions"),
                 payload,
                 operation="chat_completions",
+                inspect=_chat_completion_body_failure,
             )
         if response.is_error:
             raise _safe_error(response)
-        data = response.json()
-        choice = (data.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
+        try:
+            data = response.json()
+        except ValueError as exc:
+            # A captive portal or a wrong base URL answers 200 with HTML.
+            content_type = response.headers.get("content-type", "").split(";")[0]
+            raise ProviderResponseError(
+                "provider returned a response that is not JSON (content-type "
+                f"{content_type.strip()[:100] or 'none'})"
+            ) from exc
+        if not isinstance(data, dict):
+            raise ProviderResponseError(
+                "provider returned a response that is not a JSON object"
+            )
+        failure = _chat_completion_failure(data)
+        if failure is not None:
+            raise failure
+        choice = _first_choice(data)
+        message = choice.get("message")
+        if not isinstance(message, dict):
+            message = {}
+        # Servers that serialize absent lists write ``"tool_calls": null``.
+        raw_calls = message.get("tool_calls")
+        items = (
+            [item for item in raw_calls if isinstance(item, dict)]
+            if isinstance(raw_calls, list)
+            else []
+        )
         calls: list[ToolCall] = []
-        for item in message.get("tool_calls", []):
-            function = item.get("function", {})
+        for item in items:
+            function = item.get("function")
+            if not isinstance(function, dict):
+                function = {}
             name = _decode_tool_name(request, function.get("name", ""))
             calls.append(
                 _normalized_tool_call(
@@ -2055,10 +2423,27 @@ class OpenAICompatibleProvider(ModelProvider):
                     ),
                 )
             )
+        legacy = message.get("function_call")
+        if not items and isinstance(legacy, dict) and legacy.get("name"):
+            # Only without tool_calls: a server that mirrors one call into
+            # both fields must not have it run twice.
+            calls.append(
+                _legacy_function_call(
+                    request,
+                    legacy,
+                    {
+                        "adapter": self.config.flavor.value,
+                        "model_id": data.get("model") or model,
+                        "provider": self.config.id,
+                        "status": choice.get("finish_reason"),
+                        "vendor_request_id": data.get("id"),
+                    },
+                )
+            )
         return ModelResponse(
             provider_id=self.config.id,
             model=data.get("model") or model,
-            text=_openai_message_content(message).strip(),
+            text=(_openai_message_content(message) or _openai_refusal(message)).strip(),
             reasoning=_openai_message_reasoning(message).strip(),
             tool_calls=calls,
             usage=_openai_usage(data.get("usage")),
@@ -2400,11 +2785,13 @@ async def _stream_openai_compatible(
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
     call_parts: dict[int, dict[str, str]] = {}
+    legacy_call = {"name": "", "arguments": ""}
     usage = ModelUsage()
     finish_reason: str | None = None
     response_id: str | None = None
     response_model = model
     terminated = False
+    keepalives = 0
     try:
         async with provider._client(provider._headers()) as client:
             async with _stream_with_retry(
@@ -2415,14 +2802,23 @@ async def _stream_openai_compatible(
                 json=payload,
                 operation="chat_completions_stream",
             ) as frames:
-                async for frame in frames:
+                async for frame in _frames_until_finished_close(
+                    frames, lambda: finish_reason is not None, provider.config
+                ):
                     encoded = frame.strip()
                     if not encoded:
                         continue
                     if encoded == "[DONE]":
+                        # Nothing follows [DONE]. A proxy that holds the socket
+                        # open after it must not turn the reply into a timeout.
                         terminated = True
+                        break
+                    data = _stream_frame_data(encoded)
+                    if data is None:
+                        if not keepalives:
+                            _record_keepalive_skipped(provider.config, encoded)
+                        keepalives += 1
                         continue
-                    data = json.loads(encoded)
                     failure = _stream_error_frame(data)
                     if failure is not None:
                         raise failure
@@ -2433,22 +2829,28 @@ async def _stream_openai_compatible(
                     chunk_usage = data.get("usage")
                     if chunk_usage:
                         usage = _openai_usage(chunk_usage)
-                    choice = (data.get("choices") or [{}])[0]
+                    choice = _first_choice(data)
                     finish_reason = choice.get("finish_reason") or finish_reason
-                    delta = choice.get("delta") or {}
+                    failure = _finish_reason_failure(choice)
+                    if failure is not None:
+                        raise failure
+                    delta = choice.get("delta")
+                    if not isinstance(delta, dict):
+                        delta = {}
                     reasoning = _openai_message_reasoning(delta)
                     if reasoning:
                         reasoning_parts.append(reasoning)
                         yield ModelStreamEvent(
                             type=StreamEventType.REASONING_DELTA, delta=reasoning
                         )
-                    content = _openai_message_content(delta)
+                    content = _openai_message_content(delta) or _openai_refusal(delta)
                     if content:
                         text_parts.append(content)
                         yield ModelStreamEvent(
                             type=StreamEventType.TEXT_DELTA, delta=content
                         )
                     _merge_tool_call_deltas(call_parts, delta.get("tool_calls"))
+                    _merge_function_call_delta(legacy_call, delta.get("function_call"))
         if not terminated and finish_reason is None:
             # Chat Completions ends every reply with a finish_reason and then
             # [DONE]; a body that closes cleanly without either was cut short
@@ -2475,6 +2877,20 @@ async def _stream_openai_compatible(
                             "vendor_request_id": response_id,
                         },
                     ),
+                )
+            )
+        if not call_parts and legacy_call["name"]:
+            calls.append(
+                _legacy_function_call(
+                    request,
+                    legacy_call,
+                    {
+                        "adapter": provider.config.flavor.value,
+                        "model_id": response_model,
+                        "provider": provider.config.id,
+                        "status": finish_reason,
+                        "vendor_request_id": response_id,
+                    },
                 )
             )
         for call in calls:
