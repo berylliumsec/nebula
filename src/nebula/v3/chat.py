@@ -946,6 +946,21 @@ def _routing_input_schema(spec: Any) -> dict[str, Any]:
     return schema
 
 
+# Hooks for these events run after the turn has already ended, so a required
+# hook's failure is reported instead of raised: there is nothing left to block.
+_ENDED_TURN_HOOK_FINISH_REASONS = {
+    "chat.turn.failed": "failed",
+    "chat.turn.cancelled": "cancelled",
+}
+_HOOK_STDERR_EXCERPT_CHARS = 500
+
+
+def _turn_end_hook_payload(finish_reason: str, detail: str | None) -> dict[str, Any]:
+    """Every turn-ending hook event carries the same keys, so one hook serves all."""
+
+    return {"finish_reason": finish_reason, "detail": detail}
+
+
 def _tool_free_request(request: ModelRequest) -> ModelRequest:
     """Only a request that exposes no functions tells the model it has none."""
 
@@ -1703,69 +1718,78 @@ class ChatService:
         self, prepared: PreparedChat, runtime: _ActiveProviderTurn
     ) -> None:
         stopped = False
+        # Turn-ending hooks run after the handlers below, not inside them: a
+        # hook failing inside ``except CancelledError`` would carry the stop
+        # as its implicit cause and blame cancellation for its own exit.
+        ended: tuple[str, str] | None = None
+        frame: tuple[str, dict[str, Any]] | None = None
+        failure: BaseException | None = None
         try:
-            async for event in self.stream(prepared):
+            try:
+                async for event in self.stream(prepared):
+                    async with runtime.condition:
+                        runtime.events.append(event)
+                        runtime.condition.notify_all()
+            except asyncio.CancelledError as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.provider_turn.cancelled",
+                    "A provider chat turn was cancelled.",
+                    exc,
+                    stage="provider-turn-stream",
+                )
+                turn_id = prepared.turn.id if prepared.turn else None
+                if self.shutting_down:
+                    # Core is stopping, not the operator: keep the turn
+                    # recoverable for the next boot instead of recording an
+                    # operator stop.
+                    interrupted = self._interrupt_turn_for_shutdown(prepared)
+                    frame = (
+                        "error",
+                        {
+                            "type": "error",
+                            "turn_id": turn_id,
+                            "detail": (
+                                interrupted.error
+                                if interrupted is not None and interrupted.error
+                                else "Core stopped before this response completed. "
+                                "Review and resume it."
+                            ),
+                        },
+                    )
+                else:
+                    stopped = True
+                    ended = ("chat.turn.cancelled", "response stopped")
+                    frame = (
+                        "cancelled",
+                        {
+                            "type": "cancelled",
+                            "turn_id": turn_id,
+                            "detail": "response stopped",
+                        },
+                    )
+            except BaseException as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.provider_turn.failed",
+                    "A provider chat turn failed while streaming.",
+                    exc,
+                    stage="provider-turn-stream",
+                )
+                ended = ("chat.turn.failed", str(exc)[:1_000])
+                failure = exc
+            if ended is not None:
+                await self._run_terminal_native_hooks(prepared, *ended)
+            runtime.error = failure
+            if frame is not None:
+                # Only this producer task was cancelled. Followers run in their
+                # own tasks and get the stop as a terminal frame they can
+                # forward, not as a CancelledError re-raised inside a task
+                # nobody cancelled; runtime.error stays reserved for real
+                # failures.
                 async with runtime.condition:
-                    runtime.events.append(event)
+                    runtime.events.append(frame)
                     runtime.condition.notify_all()
-        except asyncio.CancelledError as exc:
-            record_caught_exception(
-                "chat",
-                "chat.provider_turn.cancelled",
-                "A provider chat turn was cancelled.",
-                exc,
-                stage="provider-turn-stream",
-            )
-            turn_id = prepared.turn.id if prepared.turn else None
-            if self.shutting_down:
-                # Core is stopping, not the operator: keep the turn recoverable
-                # for the next boot instead of recording an operator stop.
-                interrupted = self._interrupt_turn_for_shutdown(prepared)
-                frame: tuple[str, dict[str, Any]] = (
-                    "error",
-                    {
-                        "type": "error",
-                        "turn_id": turn_id,
-                        "detail": (
-                            interrupted.error
-                            if interrupted is not None and interrupted.error
-                            else "Core stopped before this response completed. "
-                            "Review and resume it."
-                        ),
-                    },
-                )
-            else:
-                stopped = True
-                await self._run_terminal_native_hooks(
-                    prepared, "chat.turn.cancelled", "response stopped"
-                )
-                frame = (
-                    "cancelled",
-                    {
-                        "type": "cancelled",
-                        "turn_id": turn_id,
-                        "detail": "response stopped",
-                    },
-                )
-            # Only this producer task was cancelled. Followers run in their own
-            # tasks and get the stop as a terminal frame they can forward, not
-            # as a CancelledError re-raised inside a task nobody cancelled;
-            # runtime.error stays reserved for real failures.
-            async with runtime.condition:
-                runtime.events.append(frame)
-                runtime.condition.notify_all()
-        except BaseException as exc:
-            record_caught_exception(
-                "chat",
-                "chat.provider_turn.failed",
-                "A provider chat turn failed while streaming.",
-                exc,
-                stage="provider-turn-stream",
-            )
-            await self._run_terminal_native_hooks(
-                prepared, "chat.turn.failed", str(exc)[:1_000]
-            )
-            runtime.error = exc
         finally:
             async with runtime.condition:
                 runtime.done = True
@@ -3040,28 +3064,21 @@ class ChatService:
         self._release_execution(prepared)
 
     async def complete(self, prepared: PreparedChat) -> ChatCompletionResponse:
+        ended: tuple[BaseException, str, ChatTurnStatus]
         try:
             return await self._complete_claimed(prepared)
-        except asyncio.CancelledError:
-            await self._run_terminal_native_hooks(
-                prepared, "chat.turn.cancelled", "response stopped"
-            )
-            self._fail_closed_turn(
-                prepared,
-                status=ChatTurnStatus.CANCELLED,
-                error="response stopped",
-            )
-            raise
-        except BaseException as exc:
-            await self._run_terminal_native_hooks(
-                prepared, "chat.turn.failed", str(exc)[:1_000]
-            )
-            self._fail_closed_turn(
-                prepared,
-                status=ChatTurnStatus.FAILED,
-                error=str(exc)[:1_000],
-            )
-            raise
+        except asyncio.CancelledError as exc:  # diagnostic-expected: re-raised below
+            ended = exc, "chat.turn.cancelled", ChatTurnStatus.CANCELLED
+            detail = "response stopped"
+        except BaseException as exc:  # diagnostic-expected: re-raised below
+            ended = exc, "chat.turn.failed", ChatTurnStatus.FAILED
+            detail = str(exc)[:1_000]
+        # Outside the handlers, so a hook's own failure is never chained to
+        # the stop or failure that ended the turn.
+        error, event_name, status = ended
+        await self._run_terminal_native_hooks(prepared, event_name, detail)
+        self._fail_closed_turn(prepared, status=status, error=detail)
+        raise error
 
     async def _complete_claimed(self, prepared: PreparedChat) -> ChatCompletionResponse:
         self._claim_execution(prepared)
@@ -3088,7 +3105,7 @@ class ChatService:
         await self._run_native_hooks(
             prepared,
             "chat.turn.completed",
-            {"finish_reason": completion.finish_reason},
+            _turn_end_hook_payload(completion.finish_reason or "stop", None),
         )
         self._persist(prepared, completion)
         self.start_optional_naming(
@@ -3648,7 +3665,7 @@ class ChatService:
                 await self._run_native_hooks(
                     prepared,
                     "chat.turn.completed",
-                    {"finish_reason": completion.finish_reason},
+                    _turn_end_hook_payload(completion.finish_reason or "stop", None),
                 )
                 self._persist(prepared, completion)
                 self.start_optional_naming(
@@ -4427,6 +4444,13 @@ class ChatService:
                                     "delta": completion.message.content,
                                 },
                             )
+                        await self._run_native_hooks(
+                            prepared,
+                            "chat.turn.completed",
+                            _turn_end_hook_payload(
+                                completion.finish_reason or "stop", None
+                            ),
+                        )
                         self._persist(prepared, completion)
                         turn = prepared.turn or turn
                         self.start_optional_naming(
@@ -6088,6 +6112,7 @@ class ChatService:
             for item in self.list_turn_hook_executions(turn.id)
             if item.event_name == event_name
         ]
+        ended_turn = event_name in _ENDED_TURN_HOOK_FINISH_REASONS
         runner = NativeHookRunner(self.store)
         for snapshot in prepared.hook_snapshots:
             if event_name not in snapshot.manifest.events:
@@ -6101,6 +6126,7 @@ class ChatService:
                 if (
                     prior.status in {"failed", "timed_out"}
                     and snapshot.manifest.failure_policy == "block"
+                    and not ended_turn
                 ):
                     raise ChatError(
                         f"required native hook {snapshot.id!r} did not complete: "
@@ -6130,10 +6156,64 @@ class ChatService:
                 outcome.status != "complete"
                 and snapshot.manifest.failure_policy == "block"
             ):
+                if ended_turn:
+                    self._record_ended_turn_hook_failure(outcome)
+                    continue
                 raise ChatError(
                     f"required native hook {snapshot.id!r} did not complete: "
                     f"{outcome.error or outcome.status}"
                 )
+
+    @staticmethod
+    def _record_ended_turn_hook_failure(execution: NativeHookExecution) -> None:
+        """Report a required hook that failed after its turn had already ended.
+
+        The hook's own exit is the cause, so the record names it, with a
+        bounded, redacted stderr excerpt; the full output stays on the
+        execution record.
+        """
+
+        if execution.status == "timed_out":
+            outcome, reason_code = "timed out", "timeout"
+        elif execution.exit_code is not None:
+            outcome = f"exited with code {execution.exit_code}"
+            reason_code = "invalid_input"
+        else:
+            outcome = execution.error or "did not complete"
+            reason_code = "dependency_unavailable"
+        stderr = sanitize_display_text(redact_text(execution.stderr)).strip()
+        if len(stderr) > _HOOK_STDERR_EXCERPT_CHARS:
+            stderr = "…" + stderr[-_HOOK_STDERR_EXCERPT_CHARS:]
+        detail = (
+            f"Lifecycle hook {execution.hook_id!r} {outcome} on {execution.event_name}."
+        )
+        if stderr:
+            detail += f" stderr: {stderr}"
+        record_diagnostic(
+            "warning",
+            "chat",
+            "chat.native_hook.terminal_hook_failed",
+            "A required lifecycle hook did not complete after its turn had ended.",
+            outcome="failure",
+            stage=execution.event_name,
+            retryable=False,
+            project_id=execution.engagement_id,
+            session_id=execution.chat_session_id,
+            execution_id=execution.id,
+            safe_failure_cause="The operator's lifecycle hook did not complete.",
+            operator_detail=detail,
+            impact=(
+                "The turn had already ended, so its outcome is unchanged. The "
+                "hook's full output is on its execution record."
+            ),
+            reason_code=reason_code,
+            metadata={
+                "hook_id": execution.hook_id,
+                "exit_code": execution.exit_code,
+                "status": execution.status,
+                "policy": "block",
+            },
+        )
 
     def list_turn_hook_executions(self, turn_id: str) -> list[NativeHookExecution]:
         """Return every durable hook attempt for a turn, paging past the store cap."""
@@ -6179,7 +6259,13 @@ class ChatService:
         """Persist terminal hook outcomes without replacing the primary failure."""
 
         try:
-            await self._run_native_hooks(prepared, event_name, {"detail": detail})
+            await self._run_native_hooks(
+                prepared,
+                event_name,
+                _turn_end_hook_payload(
+                    _ENDED_TURN_HOOK_FINISH_REASONS[event_name], detail
+                ),
+            )
         except Exception as exc:
             record_caught_exception(
                 "chat",
