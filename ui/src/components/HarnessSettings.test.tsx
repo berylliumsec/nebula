@@ -211,6 +211,29 @@ it("edits an MCP server without resetting its saved working directory", async ()
   expect(changes).not.toHaveProperty("cwd_policy");
 });
 
+it("saves a server description and shows it on the card", async () => {
+  vi.resetAllMocks();
+  api.listHarnesses.mockResolvedValue([]);
+  const described = {...importedServer, description: "Burp Suite scanner for the staging web app."};
+  api.listMcpServers.mockResolvedValueOnce([importedServer]).mockResolvedValue([described]);
+  api.updateMcpServer.mockResolvedValue(described);
+  const user = userEvent.setup();
+  render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+  await user.click(await screen.findByRole("button", {name: "Edit burp"}));
+  const dialog = screen.getByRole("dialog", {name: "Edit MCP server"});
+  const field = within(dialog).getByRole("textbox", {name: "Description"});
+  expect(field).toHaveValue("");
+  expect(field).toHaveAccessibleDescription(/Jev reads it when ranking servers/);
+  await user.type(field, "  Burp Suite scanner for the staging web app.  ");
+  expect(within(dialog).getByText("47/500")).toBeVisible();
+  await user.click(within(dialog).getByRole("button", {name: "Save MCP server"}));
+  await waitFor(() => expect(api.updateMcpServer).toHaveBeenCalledTimes(1));
+  expect(api.updateMcpServer.mock.calls[0][1]).toMatchObject({description: "Burp Suite scanner for the staging web app."});
+  expect(await screen.findByText("Burp Suite scanner for the staging web app.")).toBeVisible();
+  await user.click(screen.getByRole("button", {name: "Edit burp"}));
+  expect(within(screen.getByRole("dialog", {name: "Edit MCP server"})).getByRole("textbox", {name: "Description"})).toHaveValue("Burp Suite scanner for the staging web app.");
+});
+
 describe("harness settings destructive actions", () => {
   beforeEach(() => {
     vi.resetAllMocks();

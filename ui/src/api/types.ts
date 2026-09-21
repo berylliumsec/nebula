@@ -2287,6 +2287,8 @@ export interface SshEnvironmentSettingsChange {
 export interface McpServerProfile {
   id: Identifier;
   name: string;
+  /** What the server is for, in the operator's words. */
+  description?: string;
   transport: "stdio" | "streamable_http";
   command?: string;
   arguments: string[];
