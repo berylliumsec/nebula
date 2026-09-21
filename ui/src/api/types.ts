@@ -2440,6 +2440,10 @@ export interface ChatSessionAssistantSettingsRequest {
   hookIds?: Identifier[];
   reasoningEffort?: ReasoningEffort;
   useModelReasoningDefault?: boolean;
+  allowSubagents?: boolean;
+  maxActiveSubagents?: number | null;
+  subagentProviderId?: Identifier;
+  subagentModel?: string;
   expectedRevision?: number;
 }
 

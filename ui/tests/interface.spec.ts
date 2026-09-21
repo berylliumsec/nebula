@@ -9522,8 +9522,9 @@ const delegated = [
   },
 ];
 
-test("stabilization an operator allows delegation and acts on a waiting subagent", async ({ page }) => {
+reloadTest("stabilization an operator allows delegation and acts on a waiting subagent", async ({ page }) => {
   const decisions: unknown[] = [];
+  let savedSession = { ...entity, id: "subagent-chat", engagement_id: "scratch-project", title: "Assess staging API auth", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} as Record<string, unknown> };
   // A ready provider, so "the composer stays usable" is a real assertion.
   await installReasoningProvider(page);
   await page.route("**/api/v1/chat/sessions/*/subagents", async route => {
@@ -9536,7 +9537,11 @@ test("stabilization an operator allows delegation and acts on a waiting subagent
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/chat-sessions")) {
-      await route.fulfill({ json: [{ ...entity, id: "subagent-chat", engagement_id: "scratch-project", title: "Assess staging API auth", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} }] });
+      await route.fulfill({ json: [savedSession] });
+    } else if (path.endsWith("/chat-sessions/subagent-chat") && route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON();
+      savedSession = { ...savedSession, revision: savedSession.revision + 1, metadata: { ...savedSession.metadata, allow_subagents: body.allow_subagents, max_active_subagents: body.max_active_subagents } };
+      await route.fulfill({ json: savedSession });
     } else if (path.endsWith("/chat/sessions/subagent-chat/messages")) {
       await route.fulfill({ json: [] });
     } else if (path.endsWith("/chat/sessions/subagent-chat/pending-turn")) {
@@ -9551,12 +9556,18 @@ test("stabilization an operator allows delegation and acts on a waiting subagent
   await expect(toggle).toBeVisible();
   await expect(toggle).not.toBeChecked();
   await toggle.check();
+  await expect(page.getByText("Subagents saved. Applies to your next message.", { exact: true })).toBeVisible();
   // Delegation is unlimited until the operator caps how many run at once.
   await expect(toggle).toHaveAccessibleName(/no limit/);
   const limit = page.getByRole("spinbutton", { name: "Running at once" });
   await expect(limit).toHaveAttribute("placeholder", "No limit");
   await limit.fill("3");
+  await expect(page.getByText("Subagents saved. Applies to your next message.", { exact: true })).toBeVisible();
   await expect(toggle).toHaveAccessibleName(/up to 3 at a time/);
+  await page.reload();
+  await page.getByRole("button", { name: "Assistant settings" }).click();
+  await expect(page.getByRole("checkbox", { name: /Subagents/ })).toBeChecked();
+  await expect(page.getByRole("spinbutton", { name: "Running at once" })).toHaveValue("3");
   await page.getByRole("button", { name: "Close assistant settings" }).click();
 
   // The rail reports what is delegated without taking over the composer.
@@ -9581,7 +9592,8 @@ test("stabilization an operator allows delegation and acts on a waiting subagent
   expect(accessibility.violations).toEqual([]);
 });
 
-test("stabilization a harness chat delegates to a chosen provider model", async ({ page }) => {
+reloadTest("stabilization a harness chat delegates to a chosen provider model", async ({ page }) => {
+  let savedSession = { ...entity, id: "harness-subagent-chat", engagement_id: "scratch-project", title: "Assess staging API auth", backend: "harness", harness_profile_id: "harness-codex-subagents", harness_session_id: "harness-subagent-session", model: "gpt-5.6", metadata: {} as Record<string, unknown> };
   const codex = {
     ...entity,
     id: "harness-codex-subagents",
@@ -9639,7 +9651,11 @@ test("stabilization a harness chat delegates to a chosen provider model", async 
         detail: "This harness session is ready for another turn.",
       } });
     } else if (path.endsWith("/chat-sessions") && request.method() === "GET") {
-      await route.fulfill({ json: [{ ...entity, id: "harness-subagent-chat", engagement_id: "scratch-project", title: "Assess staging API auth", backend: "harness", harness_profile_id: codex.id, harness_session_id: "harness-subagent-session", model: "gpt-5.6", metadata: {} }] });
+      await route.fulfill({ json: [savedSession] });
+    } else if (path.endsWith("/chat-sessions/harness-subagent-chat") && request.method() === "PATCH") {
+      const body = request.postDataJSON();
+      savedSession = { ...savedSession, revision: savedSession.revision + 1, metadata: { ...savedSession.metadata, provider_subagent: body.allow_subagents ? { provider_profile_id: body.subagent_provider_id, model: body.subagent_model, max_active: body.max_active_subagents } : null } };
+      await route.fulfill({ json: savedSession });
     } else if (path.endsWith("/chat/sessions/harness-subagent-chat/subagents")) {
       await route.fulfill({ json: { session_id: "harness-subagent-chat", subagents: harnessChildren } });
     } else if (path.endsWith("/chat/sessions/harness-subagent-chat/messages")) {
@@ -9674,9 +9690,13 @@ test("stabilization a harness chat delegates to a chosen provider model", async 
   const toggle = page.getByRole("checkbox", { name: /Provider subagents/ });
   await expect(toggle).not.toBeChecked();
   await toggle.check();
+  await expect(page.getByText("Subagents saved. Applies to your next message.", { exact: true })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Subagent provider" })).toHaveValue(subagentProvider.id);
   await expect(page.getByRole("combobox", { name: "Subagent model" })).toHaveValue("deepseek/deepseek-v3.2");
   await expect(page.locator(".chat-harness-subagent-status")).toContainText("Tools verified");
+  await page.reload();
+  await page.getByRole("button", { name: "Assistant settings" }).click();
+  await expect(page.getByRole("checkbox", { name: /Provider subagents/ })).toBeChecked();
   await page.getByRole("button", { name: "Close assistant settings" }).click();
 
   // The same rail and pane as a provider chat, naming the subagent model.

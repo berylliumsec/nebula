@@ -788,6 +788,10 @@ class ChatSessionUpdateRequest(NebulaModel):
     mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
     hook_ids: list[str] | None = Field(default=None, max_length=32)
     reasoning_effort: ReasoningEffort | None = None
+    allow_subagents: bool | None = None
+    max_active_subagents: int | None = Field(default=None, ge=1, le=100)
+    subagent_provider_id: str | None = Field(default=None, max_length=200)
+    subagent_model: str | None = Field(default=None, max_length=300)
     expected_revision: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
@@ -798,6 +802,10 @@ class ChatSessionUpdateRequest(NebulaModel):
             and self.mcp_server_ids is None
             and self.hook_ids is None
             and "reasoning_effort" not in self.model_fields_set
+            and self.allow_subagents is None
+            and "max_active_subagents" not in self.model_fields_set
+            and self.subagent_provider_id is None
+            and self.subagent_model is None
         ):
             raise ValueError("Provide a title, archived state, or assistant settings")
         for name, values in (
@@ -9948,6 +9956,44 @@ def create_app(
             metadata["hook_ids"] = request.hook_ids
         if "reasoning_effort" in request.model_fields_set:
             metadata["reasoning_effort"] = request.reasoning_effort
+        if (
+            request.allow_subagents is not None
+            or "max_active_subagents" in request.model_fields_set
+            or request.subagent_provider_id is not None
+            or request.subagent_model is not None
+        ):
+            enabled = request.allow_subagents
+            if enabled is None:
+                enabled = bool(
+                    metadata.get("provider_subagent")
+                    if current.backend == ChatBackend.HARNESS
+                    else metadata.get("allow_subagents")
+                )
+            if current.backend == ChatBackend.HARNESS:
+                if enabled:
+                    saved = metadata.get("provider_subagent") or {}
+                    provider_id = request.subagent_provider_id or str(
+                        saved.get("provider_profile_id") or ""
+                    )
+                    model = request.subagent_model or str(saved.get("model") or "")
+                    limit = (
+                        request.max_active_subagents
+                        if "max_active_subagents" in request.model_fields_set
+                        else saved.get("max_active")
+                    )
+                    # Save the operator's choice while model verification runs.
+                    # Starting a turn still validates tools and data-sharing consent.
+                    metadata["provider_subagent"] = {
+                        "provider_profile_id": provider_id,
+                        "model": model,
+                        **({"max_active": limit} if limit is not None else {}),
+                    }
+                else:
+                    metadata.pop("provider_subagent", None)
+            else:
+                metadata["allow_subagents"] = enabled
+                if "max_active_subagents" in request.model_fields_set:
+                    metadata["max_active_subagents"] = request.max_active_subagents
         changes["metadata"] = metadata
         updated = store.update(
             ChatSession,
