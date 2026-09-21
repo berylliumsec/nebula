@@ -428,6 +428,76 @@ describe("Nebula workspace", () => {
     });
   });
 
+  it("switches a saved provider conversation to the first available harness", async () => {
+    const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
+    const provider = {
+      ...entity,
+      id: "provider-1",
+      name: "Cloud analyst",
+      provider_type: "openai",
+      endpoint: "https://api.openai.com/v1",
+      enabled: true,
+      is_local: false,
+      secret_ref: "env:OPENAI_API_KEY",
+      model_allowlist: ["provider-model"],
+      capabilities: { streaming: true },
+      privacy: { local_only: false, residency: [], permits_sensitive_data: true },
+      metadata: { default_model: "provider-model" },
+    };
+    const harness = {
+      ...entity,
+      id: "harness-1",
+      name: "Codex",
+      kind: "codex_app_server",
+      connection_mode: "spawn",
+      transport: "stdio",
+      auth_mode: "existing_session",
+      default_model: "codex-model",
+      enabled: true,
+      privacy: { local_only: true, permits_sensitive_data: true },
+      native_capabilities: { workspace_access: "write", shell: true },
+      capabilities: {
+        checked_at: "2026-07-12T11:00:00Z",
+        authentication_state: "verified",
+        models: ["codex-model"],
+      },
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable" }), { status: 200 });
+      if (path.endsWith("/engagements")) return new Response(JSON.stringify([{ ...entity, id: "engagement-1", name: "Runtime switch", status: "active", metadata: {} }]), { status: 200 });
+      if (path.endsWith("/providers/provider-1/health")) return new Response(JSON.stringify({ provider_id: "provider-1", healthy: true, models: ["provider-model"], detail: null }), { status: 200 });
+      if (path.endsWith("/providers")) return new Response(JSON.stringify([provider]), { status: 200 });
+      if (path.endsWith("/harnesses")) return new Response(JSON.stringify([harness]), { status: 200 });
+      if (path.endsWith("/chat-sessions")) return new Response(JSON.stringify([{
+        ...entity,
+        id: "session-provider",
+        engagement_id: "engagement-1",
+        title: "Provider conversation",
+        backend: "provider",
+        provider_profile_id: "provider-1",
+        model: "provider-model",
+        metadata: { message_count: 0 },
+      }]), { status: 200 });
+      if (path.endsWith("/chat/sessions/session-provider/messages")) return new Response(JSON.stringify([]), { status: 200 });
+      if (path.endsWith("/chat/sessions/session-provider/pending-turn")) return new Response(JSON.stringify({ detail: "No pending turn" }), { status: 404 });
+      return unmatchedCoreResponse(input);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderApp("/sessions?view=chat&session=session-provider");
+
+    await screen.findByRole("textbox", { name: "Message the analyst assistant" }, { timeout: 5_000 });
+    await user.click(screen.getByRole("button", { name: "Assistant settings" }));
+    expect(await screen.findByRole("combobox", { name: "Chat runtime" })).toHaveValue("provider");
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Chat runtime" }), "harness");
+
+    expect(screen.getByRole("combobox", { name: "Chat harness" })).toHaveValue("harness-1");
+    expect(screen.getByRole("combobox", { name: "Chat harness model" })).toHaveValue("codex-model");
+    expect(screen.getByRole("button", { name: "Assistant settings" })).toHaveTextContent("Codex");
+  });
+
   it("streams analyst chat with explicit provider/model selection and cloud knowledge consent", async () => {
     const entity = {
       created_at: "2026-07-12T10:00:00Z",

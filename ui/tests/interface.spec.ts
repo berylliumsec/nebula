@@ -4008,6 +4008,93 @@ test("assistant upgrade provider lifecycle hooks are selected and visible after 
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
 
+test("assistant settings expose provider metadata when switching a saved provider conversation to an available harness", async ({ page }) => {
+  const provider = {
+    ...entity,
+    id: "provider-saved-runtime",
+    name: "Saved provider",
+    provider_type: "openai",
+    endpoint: "https://api.openai.com/v1",
+    enabled: true,
+    is_local: false,
+    secret_ref: "env:OPENAI_API_KEY",
+    model_allowlist: ["provider-model"],
+    capabilities: { streaming: true },
+    privacy: { local_only: false, permits_sensitive_data: true },
+    metadata: { default_model: "provider-model" },
+  };
+  const harness = {
+    ...entity,
+    id: "harness-saved-runtime",
+    name: "Codex harness",
+    kind: "codex_app_server",
+    connection_mode: "spawn",
+    transport: "stdio",
+    auth_mode: "existing_session",
+    default_model: "codex-model",
+    enabled: true,
+    privacy: { local_only: true, permits_sensitive_data: true },
+    native_capabilities: { workspace_access: "write", shell: true },
+    capabilities: {
+      checked_at: entity.updated_at,
+      authentication_state: "verified",
+      models: ["codex-model"],
+    },
+  };
+  await installTruthfulCore(page);
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/providers") && route.request().method() === "GET") {
+      await route.fulfill({ json: [provider] });
+      return;
+    }
+    if (path.endsWith(`/providers/${provider.id}/health`) && route.request().method() === "POST") {
+      await route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["provider-model"] } });
+      return;
+    }
+    if (path.endsWith("/harnesses") && route.request().method() === "GET") {
+      await route.fulfill({ json: [harness] });
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && route.request().method() === "GET") {
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "saved-provider-chat",
+        engagement_id: "scratch-project",
+        title: "Saved provider chat",
+        backend: "provider",
+        provider_profile_id: provider.id,
+        model: "provider-model",
+        metadata: { message_count: 0 },
+      }] });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/saved-provider-chat/messages")) {
+      await route.fulfill({ json: [] });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/saved-provider-chat/pending-turn")) {
+      await route.fulfill({ status: 404, json: { detail: "No pending turn" } });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=saved-provider-chat", "Workbench");
+  await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
+  await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "Assistant settings" });
+  await expect(settings.getByRole("combobox", { name: "Chat runtime" })).toHaveValue("provider");
+
+  await settings.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
+
+  await expect(settings.getByLabel("Chat harness", { exact: true })).toHaveValue(harness.id);
+  await expect(settings.getByLabel("Chat harness model", { exact: true })).toHaveValue("codex-model");
+  await expect(page.getByRole("button", { name: "Assistant settings", exact: true })).toContainText("Codex harness");
+  expect((await new AxeBuilder({ page }).include("#assistant-settings-popover").analyze()).violations).toEqual([]);
+  expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+});
+
 test("assistant upgrade provider thinking stays collapsed and out of the reply", async ({ page }) => {
   const provider = {
     ...entity,

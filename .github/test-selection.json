@@ -1,23 +1,22 @@
 {
-  "change_digest": "4d65d4518f3087eca5dc436a5247852f65f8d56cd2f5a19393ac8d1449e25446",
-  "reviewed_by": "Claude review of Grok /goal final messages",
-  "reason": "Live Grok (1.0.34, grok-4.6) /goal runs showed two defects in the chat reply. (1) Grok's goal mode runs planner, implementer and skeptic roles that narrate as commentary, so a monitored /goal run's only answer text was the final role's closing word: a blocked goal ended the chat with just 'Refuted'. _run_harness_command now replaces that reply, for monitored Grok goals that stop, with _goal_outcome_message: outcome, elapsed time and tokens from the goal snapshot, the objective, Grok's last message, and a next step (/goal status or /goal resume). /goal status, pause and clear keep Grok's own reply. (2) After streaming its final answer in chunks, goal mode sent the whole answer again as one chunk (recorded: 70 chunks then one 214-character chunk equal to their join), so the reply appeared twice; ordinary Grok turns were checked live and do not do this. GrokAcpConnection.run_turn now drops a closing chunk that exactly repeats the text streamed since the last tool call. Verified end to end through a scratch Core built from this branch (project in host mode, Grok profile with workspace write and shell): '/goal add f_to_c and pytest tests' completed in 270 s and 125k tokens, the project's 3 tests pass, and the reply read 'Goal complete after 4 min 24 s and 124,939 tokens' with the objective and Grok's summary; replaying the recorded 71 chunks through the fixed code yields the summary once. test_harness_commands.py carries the new and updated tests; the other files are the suites that drive the Grok and Codex connections, _run_harness_command and the harness runtime.",
-  "exclusions": "Backend-only change inside the Grok connection and the harness /goal command path; no UI, API shape or native code changed, so no frontend, Playwright or native tests apply. test_browser_companion.py is left out: it only lists Codex models and needs a real Chromium.",
+  "change_digest": "17168ab11ec5bf9a2276b2473198624b34f45822e489546fbf1745e9b28ee51c",
+  "reviewed_by": "Codex review of saved-chat provider-to-harness switching",
+  "reason": "Selecting a saved provider conversation clears its harness identity, so switching to Agent harness must acquire an available harness and model even when the catalog resolves later. The selection verifies deterministic React state plus the assistant-settings journey across desktop Chromium and emulated mobile Chromium/WebKit.",
+  "exclusions": "Full backend and frontend suites, unrelated chat/provider/harness tests, Python and native tests, physical devices, and unrelated Playwright areas are excluded. The server runtime handoff contract and API shapes are unchanged; this defect is confined to UI catalog/session state ownership. No origin-sensitive browser API changed.",
   "expected_tests": {
-    "python": 228,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 40,
     "native": 0,
-    "playwright": 0
+    "playwright": 6
   },
-  "python": [
-    "tests/v3/test_harness_commands.py",
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_harnesses.py",
-    "tests/v3/test_harness_connection_state.py",
-    "tests/v3/test_approval_handoff.py",
-    "tests/v3/test_harness_provider_subagents.py"
+  "python": [],
+  "frontend": [
+    "ui/src/App.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "assistant-settings-navigation/desktop",
+    "assistant-settings-navigation/mobile-chromium",
+    "assistant-settings-navigation/mobile-webkit"
+  ]
 }
