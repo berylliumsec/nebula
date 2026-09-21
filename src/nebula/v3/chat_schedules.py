@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from .chat_subagents import subagent_limit
 from .domain import (
     ChatSchedule,
     ChatSession,
@@ -29,6 +30,7 @@ class ScheduledTurnSettings(NamedTuple):
     mcp_server_ids: list[str]
     ssh_environment_ids: list[str] | None
     allow_subagents: bool
+    max_active_subagents: int | None
     allow_cloud_tool_results: bool
 
 
@@ -169,6 +171,7 @@ class ChatScheduleService:
                 mcp_server_ids=[],
                 ssh_environment_ids=None,
                 allow_subagents=False,
+                max_active_subagents=None,
                 allow_cloud_tool_results=tools_enabled,
             )
         snapshot = latest.request_snapshot
@@ -202,6 +205,7 @@ class ChatScheduleService:
             mcp_server_ids=mcp_server_ids,
             ssh_environment_ids=ssh_environment_ids,
             allow_subagents=bool(snapshot.get("allow_subagents", False)),
+            max_active_subagents=subagent_limit(snapshot.get("max_active_subagents")),
             # The operator already confirmed tool-result transfer for the turn
             # this occurrence continues, as subagent goal continuation does.
             allow_cloud_tool_results=tools_enabled,

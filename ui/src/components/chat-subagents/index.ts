@@ -16,12 +16,12 @@ export {
   subagentProviders,
   type HarnessSubagentChoice,
 } from "./HarnessSubagentSettings";
+export { SubagentLimitField, subagentLimitLabel } from "./SubagentLimitField";
 export {
   ACTIVE_STATUSES,
   compactTokens,
   elapsedLabel,
   statusLabel,
-  SUBAGENT_SLOTS,
   subagentSummary,
   useChatSubagents,
   type ChatSubagentState,

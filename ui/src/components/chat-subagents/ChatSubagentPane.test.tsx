@@ -50,10 +50,12 @@ describe("the subagents an operator can see and act on", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("shows what each child is doing without claiming more than Core reported", () => {
-    render(<ChatSubagentPane {...paneProps} subagents={[subagent({})]} />);
+    const { container } = render(<ChatSubagentPane {...paneProps} subagents={[subagent({})]} />);
     expect(screen.getByText("Map documented API routes")).toBeInTheDocument();
     expect(screen.getByText(/Running · step 6 · 38s · 6.2k tokens/)).toBeInTheDocument();
-    expect(screen.getByText(/1 of 3 slots active/)).toBeInTheDocument();
+    // Without an operator limit there are no slots to fill.
+    expect(screen.getByText(/1 running · no limit · 6.2k tokens/)).toBeInTheDocument();
+    expect(container.querySelector(".chat-subagent-slot-bar")).toBeNull();
     // The inheritance rule is stated, not implied.
     expect(screen.getByText(/cannot start their own subagents/)).toBeInTheDocument();
   });
@@ -103,7 +105,7 @@ describe("the subagents an operator can see and act on", () => {
   it("explains delegation before anything has been delegated", () => {
     render(<ChatSubagentPane {...paneProps} subagents={[]} />);
     expect(screen.getByText("Nothing delegated yet")).toBeInTheDocument();
-    expect(screen.getByText(/0 of 3 slots active/)).toBeInTheDocument();
+    expect(screen.getByText(/0 running · no limit/)).toBeInTheDocument();
   });
 
   it("carries the counts on the rail and stays out of the way when empty", async () => {
@@ -156,8 +158,9 @@ describe("the subagents an operator can see and act on", () => {
       {...paneProps}
       subagents={[subagent({ parentBackend: "harness", providerProfileId: "openrouter", model: "deepseek/deepseek-v3.2" })]}
       harnessDelegation={{ harnessName: "Codex", providerName: "OpenRouter", model: "deepseek/deepseek-v3.2" }}
+      limit={2}
     />);
-    expect(screen.getByText(/1 of 3 slots active · deepseek\/deepseek-v3.2 · 6.2k tokens/)).toBeInTheDocument();
+    expect(screen.getByText(/1 of 2 running · limit 2 · deepseek\/deepseek-v3.2 · 6.2k tokens/)).toBeInTheDocument();
     // Where the tool outputs go is stated, not implied.
     expect(screen.getByText(/run on OpenRouter · deepseek\/deepseek-v3.2 .* Their tool outputs go to OpenRouter/)).toBeInTheDocument();
   });

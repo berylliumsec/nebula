@@ -572,6 +572,67 @@ def test_subagent_tools_follow_the_chat_setting(tmp_path):
     asyncio.run(scenario())
 
 
+def test_operator_limit_reaches_the_harness_and_is_enforced(tmp_path):
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        child.answers = ["First."]
+        child.gate = asyncio.Event()
+        limited = {**SETTING, "max_active": 1}
+        seen: dict = {}
+
+        async def script(connection: ScriptedConnection, prompt: str) -> str:
+            del prompt
+            _payload(await connection.call("subagent.start", task="One."))
+            seen["refused"] = await connection.call("subagent.start", task="Two.")
+            return "Limited."
+
+        def instructions(opened) -> str:
+            return _harness_developer_instructions(
+                opened.session,
+                _session_native_capabilities(opened.session, harness),
+                vendor="Codex",
+                gateway_tools=opened.gateway_tools,
+            )
+
+        adapter.script = script
+        parent_chat, chat_turn, turn = _prepare(
+            runtime, project, harness, "Fan out.", setting=limited
+        )
+        assert chat_turn.request_snapshot["provider_subagent"] == limited
+        assert (
+            store.get(ChatSession, parent_chat.id).metadata["provider_subagent"]
+            == limited
+        )
+        await runtime.start_chat_turn(turn.id)
+        assert seen["refused"]["isError"] is True
+        assert (
+            "operator allows 1 running at once"
+            in (seen["refused"]["content"][0]["text"])
+        )
+        (record,) = store.list_entities(ChatSubagent)
+        assert "at most 1 run at once" in instructions(adapter.opens[0])
+
+        child.gate.set()
+        await _until(
+            lambda: (
+                store.get(ChatSubagent, record.id).status
+                == ChatSubagentStatus.COMPLETED
+            )
+        )
+        # Clearing the limit changes the instructions, so the connection reopens.
+        adapter.script = None
+        _, _, unlimited = _prepare(
+            runtime, project, harness, "No limit now.", chat_id=parent_chat.id
+        )
+        await runtime.start_chat_turn(unlimited.id)
+        assert len(adapter.opens) == 2
+        assert "run at once" not in instructions(adapter.opens[1])
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_subagent_setting_is_validated_before_anything_is_stored(tmp_path):
     store, project, harness, chat, _adapter, runtime = _setup(
         tmp_path,
@@ -605,6 +666,8 @@ def test_subagent_setting_is_validated_before_anything_is_stored(tmp_path):
             "Hi",
             setting={"provider_profile_id": "closed", "model": "model-a"},
         )
+    with pytest.raises(ChatConfigurationError, match="between 1 and 100"):
+        _prepare(runtime, project, harness, "Hi", setting={**SETTING, "max_active": 0})
     assert not store.list_entities(ChatTurn)
     assert not store.list_entities(ChatSession)
     # A cloud provider that accepts project data is fine: turning subagents on
