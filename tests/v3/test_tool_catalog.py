@@ -21,7 +21,7 @@ from nebula.v3.domain import (
     utc_now,
 )
 from nebula.v3.knowledge_index import ChromaKnowledgeIndex
-from nebula.v3.mcp import mcp_tool_runtime_name
+from nebula.v3.mcp import catalog_mcp_profiles, mcp_tool_runtime_name
 from nebula.v3.providers import ToolCall
 from nebula.v3.runtime_platform import RuntimeToolComponents
 from nebula.v3.storage import NebulaStore
@@ -44,7 +44,7 @@ from nebula.v3.tool_catalog import (
 from nebula.v3.tools import InvalidToolArguments, ToolInvocation
 from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
 from tests.v3.test_knowledge_index import SecurityEmbeddingFunction
-from tests.v3.test_tool_suggestions import MCP_TOOL, _mcp_service, _spec
+from tests.v3.test_tool_suggestions import MCP_TOOL, NOTES_TOOL, _mcp_service, _spec
 
 CREDENTIAL_TOOL = "mcp.vault.rotate_password"
 DATABASE_TOOL = "mcp.warehouse.run_sql"
@@ -126,6 +126,21 @@ def test_always_loaded_tools_stay_out_of_the_deferred_catalog():
     assert set(deferrable_specs(specs, always_loaded=["mcp.gone.tool"])) == set(
         _catalog()
     )
+
+
+def test_selected_sources_stay_out_of_the_deferred_catalog():
+    specs = {
+        MCP_TOOL: _spec(MCP_TOOL, "Search.", source="mcp:tracker"),
+        CREDENTIAL_TOOL: _spec(CREDENTIAL_TOOL, "Rotate.", source="mcp:vault"),
+        DATABASE_TOOL: _spec(DATABASE_TOOL, "Query.", source="mcp:warehouse"),
+    }
+
+    deferred = deferrable_specs(
+        specs, always_loaded=[DATABASE_TOOL], always_loaded_sources=["mcp:tracker"]
+    )
+
+    # A selected server goes out whole; a pin still keeps a single tool.
+    assert set(deferred) == {CREDENTIAL_TOOL}
 
 
 def test_keyword_search_and_load_are_bounded_to_deferred_tools(tmp_path):
@@ -519,35 +534,71 @@ def test_prepare_defers_by_default_and_ranks_locally(tmp_path, monkeypatch):
     assert snapshot["tool_catalog"]["deferred"] == [MCP_TOOL]
     assert set(prepared.tool_components.specs) == {
         MCP_TOOL,
+        NOTES_TOOL,
         CATALOG_SEARCH,
         CATALOG_LOAD,
         CATALOG_CALL,
     }
+    # The selected server was built with every other usable one, and only
+    # the other one's tool is on demand.
+    assert service.tool_platform.calls == [["notes", "tracker"]]
     assert index.warmed.wait(5)
 
 
-def test_prepare_sends_every_tool_when_on_demand_loading_is_off(tmp_path, monkeypatch):
-    service, request = _mcp_service(tmp_path, monkeypatch, lambda: None)
-    original = service.tool_platform.chat_components
-
-    def opted_out(**kwargs):
-        components = original(**kwargs)
-        return RuntimeToolComponents(
-            broker=components.broker,
-            scope=components.scope.model_copy(
-                update={"tool_suggestions": False, "on_demand_tools": False}
-            ),
-            workspace=components.workspace,
-            specs=components.specs,
-            runtime_digest=components.runtime_digest,
-        )
-
-    service.tool_platform.chat_components = opted_out
+def test_prepare_sends_only_selected_servers_when_on_demand_loading_is_off(
+    tmp_path, monkeypatch
+):
+    service, request = _mcp_service(
+        tmp_path,
+        monkeypatch,
+        lambda: None,
+        scope={"tool_suggestions": False, "on_demand_tools": False},
+    )
 
     prepared = service.prepare(request)
 
+    # Without deferral the other server's tools would land in every request,
+    # so it is not offered at all.
+    assert service.tool_platform.calls == [["notes"]]
     assert prepared.turn.request_snapshot["tool_catalog"] is None
-    assert set(prepared.tool_components.specs) == {MCP_TOOL}
+    assert prepared.turn.request_snapshot["mcp_catalog_snapshot"] == []
+    assert set(prepared.tool_components.specs) == {NOTES_TOOL}
+
+
+def test_on_demand_servers_never_turn_tools_on_for_a_plain_chat(tmp_path, monkeypatch):
+    service, request = _mcp_service(tmp_path, monkeypatch, lambda: None, selected=())
+
+    prepared = service.prepare(request)
+
+    assert prepared.tools_enabled is False
+    assert service.tool_platform.calls == []
+
+
+def test_resume_rebuilds_the_on_demand_catalog_from_the_turn(tmp_path, monkeypatch):
+    service, request = _mcp_service(
+        tmp_path, monkeypatch, lambda: None, scope={"tool_suggestions": False}
+    )
+    prepared = service.prepare(request)
+    turn = service.store.update(
+        ChatTurn,
+        prepared.turn.id,
+        {"status": ChatTurnStatus.WAITING_APPROVAL},
+        expected_revision=prepared.turn.revision,
+    )
+    # Changing the live server after the pause must not change what the
+    # paused turn was offered.
+    tracker = service.store.get(McpServerProfile, "tracker")
+    service.store.update(
+        McpServerProfile,
+        tracker.id,
+        {"enabled": False},
+        expected_revision=tracker.revision,
+    )
+
+    resumed = service.prepare_resume(turn.id)
+
+    assert service.tool_platform.calls[-1] == ["notes", "tracker"]
+    assert {MCP_TOOL, NOTES_TOOL, CATALOG_CALL} <= set(resumed.tool_components.specs)
 
 
 def test_prepare_keeps_an_always_loaded_tool_in_the_function_list(
@@ -575,9 +626,10 @@ def test_prepare_keeps_an_always_loaded_tool_in_the_function_list(
 
     prepared = service.prepare(request)
 
-    # Nothing was left to defer, so the turn runs without the catalog tools.
+    # The pin covers the one on-demand tool and the selected server is sent
+    # whole, so nothing is left to defer and the catalog tools are omitted.
     assert prepared.turn.request_snapshot["tool_catalog"] is None
-    assert set(prepared.tool_components.specs) == {MCP_TOOL}
+    assert set(prepared.tool_components.specs) == {MCP_TOOL, NOTES_TOOL}
 
 
 def test_scope_update_without_the_field_keeps_on_demand_loading(tmp_path):
@@ -632,6 +684,40 @@ def test_always_loaded_tools_are_normalized_and_kept_by_older_clients(tmp_path):
     assert kept.json()["always_loaded_tools"] == sorted([MCP_TOOL, DATABASE_TOOL])
     cleared = client.put(url, json={"always_loaded_tools": []}, headers=headers)
     assert cleared.json()["always_loaded_tools"] == []
+
+
+def test_catalog_offers_every_other_usable_server_in_name_order(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+
+    def server(identifier, name, **fields):
+        fields.setdefault("enabled", True)
+        return store.create(
+            McpServerProfile(
+                id=identifier,
+                name=name,
+                transport="stdio",
+                command=f"/usr/bin/{identifier}",
+                trusted_stdio=fields["enabled"],
+                capabilities=McpCapabilitySnapshot(
+                    checked_at=fields.pop("checked_at", utc_now()),
+                    tools=[McpToolSnapshot(name="work", description="Does work.")],
+                ),
+                **fields,
+            )
+        )
+
+    server("mcp-selected", "selected")
+    server("mcp-z", "alpha")
+    server("mcp-a", "beta")
+    server("mcp-off", "off", enabled=False)
+    server("mcp-unprobed", "unprobed", checked_at=None)
+    server("mcp-denied", "denied", tool_overrides={"work": McpApprovalMode.DENY})
+    server("mcp-trimmed", "trimmed", disabled_tools=["work"])
+
+    catalog = catalog_mcp_profiles(store, exclude={"mcp-selected"})
+
+    # Skipped quietly: nobody chose these, so none of them may fail the turn.
+    assert [item.id for item in catalog] == ["mcp-z", "mcp-a"]
 
 
 def test_tool_candidates_are_the_runtime_names_of_selectable_mcp_tools(tmp_path):

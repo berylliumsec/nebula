@@ -93,15 +93,23 @@ def is_deferrable(spec: ToolSpec) -> bool:
 
 
 def deferrable_specs(
-    specs: Mapping[str, ToolSpec], *, always_loaded: Collection[str] = ()
+    specs: Mapping[str, ToolSpec],
+    *,
+    always_loaded: Collection[str] = (),
+    always_loaded_sources: Collection[str] = (),
 ) -> dict[str, ToolSpec]:
-    """Sourced tools, minus the ones the operator pinned to every request."""
+    """Sourced tools, minus pinned ones and those of sources sent in full.
+
+    ``always_loaded`` names single tools the project pins; ``always_loaded_sources``
+    names whole sources (``mcp:<id>``) the operator selected for the chat.
+    """
 
     pinned = set(always_loaded)
+    sources = set(always_loaded_sources)
     return {
         name: spec
         for name, spec in specs.items()
-        if is_deferrable(spec) and name not in pinned
+        if is_deferrable(spec) and name not in pinned and spec.source_id not in sources
     }
 
 

@@ -1952,6 +1952,7 @@ interface WireEngagementScope extends JsonObject {
   prohibited_actions?: string[];
   local_only?: boolean;
   tool_suggestions?: boolean;
+  on_demand_tools?: boolean;
   always_loaded_tools?: string[];
   max_concurrency?: number;
   grants?: Array<{
@@ -4228,6 +4229,7 @@ function mapEngagementScope(value: WireEngagementScope): EngagementScopePolicy {
     prohibitedActions: value.prohibited_actions ?? [],
     localOnly: value.local_only !== false,
     toolSuggestions: value.tool_suggestions === true,
+    onDemandTools: value.on_demand_tools !== false,
     webSearch: value.web_search === true,
     webSearchDisclosesScope: value.web_search_discloses_scope === true,
     alwaysLoadedTools: value.always_loaded_tools ?? [],
