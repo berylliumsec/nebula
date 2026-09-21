@@ -482,24 +482,22 @@ class ModelRequest(BaseModel):
         return self
 
 
+_TOOL_CALL_NAME = r"^[a-z][a-z0-9_.-]{1,127}$"
+_TOOL_CALL_ID_MAX_LENGTH = 500
+INVALID_TOOL_CALL_NAME = "invalid_tool_call"
+"""The name a call carries when the name the provider sent is unusable."""
+
+
 class ToolCall(BaseModel):
-    id: str = Field(min_length=1, max_length=500)
-    name: str = Field(pattern=r"^[a-z][a-z0-9_.-]{1,127}$")
+    id: str = Field(min_length=1, max_length=_TOOL_CALL_ID_MAX_LENGTH)
+    name: str = Field(pattern=_TOOL_CALL_NAME)
     arguments: dict[str, Any]
-
-
-def _normalized_tool_call(**values: Any) -> ToolCall:
-    try:
-        return ToolCall.model_validate(values)
-    except ValueError as exc:
-        record_caught_exception(
-            "providers",
-            "providers.providers.malformed_tool_call",
-            "A provider returned an invalid tool-call identity or name.",
-            exc,
-            stage="providers",
-        )
-        raise ProviderToolCallError("provider returned a malformed tool call") from exc
+    # Why Core could not read the call the model made, for the model to read
+    # and correct. Its arguments are then empty: they never run, and the
+    # text the model sent stays in the protected diagnostic.
+    invalid_reason: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class ModelUsage(BaseModel):
@@ -1746,6 +1744,73 @@ def _raise_responses_outcome(data: dict[str, Any]) -> None:
         raise ProviderRefusalError("content_filter")
 
 
+# Tool arguments are read without ``strict``: a raw newline or tab inside a
+# string is what the model meant, and JSON only forbids it on the wire.
+_ARGUMENTS_DECODER = json.JSONDecoder(strict=False)
+_JSON_WHITESPACE = re.compile(r"[ \t\n\r]*")
+# A backslash with the escape it starts, or a lone backslash that starts none.
+_JSON_ESCAPE = re.compile(r'\\(u[0-9a-fA-F]{4}|["\\/bfnrt])?')
+
+
+def _after_whitespace(text: str, index: int) -> int:
+    match = _JSON_WHITESPACE.match(text, index)
+    return match.end() if match else index
+
+
+def _decoded_repeated_value(text: str) -> tuple[Any, bool]:
+    """One JSON value, or that value followed by itself; and which it was.
+
+    Some routes send a call's complete arguments once more after streaming
+    them, so the assembled text is the object and then the same object again.
+    Anything else after the first value is a defect, reported as the decoder
+    found it.
+    """
+
+    try:
+        return _ARGUMENTS_DECODER.decode(text), False
+    except json.JSONDecodeError as exc:
+        if not exc.msg.startswith("Extra data"):
+            raise
+        first, end = _ARGUMENTS_DECODER.raw_decode(text, _after_whitespace(text, 0))
+        while True:
+            start = _after_whitespace(text, end)
+            if start == len(text):
+                return first, True
+            try:
+                again, end = _ARGUMENTS_DECODER.raw_decode(text, start)
+            except json.JSONDecodeError:
+                raise exc from None
+            if again != first:
+                raise exc from None
+
+
+def _decoded_arguments(value: Any) -> tuple[Any, str | None]:
+    """Decode tool arguments, and name the repair that made them readable.
+
+    Models write regexes and Windows paths with backslashes that start no
+    JSON escape (pi-mono's ``repairJson`` doubles them), and some routes
+    repeat the whole object. Arguments cut off mid-value are never completed:
+    a guessed ending could run a different command than the model meant.
+    """
+
+    if not isinstance(value, str):
+        return json.loads(value), None
+    try:
+        parsed, repeated = _decoded_repeated_value(value)
+    except json.JSONDecodeError as exc:
+        if not exc.msg.startswith("Invalid \\escape"):
+            raise
+        repaired = _JSON_ESCAPE.sub(
+            lambda match: match.group(0) if match.group(1) else "\\\\", value
+        )
+        try:
+            parsed, repeated = _decoded_repeated_value(repaired)
+        except json.JSONDecodeError:
+            raise exc from None
+        return parsed, "invalid_escape"
+    return parsed, "repeated_arguments" if repeated else None
+
+
 def _arguments(
     value: Any, *, diagnostic_metadata: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -1754,7 +1819,7 @@ def _arguments(
     if not value:
         return {}
     try:
-        parsed = json.loads(value)
+        parsed, repair = _decoded_arguments(value)
     except (TypeError, json.JSONDecodeError) as exc:
         metadata = {
             **(diagnostic_metadata or {}),
@@ -1791,6 +1856,18 @@ def _arguments(
             ),
         )
         raise failure from exc
+    if repair is not None:
+        record_diagnostic(
+            "warning",
+            "providers",
+            "providers.tool_arguments.repaired",
+            "A provider returned tool arguments JSON does not allow; Core read "
+            "them the way the model wrote them.",
+            outcome="fallback",
+            stage="tool_arguments",
+            retryable=False,
+            metadata={**(diagnostic_metadata or {}), "repair": repair},
+        )
     if isinstance(parsed, str):
         # Some gateways encode the arguments string twice ("\"{...}\"").
         try:
@@ -1826,14 +1903,54 @@ def _openai_usage(usage: Any) -> ModelUsage:
     )
 
 
+def _tool_call_slot(
+    call_parts: dict[int, dict[str, str]], call_id: str, name: str, index: int | None
+) -> int | None:
+    """The assembled call a delta continues, or ``None`` when it starts a part.
+
+    Looked up by id first, then by index, then by arrival, as the AI SDK's
+    streaming tool-call tracker does: a new id on a known index is a new call
+    (Ollama reports every call at index 0). A delta with neither id nor name
+    on an index no call has used is kept apart; ``_assembled_tool_calls``
+    decides at the end whether it is part of the call before it.
+    """
+
+    if call_id:
+        for key, part in call_parts.items():
+            if part["id"] == call_id:
+                return key
+    latest = max(call_parts) if call_parts else None
+    if index is not None:
+        at_index = [
+            key for key, part in call_parts.items() if part["index"] == str(index)
+        ]
+        if not at_index:
+            return None
+        part = call_parts[at_index[-1]]
+        # A different id or name on the same index starts the next call;
+        # vendors that resend them on every fragment resend the same ones. An
+        # id that follows its name completes the call the name opened.
+        if (call_id and part["id"]) or (name and part["name"] and name != part["name"]):
+            return None
+        return at_index[-1]
+    if not call_id and not name:
+        # Unindexed argument fragments continue the most recent call.
+        return latest
+    if call_id and not name and latest is not None and not call_parts[latest]["id"]:
+        # An unindexed id arriving after the name it belongs to.
+        return latest
+    return None
+
+
 def _merge_tool_call_deltas(call_parts: dict[int, dict[str, str]], items: Any) -> None:
     """Fold one chunk's tool-call deltas into the calls assembled so far.
 
-    OpenAI keys fragments by ``index``. Vendors that omit it send whole calls
-    per chunk, so those are keyed by ``id`` when it is already known and by
-    arrival order otherwise: two calls in one chunk must never merge into one.
-    ``id`` and ``name`` are taken once, because vendors that resend them on
-    every fragment would otherwise yield ``call_1call_1``.
+    Calls are kept in arrival order. OpenAI keys fragments by ``index``;
+    vendors that omit it send whole calls per chunk, so two calls in one chunk
+    must never merge into one. ``id`` and ``name`` are taken once, because
+    vendors that resend them on every fragment would otherwise yield
+    ``call_1call_1``. Arguments sent as an object are the whole arguments so
+    far, so they replace rather than extend what arrived before.
     """
 
     if not isinstance(items, list):
@@ -1847,31 +1964,99 @@ def _merge_tool_call_deltas(call_parts: dict[int, dict[str, str]], items: Any) -
         call_id = str(item.get("id") or "")
         name = str(function.get("name") or "")
         raw_index = item.get("index")
-        if isinstance(raw_index, int) and not isinstance(raw_index, bool):
-            key = raw_index
-        else:
-            known = [
-                index
-                for index, value in call_parts.items()
-                if call_id and value["id"] == call_id
-            ]
-            if known:
-                key = known[0]
-            elif call_parts and not call_id and not name:
-                # An argument fragment without any identity continues the
-                # most recent call.
-                key = max(call_parts)
-            else:
-                key = max(call_parts, default=-1) + 1
-        current = call_parts.setdefault(key, {"id": "", "name": "", "arguments": ""})
+        index = (
+            raw_index
+            if isinstance(raw_index, int) and not isinstance(raw_index, bool)
+            else None
+        )
+        key = _tool_call_slot(call_parts, call_id, name, index)
+        if key is None:
+            key = max(call_parts, default=-1) + 1
+            call_parts[key] = {
+                "id": "",
+                "name": "",
+                "arguments": "",
+                "index": "" if index is None else str(index),
+            }
+        current = call_parts[key]
         current["id"] = current["id"] or call_id
         current["name"] = current["name"] or name
         arguments = function.get("arguments")
-        current["arguments"] += (
-            json.dumps(arguments)
-            if isinstance(arguments, dict)
-            else str(arguments or "")
+        if isinstance(arguments, dict):
+            current["arguments"] = json.dumps(arguments)
+        else:
+            current["arguments"] += str(arguments or "")
+
+
+def _reads_as_object(text: str) -> bool:
+    """Whether assembled argument text is a whole JSON object."""
+
+    if not text.strip():
+        return False
+    try:
+        parsed, _repair = _decoded_arguments(text)
+    except json.JSONDecodeError:  # diagnostic-expected: judging a fragment
+        return False
+    return isinstance(parsed, dict)
+
+
+def _assembled_tool_calls(
+    request: ModelRequest,
+    call_parts: dict[int, dict[str, str]],
+    *,
+    diagnostic_metadata: dict[str, Any],
+) -> list[ToolCall]:
+    """Read the streamed calls, joining fragments that name no tool.
+
+    Every call names its function, so a part without a name is a piece of the
+    call before it that the route sent under its own index or id (a parser
+    that emits the tail of the arguments again after moving to the next
+    index). It joins that call when the two read as one object, and is
+    dropped otherwise. A nameless part with its own id and whole arguments is
+    a call whose name was lost, returned for the model to correct.
+    """
+
+    kept: list[dict[str, str]] = []
+    for _, part in sorted(call_parts.items()):
+        if part["name"] or not kept:
+            kept.append(dict(part))
+            continue
+        previous = kept[-1]
+        joined = previous["arguments"] + part["arguments"]
+        if _reads_as_object(joined):
+            previous["arguments"] = joined
+            continue
+        if part["id"] and _reads_as_object(part["arguments"]):
+            # A call of its own whose name was lost.
+            kept.append(dict(part))
+            continue
+        encoded = part["arguments"].encode("utf-8", errors="surrogatepass")
+        record_diagnostic(
+            "warning",
+            "providers",
+            "providers.tool_call.stray_fragment",
+            "A provider streamed a tool-call fragment that belongs to no call; "
+            "Core dropped it and kept the calls around it.",
+            outcome="fallback",
+            stage="tool_arguments",
+            retryable=False,
+            metadata={
+                **diagnostic_metadata,
+                "byte_count": len(encoded),
+                "fingerprint": hashlib.sha256(encoded).hexdigest(),
+                "had_id": bool(part["id"]),
+            },
         )
+    return [
+        _tool_call(
+            request,
+            call_id=part["id"],
+            name=part["name"],
+            arguments=part["arguments"],
+            diagnostic_metadata=diagnostic_metadata,
+        )
+        for part in kept
+    ]
 
 
 def _openai_text_parts(value: Any) -> str:
@@ -2191,10 +2376,18 @@ class OpenAIResponsesProvider(ModelProvider):
                     # its arguments were never finished.
                     continue
                 calls.append(
-                    _normalized_tool_call(
-                        id=item.get("call_id") or item.get("id", ""),
-                        name=_decode_tool_name(request, item.get("name", "")),
-                        arguments=_arguments(item.get("arguments")),
+                    _tool_call(
+                        request,
+                        call_id=item.get("call_id") or item.get("id"),
+                        name=item.get("name"),
+                        arguments=item.get("arguments"),
+                        diagnostic_metadata={
+                            "adapter": self.config.kind.value,
+                            "model_id": data.get("model") or model,
+                            "provider": self.config.id,
+                            "status": data.get("status"),
+                            "vendor_request_id": data.get("id"),
+                        },
                     )
                 )
             elif item.get("type") == "message":
@@ -2293,9 +2486,106 @@ def _wire_tool_names(request: ModelRequest) -> dict[str, str]:
     return mapping
 
 
-def _decode_tool_name(request: ModelRequest, wire: str) -> str:
-    reverse = {value: key for key, value in _wire_tool_names(request).items()}
-    return reverse.get(wire, wire)
+def _decode_tool_name(request: ModelRequest, wire: Any) -> str:
+    """The Nebula tool a provider's call names, as near as Core can tell.
+
+    Vendors see wire names, so those decode to the tool. Models also mis-case
+    a declared name, pad it with spaces or keep OpenAI's ``functions.``
+    namespace in front of it; opencode repairs a mis-cased name the same way.
+    A name that matches no declared or replayed tool is returned as sent.
+    """
+
+    sent = wire.strip() if isinstance(wire, str) else ""
+    names = _wire_tool_names(request)
+    declared = {wire_name: name for name, wire_name in names.items()}
+    declared.update({name: name for name in names})
+    candidates = (sent, sent.removeprefix("functions."))
+    for candidate in candidates:
+        if candidate in declared:
+            return declared[candidate]
+    folded = {key.casefold(): name for key, name in declared.items()}
+    for candidate in candidates:
+        match = folded.get(candidate.casefold())
+        if match is not None:
+            return match
+    return sent
+
+
+def _tool_call(
+    request: ModelRequest,
+    *,
+    call_id: Any,
+    name: Any,
+    arguments: Any,
+    diagnostic_metadata: dict[str, Any] | None = None,
+) -> ToolCall:
+    """Read one provider tool call; a defect in it never fails the response.
+
+    A missing id gets one Core mints, as the AI SDK does (``toolCall.id ||
+    generateId()``), and the name is decoded against the declared tools. A
+    call that still cannot be read, because it names no usable tool or its
+    arguments are not a JSON object, comes back with ``invalid_reason`` and
+    no arguments: the caller answers it with the reason, the way Codex
+    answers "failed to parse function arguments", and never runs it. The
+    other calls of the response are unaffected.
+    """
+
+    metadata = dict(diagnostic_metadata or {})
+    identity = (
+        str(call_id)
+        if isinstance(call_id, (str, int)) and not isinstance(call_id, bool)
+        else ""
+    )
+    if not identity or len(identity) > _TOOL_CALL_ID_MAX_LENGTH:
+        identity = f"call_{uuid.uuid4().hex}"
+        record_diagnostic(
+            "warning",
+            "providers",
+            "providers.tool_call.missing_id",
+            "A provider returned a tool call without a usable id; Core gave it one.",
+            outcome="fallback",
+            stage="providers",
+            retryable=False,
+            metadata=metadata,
+        )
+    decoded = _decode_tool_name(request, name)
+    usable_name = re.fullmatch(_TOOL_CALL_NAME, decoded) is not None
+    reasons: list[str] = []
+    if not decoded:
+        reasons.append("the call did not name a tool")
+    elif not usable_name:
+        reasons.append(f"{decoded[:64]!r} is not the name of a tool")
+    if reasons:
+        record_diagnostic(
+            "warning",
+            "providers",
+            "providers.tool_call.invalid_name",
+            "A provider returned a tool call whose name is not a tool name; "
+            "Core returned it to the model instead of failing the response.",
+            outcome="fallback",
+            stage="providers",
+            retryable=False,
+            metadata={**metadata, "name_length": len(decoded)},
+        )
+    try:
+        parsed = _arguments(
+            arguments, diagnostic_metadata={**metadata, "tool_id": decoded}
+        )
+    except ProviderError as exc:  # diagnostic-expected: the model is told why instead
+        parsed = {}
+        reasons.append(
+            f"arguments were not valid JSON: {exc.__cause__}"
+            if isinstance(exc.__cause__, json.JSONDecodeError)
+            else "arguments were not a JSON object"
+        )
+    if reasons:
+        return ToolCall(
+            id=identity,
+            name=decoded if usable_name else INVALID_TOOL_CALL_NAME,
+            arguments={},
+            invalid_reason="; ".join(reasons),
+        )
+    return ToolCall(id=identity, name=decoded, arguments=parsed)
 
 
 # Mistral AI model families, served by Mistral itself or by any runtime that
@@ -2413,9 +2703,11 @@ def _merge_function_call_delta(call: dict[str, str], delta: Any) -> None:
         return
     call["name"] = call["name"] or str(delta.get("name") or "")
     arguments = delta.get("arguments")
-    call["arguments"] += (
-        json.dumps(arguments) if isinstance(arguments, dict) else str(arguments or "")
-    )
+    if isinstance(arguments, dict):
+        # An object is the whole arguments so far, not the next piece.
+        call["arguments"] = json.dumps(arguments)
+    else:
+        call["arguments"] += str(arguments or "")
 
 
 def _legacy_function_call(
@@ -2427,14 +2719,12 @@ def _legacy_function_call(
     like a ``tool_calls`` entry.
     """
 
-    name = _decode_tool_name(request, str(function.get("name") or ""))
-    return _normalized_tool_call(
-        id=f"call_{uuid.uuid4().hex[:24]}",
-        name=name,
-        arguments=_arguments(
-            function.get("arguments"),
-            diagnostic_metadata={**metadata, "tool_id": name},
-        ),
+    return _tool_call(
+        request,
+        call_id=f"call_{uuid.uuid4().hex[:24]}",
+        name=function.get("name"),
+        arguments=function.get("arguments"),
+        diagnostic_metadata=metadata,
     )
 
 
@@ -2668,22 +2958,19 @@ class OpenAICompatibleProvider(ModelProvider):
             function = item.get("function")
             if not isinstance(function, dict):
                 function = {}
-            name = _decode_tool_name(request, function.get("name", ""))
             calls.append(
-                _normalized_tool_call(
-                    id=item.get("id", ""),
-                    name=name,
-                    arguments=_arguments(
-                        function.get("arguments"),
-                        diagnostic_metadata={
-                            "adapter": self.config.flavor.value,
-                            "model_id": data.get("model") or model,
-                            "provider": self.config.id,
-                            "status": choice.get("finish_reason"),
-                            "tool_id": name,
-                            "vendor_request_id": data.get("id"),
-                        },
-                    ),
+                _tool_call(
+                    request,
+                    call_id=item.get("id"),
+                    name=function.get("name"),
+                    arguments=function.get("arguments"),
+                    diagnostic_metadata={
+                        "adapter": self.config.flavor.value,
+                        "model_id": data.get("model") or model,
+                        "provider": self.config.id,
+                        "status": choice.get("finish_reason"),
+                        "vendor_request_id": data.get("id"),
+                    },
                 )
             )
         legacy = message.get("function_call")
@@ -3122,26 +3409,17 @@ async def _stream_openai_compatible(
                 "provider stream ended before the reply completed: no finish "
                 "reason or [DONE] frame arrived"
             )
-        calls: list[ToolCall] = []
-        for _, value in sorted(call_parts.items()):
-            name = _decode_tool_name(request, value["name"])
-            calls.append(
-                _normalized_tool_call(
-                    id=value["id"],
-                    name=name,
-                    arguments=_arguments(
-                        value["arguments"],
-                        diagnostic_metadata={
-                            "adapter": provider.config.flavor.value,
-                            "model_id": response_model,
-                            "provider": provider.config.id,
-                            "status": finish_reason,
-                            "tool_id": name,
-                            "vendor_request_id": response_id,
-                        },
-                    ),
-                )
-            )
+        calls = _assembled_tool_calls(
+            request,
+            call_parts,
+            diagnostic_metadata={
+                "adapter": provider.config.flavor.value,
+                "model_id": response_model,
+                "provider": provider.config.id,
+                "status": finish_reason,
+                "vendor_request_id": response_id,
+            },
+        )
         if not call_parts and legacy_call["name"]:
             calls.append(
                 _legacy_function_call(
@@ -3357,10 +3635,18 @@ class AnthropicProvider(ModelProvider):
                 text_parts.append(block.get("text", ""))
             elif block.get("type") == "tool_use":
                 calls.append(
-                    _normalized_tool_call(
-                        id=block.get("id", ""),
-                        name=_decode_tool_name(request, block.get("name", "")),
-                        arguments=_arguments(block.get("input")),
+                    _tool_call(
+                        request,
+                        call_id=block.get("id"),
+                        name=block.get("name"),
+                        arguments=block.get("input"),
+                        diagnostic_metadata={
+                            "adapter": self.config.kind.value,
+                            "model_id": data.get("model") or model,
+                            "provider": self.config.id,
+                            "status": data.get("stop_reason"),
+                            "vendor_request_id": data.get("id"),
+                        },
                     )
                 )
         if data.get("stop_reason") == "refusal":
@@ -3590,15 +3876,28 @@ class GeminiProvider(ModelProvider):
         parts = candidate.get("content", {}).get("parts", [])
         text_parts = [part.get("text", "") for part in parts if "text" in part]
         call_scope = _gemini_call_scope(data.get("responseId"))
-        calls = [
-            _normalized_tool_call(
-                id=_gemini_call_id(part["functionCall"].get("id"), call_scope, index),
-                name=part["functionCall"]["name"],
-                arguments=_arguments(part["functionCall"].get("args")),
+        calls: list[ToolCall] = []
+        for index, part in enumerate(parts):
+            if "functionCall" not in part:
+                continue
+            function = part["functionCall"]
+            if not isinstance(function, dict):
+                function = {}
+            calls.append(
+                _tool_call(
+                    request,
+                    call_id=_gemini_call_id(function.get("id"), call_scope, index),
+                    name=function.get("name"),
+                    arguments=function.get("args"),
+                    diagnostic_metadata={
+                        "adapter": self.config.kind.value,
+                        "model_id": model,
+                        "provider": self.config.id,
+                        "status": candidate.get("finishReason"),
+                        "vendor_request_id": data.get("responseId"),
+                    },
+                )
             )
-            for index, part in enumerate(parts)
-            if "functionCall" in part
-        ]
         usage = data.get("usageMetadata") or {}
         return ModelResponse(
             provider_id=self.config.id,
@@ -3873,15 +4172,27 @@ class BedrockProvider(ModelProvider):
             attempt += 1
         _raise_bedrock_outcome(request, data)
         blocks = data.get("output", {}).get("message", {}).get("content", [])
-        calls = [
-            _normalized_tool_call(
-                id=block["toolUse"].get("toolUseId", ""),
-                name=_decode_tool_name(request, block["toolUse"].get("name", "")),
-                arguments=_arguments(block["toolUse"].get("input")),
+        calls: list[ToolCall] = []
+        for block in blocks:
+            if "toolUse" not in block:
+                continue
+            tool_use = block["toolUse"]
+            if not isinstance(tool_use, dict):
+                tool_use = {}
+            calls.append(
+                _tool_call(
+                    request,
+                    call_id=tool_use.get("toolUseId"),
+                    name=tool_use.get("name"),
+                    arguments=tool_use.get("input"),
+                    diagnostic_metadata={
+                        "adapter": self.config.kind.value,
+                        "model_id": model,
+                        "provider": self.config.id,
+                        "status": data.get("stopReason"),
+                    },
+                )
             )
-            for block in blocks
-            if "toolUse" in block
-        ]
         usage = data.get("usage") or {}
         return ModelResponse(
             provider_id=self.config.id,
