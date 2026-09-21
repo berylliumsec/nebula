@@ -3998,7 +3998,8 @@ test("assistant upgrade provider lifecycle hooks are selected and visible after 
   await expect(page.getByText("Lifecycle hooks · 1/1 completed")).toBeVisible();
   expect(await page.evaluate(() => (globalThis as typeof globalThis & { __selectedHookIds?: string[] }).__selectedHookIds)).toEqual(["audit"]);
   await openSessionDetails(page);
-  await expect(page.getByRole("region", { name: "Workspace controls" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Working context" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Workspace controls" })).toHaveCount(0);
   const closeDetails = page.getByRole("button", { name: "Close details" });
   if (await closeDetails.count()) await closeDetails.click();
   else await page.getByRole("button", { name: "Hide session details" }).click();
@@ -5603,6 +5604,9 @@ test("stabilization completed harness output keeps one continuous transcript scr
   const forkAction = completedMessage.getByRole("button", { name: "Fork conversation here" });
   await expect(completedMessage.locator("header").getByRole("button", { name: "Fork conversation here" })).toHaveCount(0);
   await expect(forkAction.locator("xpath=..")).toHaveClass(/chat-message-actions/);
+  // Saved messages keep Bookmark; operator context is no longer offered here.
+  await expect(completedMessage.getByRole("button", { name: "Bookmark" })).toBeAttached();
+  await expect(completedMessage.getByRole("button", { name: "Save as decision" })).toHaveCount(0);
   // A long article's center can lie behind fixed chrome even after scrolling.
   // Exercise the visible end of the answer where the operator reaches actions.
   await completedMessage.locator(".assistant-markdown p", { hasText: "Verification completed successfully" }).last().hover();
@@ -9620,6 +9624,12 @@ test("stabilization conversation details lead with working context and stop repe
   await expect(drawer.getByText("Knowledge boundary")).toHaveCount(0);
   await expect(drawer.getByText("Execution boundary")).toHaveCount(0);
   await expect(drawer.getByText("Prepared for your next message")).toHaveCount(0);
+  // Nor does it carry controls the operator does not use from here.
+  await expect(drawer.getByText("Workspace controls")).toHaveCount(0);
+  await expect(drawer.getByText("Operator context")).toHaveCount(0);
+  await expect(drawer.getByText("Recorded prior-turn context")).toHaveCount(0);
+  await expect(drawer.getByText("Technical session details")).toHaveCount(0);
+  expect(headings).toEqual(["Working context"]);
 
   // Their information did not disappear: it is where the controls are. On a
   // narrow window the drawer is a sheet over the conversation, so it closes

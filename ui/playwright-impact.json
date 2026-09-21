@@ -10,7 +10,7 @@
   "rules": [
     {"name": "provider-reasoning", "patterns": ["src/nebula/v3/providers.py", "src/nebula/v3/chat.py", "ui/src/pages/SessionsPage.tsx"], "areas": ["provider-reasoning"]},
     {"name": "chat-subagents", "patterns": ["ui/src/components/chat-subagents/*", "ui/src/chat-subagents.css", "src/nebula/v3/chat_subagents.py"], "areas": ["chat-subagents"]},
-    {"name": "conversation-details", "patterns": ["ui/src/components/ChatWorkspaceDrawer.tsx", "ui/src/components/ChatRecordedContext.tsx", "ui/src/components/ChatDecisions.tsx"], "areas": ["conversation-details"]},
+    {"name": "conversation-details", "patterns": ["ui/src/components/ChatWorkspaceDrawer.tsx", "ui/src/components/ProviderGoalChildren.tsx"], "areas": ["conversation-details"]},
     {"name": "structured-results", "patterns": ["ui/src/components/structured-result/*", "ui/src/pages/ResultsPage*", "ui/src/structured-results.css", "src/nebula/v3/structured_results.py", "ui/src/components/ProviderGoalPanel*", "src/nebula/v3/chat_goals.py"], "areas": ["structured-results"]},
     {"name": "tool-suggestions", "patterns": ["ui/src/components/ToolSuggestion*", "ui/src/components/TypeSafe*", "ui/src/components/EngagementPolicySettings*", "src/nebula/v3/tool_suggestions.py"], "areas": ["tool-suggestions"]},
     {"name": "mcp-import", "patterns": ["ui/src/components/McpImportDialog*", "ui/src/components/HarnessSettings*", "src/nebula/v3/mcp*.py"], "areas": ["mcp-import"]},

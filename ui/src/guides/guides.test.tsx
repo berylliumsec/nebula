@@ -72,8 +72,8 @@ describe("guide routing helpers", () => {
   });
 
   it("points every step at a control the product labels, and never at a missing guide action", () => {
-    const anchors = new Set(["lifecycle-hooks", "hook-outcomes", "composer", "shared-skills", "workspace-controls", "add-provider", "device-pairing", "command-palette",
-      "assistant-runtime", "attach-files", "terminal-toggle", "project-policy", "message-actions", "transcript-search", "operator-context", "goal-panel", "mcp-settings", "mcp-turn", "knowledge-status", "tool-assistance", "continue-mission"]);
+    const anchors = new Set(["lifecycle-hooks", "hook-outcomes", "composer", "shared-skills", "add-provider", "device-pairing", "command-palette",
+      "assistant-runtime", "attach-files", "terminal-toggle", "project-policy", "message-actions", "transcript-search", "goal-panel", "mcp-settings", "mcp-turn", "knowledge-status", "tool-assistance", "continue-mission"]);
     const ids = guideCatalog.map(guide => guide.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const step of guideCatalog.flatMap(guide => guide.steps)) {
