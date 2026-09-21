@@ -225,6 +225,9 @@ class ProviderConfig(BaseModel):
     options: dict[str, Any] = Field(default_factory=dict)
     # Request parameters each exact model advertises (OpenRouter catalog).
     model_parameters: dict[str, list[str]] = Field(default_factory=dict)
+    # Models the catalog marks as always reasoning (OpenRouter
+    # ``reasoning.mandatory``); they are never asked to skip it.
+    reasoning_mandatory_models: list[str] = Field(default_factory=list)
 
     @field_validator("base_url")
     @classmethod
@@ -2226,7 +2229,7 @@ def _openai_refusal(message: dict[str, Any]) -> str:
 
 
 def _openrouter_reasoning(
-    request: "ModelRequest", supported: set[str]
+    request: "ModelRequest", supported: set[str], *, mandatory: bool = False
 ) -> dict[str, Any]:
     """The reasoning object OpenRouter is sent for one request.
 
@@ -2234,13 +2237,17 @@ def _openrouter_reasoning(
     transcript shows the operator. An effort or a token ceiling is only added
     when the route advertises the control: sending one it does not take costs
     the request, and with ``require_parameters`` it can leave no eligible
-    endpoint at all.
+    endpoint at all. A model whose reasoning is ``mandatory`` refuses
+    ``none``, so it keeps its default instead of being asked and resent
+    (pi-mono and Cline never send it the disable either).
     """
 
     reasoning: dict[str, Any] = {"exclude": False}
     if "reasoning" not in supported and supported:
         return reasoning
-    if request.reasoning_effort is not None:
+    if request.reasoning_effort is not None and not (
+        mandatory and request.reasoning_effort == "none"
+    ):
         reasoning["effort"] = request.reasoning_effort
     if request.reasoning_max_tokens is not None:
         reasoning["max_tokens"] = request.reasoning_max_tokens
@@ -2257,29 +2264,85 @@ def _refused_reasoning_off_retry(
     budget for the answer; it is a preference, not a requirement. A model
     whose reasoning is mandatory, or an OpenAI family with no ``none`` level,
     answers 400, and the call is worth one more try with the model's default
-    reasoning. pi-mono and Cline never send the disable to such models; the
-    stored catalog does not say which they are, so Core asks and falls back.
-    A level the operator chose is never dropped this way.
+    reasoning. Each family's disable is undone: an effort of ``none``
+    (OpenRouter, OpenAI, Ollama), ``thinking: disabled`` (DeepSeek, Z.ai,
+    Anthropic) and a chat template's thinking switch set off. pi-mono and
+    Cline never send the disable to such models; only OpenRouter's catalog
+    says which they are, so elsewhere Core asks and falls back. A level the
+    operator chose is never dropped this way.
     """
 
     if response.status_code not in {400, 422}:
         return None
-    reasoning = payload.get("reasoning")
-    if not isinstance(reasoning, dict) or reasoning.get("effort") != "none":
-        reasoning = None
-        if payload.get("reasoning_effort") != "none":
-            return None
     detail = response.text.casefold()
     if "reasoning" not in detail and "thinking" not in detail:
         return None
     retry = dict(payload)
-    if reasoning is not None:
-        retry["reasoning"] = {
-            key: value for key, value in reasoning.items() if key != "effort"
-        }
-    else:
+    reasoning = payload.get("reasoning")
+    if isinstance(reasoning, dict) and reasoning.get("effort") == "none":
+        kept = {key: value for key, value in reasoning.items() if key != "effort"}
+        if kept:
+            retry["reasoning"] = kept
+        else:
+            del retry["reasoning"]
+    if payload.get("reasoning_effort") == "none":
         del retry["reasoning_effort"]
-    return retry
+    thinking = payload.get("thinking")
+    if isinstance(thinking, dict) and thinking.get("type") == "disabled":
+        del retry["thinking"]
+    switches = payload.get("chat_template_kwargs")
+    if isinstance(switches, dict):
+        kept = {
+            key: value
+            for key, value in switches.items()
+            if not (key in _CHAT_TEMPLATE_THINKING_SWITCHES and value is False)
+        }
+        if kept != switches:
+            if kept:
+                retry["chat_template_kwargs"] = kept
+            else:
+                del retry["chat_template_kwargs"]
+    return None if retry == payload else retry
+
+
+def _refused_reasoning_summary_retry(
+    payload: dict[str, Any], response: httpx.Response
+) -> dict[str, Any] | None:
+    """The Responses payload to resend when reasoning summaries are refused.
+
+    Summaries are asked for so the transcript can show the thought; OpenAI
+    answers 400 to an organization not verified for them. The level itself
+    still applies, so only the summary is dropped.
+    """
+
+    reasoning = payload.get("reasoning")
+    if (
+        response.status_code not in {400, 422}
+        or not isinstance(reasoning, dict)
+        or "summary" not in reasoning
+        or "summar" not in response.text.casefold()
+    ):
+        return None
+    return {
+        **payload,
+        "reasoning": {
+            key: value for key, value in reasoning.items() if key != "summary"
+        },
+    }
+
+
+def _record_reasoning_off_refused(config: "ProviderConfig", model: str) -> None:
+    record_diagnostic(
+        "warning",
+        "providers",
+        "providers.reasoning.off_refused",
+        "The route refused a request to skip reasoning; Core asked "
+        "again with the model's default reasoning.",
+        outcome="fallback",
+        stage="providers",
+        retryable=False,
+        metadata={"provider_id": config.id, "model": model},
+    )
 
 
 def _openai_message_reasoning(message: dict[str, Any]) -> str:
@@ -2558,6 +2621,129 @@ def _openai_reasoning_model(model: str) -> bool:
     return _OPENAI_REASONING_MODEL.match(model.rsplit("/", 1)[-1]) is not None
 
 
+def _host_in(base_url: str, domains: Iterable[str]) -> bool:
+    host = (httpx.URL(base_url).host or "").casefold()
+    return any(host == domain or host.endswith("." + domain) for domain in domains)
+
+
+_DEEPSEEK_HOSTS = ("deepseek.com",)
+# Z.ai's international API and BigModel (open.bigmodel.cn) are the same API.
+_ZAI_HOSTS = ("z.ai", "bigmodel.cn")
+# DeepSeek takes low, high and max (Vercel AI's DeepSeek provider mapping).
+_DEEPSEEK_EFFORT: dict[str, str] = {
+    "minimal": "low",
+    "low": "low",
+    "medium": "high",
+    "high": "high",
+    "xhigh": "max",
+}
+# GLM-5.2 and later on Z.ai take high and max; a lower level keeps the
+# model's default depth with thinking on (pi-mono's Z.ai mapping).
+_ZAI_EFFORT: dict[str, str] = {"high": "high", "xhigh": "max"}
+# Ollama's OpenAI endpoint validates reasoning_effort as none|low|medium|high|max.
+_OLLAMA_EFFORT: dict[str, str] = {
+    "none": "none",
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "max",
+}
+_FAMILY_VERSION = {
+    "deepseek": re.compile(r"deepseek-v(\d+)(?:\.(\d+))?"),
+    "glm": re.compile(r"glm-(\d+)(?:\.(\d+))?"),
+    "qwen": re.compile(r"qwen(\d+)(?:\.(\d+))?"),
+}
+# The chat-template variables that switch thinking on and off.
+_CHAT_TEMPLATE_THINKING_SWITCHES = frozenset({"thinking", "enable_thinking"})
+
+
+def _family_version(model: str, family: str) -> tuple[int, int] | None:
+    match = _FAMILY_VERSION[family].search(_model_name(model))
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2) or 0)
+
+
+def _glm_thinks(model: str) -> bool:
+    """GLM 4.5 and later have a thinking mode; GLM-4 and earlier do not."""
+
+    version = _family_version(model, "glm")
+    return version is not None and version >= (4, 5)
+
+
+def _chat_template_thinking_switch(model: str) -> str | None:
+    """The chat-template variable a self-hosted model's thinking follows.
+
+    DeepSeek V3.1 and later read ``thinking``; GLM 4.5+ and Qwen3 read
+    ``enable_thinking`` (vLLM and SGLang recipes, pi-mono's chat-template
+    format). A template without either has no switch to send.
+    """
+
+    deepseek = _family_version(model, "deepseek")
+    if deepseek is not None:
+        return "thinking" if deepseek >= (3, 1) else None
+    if _glm_thinks(model):
+        return "enable_thinking"
+    qwen = _family_version(model, "qwen")
+    return "enable_thinking" if qwen is not None and qwen >= (3, 0) else None
+
+
+def _chat_reasoning_controls(
+    config: "ProviderConfig", request: "ModelRequest", model: str
+) -> dict[str, Any]:
+    """Reasoning fields for a Chat Completions route other than OpenRouter.
+
+    Each family takes the level in its own shape, so it is translated per
+    flavor, host and model; a route with no documented control is left alone
+    rather than sent a parameter it may reject. ``None`` leaves the model's
+    default.
+    """
+
+    effort = request.reasoning_effort
+    if effort is None:
+        return {}
+    if config.flavor == ProviderFlavor.DEEPSEEK or _host_in(
+        config.base_url, _DEEPSEEK_HOSTS
+    ):
+        # Vercel AI's DeepSeek provider, LiteLLM and pi-mono.
+        if effort == "none":
+            return {"thinking": {"type": "disabled"}}
+        return {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": _DEEPSEEK_EFFORT[effort],
+        }
+    if _host_in(config.base_url, _ZAI_HOSTS):
+        if not _glm_thinks(model):
+            return {}
+        if effort == "none":
+            return {"thinking": {"type": "disabled"}}
+        # ``clear_thinking: false`` keeps earlier steps' reasoning, which is
+        # also what makes Z.ai use the reasoning Core replays (opencode,
+        # pi-mono).
+        fields: dict[str, Any] = {
+            "thinking": {"type": "enabled", "clear_thinking": False}
+        }
+        version = _family_version(model, "glm")
+        if version is not None and version >= (5, 2) and effort in _ZAI_EFFORT:
+            fields["reasoning_effort"] = _ZAI_EFFORT[effort]
+        return fields
+    if config.flavor in {ProviderFlavor.VLLM, ProviderFlavor.SGLANG}:
+        switch = _chat_template_thinking_switch(model)
+        if switch is None:
+            return {}
+        return {"chat_template_kwargs": {switch: effort != "none"}}
+    if config.flavor == ProviderFlavor.OLLAMA:
+        if _chat_template_thinking_switch(model) is None:
+            return {}
+        return {"reasoning_effort": _OLLAMA_EFFORT[effort]}
+    if _openai_reasoning_model(model):
+        # OpenAI's own reasoning families take the effort as a scalar,
+        # directly and via Azure, Foundry or a gateway.
+        return {"reasoning_effort": effort}
+    return {}
+
+
 _STRICT_SCHEMA_MAPPINGS = frozenset(
     {"properties", "$defs", "definitions", "patternProperties"}
 )
@@ -2659,6 +2845,17 @@ class OpenAIResponsesProvider(ModelProvider):
                 )
         if _openai_reasoning_model(model):
             payload["include"] = ["reasoning.encrypted_content"]
+            if request.reasoning_effort is not None:
+                # Summaries are what the transcript can show of the thought;
+                # there is none to ask for when reasoning is off.
+                payload["reasoning"] = {
+                    "effort": request.reasoning_effort,
+                    **(
+                        {"summary": "auto"}
+                        if request.reasoning_effort != "none"
+                        else {}
+                    ),
+                }
         if request.instructions:
             payload["instructions"] = request.instructions
         if request.max_output_tokens:
@@ -2700,25 +2897,60 @@ class OpenAIResponsesProvider(ModelProvider):
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         model = self.require(request)
+        payload = self._payload(request, model)
         async with self._client(
             self._headers(), timeout=_native_http_timeout(self.config)
         ) as client:
             response = await self._post(
                 client,
                 self._path("/v1/responses"),
-                self._payload(request, model),
+                payload,
                 operation="responses",
             )
+            retry = _refused_reasoning_off_retry(payload, response)
+            if retry is not None:
+                _record_reasoning_off_refused(self.config, model)
+            else:
+                retry = _refused_reasoning_summary_retry(payload, response)
+                if retry is not None:
+                    record_diagnostic(
+                        "warning",
+                        "providers",
+                        "providers.reasoning.summary_refused",
+                        "The route refused reasoning summaries; Core asked "
+                        "again at the same level without them.",
+                        outcome="fallback",
+                        stage="providers",
+                        retryable=False,
+                        metadata={"provider_id": self.config.id, "model": model},
+                    )
+            if retry is not None:
+                response = await self._post(
+                    client,
+                    self._path("/v1/responses"),
+                    retry,
+                    operation="responses",
+                )
         if response.is_error:
             raise _safe_error(response)
         data = response.json()
         _raise_responses_outcome(data)
         text_parts: list[str] = []
+        summaries: list[str] = []
         commentary: list[str] = []
         refused = False
         calls: list[ToolCall] = []
         reasoning_items: list[dict[str, Any]] = []
         for item in data.get("output", []):
+            if item.get("type") == "reasoning":
+                summary = item.get("summary")
+                summaries.extend(
+                    part["text"]
+                    for part in (summary if isinstance(summary, list) else [])
+                    if isinstance(part, dict)
+                    and part.get("type") == "summary_text"
+                    and isinstance(part.get("text"), str)
+                )
             if item.get("type") == "reasoning" and isinstance(
                 item.get("encrypted_content"), str
             ):
@@ -2773,7 +3005,9 @@ class OpenAIResponsesProvider(ModelProvider):
             provider_id=self.config.id,
             model=data.get("model", model),
             text="".join(text_parts),
-            reasoning="\n\n".join(part for part in commentary if part.strip()),
+            reasoning="\n\n".join(
+                part for part in [*summaries, *commentary] if part.strip()
+            ),
             tool_calls=calls,
             usage=ModelUsage(
                 input_tokens=usage.get("input_tokens", 0),
@@ -3216,11 +3450,7 @@ class OpenAICompatibleProvider(ModelProvider):
             return bool(supported) and "structured_outputs" not in supported
         if self.config.flavor == ProviderFlavor.DEEPSEEK:
             return True
-        host = (httpx.URL(self.config.base_url).host or "").casefold()
-        return any(
-            host == domain or host.endswith("." + domain)
-            for domain in _JSON_OBJECT_ONLY_HOSTS
-        )
+        return _host_in(self.config.base_url, _JSON_OBJECT_ONLY_HOSTS)
 
     def _payload(self, request: ModelRequest, model: str) -> dict[str, Any]:
         vllm_grammar = self.config.flavor == ProviderFlavor.VLLM
@@ -3295,15 +3525,8 @@ class OpenAICompatibleProvider(ModelProvider):
             payload[ceiling] = request.max_output_tokens
         if request.temperature is not None and not _openai_reasoning_model(model):
             payload["temperature"] = request.temperature
-        if (
-            not openrouter
-            and request.reasoning_effort is not None
-            and _openai_reasoning_model(model)
-        ):
-            # OpenAI's own reasoning families take the effort as a scalar.
-            # Other OpenAI-compatible endpoints advertise no such control, so
-            # they are left alone rather than sent a parameter they may reject.
-            payload["reasoning_effort"] = request.reasoning_effort
+        if not openrouter:
+            payload.update(_chat_reasoning_controls(self.config, request, model))
         if request.tools:
             if openrouter:
                 # Prevent OpenRouter from selecting an endpoint that drops a
@@ -3340,7 +3563,16 @@ class OpenAICompatibleProvider(ModelProvider):
                 }
                 for tool in request.tools
             ]
-            if request.tool_choice in {ToolChoice.REQUIRED, ToolChoice.NONE}:
+            if (
+                request.tool_choice == ToolChoice.REQUIRED
+                and rejects_forced_tool_choice(model)
+            ):
+                # Fable 5.1 and Mythos refuse a forced choice wherever they
+                # are served, and OpenRouter forwards "required" to them as
+                # Anthropic's "any" (#486 gates the native adapters the same
+                # way). The caller still validates the call.
+                payload["tool_choice"] = ToolChoice.AUTO.value
+            elif request.tool_choice in {ToolChoice.REQUIRED, ToolChoice.NONE}:
                 payload["tool_choice"] = request.tool_choice.value
         if json_object:
             payload["response_format"] = {"type": "json_object"}
@@ -3376,7 +3608,10 @@ class OpenAICompatibleProvider(ModelProvider):
                 # Operator-selected upstream providers: never route elsewhere.
                 payload["provider"] = {**payload.get("provider", {}), "only": allowed}
             payload["reasoning"] = _openrouter_reasoning(
-                request, set(self.config.model_parameters.get(model, ()))
+                request,
+                set(self.config.model_parameters.get(model, ())),
+                mandatory=model in self.config.reasoning_mandatory_models
+                or _claude_always_thinks(model),
             )
             # OpenRouter compresses the middle of an oversized prompt by default
             # on endpoints of 8K or less. Nebula sizes its own context and
@@ -3430,17 +3665,7 @@ class OpenAICompatibleProvider(ModelProvider):
             )
             retry = _refused_reasoning_off_retry(payload, response)
             if retry is not None:
-                record_diagnostic(
-                    "warning",
-                    "providers",
-                    "providers.reasoning.off_refused",
-                    "The route refused a request to skip reasoning; Core asked "
-                    "again with the model's default reasoning.",
-                    outcome="fallback",
-                    stage="providers",
-                    retryable=False,
-                    metadata={"provider_id": self.config.id, "model": model},
-                )
+                _record_reasoning_off_refused(self.config, model)
                 response = await self._post(
                     client,
                     self._path("/v1/chat/completions"),
@@ -4132,6 +4357,130 @@ def _claude_thinks_by_default(model: str) -> bool:
     )
 
 
+def _claude_always_thinks(model: str) -> bool:
+    """Fable and Mythos think on every request and 400 an explicit disable."""
+
+    claude = _claude_model(model)
+    return claude is not None and claude[0] in {"fable", "mythos"}
+
+
+# Nebula's levels as Claude effort levels; ``none`` has no effort equivalent.
+_CLAUDE_EFFORT: dict[str, str] = {
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "xhigh",
+}
+# Share of the output budget a budget-thinking Claude model may think with at
+# each level (Vercel AI's defaults), and Anthropic's minimum budget.
+_CLAUDE_THINKING_SHARE: dict[str, float] = {
+    "minimal": 0.02,
+    "low": 0.1,
+    "medium": 0.3,
+    "high": 0.6,
+    "xhigh": 0.9,
+}
+_CLAUDE_MIN_THINKING_BUDGET = 1024
+
+
+def _claude_effort(
+    family: str, version: tuple[int, int] | None, effort: str
+) -> str | None:
+    """The ``output_config.effort`` a Claude model takes for ``effort``.
+
+    Opus 4.7+, Sonnet 5, Fable and Mythos take low through max with xhigh;
+    the 4.6 generation has max but no xhigh; Opus 4.5 stops at high; Sonnet
+    4.5, Haiku 4.5 and older models reject the field.
+    """
+
+    level = _CLAUDE_EFFORT[effort]
+    if family in {"fable", "mythos"} or version is None or version >= (4, 7):
+        return level
+    if version >= (4, 6):
+        return "max" if level == "xhigh" else level
+    if family == "opus" and version >= (4, 5):
+        return "high" if level == "xhigh" else level
+    return None
+
+
+def _claude_thinking_budget(
+    effort: str, ceiling: int | None, max_tokens: int | None
+) -> int | None:
+    """A ``budget_tokens`` below ``max_tokens`` and at least Anthropic's minimum."""
+
+    if max_tokens is None:
+        return None
+    budget = (
+        ceiling
+        if ceiling is not None
+        else round(max_tokens * _CLAUDE_THINKING_SHARE[effort])
+    )
+    budget = max(_CLAUDE_MIN_THINKING_BUDGET, min(budget, max_tokens - 1))
+    return budget if budget < max_tokens else None
+
+
+def _claude_reasoning(
+    model: str,
+    request: ModelRequest,
+    *,
+    forced: bool,
+    max_tokens: int | None,
+) -> dict[str, Any]:
+    """Messages API ``thinking`` and ``output_config`` for the requested level.
+
+    Sent at the top level to Anthropic and inside Bedrock's
+    ``additionalModelRequestFields``. Per the Claude API reference:
+
+    - ``none`` disables thinking, except on Fable and Mythos, which always
+      think; they get the lowest effort instead.
+    - Other levels set ``output_config.effort`` where the model takes it,
+      and turn on adaptive thinking (4.6 and later, with readable
+      summaries) or a thinking budget (earlier models; never
+      ``budget_tokens`` on 4.6+, where it is deprecated or a 400).
+    - Thinking cannot be switched on beside a forced tool choice, so a
+      forced request carries the effort alone.
+
+    Another model behind an Anthropic-compatible endpoint (DeepSeek, Z.ai)
+    is sent only the protocol's own disable. ``None`` sends nothing.
+    """
+
+    effort = request.reasoning_effort
+    if effort is None:
+        return {}
+    claude = _claude_model(model)
+    if claude is None:
+        return {"thinking": {"type": "disabled"}} if effort == "none" else {}
+    family, version = claude
+    if effort == "none":
+        if family in {"fable", "mythos"}:
+            return {"output_config": {"effort": "low"}}
+        return {"thinking": {"type": "disabled"}}
+    fields: dict[str, Any] = {}
+    level = _claude_effort(family, version, effort)
+    if level is not None:
+        fields["output_config"] = {"effort": level}
+    if forced:
+        return fields
+    if family in {"fable", "mythos"} or version is None or version >= (4, 6):
+        fields["thinking"] = {"type": "adaptive", "display": "summarized"}
+    else:
+        budget = _claude_thinking_budget(
+            effort, request.reasoning_max_tokens, max_tokens
+        )
+        if budget is not None:
+            fields["thinking"] = {"type": "enabled", "budget_tokens": budget}
+    return fields
+
+
+def _claude_thinking_on(fields: dict[str, Any]) -> bool:
+    thinking = fields.get("thinking")
+    return isinstance(thinking, dict) and thinking.get("type") in {
+        "adaptive",
+        "enabled",
+    }
+
+
 class AnthropicProvider(ModelProvider):
     def _headers(self) -> dict[str, str]:
         key = self.config.resolve_api_key()
@@ -4205,7 +4554,20 @@ class AnthropicProvider(ModelProvider):
             payload["system"] = "\n".join(
                 [str(item) for item in [*systems, request.instructions] if item]
             )
-        if request.temperature is not None and not _claude_rejects_sampling(model):
+        reasoning = _claude_reasoning(
+            model,
+            request,
+            forced=request.tool_choice == ToolChoice.REQUIRED
+            and not rejects_forced_tool_choice(model),
+            max_tokens=payload["max_tokens"],
+        )
+        payload.update(reasoning)
+        if (
+            request.temperature is not None
+            and not _claude_rejects_sampling(model)
+            # Thinking takes no sampling parameters.
+            and not _claude_thinking_on(reasoning)
+        ):
             payload["temperature"] = request.temperature
         if request.tools:
             payload["tools"] = [
@@ -4247,12 +4609,22 @@ class AnthropicProvider(ModelProvider):
                 payload,
                 operation="messages",
             )
+            retry = _refused_reasoning_off_retry(payload, response)
+            if retry is not None:
+                _record_reasoning_off_refused(self.config, model)
+                response = await self._post(
+                    client,
+                    self._path("/v1/messages"),
+                    retry,
+                    operation="messages",
+                )
         if response.is_error:
             raise _safe_error(response)
         data = response.json()
         if data.get("stop_reason") == _CONTEXT_WINDOW_STOP_REASON:
             raise _context_window_stop(_CONTEXT_WINDOW_STOP_REASON)
         text_parts: list[str] = []
+        thoughts: list[str] = []
         calls: list[ToolCall] = []
         thinking_blocks: list[dict[str, Any]] = []
         for block in data.get("content", []):
@@ -4261,6 +4633,11 @@ class AnthropicProvider(ModelProvider):
             elif block.get("type") in {"thinking", "redacted_thinking"}:
                 # Kept exactly as sent: an edited block fails its signature.
                 thinking_blocks.append(block)
+                # A summarized thought is readable; an omitted or redacted
+                # one has no text to show.
+                thought = block.get("thinking")
+                if isinstance(thought, str) and thought.strip():
+                    thoughts.append(thought)
             elif block.get("type") == "tool_use":
                 calls.append(
                     _tool_call(
@@ -4288,6 +4665,7 @@ class AnthropicProvider(ModelProvider):
             provider_id=self.config.id,
             model=data.get("model", model),
             text="".join(text_parts),
+            reasoning="\n\n".join(thoughts),
             tool_calls=calls,
             usage=ModelUsage(
                 input_tokens=usage.get("input_tokens", 0),
@@ -4429,6 +4807,109 @@ def _gemini_call_parts(
     return parts
 
 
+# ``gemini-<major>[.<minor>]-pro|flash``: Gemini 3 and later take a
+# ``thinkingLevel``. Gemini 2.5 takes a token budget instead.
+_GEMINI_LEVEL_MODEL = re.compile(r"gemini-(\d+)(?:\.(\d+))?-(pro|flash)")
+_GEMINI_25_MODEL = re.compile(r"gemini-2\.5-(flash-lite|flash|pro)")
+# Variants that do not think (image, speech and live models).
+_GEMINI_NON_THINKING = re.compile(r"image|tts|audio|live|embedding")
+# Gemini 2.5 thinking budgets per level (pi-mono's); 2.5 Pro cannot switch
+# thinking off, so ``none`` is its 128-token minimum.
+_GEMINI_25_BUDGETS: dict[str, dict[str, int]] = {
+    "pro": {
+        "none": 128,
+        "minimal": 128,
+        "low": 2_048,
+        "medium": 8_192,
+        "high": 32_768,
+        "xhigh": 32_768,
+    },
+    "flash": {
+        "none": 0,
+        "minimal": 128,
+        "low": 2_048,
+        "medium": 8_192,
+        "high": 24_576,
+        "xhigh": 24_576,
+    },
+    "flash-lite": {
+        "none": 0,
+        "minimal": 512,
+        "low": 2_048,
+        "medium": 8_192,
+        "high": 24_576,
+        "xhigh": 24_576,
+    },
+}
+_GEMINI_25_BUDGET_RANGE: dict[str, tuple[int, int]] = {
+    "pro": (128, 32_768),
+    "flash": (1, 24_576),
+    "flash-lite": (512, 24_576),
+}
+
+
+def _gemini_lowest_level(name: str) -> str | None:
+    """The lowest ``thinkingLevel`` of a Gemini 3+ model; ``None`` otherwise.
+
+    Gemini 3 cannot switch thinking off. Flash's floor is ``minimal`` (``low``
+    from 3.7, as Vercel AI maps it); Pro's is ``low``.
+    """
+
+    if name == "gemini-flash-latest":
+        return "low"
+    if name == "gemini-flash-lite-latest":
+        return "minimal"
+    match = _GEMINI_LEVEL_MODEL.match(name)
+    if match is None or int(match.group(1)) < 3:
+        return None
+    if match.group(3) == "pro":
+        return "low"
+    version = (int(match.group(1)), int(match.group(2) or 0))
+    lite = name[match.end() :].startswith("-lite")
+    return "low" if version >= (3, 7) and not lite else "minimal"
+
+
+def _gemini_thinking_config(model: str, request: ModelRequest) -> dict[str, Any] | None:
+    """``generationConfig.thinkingConfig`` for the requested level.
+
+    ``includeThoughts`` returns thought summaries, which are read as
+    reasoning. ``None`` (no level, or a model with no thinking control)
+    leaves the model's default.
+    """
+
+    effort = request.reasoning_effort
+    if effort is None:
+        return None
+    name = _model_name(model)
+    if _GEMINI_NON_THINKING.search(name):
+        return None
+    config: dict[str, Any]
+    floor = _gemini_lowest_level(name)
+    if floor is not None:
+        levels = {
+            "none": floor,
+            "minimal": floor,
+            "low": "low",
+            "medium": "medium",
+            "high": "high",
+            "xhigh": "high",
+        }
+        config = {"thinkingLevel": levels[effort]}
+    else:
+        match = _GEMINI_25_MODEL.match(name)
+        if match is None:
+            return None
+        variant = match.group(1)
+        budget = _GEMINI_25_BUDGETS[variant][effort]
+        if effort != "none" and request.reasoning_max_tokens is not None:
+            lowest, highest = _GEMINI_25_BUDGET_RANGE[variant]
+            budget = max(lowest, min(request.reasoning_max_tokens, highest))
+        config = {"thinkingBudget": budget}
+    if effort != "none":
+        config["includeThoughts"] = True
+    return config
+
+
 class GeminiProvider(ModelProvider):
     def _headers(self) -> dict[str, str]:
         key = self.config.resolve_api_key()
@@ -4534,6 +5015,9 @@ class GeminiProvider(ModelProvider):
                     "responseJsonSchema": request.response_schema,
                 }
             )
+        thinking = _gemini_thinking_config(model, request)
+        if thinking is not None:
+            generation["thinkingConfig"] = thinking
         if generation:
             payload["generationConfig"] = generation
         async with self._client(
@@ -4551,7 +5035,20 @@ class GeminiProvider(ModelProvider):
         _raise_gemini_outcome(request, data)
         candidate = (data.get("candidates") or [{}])[0]
         parts = candidate.get("content", {}).get("parts", [])
-        text_parts = [part.get("text", "") for part in parts if "text" in part]
+        # ``thought: true`` marks a thought summary, not the answer
+        # (pi-mono ``isThinkingPart``).
+        text_parts = [
+            part.get("text", "")
+            for part in parts
+            if "text" in part and part.get("thought") is not True
+        ]
+        thoughts = [
+            part["text"]
+            for part in parts
+            if part.get("thought") is True
+            and isinstance(part.get("text"), str)
+            and part["text"].strip()
+        ]
         call_scope = _gemini_call_scope(data.get("responseId"))
         calls: list[ToolCall] = []
         for index, part in enumerate(parts):
@@ -4586,6 +5083,7 @@ class GeminiProvider(ModelProvider):
             provider_id=self.config.id,
             model=model,
             text="".join(text_parts),
+            reasoning="\n\n".join(thoughts),
             tool_calls=calls,
             usage=ModelUsage(
                 input_tokens=usage.get("promptTokenCount", 0),
@@ -4781,6 +5279,7 @@ class BedrockProvider(ModelProvider):
             systems.append(request.instructions)
         if systems:
             kwargs["system"] = [{"text": "\n".join(systems)}]
+        forced = False
         if request.tools:
             kwargs["toolConfig"] = {
                 "tools": [
@@ -4803,11 +5302,7 @@ class BedrockProvider(ModelProvider):
                     kwargs["toolConfig"]["toolChoice"] = {"auto": {}}
                 else:
                     kwargs["toolConfig"]["toolChoice"] = {"any": {}}
-                    if _claude_thinks_by_default(model):
-                        # Bedrock accepts a forced choice only with thinking off.
-                        kwargs["additionalModelRequestFields"] = {
-                            "thinking": {"type": "disabled"}
-                        }
+                    forced = True
         elif request.tool_results:
             # Converse rejects toolUse/toolResult blocks without a toolConfig,
             # so a caller replaying history without tools gets each replayed
@@ -4824,10 +5319,41 @@ class BedrockProvider(ModelProvider):
                     for name in _replayed_wire_names(request, wire_names)
                 ]
             }
+        # Claude takes the Messages API reasoning fields through Converse's
+        # passthrough; other Bedrock families are not sent them.
+        reasoning = (
+            _claude_reasoning(
+                model,
+                request,
+                forced=forced,
+                max_tokens=request.max_output_tokens,
+            )
+            if _claude_model(model) is not None
+            else {}
+        )
+        if forced and _claude_thinks_by_default(model):
+            # Bedrock accepts a forced choice only with thinking off, and Opus
+            # 5 accepts thinking off only at effort high or below.
+            reasoning["thinking"] = {"type": "disabled"}
+            output = reasoning.get("output_config")
+            claude = _claude_model(model)
+            if (
+                isinstance(output, dict)
+                and output.get("effort") in {"xhigh", "max"}
+                and claude is not None
+                and claude[0] == "opus"
+            ):
+                output["effort"] = "high"
+        if reasoning:
+            kwargs["additionalModelRequestFields"] = reasoning
         inference: dict[str, Any] = {}
         if request.max_output_tokens:
             inference["maxTokens"] = request.max_output_tokens
-        if request.temperature is not None and not _claude_rejects_sampling(model):
+        if (
+            request.temperature is not None
+            and not _claude_rejects_sampling(model)
+            and not _claude_thinking_on(reasoning)
+        ):
             inference["temperature"] = request.temperature
         if inference:
             kwargs["inferenceConfig"] = inference
@@ -4903,10 +5429,18 @@ class BedrockProvider(ModelProvider):
                 )
             )
         usage = data.get("usage") or {}
+        thoughts: list[str] = []
+        for block in blocks:
+            content = block.get("reasoningContent")
+            text = content.get("reasoningText") if isinstance(content, dict) else None
+            thought = text.get("text") if isinstance(text, dict) else None
+            if isinstance(thought, str) and thought.strip():
+                thoughts.append(thought)
         return ModelResponse(
             provider_id=self.config.id,
             model=model,
             text="".join(block.get("text", "") for block in blocks),
+            reasoning="\n\n".join(thoughts),
             tool_calls=calls,
             usage=ModelUsage(
                 input_tokens=usage.get("inputTokens", 0),
@@ -5388,15 +5922,24 @@ def provider_from_profile(
         raise ValueError("a local-only privacy profile cannot use a cloud provider")
     descriptors = profile.metadata.get("model_descriptors")
     if isinstance(descriptors, list):
+        described = [
+            item
+            for item in descriptors
+            if isinstance(item, dict) and isinstance(item.get("id"), str)
+        ]
         config = config.model_copy(
             update={
                 "model_parameters": {
                     str(item["id"]): [
                         str(value) for value in item.get("supported_parameters") or []
                     ]
-                    for item in descriptors
-                    if isinstance(item, dict) and isinstance(item.get("id"), str)
-                }
+                    for item in described
+                },
+                "reasoning_mandatory_models": [
+                    str(item["id"])
+                    for item in described
+                    if item.get("reasoning_mandatory") is True
+                ],
             }
         )
     return build_provider(config)
