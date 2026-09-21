@@ -609,7 +609,7 @@ def test_native_providers_translate_tool_definitions(monkeypatch, provider_class
         assert observed["payload"]["tools"][0]["input_schema"] == TOOL.input_schema
     else:
         declaration = observed["payload"]["tools"][0]["functionDeclarations"][0]
-        assert declaration["parameters"] == TOOL.input_schema
+        assert declaration["parametersJsonSchema"] == TOOL.input_schema
 
 
 def test_anthropic_health_discovers_models_without_a_configured_default(monkeypatch):

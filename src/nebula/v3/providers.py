@@ -37,6 +37,7 @@ from typing import Any, Literal
 from urllib.parse import quote, urlsplit
 
 import boto3  # type: ignore[import-untyped]
+from botocore.config import Config as BotocoreConfig  # type: ignore[import-untyped]
 import httpx
 from pydantic import (
     BaseModel,
@@ -652,11 +653,13 @@ class ModelProvider(ABC):
             )
         return model
 
-    def _client(self, headers: dict[str, str]) -> httpx.AsyncClient:
+    def _client(
+        self, headers: dict[str, str], *, timeout: httpx.Timeout | None = None
+    ) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             base_url=self.config.base_url,
             headers={**self.config.extra_headers, **headers},
-            timeout=self.config.timeout_seconds,
+            timeout=self.config.timeout_seconds if timeout is None else timeout,
             transport=self._transport,
         )
 
@@ -747,8 +750,8 @@ class ModelProvider(ABC):
 
 # Statuses that mean the upstream produced nothing, so replaying the identical
 # request cannot duplicate work.  Other 4xx answers are request defects that a
-# retry would only repeat.
-_RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504})
+# retry would only repeat.  529 is Anthropic's ``overloaded_error``.
+_RETRYABLE_STATUS_CODES = frozenset({408, 425, 429, 500, 502, 503, 504, 529})
 _DEFAULT_RETRY_ATTEMPTS = 3
 _MAX_RETRY_ATTEMPTS = 8
 _DEFAULT_RETRY_BACKOFF_SECONDS = 0.5
@@ -796,6 +799,42 @@ def retry_policy(config: ProviderConfig) -> RetryPolicy:
         maximum=_MAX_RETRY_DELAY_SECONDS,
     )
     return RetryPolicy(attempts=max(1, int(attempts)), backoff_seconds=backoff)
+
+
+_DEFAULT_NATIVE_REQUEST_TIMEOUT_SECONDS = 600.0
+_MAX_NATIVE_REQUEST_TIMEOUT_SECONDS = 3600.0
+_NATIVE_CONNECT_TIMEOUT_SECONDS = 10.0
+
+
+def _native_request_timeout(config: ProviderConfig) -> float:
+    """Seconds one non-streamed native generation may take to answer.
+
+    The Anthropic, Responses, Gemini and Bedrock adapters receive the whole
+    generation as one response, so the read timeout bounds the entire answer,
+    not the gap between tokens. Operators tune it per provider
+    (``options.request_timeout_seconds``) and per deployment; a config built
+    with an explicit ``timeout_seconds`` keeps it when neither is set.
+    """
+
+    fallback = (
+        config.timeout_seconds
+        if "timeout_seconds" in config.model_fields_set
+        else _DEFAULT_NATIVE_REQUEST_TIMEOUT_SECONDS
+    )
+    seconds = _bounded_number(
+        config.options.get(
+            "request_timeout_seconds",
+            os.getenv("NEBULA_PROVIDER_REQUEST_TIMEOUT_SECONDS"),
+        ),
+        fallback,
+        maximum=_MAX_NATIVE_REQUEST_TIMEOUT_SECONDS,
+    )
+    return seconds if seconds > 0 else fallback
+
+
+def _native_http_timeout(config: ProviderConfig) -> httpx.Timeout:
+    read = _native_request_timeout(config)
+    return httpx.Timeout(read, connect=min(_NATIVE_CONNECT_TIMEOUT_SECONDS, read))
 
 
 def _retry_after_seconds(response: httpx.Response) -> float | None:
@@ -1604,6 +1643,9 @@ class OpenAIResponsesProvider(ModelProvider):
             "input": [
                 _openai_responses_message(message) for message in request.messages
             ],
+            # Nebula replays history itself and never reads stored items, so
+            # engagement data is not kept server-side by default.
+            "store": False,
         }
         for result in request.tool_results:
             payload["input"].extend(
@@ -1656,7 +1698,7 @@ class OpenAIResponsesProvider(ModelProvider):
                 "format": {
                     "type": "json_schema",
                     "name": "nebula_response",
-                    "strict": True,
+                    "strict": _openai_strict_schema(request.response_schema),
                     "schema": request.response_schema,
                 }
             }
@@ -1666,7 +1708,9 @@ class OpenAIResponsesProvider(ModelProvider):
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
         model = self.require(request)
-        async with self._client(self._headers()) as client:
+        async with self._client(
+            self._headers(), timeout=_native_http_timeout(self.config)
+        ) as client:
             response = await self._post(
                 client,
                 self._path("/v1/responses"),
@@ -2475,6 +2519,66 @@ async def _stream_openai_compatible(
         )
 
 
+# ``claude-<family>-<major>[-<minor>]`` anywhere after a Bedrock provider or
+# region prefix (``anthropic.``, ``us.anthropic.``) or an ARN path.
+_CLAUDE_MODEL = re.compile(
+    r"(?:^|\.)claude-(opus|sonnet|haiku|fable|mythos)-"
+    r"(?:(preview)|(\d+)(?:[-.](\d{1,2}))?(?![0-9]))"
+)
+
+
+def _claude_model(model: str) -> tuple[str, tuple[int, int] | None] | None:
+    """Family and version of a Claude model id; ``None`` for a preview."""
+
+    match = _CLAUDE_MODEL.search(model.casefold().rsplit("/", 1)[-1])
+    if match is None:
+        return None
+    family, preview, major, minor = match.groups()
+    if preview:
+        return family, None
+    return family, (int(major), int(minor or 0))
+
+
+def _claude_rejects_sampling(model: str) -> bool:
+    """Opus 4.7+, Sonnet 5+, Fable and Mythos return 400 for ``temperature``."""
+
+    claude = _claude_model(model)
+    if claude is None:
+        return False
+    family, version = claude
+    if family in {"fable", "mythos"}:
+        return True
+    if version is None:
+        return False
+    return (family == "opus" and version >= (4, 7)) or (
+        family == "sonnet" and version >= (5, 0)
+    )
+
+
+def rejects_forced_tool_choice(model: str) -> bool:
+    """Fable 5.1, Mythos 5.1 and Mythos Preview reject ``any`` and ``tool``.
+
+    Adapters send ``auto`` instead; the caller still validates the call.
+    """
+
+    claude = _claude_model(model)
+    if claude is None or claude[0] not in {"fable", "mythos"}:
+        return False
+    return claude[1] is None or claude[1] >= (5, 1)
+
+
+def _claude_thinks_by_default(model: str) -> bool:
+    """Opus 5 and Sonnet 5 think by default and accept ``thinking: disabled``."""
+
+    claude = _claude_model(model)
+    return (
+        claude is not None
+        and claude[0] in {"opus", "sonnet"}
+        and claude[1] is not None
+        and claude[1] >= (5, 0)
+    )
+
+
 class AnthropicProvider(ModelProvider):
     def _headers(self) -> dict[str, str]:
         key = self.config.resolve_api_key()
@@ -2536,7 +2640,7 @@ class AnthropicProvider(ModelProvider):
             payload["system"] = "\n".join(
                 [str(item) for item in [*systems, request.instructions] if item]
             )
-        if request.temperature is not None:
+        if request.temperature is not None and not _claude_rejects_sampling(model):
             payload["temperature"] = request.temperature
         if request.tools:
             payload["tools"] = [
@@ -2549,10 +2653,12 @@ class AnthropicProvider(ModelProvider):
             ]
             if request.tool_choice == ToolChoice.REQUIRED:
                 payload["tool_choice"] = {
-                    "type": "any",
+                    "type": "auto" if rejects_forced_tool_choice(model) else "any",
                     "disable_parallel_tool_use": not request.parallel_tool_calls,
                 }
-        async with self._client(self._headers()) as client:
+        async with self._client(
+            self._headers(), timeout=_native_http_timeout(self.config)
+        ) as client:
             response = await self._post(
                 client,
                 self._path("/v1/messages"),
@@ -2742,7 +2848,10 @@ class GeminiProvider(ModelProvider):
                         {
                             "name": tool.name,
                             "description": tool.description,
-                            "parameters": tool.input_schema,
+                            # ``parameters`` is Gemini's OpenAPI subset and
+                            # rejects empty objects, ``const`` and
+                            # ``additionalProperties``; this takes JSON Schema.
+                            "parametersJsonSchema": tool.input_schema,
                         }
                         for tool in request.tools
                     ]
@@ -2764,7 +2873,9 @@ class GeminiProvider(ModelProvider):
             )
         if generation:
             payload["generationConfig"] = generation
-        async with self._client(self._headers()) as client:
+        async with self._client(
+            self._headers(), timeout=_native_http_timeout(self.config)
+        ) as client:
             response = await self._post(
                 client,
                 self._model_path(model, "generateContent"),
@@ -2878,6 +2989,18 @@ def _bedrock_error_detail(exc: BaseException) -> str:
     return type(exc).__name__
 
 
+# Converse errors that mean nothing was generated, so the request may be resent.
+_BEDROCK_TRANSIENT_ERRORS = frozenset(
+    {
+        "ThrottlingException",
+        "ServiceUnavailableException",
+        "ModelNotReadyException",
+        "InternalServerException",
+        "ModelTimeoutException",
+    }
+)
+
+
 def _bedrock_failure(exc: BaseException) -> ProviderError:
     """Type a Converse failure so chat can compact and retry an overflow."""
 
@@ -2885,7 +3008,31 @@ def _bedrock_failure(exc: BaseException) -> ProviderError:
     message = f"Bedrock request failed: {detail}"
     if _context_length_error(detail, None):
         return ProviderContextLengthError(message)
+    response = getattr(exc, "response", None)
+    response = response if isinstance(response, dict) else {}
+    error = response.get("Error")
+    if isinstance(error, dict) and error.get("Code") in _BEDROCK_TRANSIENT_ERRORS:
+        metadata = response.get("ResponseMetadata")
+        status = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
+        return ProviderOverloadedError(
+            message, status_code=status if isinstance(status, int) else None
+        )
     return ProviderError(message)
+
+
+def _bedrock_alternating(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge adjacent same-role messages; Converse requires alternation."""
+
+    merged: list[dict[str, Any]] = []
+    for message in messages:
+        if merged and merged[-1]["role"] == message["role"]:
+            merged[-1] = {
+                "role": message["role"],
+                "content": [*merged[-1]["content"], *message["content"]],
+            }
+        else:
+            merged.append(message)
+    return merged
 
 
 class BedrockProvider(ModelProvider):
@@ -2940,6 +3087,7 @@ class BedrockProvider(ModelProvider):
                     },
                 ]
             )
+        kwargs["messages"] = _bedrock_alternating(kwargs["messages"])
         systems = [str(m.content) for m in request.messages if m.role == "system"]
         if request.instructions:
             systems.append(request.instructions)
@@ -2959,32 +3107,70 @@ class BedrockProvider(ModelProvider):
                 ]
             }
             if request.tool_choice == ToolChoice.REQUIRED:
-                kwargs["toolConfig"]["toolChoice"] = {"any": {}}
+                if rejects_forced_tool_choice(model):
+                    kwargs["toolConfig"]["toolChoice"] = {"auto": {}}
+                else:
+                    kwargs["toolConfig"]["toolChoice"] = {"any": {}}
+                    if _claude_thinks_by_default(model):
+                        # Bedrock accepts a forced choice only with thinking off.
+                        kwargs["additionalModelRequestFields"] = {
+                            "thinking": {"type": "disabled"}
+                        }
         inference: dict[str, Any] = {}
         if request.max_output_tokens:
             inference["maxTokens"] = request.max_output_tokens
-        if request.temperature is not None:
+        if request.temperature is not None and not _claude_rejects_sampling(model):
             inference["temperature"] = request.temperature
         if inference:
             kwargs["inferenceConfig"] = inference
+        # botocore would otherwise resend a whole generation up to five times
+        # after its 60 s read timeout; Nebula's retry policy decides instead.
+        client_config = BotocoreConfig(
+            connect_timeout=_NATIVE_CONNECT_TIMEOUT_SECONDS,
+            read_timeout=_native_request_timeout(self.config),
+            retries={"mode": "standard", "max_attempts": 1},
+        )
 
         def invoke() -> dict[str, Any]:
             client = boto3.client(
-                "bedrock-runtime", region_name=self.config.options.get("region")
+                "bedrock-runtime",
+                region_name=self.config.options.get("region"),
+                config=client_config,
             )
             return client.converse(**kwargs)
 
-        try:
-            data = await asyncio.to_thread(invoke)
-        except Exception as exc:
-            record_caught_exception(
-                "providers",
-                "providers.providers.caught_failure_012",
-                "A handled providers operation raised an exception.",
-                exc,
-                stage="providers",
-            )
-            raise _bedrock_failure(exc) from exc
+        policy = retry_policy(self.config)
+        attempt = 1
+        while True:
+            try:
+                data = await asyncio.to_thread(invoke)
+                break
+            except Exception as exc:
+                record_caught_exception(
+                    "providers",
+                    "providers.providers.caught_failure_012",
+                    "A handled providers operation raised an exception.",
+                    exc,
+                    stage="providers",
+                )
+                failure = _bedrock_failure(exc)
+                if not isinstance(failure, ProviderOverloadedError):
+                    raise failure from exc
+                if attempt >= policy.attempts:
+                    if attempt > 1:
+                        raise _exhausted(failure, attempt) from exc
+                    raise failure from exc
+                delay = _retry_delay(policy, attempt, None)
+                _record_retry(
+                    self.config,
+                    operation="converse",
+                    attempt=attempt,
+                    policy=policy,
+                    delay=delay,
+                    status_code=failure.status_code,
+                )
+            await asyncio.sleep(delay)
+            attempt += 1
         blocks = data.get("output", {}).get("message", {}).get("content", [])
         calls = [
             _normalized_tool_call(

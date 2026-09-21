@@ -445,6 +445,7 @@ from .providers import (
     ToolChoice,
     ToolDefinition,
     provider_from_profile,
+    rejects_forced_tool_choice,
 )
 from .reporting import ReportRenderError, ReportRenderService
 from .report_signoff import ReportSignoffRequest, sign_off_report
@@ -12247,7 +12248,9 @@ async def _verify_provider_capability(
             ),
             timeout=PROVIDER_CAPABILITY_PROBE_TIMEOUT_SECONDS,
         )
-        if response.text.strip():
+        # A model that rejects forced tool choice is asked with ``auto`` and may
+        # add a sentence beside the call; the call itself is still checked.
+        if response.text.strip() and not rejects_forced_tool_choice(model):
             raise ProviderError("probe returned prose instead of only a tool call")
         if len(response.tool_calls) != 1:
             raise ProviderError("probe did not return exactly one structured tool call")
