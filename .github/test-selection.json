@@ -1,34 +1,20 @@
 {
-  "change_digest": "c2adcb043ff582e1818afbc18fa6b5a62b049ddbc101360798e79e695e58fbda",
-  "reviewed_by": "Claude review of harness provider subagents",
-  "reason": "Harness chats (Codex, Grok) can delegate to one provider model as a subagent. ChatCompletionRequest gains subagent_provider_id/subagent_model; HarnessRuntimeService.prepare_chat validates them through SubagentService.validate_harness_setting (enabled provider, allowlisted and tool-verified model, local-only projects refuse cloud, a cloud provider must permit sensitive data), stores the choice on the chat and harness session, and snapshots it on the turn. The gateway catalog offers subagent.start/wait/list/stop while the setting is on, the developer instructions name the model, and a change reopens the vendor connection (subagent_binding_changed). _gateway_subagent records each call as a ToolCall and drives the existing SubagentService: start creates a ChatSubagent (new fields parent_backend, provider_profile_id, model, reported_at) on the chosen model with the session's MCP servers, the command runtime only when both sides have it, and no SSH hosts; wait is bounded per harness kind (300/600 s Codex, 60/120 s Grok) and wakes on settles; the harness turn's end stops children of a stopped turn and posts finished reports; unreported reports are prepended to the next harness prompt once. Provider-chat subagents keep their behaviour apart from views now naming the model. test_harness_provider_subagents.py drives a scripted harness connection through start/wait/list, late reports reaching the next turn once, a bounded wait, stopping, the catalog/reconnect/instructions following the setting, validation and privacy refusals, delegated-work item kinds, and per-kind wait limits. test_chat_subagents.py guards the provider-parent path; test_harnesses.py and test_harness_adapters.py cover the gateway, connection and instructions code in harnesses.py; test_chat.py, test_chat_queue.py and test_chat_api.py cover the request model, queue dispatch and API wiring. Frontend: HarnessSubagentSettings.test.tsx covers the new Assistant settings section, ChatSubagentPane.test.tsx the harness pane copy and result-card model, client.test.ts the request/session wire mapping. Playwright: the chat-subagents area now also runs the new harness delegation journey on desktop and both phones, and entry:assistant covers SessionsPage (settings popover, request body, rail/pane gating).",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust changed. The provider-reasoning area is selected because the SessionsPage request builder next to reasoning effort changed. Other areas that SessionsPage/chat.py/harnesses.py map to (chat-edit-in-place, provider-thinking, conversation-details) run inside the assistant grep, which was run locally on desktop, mobile-chromium and mobile-webkit and passes. activity-ledger is not selected: harnessActivity/ActivityLedger did not change; the backend only relabels subagent.* gateway calls as the existing subagent kind, covered by test_harness_provider_subagents.py. core-api is not selected: the new ChatSubagent and request fields are optional with defaults and the REST paths are covered by test_chat_api.py. test_chat_schedules.py was run locally and passes. ui/src/App.test.tsx 'keeps diagnostics out of the advanced view' fails identically on pristine origin/main and is unrelated.",
+  "change_digest": "c3aa71fe877a4f5a5dc0b0bae3bb4e9d1044bcc4db1cfc947e2682096ccee49f",
+  "reviewed_by": "Codex review of malformed provider tool-argument diagnostics",
+  "reason": "The OpenAI-compatible adapter previously reduced malformed native tool-call JSON to a generic error, and its detailed JSONDecodeError catch was a warning hidden by the production error-level diagnostic threshold. The selected cases prove that the real durable provider log now records an error with exact decoder coordinates, provider response identity, model, tool, byte count and a one-way fingerprint without retaining argument values; that existing malformed and unidentified calls remain unexecuted; and that valid streamed tool-call assembly still completes.",
+  "exclusions": "No frontend, Playwright, native, production-build, LAN, or physical-device gates apply because the API response, chat failure text, UI, persistence, origin behavior, and executable packaging are unchanged. No live provider call is selected because malformed output is nondeterministic and the diagnostic boundary is fully exercised with the same OpenAI-compatible response shape. Full suites and unrelated provider adapters are excluded.",
   "expected_tests": {
-    "python": 282,
-    "frontend": 93,
+    "python": 4,
+    "frontend": 0,
     "native": 0,
-    "playwright": 165
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_provider_subagents.py",
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_harnesses.py",
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_queue.py",
-    "tests/v3/test_chat_api.py"
+    "tests/v3/test_providers.py::test_openai_compatible_logs_exact_malformed_tool_json_without_its_values",
+    "tests/v3/test_providers.py::test_openai_compatible_rejects_partial_or_unidentified_tool_calls",
+    "tests/v3/test_providers.py::test_streaming_tool_calls_are_keyed_by_index_or_arrival_order"
   ],
-  "frontend": [
-    "ui/src/components/chat-subagents/HarnessSubagentSettings.test.tsx",
-    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx",
-    "ui/src/api/client.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:chat-subagents",
-    "area:provider-reasoning",
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit"
-  ]
+  "playwright": []
 }

@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from nebula.v3 import providers
+from nebula.v3 import diagnostics, providers
 from nebula.v3.model_catalog import openrouter_models
 from nebula.v3.providers import (
     AnthropicProvider,
@@ -410,6 +410,94 @@ def test_openai_compatible_rejects_partial_or_unidentified_tool_calls(
                 )
             )
         )
+
+
+def test_openai_compatible_logs_exact_malformed_tool_json_without_its_values(
+    monkeypatch, tmp_path
+):
+    malformed = '{"address":"sensitive.example"'
+    manager = diagnostics.DiagnosticManager(tmp_path, watch_settings=False)
+    monkeypatch.setattr(diagnostics, "_manager", manager)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "gen-malformed-1",
+                "model": "deepseek/deepseek-v4.1-flash",
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "tool_1",
+                                    "function": {
+                                        "name": "lookup_asset",
+                                        "arguments": malformed,
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ],
+            },
+        )
+
+    provider = OpenAICompatibleProvider(
+        ProviderConfig(
+            id="openrouter",
+            kind=ProviderKind.OPENAI_COMPATIBLE,
+            flavor=ProviderFlavor.OPENROUTER,
+            base_url="https://openrouter.ai/api/v1",
+            default_model="deepseek/deepseek-v4.1-flash",
+            capabilities=ModelCapabilities(tools=True, strict_tools=True),
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    try:
+        with pytest.raises(ProviderError, match="malformed tool arguments") as caught:
+            asyncio.run(
+                provider.complete(
+                    ModelRequest(
+                        messages=[ModelMessage(role="user", content="continue")],
+                        tools=[TOOL],
+                    )
+                )
+            )
+        assert manager.flush()
+    finally:
+        manager.close()
+
+    assert isinstance(caught.value.__cause__, json.JSONDecodeError)
+    records = [
+        json.loads(line)
+        for line in (manager.log_dir / "providers.log").read_text().splitlines()
+    ]
+    record = next(
+        item
+        for item in records
+        if item["event_code"] == "providers.tool_arguments.invalid_json"
+    )
+    metadata = record["metadata"]
+    assert record["level"] == "ERROR"
+    assert record["stage"] == "tool_arguments"
+    assert record["exception_chain"] == ["ProviderError", "JSONDecodeError"]
+    assert metadata == {
+        "adapter": "openrouter",
+        "byte_count": len(malformed.encode()),
+        "fingerprint": providers.hashlib.sha256(malformed.encode()).hexdigest(),
+        "format": "json",
+        "model_id": "deepseek/deepseek-v4.1-flash",
+        "provider": "openrouter",
+        "status": "tool_calls",
+        "tool_id": "lookup_asset",
+        "validation": "Expecting ',' delimiter; line 1; column 31; character 30",
+        "vendor_request_id": "gen-malformed-1",
+    }
+    assert "sensitive.example" not in json.dumps(record)
 
 
 @pytest.mark.parametrize(
