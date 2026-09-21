@@ -354,6 +354,10 @@ class ChatCompletionRequest(NebulaModel):
     tools_enabled: bool = False
     # Advertise start/wait/list/stop subagent tools. Ignored for subagent turns.
     allow_subagents: bool = False
+    # Harness chats: the provider model their subagents run on. Provider chats
+    # ignore these; their children share the chat's own model.
+    subagent_provider_id: str | None = Field(default=None, max_length=200)
+    subagent_model: str | None = Field(default=None, max_length=500)
     max_artifact_queries: int | None = Field(default=None, ge=0)
     allow_cloud_tool_results: bool = False
     # Optional vendor-native turn controls.  They are validated again against
@@ -370,6 +374,16 @@ class ChatCompletionRequest(NebulaModel):
         default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
     )
     stream: bool = False
+
+    def harness_provider_subagent(self) -> dict[str, str] | None:
+        """The provider subagent model a harness chat turn asks for, if any."""
+
+        if not self.allow_subagents:
+            return None
+        return {
+            "provider_profile_id": self.subagent_provider_id or "",
+            "model": self.subagent_model or "",
+        }
 
     @model_validator(mode="after")
     def conversation_is_bounded_and_actionable(self) -> "ChatCompletionRequest":

@@ -573,6 +573,7 @@ class ChatQueueService:
                     else None,
                     harness_reasoning_effort=request.harness_reasoning_effort,
                     harness_service_tier=request.harness_service_tier,
+                    provider_subagent=request.harness_provider_subagent(),
                     queue_claim=claim,
                 )
                 self.harness.start_chat_turn(turn.id)

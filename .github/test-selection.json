@@ -1,28 +1,34 @@
 {
-  "change_digest": "35d4f8b5b6119b702f3febc0708ed1312fe5d7a2a8a2c418c0392fca8026e6b0",
-  "reviewed_by": "Claude review of MCP server descriptions",
-  "reason": "McpServerProfile gains an operator-written description (up to 500 characters). Jev ranks an on-demand server by it, falling back to its handshake instructions and then its tool names as before. Once tools are picked for a turn, by Jev or by the local ranker, the catalog receipt records the servers behind the picks and Jev's ranked servers (ToolSuggestionReceipt.source_ids is new), and catalog_instructions tells the model which server each pick comes from and, as JSON data, what the operator says each of those servers is for. Handshake instructions still never reach the model. The mcp.json importer now maps `description` (previously skipped), truncating past 500 characters with a warning; a re-import without one keeps the Nebula-written value, and export writes it. Settings gets a Description field in the Add/Edit MCP server dialog and a two-line description on the server card, per the approved Figma mockup. test_tool_catalog.py covers the instruction text (server names on picks, the description line, old receipts without sources), picked_sources ordering, and the local-ranker path through ChatService.prepare. test_tool_suggestions.py covers the description beating handshake instructions in Jev's criteria, source_ids on the receipt, and the Jev path through prepare into the model's instructions. test_mcp_import.py covers import, truncation, keep-on-silent-reimport, replace-on-described-reimport, export round trip, type errors, the regenerated schema, and the REST create/patch/length limit. test_operator_help.py is selected because the MCP help entry changed; test_chat.py because chat.py changed. HarnessSettings.test.tsx covers editing, saving and showing the description; client.test.ts covers the wire mapping. The mcp-import real-Core journey drives the MCP settings section and edit dialog on desktop and at 390px.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust changed. The mcp-import area is limited to its desktop and chromium-390 entries, both run locally and passing; the other widths render the same dialog and card markup. The assistant, provider-reasoning and tool-suggestions areas that chat.py and tool_suggestions.py map to are not selected: the chat.py change only attaches server details to the catalog receipt, which the selected Python tests assert through ChatService.prepare, and no chat UI changed. The core-api area that domain.py maps to is not selected: the new field is optional with a default, and the REST path is covered by test_mcp_import.py. ui/src/api/types.ts and components-domain.css are covered by the HarnessSettings and client tests plus the selected real-Core journey. Missions, schedules, subagents and harness chats do not read the catalog receipt, so their suites are not selected; test_chat_tool_loop, test_chat_goals, test_chat_schedules, test_chat_subagents, test_harnesses, test_exporter, test_mcp_probe and test_mcp_gateway were run locally and pass.",
+  "change_digest": "c2adcb043ff582e1818afbc18fa6b5a62b049ddbc101360798e79e695e58fbda",
+  "reviewed_by": "Claude review of harness provider subagents",
+  "reason": "Harness chats (Codex, Grok) can delegate to one provider model as a subagent. ChatCompletionRequest gains subagent_provider_id/subagent_model; HarnessRuntimeService.prepare_chat validates them through SubagentService.validate_harness_setting (enabled provider, allowlisted and tool-verified model, local-only projects refuse cloud, a cloud provider must permit sensitive data), stores the choice on the chat and harness session, and snapshots it on the turn. The gateway catalog offers subagent.start/wait/list/stop while the setting is on, the developer instructions name the model, and a change reopens the vendor connection (subagent_binding_changed). _gateway_subagent records each call as a ToolCall and drives the existing SubagentService: start creates a ChatSubagent (new fields parent_backend, provider_profile_id, model, reported_at) on the chosen model with the session's MCP servers, the command runtime only when both sides have it, and no SSH hosts; wait is bounded per harness kind (300/600 s Codex, 60/120 s Grok) and wakes on settles; the harness turn's end stops children of a stopped turn and posts finished reports; unreported reports are prepended to the next harness prompt once. Provider-chat subagents keep their behaviour apart from views now naming the model. test_harness_provider_subagents.py drives a scripted harness connection through start/wait/list, late reports reaching the next turn once, a bounded wait, stopping, the catalog/reconnect/instructions following the setting, validation and privacy refusals, delegated-work item kinds, and per-kind wait limits. test_chat_subagents.py guards the provider-parent path; test_harnesses.py and test_harness_adapters.py cover the gateway, connection and instructions code in harnesses.py; test_chat.py, test_chat_queue.py and test_chat_api.py cover the request model, queue dispatch and API wiring. Frontend: HarnessSubagentSettings.test.tsx covers the new Assistant settings section, ChatSubagentPane.test.tsx the harness pane copy and result-card model, client.test.ts the request/session wire mapping. Playwright: the chat-subagents area now also runs the new harness delegation journey on desktop and both phones, and entry:assistant covers SessionsPage (settings popover, request body, rail/pane gating).",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No native tests: no Rust changed. The provider-reasoning area is selected because the SessionsPage request builder next to reasoning effort changed. Other areas that SessionsPage/chat.py/harnesses.py map to (chat-edit-in-place, provider-thinking, conversation-details) run inside the assistant grep, which was run locally on desktop, mobile-chromium and mobile-webkit and passes. activity-ledger is not selected: harnessActivity/ActivityLedger did not change; the backend only relabels subagent.* gateway calls as the existing subagent kind, covered by test_harness_provider_subagents.py. core-api is not selected: the new ChatSubagent and request fields are optional with defaults and the REST paths are covered by test_chat_api.py. test_chat_schedules.py was run locally and passes. ui/src/App.test.tsx 'keeps diagnostics out of the advanced view' fails identically on pristine origin/main and is unrelated.",
   "expected_tests": {
-    "python": 168,
-    "frontend": 91,
+    "python": 282,
+    "frontend": 93,
     "native": 0,
-    "playwright": 2
+    "playwright": 165
   },
   "python": [
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_mcp_import.py",
-    "tests/v3/test_operator_help.py",
-    "tests/v3/test_chat.py"
+    "tests/v3/test_harness_provider_subagents.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_harnesses.py",
+    "tests/v3/test_harness_adapters.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_queue.py",
+    "tests/v3/test_chat_api.py"
   ],
   "frontend": [
-    "ui/src/components/HarnessSettings.test.tsx",
+    "ui/src/components/chat-subagents/HarnessSubagentSettings.test.tsx",
+    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx",
     "ui/src/api/client.test.ts"
   ],
   "native": [],
   "playwright": [
-    "entry:mcp-import/assistant-real-desktop",
-    "entry:mcp-import/assistant-real-chromium-390"
+    "area:chat-subagents",
+    "area:provider-reasoning",
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit"
   ]
 }

@@ -1783,8 +1783,15 @@ export interface ChatCompletionRequest {
   harnessSkill?: HarnessSkillInvocation;
   /** Provider-side reasoning level; absent leaves the model's own default. */
   reasoningEffort?: ReasoningEffort;
-  /** Let this turn delegate work to parallel subagents on the same model. */
+  /**
+   * Let this turn delegate work to parallel subagents: on the same model in a
+   * provider chat, on subagentProviderId/subagentModel in a harness chat.
+   */
   allowSubagents?: boolean;
+  /** Harness chats: the provider profile their subagents run on. */
+  subagentProviderId?: Identifier;
+  /** Harness chats: the provider model their subagents run on. */
+  subagentModel?: string;
   runtimeSwitchConfirmation?: string;
 }
 
@@ -2097,6 +2104,9 @@ export interface ChatSessionSummary {
   reasoningEffort?: ReasoningEffort;
   /** Whether this conversation last ran with delegation available. */
   allowSubagents?: boolean;
+  /** Harness chats: the provider model their subagents last ran on. */
+  subagentProviderId?: Identifier;
+  subagentModel?: string;
   archivedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -3307,8 +3317,13 @@ export interface ChatSubagentView {
   status: ChatSubagentStatus;
   parentSessionId: Identifier;
   parentTurnId: Identifier;
+  /** The runtime of the conversation that delegated this child. */
+  parentBackend: "provider" | "harness";
   childSessionId: Identifier;
   childTurnId?: Identifier;
+  /** The provider model the child runs on. */
+  providerProfileId?: Identifier;
+  model?: string;
   stepCount: number;
   /** The last few tool steps Core kept for the operator, newest last. */
   recentSteps: ChatSubagentStep[];

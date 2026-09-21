@@ -1749,6 +1749,10 @@ def create_app(
                 )
             )
         )
+    # Harness chats delegate to provider models through the same service that
+    # runs provider-chat subagents.
+    if harness_runtime.provider_subagents is None:
+        harness_runtime.bind_provider_subagents(provider_chat.subagents)
 
     executions = execution_service
     if executions is None and artifact_store is not None and tool_platform is not None:
@@ -8864,6 +8868,7 @@ def create_app(
                     if request.harness_skill is not None
                     else None
                 ),
+                provider_subagent=request.harness_provider_subagent(),
             )
             if companion_ids:
                 browser_companion.bind(next(iter(companion_ids)), chat.id)

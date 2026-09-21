@@ -31,6 +31,9 @@ export function ChatSubagentResultCard({ subagent, onOpenConversation }: ChatSub
       <strong>{failed ? "Subagent stopped" : "Subagent finished"}</strong>
       <span className="chat-subagent-result-name">{subagent.name}</span>
       <small>
+        {subagent.parentBackend === "harness" && subagent.model
+          ? <span className="chat-subagent-result-model">{subagent.model.split("/").pop()} · </span>
+          : null}
         {elapsedLabel(subagent.elapsedSeconds)}
         {subagent.usage.totalTokens ? ` · ${compactTokens(subagent.usage.totalTokens)} tokens` : ""}
       </small>
