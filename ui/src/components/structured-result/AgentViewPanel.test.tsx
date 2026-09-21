@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../../api/client";
 import type { StructuredResultSummary } from "../../api/types";
 import { AgentViewPanel, type AgentViewPanelProps } from "./AgentViewPanel";
-import { clampRect, MIN_HEIGHT, MIN_WIDTH, readPlacement, readRect, writePlacement } from "./agentViewGeometry";
+import { clampRect, MIN_HEIGHT, MIN_WIDTH, readLauncher, readRect, writeLauncher } from "./agentViewGeometry";
 
 vi.mock("../../diagnostics", () => ({
   logCaughtDiagnostic: vi.fn(),
@@ -50,7 +50,6 @@ function panel(overrides: Partial<AgentViewPanelProps> = {}) {
     onMinimize: vi.fn(),
     onRestore: vi.fn(),
     onClose: vi.fn(),
-    onDock: vi.fn(),
     ...overrides,
   };
   return { props, ...render(<MemoryRouter><AgentViewPanel {...props} /></MemoryRouter>) };
@@ -71,12 +70,6 @@ function setNarrow(narrow: boolean) {
 
 describe("where the Agent view sits", () => {
   beforeEach(() => localStorage.clear());
-
-  it("floats until the operator docks it, and remembers the choice", () => {
-    expect(readPlacement()).toBe("floating");
-    writePlacement("docked");
-    expect(readPlacement()).toBe("docked");
-  });
 
   it("never shrinks past its minimum, outgrows the window, or leaves the screen", () => {
     expect(clampRect({ x: 0, y: 0, width: 10, height: 10 }, viewport)).toEqual({ x: 12, y: 12, width: MIN_WIDTH, height: MIN_HEIGHT });
@@ -108,8 +101,8 @@ describe("where the Agent view sits", () => {
   it("survives storage that refuses to be touched", () => {
     const getItem = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("blocked"); });
     const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("blocked"); });
-    expect(readPlacement()).toBe("floating");
-    expect(() => writePlacement("docked")).not.toThrow();
+    expect(readLauncher()).toBeUndefined();
+    expect(() => writeLauncher({ x: 10, y: 10 })).not.toThrow();
     getItem.mockRestore();
     setItem.mockRestore();
   });
@@ -136,11 +129,10 @@ describe("the floating Agent view", () => {
     expect(screen.getByRole("link", { name: /Open in Results/ })).toHaveAttribute("href", "/projects/project-1/results/step-2");
   });
 
-  it("docks, minimizes and closes on the operator's word", async () => {
+  it("minimizes and closes on the operator's word, with nowhere to dock", async () => {
     const user = userEvent.setup();
     const { props } = panel();
-    await user.click(screen.getByRole("button", { name: "Dock in conversation details" }));
-    expect(props.onDock).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Dock in conversation details" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Minimize Agent view" }));
     expect(props.onMinimize).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Close Agent view" }));
@@ -174,14 +166,13 @@ describe("the floating Agent view", () => {
     expect(saved).toMatchObject({ x: before.left - 24, y: before.top + 24, width: before.width - 24 });
   });
 
-  it("is a sheet on a phone, with nothing to drag or dock into", async () => {
+  it("is a sheet on a phone, with nothing to drag", async () => {
     setNarrow(true);
     panel();
     const dialog = screen.getByRole("dialog", { name: "Agent view" });
     expect(dialog).toHaveClass("sheet");
     expect(dialog.style.left).toBe("");
     expect(screen.queryByRole("button", { name: "Move Agent view" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Dock in conversation details" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Resize Agent view" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Minimize Agent view" })).toBeInTheDocument();
   });

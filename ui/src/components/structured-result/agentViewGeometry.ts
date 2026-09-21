@@ -1,11 +1,8 @@
 /**
- * Where the Agent view sits: floating over the conversation or docked in its
- * details, and, when it floats, where and how large. It is a per-device
+ * Where the floating Agent view sits and how large it is. It is a per-device
  * convenience, so storage that is missing, full or blocked costs nothing
  * more than starting from the defaults.
  */
-
-export type AgentViewPlacement = "floating" | "docked";
 
 export interface AgentViewRect {
   x: number;
@@ -26,7 +23,6 @@ export interface AgentViewViewport {
   height: number;
 }
 
-const PLACEMENT_KEY = "nebula.agent-view.placement";
 const GEOMETRY_KEY = "nebula.agent-view.geometry";
 const LAUNCHER_KEY = "nebula.agent-view.launcher";
 
@@ -66,14 +62,6 @@ function write(key: string, value: unknown) {
 
 function finite(...values: unknown[]): boolean {
   return values.every((value) => typeof value === "number" && Number.isFinite(value));
-}
-
-export function readPlacement(): AgentViewPlacement {
-  return read(PLACEMENT_KEY) === "docked" ? "docked" : "floating";
-}
-
-export function writePlacement(placement: AgentViewPlacement) {
-  write(PLACEMENT_KEY, placement);
 }
 
 /** The viewport a floating surface has to stay inside, zoom included. */
