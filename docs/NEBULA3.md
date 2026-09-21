@@ -173,14 +173,25 @@ Tune this per provider profile with the `retry_attempts` and
 `NEBULA_PROVIDER_RETRY_ATTEMPTS` and `NEBULA_PROVIDER_RETRY_BACKOFF_SECONDS`.
 A single attempt disables automatic retries.
 
-Native Anthropic, OpenAI Responses, Gemini and Bedrock profiles receive each
-answer as one response, so their read timeout bounds the whole generation:
+Native Anthropic, OpenAI Responses, Gemini and Bedrock profiles, and
+non-streamed requests to OpenAI-compatible profiles (OpenRouter, local runtimes,
+gateways: chat routing steps, mission specialists, compaction, naming), receive
+each answer as one response, so their read timeout bounds the whole generation:
 600 seconds by default, with 10 seconds to open the connection. Tune it per
 provider profile with the `request_timeout_seconds` option (up to 3600), or per
-deployment with `NEBULA_PROVIDER_REQUEST_TIMEOUT_SECONDS`. A read timeout is
-reported and never resent, because the provider may already have produced the
-answer. Bedrock throttling and service-unavailable errors are retried like the
-HTTP statuses above.
+deployment with `NEBULA_PROVIDER_REQUEST_TIMEOUT_SECONDS`. Streamed requests
+keep their 120-second limit between chunks. A timed-out generation
+counts as one of the retry attempts above, so a timeout shorter than a thinking
+model's answer pays for that answer again on every attempt. Bedrock throttling
+and service-unavailable errors are retried like the HTTP statuses above.
+
+Short utility requests -- the capability probe, conversation naming, retrieval
+planning, context compaction and scope import -- ask the model to skip
+reasoning where the route takes that control, and a route whose model must
+reason is asked once more with its default instead of failing the call. The
+capability probe allows 2,048 output tokens (less when the model's output limit
+or served window is smaller), so a model that thinks anyway still has room for
+its one call.
 
 ## Import and export
 

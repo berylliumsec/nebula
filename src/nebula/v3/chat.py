@@ -7476,6 +7476,8 @@ class ChatService:
             messages=[ModelMessage(role="user", content=query)],
             max_output_tokens=256,
             temperature=0,
+            # A short plan needs no thinking, and thinking would spend it.
+            reasoning_effort="none",
             response_schema=(
                 _RetrievalPlan.model_json_schema()
                 if provider.capabilities.structured_output
@@ -7907,6 +7909,8 @@ class ChatService:
             ],
             max_output_tokens=32,
             temperature=0,
+            # A short title needs no thinking, and thinking would spend it.
+            reasoning_effort="none",
             metadata={
                 "operation": "conversation_naming",
                 "chat_session_id": session.id,

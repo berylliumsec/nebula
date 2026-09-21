@@ -220,8 +220,10 @@ from .language_server import (
 )
 from .context import (
     DEFAULT_CONTEXT_WINDOW,
+    ContextCapacityError,
     ContextCompactor,
     ContextStatus,
+    estimate_model_request,
     estimate_tokens,
     memory_text,
     resolve_context_limits,
@@ -590,7 +592,13 @@ CUSTOM_RESOURCES = {
 }
 
 API_PREFIX = "/api/v1"
-PROVIDER_CAPABILITY_PROBE_TIMEOUT_SECONDS = 30
+# Output room for the capability probe. Thinking models (Claude Fable 5.1
+# always thinks, Opus 5 by default, DeepSeek and GLM reasoning routes) spend it
+# before their one call, even when asked not to, and Anthropic's smallest
+# thinking budget (1,024 tokens) must fit below the request maximum.
+PROVIDER_CAPABILITY_PROBE_OUTPUT_TOKENS = 2_048
+# Long enough for that whole allowance from a route producing ~20 tokens/s.
+PROVIDER_CAPABILITY_PROBE_TIMEOUT_SECONDS = 120
 
 
 # Wrong confirmation codes tolerated per pairing offer before it is withdrawn.
@@ -12247,6 +12255,28 @@ def _safe_verification_failure(exc: Exception) -> str:
     return f"capability probe failed ({type(exc).__name__})"
 
 
+def _capability_probe_output_tokens(
+    profile: ProviderProfile, request: ModelRequest
+) -> int:
+    """The probe's output allowance, held to what the model can serve.
+
+    The model's known or configured output limit binds, and a small served
+    window keeps room for the probe's own prompt.
+    """
+
+    try:
+        limits = resolve_context_limits(
+            profile,
+            model=request.model,
+            requested_output_tokens=PROVIDER_CAPABILITY_PROBE_OUTPUT_TOKENS,
+        )
+    except ContextCapacityError:
+        # diagnostic-expected: the probe itself reports a route that cannot serve it
+        return PROVIDER_CAPABILITY_PROBE_OUTPUT_TOKENS
+    room = limits.context_window - estimate_model_request(request)
+    return max(1, min(limits.max_output_tokens, room))
+
+
 async def _verify_provider_capability(
     store: NebulaStore,
     profile: ProviderProfile,
@@ -12278,40 +12308,42 @@ async def _verify_provider_capability(
     )
     try:
         provider_runtime = (provider_factory or provider_from_profile)(probe_profile)
-        response = await asyncio.wait_for(
-            provider_runtime.complete(
-                ModelRequest(
-                    model=model,
-                    instructions=(
-                        "Capability verification. Call the supplied function exactly once "
-                        "with the required nonce. Return no prose."
-                    ),
-                    messages=[
-                        ModelMessage(
-                            role="user",
-                            content="Make the required capability-verification call now.",
-                        )
-                    ],
-                    tools=[
-                        ToolDefinition(
-                            name=probe_name,
-                            description="Echo a harmless one-time verification nonce.",
-                            input_schema={
-                                "type": "object",
-                                "properties": {
-                                    "nonce": {"type": "string", "enum": [nonce]}
-                                },
-                                "required": ["nonce"],
-                                "additionalProperties": False,
-                            },
-                        )
-                    ],
-                    tool_choice=ToolChoice.REQUIRED,
-                    parallel_tool_calls=False,
-                    max_output_tokens=128,
-                    temperature=0,
-                )
+        probe_request = ModelRequest(
+            model=model,
+            instructions=(
+                "Capability verification. Call the supplied function exactly once "
+                "with the required nonce. Return no prose."
             ),
+            messages=[
+                ModelMessage(
+                    role="user",
+                    content="Make the required capability-verification call now.",
+                )
+            ],
+            tools=[
+                ToolDefinition(
+                    name=probe_name,
+                    description="Echo a harmless one-time verification nonce.",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"nonce": {"type": "string", "enum": [nonce]}},
+                        "required": ["nonce"],
+                        "additionalProperties": False,
+                    },
+                )
+            ],
+            tool_choice=ToolChoice.REQUIRED,
+            parallel_tool_calls=False,
+            temperature=0,
+            # The call needs no thinking; a route that takes the control skips
+            # it, and the allowance below still covers a model that thinks.
+            reasoning_effort="none",
+        )
+        probe_request.max_output_tokens = _capability_probe_output_tokens(
+            profile, probe_request
+        )
+        response = await asyncio.wait_for(
+            provider_runtime.complete(probe_request),
             timeout=PROVIDER_CAPABILITY_PROBE_TIMEOUT_SECONDS,
         )
         # A preamble beside the one structured call is commentary, as it is in

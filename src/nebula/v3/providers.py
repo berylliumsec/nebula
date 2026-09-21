@@ -864,11 +864,14 @@ _NATIVE_CONNECT_TIMEOUT_SECONDS = 10.0
 
 
 def _native_request_timeout(config: ProviderConfig) -> float:
-    """Seconds one non-streamed native generation may take to answer.
+    """Seconds one non-streamed generation may take to answer.
 
-    The Anthropic, Responses, Gemini and Bedrock adapters receive the whole
-    generation as one response, so the read timeout bounds the entire answer,
-    not the gap between tokens. Operators tune it per provider
+    The Anthropic, Responses, Gemini and Bedrock adapters, and non-streamed
+    Chat Completions (every routing step, mission specialist and utility call
+    on OpenRouter, local runtimes and gateways), receive the whole generation
+    as one response, so the read timeout bounds the entire answer, not the gap
+    between tokens. Streams and catalog calls keep the client default. Operators
+    tune it per provider
     (``options.request_timeout_seconds``) and per deployment; a config built
     with an explicit ``timeout_seconds`` keeps it when neither is set.
     """
@@ -1936,6 +1939,41 @@ def _openrouter_reasoning(
     return reasoning
 
 
+def _refused_reasoning_off_retry(
+    payload: dict[str, Any], response: httpx.Response
+) -> dict[str, Any] | None:
+    """The payload to resend when a route refuses to skip reasoning.
+
+    Utility calls (capability probe, naming, retrieval planning, compaction,
+    scope import) and final-answer recovery ask for ``none`` to keep a short
+    budget for the answer; it is a preference, not a requirement. A model
+    whose reasoning is mandatory, or an OpenAI family with no ``none`` level,
+    answers 400, and the call is worth one more try with the model's default
+    reasoning. pi-mono and Cline never send the disable to such models; the
+    stored catalog does not say which they are, so Core asks and falls back.
+    A level the operator chose is never dropped this way.
+    """
+
+    if response.status_code not in {400, 422}:
+        return None
+    reasoning = payload.get("reasoning")
+    if not isinstance(reasoning, dict) or reasoning.get("effort") != "none":
+        reasoning = None
+        if payload.get("reasoning_effort") != "none":
+            return None
+    detail = response.text.casefold()
+    if "reasoning" not in detail and "thinking" not in detail:
+        return None
+    retry = dict(payload)
+    if reasoning is not None:
+        retry["reasoning"] = {
+            key: value for key, value in reasoning.items() if key != "effort"
+        }
+    else:
+        del retry["reasoning_effort"]
+    return retry
+
+
 def _openai_message_reasoning(message: dict[str, Any]) -> str:
     """Model thoughts from OpenRouter/OpenAI-compatible reasoning channels.
 
@@ -2564,7 +2602,11 @@ class OpenAICompatibleProvider(ModelProvider):
     async def complete(self, request: ModelRequest) -> ModelResponse:
         model = self.require(request)
         payload = self._payload(request, model)
-        async with self._client(self._headers()) as client:
+        # The whole generation arrives as one response, as it does for the
+        # native adapters, so it gets their long read timeout.
+        async with self._client(
+            self._headers(), timeout=_native_http_timeout(self.config)
+        ) as client:
             response = await self._post(
                 client,
                 self._path("/v1/chat/completions"),
@@ -2572,6 +2614,26 @@ class OpenAICompatibleProvider(ModelProvider):
                 operation="chat_completions",
                 inspect=_chat_completion_body_failure,
             )
+            retry = _refused_reasoning_off_retry(payload, response)
+            if retry is not None:
+                record_diagnostic(
+                    "warning",
+                    "providers",
+                    "providers.reasoning.off_refused",
+                    "The route refused a request to skip reasoning; Core asked "
+                    "again with the model's default reasoning.",
+                    outcome="fallback",
+                    stage="providers",
+                    retryable=False,
+                    metadata={"provider_id": self.config.id, "model": model},
+                )
+                response = await self._post(
+                    client,
+                    self._path("/v1/chat/completions"),
+                    retry,
+                    operation="chat_completions",
+                    inspect=_chat_completion_body_failure,
+                )
         if response.is_error:
             raise _safe_error(response)
         try:
