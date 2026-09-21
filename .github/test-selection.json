@@ -1,22 +1,20 @@
 {
-  "change_digest": "5fe32bd0303afcee6a86feaf3cdc9dba2a3273e6b8094a8557e5deb727e10455",
-  "reviewed_by": "Claude review of the structured-result explorer's narrow-column layout",
-  "reason": "The explorer renders in the conversation drawer at about 280px inside a wide window, where its viewport-keyed narrow rules never matched: a property row's fixed name column plus the actions beside the value left the value zero width, and its text rendered one character per line. The fix makes the dashboard its own sizing context and keys those rules to its width, and gives a value a minimum measure so the actions wrap instead of squeezing it out. This is presentation only: no component logic, API surface or Core behaviour changed, so the selection is the Playwright area that renders the explorer, extended with a drawer-width regression test that measures the value, the tree and the inspector and fails without the fix. The frontend unit tests for the explorer are selected because they render every view that the stylesheet now sizes.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python test is selected because no Python changed: this is one stylesheet, one Playwright fixture and one test. No native tests are selected because no Rust changed. No real-Core entry is selected: layout is identical against mock and real Core, and the drawer's data path is unchanged.",
+  "change_digest": "17acc5f9809c85a62fe85f58010d71d8186e2d1eab3e3570bc742b7b9ecf0a2d",
+  "reviewed_by": "Claude review of the conversation-details declutter",
+  "reason": "The conversation drawer's Context tab restated three things the operator already had in front of them: the context pack the composer shows above the message box, the knowledge posture Assistant settings carries, and the execution boundary its Command runtime row carries. Those three sections are removed, the working-context readout is moved to the top of the tab because the composer's context gauge opens into it, and Continue as mission moves from the reading panel to the conversation's actions menu where the rest of that conversation's actions live. Nothing gains a new source of truth: each removed readout's information stays on the control that owns it. The Playwright selection is a new conversation-details area with two tests: one proves the tab now leads with working context and no longer repeats the three settings, then opens Assistant settings and finds the knowledge and command-runtime rows still there; the other proves Continue as mission left the drawer and is enabled in the actions menu of a harness conversation. Both run on desktop and narrow because the drawer is a docked aside on one and a sheet on the other. The guide catalog's mission step is selected as a frontend test because its copy and route changed with the control it points at.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python test is selected because no Python changed: this is one page component, one guide step and two tests. No native tests are selected because no Rust changed. No real-Core entry is selected: tests/real-core.spec.ts changes by one assertion, re-pointed from the removed section to the working-context heading in the same drawer, and the surrounding test proves an unsent draft survives a tab switch, which no backend touches. The assistant and chat-subagents areas are not selected: this removes and relocates presentation in the drawer without changing the conversation, its transcript, its settings or delegation.",
   "expected_tests": {
     "python": 0,
-    "frontend": 69,
+    "frontend": 12,
     "native": 0,
-    "playwright": 16
+    "playwright": 4
   },
   "python": [],
   "frontend": [
-    "ui/src/components/structured-result/StructuredResultDashboard.test.tsx",
-    "ui/src/components/structured-result/ChatResultStream.test.tsx",
-    "ui/src/pages/ResultsPage.test.tsx"
+    "ui/src/guides/guides.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:structured-results"
+    "area:conversation-details"
   ]
 }

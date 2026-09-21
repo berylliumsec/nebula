@@ -9328,3 +9328,84 @@ test("stabilization the result explorer stays readable in the conversation drawe
   const accessibility = await new AxeBuilder({ page }).include(".chat-result-stream").analyze();
   expect(accessibility.violations).toEqual([]);
 });
+
+test("stabilization conversation details lead with working context and stop repeating settings", async ({ page }) => {
+  await installReasoningProvider(page);
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{ ...entity, id: "details-chat", engagement_id: "scratch-project", title: "Assess staging API auth", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/details-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/details-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await page.goto("/?view=chat&session=details-chat&drawer=context");
+
+  const drawer = page.getByRole("complementary", { name: "Session inspector" })
+    .or(page.getByRole("dialog", { name: "Conversation details" }));
+  await expect(drawer).toBeVisible();
+
+  // The reason this drawer exists leads it: the composer's context gauge opens
+  // here, so the context readout is the first thing under the tabs.
+  await expect(drawer.getByText("Working context")).toBeVisible();
+  const headings = await drawer.locator("h3").allInnerTexts();
+  expect(headings[0]).toBe("Working context");
+
+  // Three readouts that Assistant settings and the composer already carry.
+  await expect(drawer.getByText("Knowledge boundary")).toHaveCount(0);
+  await expect(drawer.getByText("Execution boundary")).toHaveCount(0);
+  await expect(drawer.getByText("Prepared for your next message")).toHaveCount(0);
+
+  // Their information did not disappear: it is where the controls are. On a
+  // narrow window the drawer is a sheet over the conversation, so it closes
+  // before the settings it no longer repeats can be opened.
+  const sheet = page.getByRole("dialog", { name: "Conversation details" });
+  if (await sheet.isVisible()) {
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+  }
+  await page.getByRole("button", { name: "Assistant settings" }).click();
+  const settings = page.getByRole("dialog", { name: /Assistant settings/ });
+  await expect(settings.locator('[data-guide="knowledge-status"]')).toBeVisible();
+  await expect(settings.getByRole("button", { name: /^Command runtime,/ })).toBeVisible();
+});
+
+test("stabilization continue as mission moves to the conversation actions menu", async ({ page }) => {
+  await installReasoningProvider(page);
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{ ...entity, id: "harness-chat", engagement_id: "scratch-project", title: "Sweep the staging hosts", backend: "harness", metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/harness-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/harness-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await page.goto("/?view=chat&session=harness-chat&drawer=context");
+
+  const drawer = page.getByRole("complementary", { name: "Session inspector" })
+    .or(page.getByRole("dialog", { name: "Conversation details" }));
+  await expect(drawer).toBeVisible();
+  // A one-click action does not belong in a reading panel.
+  await expect(drawer.getByRole("button", { name: /Continue as mission/ })).toHaveCount(0);
+
+  // It sits with the other actions for this conversation instead. On a narrow
+  // window the drawer is a sheet, so it closes before the list can be reached.
+  const sheet = page.getByRole("dialog", { name: "Conversation details" });
+  if (await sheet.isVisible()) {
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+  }
+  // A wide window keeps the list beside the conversation; a narrow one opens it.
+  await page.getByRole("button", { name: "Show conversations" })
+    .or(page.getByRole("button", { name: "Open conversations" })).click();
+  // The row reveals its actions on hover.
+  await page.locator(".session-list-item").filter({ hasText: "Sweep the staging hosts" }).hover();
+  await page.getByRole("button", { name: "More actions for Sweep the staging hosts" }).click();
+  const item = page.getByRole("menuitem", { name: /Continue as mission/ });
+  await expect(item).toBeVisible();
+  await expect(item).toBeEnabled();
+});

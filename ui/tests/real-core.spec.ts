@@ -2596,7 +2596,9 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await page.getByRole("button", {name: "Results", exact: true}).click();
     await expect(page.getByRole("region", {name: "Conversation results"})).toBeVisible();
     await page.getByRole("button", {name: "Context", exact: true}).click();
-    await expect(page.getByText("Prepared for your next message", {exact: true})).toBeVisible();
+    // Working context leads the tab; the attachment itself stays in the
+    // composer's context pack, asserted above.
+    await expect(page.getByText("Working context", {exact: true})).toBeVisible();
     await page.getByRole("button", {name: "Close details"}).click();
     await expect(composer).toHaveValue("Preserve this unsent draft");
     await operator.getByRole("button", {name: "Save as decision", exact: true}).click();
