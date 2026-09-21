@@ -249,6 +249,9 @@ class ScopeImportService:
                 response_schema=_ExtractionOutput.model_json_schema(),
                 max_output_tokens=8192,
                 temperature=0,
+                # Extraction into the schema needs no thinking, and thinking
+                # would spend the allowance the candidates need.
+                reasoning_effort="none",
                 metadata={
                     "engagement_id": scope_import.engagement_id,
                     "operation": "scope_import",

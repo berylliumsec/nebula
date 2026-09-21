@@ -922,6 +922,9 @@ class ContextCompactor:
                 messages=messages,
                 max_output_tokens=max_output_tokens,
                 temperature=0,
+                # The memory JSON is the whole answer; thinking would spend
+                # the allowance it needs.
+                reasoning_effort="none",
                 response_schema=(
                     ContextMemory.model_json_schema()
                     if provider.capabilities.structured_output
