@@ -122,6 +122,7 @@ from .providers import (
     ModelUsage,
     ProviderContextLengthError,
     ProviderError,
+    ProviderMalformedToolCallError,
     ProviderOverloadedError,
     ProviderResponseError,
     StreamEventType,
@@ -3667,9 +3668,7 @@ class ChatService:
                     routing = self._fit_turn_goal_request(prepared, routing)
                     self._ensure_request_capacity(prepared.provider_profile, routing)
                     try:
-                        response = await self._complete_with_context_recovery(
-                            prepared, routing
-                        )
+                        response = await self._complete_routing_step(prepared, routing)
                     except ProviderError as exc:
                         if auto_routing or not _rejects_required_tool_choice(exc):
                             raise
@@ -3698,9 +3697,7 @@ class ChatService:
                         routing = routing.model_copy(
                             update={"tool_choice": ToolChoice.AUTO}
                         )
-                        response = await self._complete_with_context_recovery(
-                            prepared, routing
-                        )
+                        response = await self._complete_routing_step(prepared, routing)
                     self._assert_execution_owner(prepared)
                     turn = self._refresh_turn(turn)
                     thoughts = _routing_thoughts(response)
@@ -4620,6 +4617,33 @@ class ChatService:
                 safe_failure_cause="The local embedding model download or load failed.",
                 exception=exc,
             )
+
+    async def _complete_routing_step(
+        self, prepared: PreparedChat, request: ModelRequest
+    ) -> ModelResponse:
+        """Route once more when the model botched its tool call.
+
+        A malformed call is a sampling accident, not a decision that no tool
+        is needed, and the identical request usually succeeds. A second
+        malformed call fails the turn with the vendor's reason.
+        """
+
+        try:
+            return await self._complete_with_context_recovery(prepared, request)
+        except ProviderMalformedToolCallError as exc:
+            record_caught_exception(
+                "chat",
+                "chat.routing.malformed_tool_call_retried",
+                "A provider returned a malformed tool call; the routing step "
+                "was asked once more.",
+                exc,
+                stage="routing",
+                metadata={
+                    "provider": prepared.provider_profile.id,
+                    "model_id": prepared.resolved_model,
+                },
+            )
+            return await self._complete_with_context_recovery(prepared, request)
 
     @staticmethod
     def _routing_batch(

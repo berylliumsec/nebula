@@ -1,28 +1,27 @@
 {
-  "change_digest": "6516a463fca9ac112238b8dd27656b35263c4f6d5e6d3e48d4ab354c4c9b9117",
-  "reviewed_by": "Claude review of harness-stopped-turns",
-  "reason": "A harness chat turn that stopped without an error event (operator Stop while the POST stream is attached, Codex turn/completed interrupted or cancelled, ACP stopReason cancelled) ended its SSE stream with the internal 'harness turn completed without a durable message' error at error level and dropped the text streamed so far, including completed Codex /goal answers. harness_events and the /chat/turns/{id}/events follower now end such turns with the existing cancelled frame (a turn Core abandoned after restart keeps its error frame), non-streamed requests get a 409, stream_turn saves the partial answer as an assistant message with finish_reason interrupted before the turn goes terminal and on operator stop, and the UI keeps that saved message marked Stopped after reload. stream_turn also left the delta coalescer unclosed, so every interrupted or error-terminated turn logged an unretrieved StopAsyncIteration; it now closes the coalescer last in its finally and the coalescer retrieves a finished read. test_harness_stopped_turns.py drives the real API with create_app and TestClient (six of its seven tests fail on main; the restart guard passes on both); the selected existing tests cover stop/cancel, restart interruption, mid-stream failure, the successful harness stream, the Codex goal stop and the follow endpoint; the vitest case covers the reload state.",
-  "exclusions": "Full test_harnesses.py (93), test_harness_adapters.py (70), test_chat_reconnection.py (5), test_chat_api.py (25) and the App/client vitest files (120) were run locally and pass, but are not selected per CI scoping. Playwright is limited to the narrowest assistant entry (desktop mock) because SessionsPage.tsx changed by one mapping line; the other assistant projects and the real-Core journey do not exercise stopped-turn reloads. No native tests: no Tauri or Rust change. No full suites.",
+  "change_digest": "dac0cfe0480f2993f33bbe19fd9d3c692958a70d376deb3408af37f3ed5c323b",
+  "reviewed_by": "Claude review of native-adapter-outcomes",
+  "reason": "The native adapters (OpenAI Responses, Anthropic, Gemini, Bedrock) read vendor stop outcomes as ordinary empty replies: a Claude safeguard refusal (HTTP 200, stop_reason refusal with stop_details.category), a Gemini promptFeedback block or SAFETY/RECITATION/BLOCKLIST/PROHIBITED_CONTENT/SPII candidate, a Bedrock guardrail_intervened/content_filtered stop, a Responses refusal part or status failed with an error, a malformed tool call (Gemini MALFORMED_FUNCTION_CALL/UNEXPECTED_TOOL_CALL, Bedrock malformed_tool_use/malformed_model_output) and model_context_window_exceeded all became text='' with no calls, so chat's routing step treated them as 'no tool needed' and synthesis re-asked and ended with 'no operator-facing answer after bounded recovery'. Responses also reported finish_reason 'incomplete' instead of max_output_tokens, so output-limit recovery never ran, raised 'malformed tool arguments' for a function_call cut off by the limit, and merged phase:commentary preamble into answer text. Each adapter now normalises these outcomes after parsing: blocks and bare refusals raise ProviderRefusalError (a ProviderResponseError subclass, 'provider blocked the response: <reason>'), a refusal with text returns that text, a malformed call raises ProviderMalformedToolCallError when the request offered tools and chat's routing step (both the required and the #487 automatic tool-choice calls) asks once more before failing the turn, context-window stops raise ProviderContextLengthError, Responses failed statuses are typed, finish_reason carries incomplete_details.reason, incomplete function_call items are skipped and commentary goes to reasoning. The SSE error frame no longer labels a refusal provider_final_answer_missing (which the client renders as 'Finish the answer' and hides the detail). tests/v3/test_native_adapter_outcomes.py (34 tests, 32 failing on origin/main 932719d; the other 2 guard ordinary stops) proves it, plus the existing parse, routing, tool-choice fallback, final-answer and stream-frame tests closest to the changed code.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through providers.py, chat.py and api.py) does not exercise vendor refusal, block or malformed-call outcomes, which need scripted vendor bodies; the Python tests drive the adapters, the chat tool loop and the SSE stream directly. test_providers.py, test_chat_tool_loop.py, test_chat_routing_tolerance.py, test_openai_compatible_robustness.py, test_native_adapter_requests.py, test_gemini_call_ids.py, test_provider_verification.py, test_reasoning_recovery.py, test_provider_contracts.py, test_chat.py, test_chat_api.py, test_specialist_routing_tolerance.py and test_openai_compatible_parameters.py were run locally in full and pass but are not selected. No full suites.",
   "expected_tests": {
-    "python": 15,
-    "frontend": 8,
+    "python": 43,
+    "frontend": 0,
     "native": 0,
-    "playwright": 55
+    "playwright": 0
   },
   "python": [
-    "tests/v3/test_harness_stopped_turns.py",
-    "tests/v3/test_harnesses.py::test_explicit_stop_cancels_detached_work_without_completing_it",
-    "tests/v3/test_harnesses.py::test_transport_loss_and_restart_interrupt_without_replay",
-    "tests/v3/test_harnesses.py::test_nebula_side_failure_mid_stream_interrupts_the_vendor_turn",
-    "tests/v3/test_harnesses.py::test_harness_stream_exposes_saved_identity_before_runtime_and_optional_naming",
-    "tests/v3/test_harness_adapters.py::test_codex_stop_between_goal_turns_pauses_the_goal",
-    "tests/v3/test_chat_reconnection.py::test_chat_follow_is_read_only_and_returns_saved_completion"
+    "tests/v3/test_native_adapter_outcomes.py",
+    "tests/v3/test_providers.py::test_openai_responses_translates_flattened_tools_and_parses_calls",
+    "tests/v3/test_providers.py::test_anthropic_tool_names_are_wire_safe_and_decoded",
+    "tests/v3/test_providers.py::test_gemini_function_calls_without_an_id_get_a_stable_one",
+    "tests/v3/test_providers.py::test_bedrock_tool_names_are_wire_safe_and_decoded",
+    "tests/v3/test_chat_tool_loop.py::test_routing_response_without_a_tool_call_answers_from_existing_results",
+    "tests/v3/test_chat_tool_loop.py::test_final_synthesis_exhaustion_preserves_tools_and_is_retryable_provider_failure",
+    "tests/v3/test_chat_api.py::test_chat_stream_names_exhausted_final_answer_recovery",
+    "tests/v3/test_chat_routing_tolerance.py::test_routing_retries_with_auto_when_required_is_rejected",
+    "tests/v3/test_chat_routing_tolerance.py::test_an_unrelated_routing_rejection_still_fails_the_turn"
   ],
-  "frontend": [
-    "ui/src/pages/chatMessageReconciliation.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant/desktop"
-  ]
+  "playwright": []
 }

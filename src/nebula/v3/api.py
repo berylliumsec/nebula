@@ -441,6 +441,7 @@ from .providers import (
     ProviderFlavor,
     ProviderHealth,
     ProviderQuotaError,
+    ProviderRefusalError,
     ProviderResponseError,
     ToolChoice,
     ToolDefinition,
@@ -9233,6 +9234,9 @@ def create_app(
                         code=(
                             "provider_final_answer_missing"
                             if isinstance(exc, ProviderResponseError)
+                            # A refusal is shown as it is, not as an
+                            # unfinished answer the client offers to finish.
+                            and not isinstance(exc, ProviderRefusalError)
                             else "chat_stream_failed"
                         ),
                         detail=str(exc),
@@ -9450,6 +9454,9 @@ def create_app(
                         code=(
                             "provider_final_answer_missing"
                             if isinstance(exc, ProviderResponseError)
+                            # A refusal is shown as it is, not as an
+                            # unfinished answer the client offers to finish.
+                            and not isinstance(exc, ProviderRefusalError)
                             else "chat_resume_failed"
                         ),
                         detail=str(exc),
