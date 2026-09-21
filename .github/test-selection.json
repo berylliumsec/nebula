@@ -1,21 +1,21 @@
 {
-  "change_digest": "55960a92ca016e7e110351aa876ce49b12d6c59fcb3b320950443e7d90b4c059",
-  "reviewed_by": "Claude review of the floating Agent view",
-  "reason": "The Agent view was reachable only as a tab in the conversation drawer. The composer's Agent view button now opens it as a floating, non-modal panel over the conversation that can be moved, resized, minimized to a launcher, docked back into the conversation's details and popped out again, with its placement and geometry remembered per device and a bottom sheet on phones. The timeline, snapshot body, follow/stop logic and status line moved into a shared AgentViewBody so the floating and docked placements render the same view; ChatResultStream is now the docked placement with a Pop out control. The frontend selection covers the panel (placement and geometry storage, clamping, first placement clear of the toolbar and composer, keyboard move and resize, Escape to minimize, the launcher and its counts, the phone sheet) and the docked stream (follow, stop, back to newest, pop out). The Playwright selection is the structured-results area, which renders the explorer in every placement and now includes an end-to-end journey on desktop, narrow, mobile Chromium and mobile WebKit: open from the composer with focus inside, the composer usable underneath, axe on the panel, keyboard move, Escape to a launcher and back to the same place, dock with focus on Pop out, the choice surviving a reload, pop out, and close returning focus to the composer button, plus the sheet on phones.",
-  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python test is selected because no Python changed: publishing, retention and the REST API are untouched. No native tests are selected because no Rust changed. No real-Core entry is selected: the view reads the same list and detail endpoints as before, which the structured-results Python tests and mock-backed journeys cover, and placement is purely client-side. The assistant area was run locally on desktop: 49 passed, and the 2 failures (conversation More actions on mobile Workbench navigation; a provider turn that thinks without answering) fail identically on origin/main without this change. The critical-workspaces area passed locally on desktop.",
+  "change_digest": "4e7f3f8d0a9d49f182517f083c3b8e1261a81f111feb518917592b84c36af008",
+  "reviewed_by": "Claude review of two chat regressions from #456 and #460",
+  "reason": "Two chat tests have been failing on main because of my own earlier changes, unseen because each of those receipts selected only its own Playwright area. #460 rendered Continue as mission first in the conversation actions menu as a hidden item for non-harness conversations; opening the menu focused that hidden button and arrow keys counted it, so 'conversation More actions remain usable on mobile Workbench navigation' failed. The item is now rendered only for harness conversations, after Export transcript so the first item is the same in every conversation, and first focus and arrow order skip hidden or disabled items; a disabled mission item explains why. #456 replaced the 'Retry final answer' error with a calm 'Finish the answer' status that deliberately has no Reload conversation button, and 'assistant upgrade names a provider turn that thinks without answering' still looked for the old controls; it now asserts the status the operator sees and completes the turn with Finish the answer. The conversation-details test for the mission item now also proves the keyboard order. The selection is the whole assistant area on its three mock projects, the area both regressions escaped, where it passed locally in full (desktop 51, mobile Chromium 44, mobile WebKit 47, none failing), plus conversation-details for the narrow sheet.",
+  "exclusions": "Full Python, frontend and Playwright suites are excluded. No Python test is selected because no Python changed. No frontend unit test is selected: the only source change is the menu markup and its focus selectors in SessionsPage, which no unit test renders, and the Playwright journeys exercise them in a browser. No native tests are selected because no Rust changed. The assistant area's real-Core entry (assistant-real-desktop) is not selected: neither the menu nor the recovery notice changes anything Core serves, and the mock entries cover both in a browser. The provider-thinking test also fails on the narrow 390px desktop-Chrome project, where something covers the Thinking summary; that project is not in its area, it passes on the real phone projects, and it is outside this repair.",
   "expected_tests": {
     "python": 0,
-    "frontend": 19,
+    "frontend": 0,
     "native": 0,
-    "playwright": 24
+    "playwright": 144
   },
   "python": [],
-  "frontend": [
-    "ui/src/components/structured-result/AgentViewPanel.test.tsx",
-    "ui/src/components/structured-result/ChatResultStream.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "area:structured-results"
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit",
+    "entry:conversation-details/narrow"
   ]
 }
