@@ -8563,7 +8563,7 @@ reloadTest("stabilization terminal long output keeps the prompt and typed input 
   expect(cursorBounds.x + cursorBounds.width / 2).toBeLessThanOrEqual(page.viewportSize()!.width);
 });
 
-test("assistant popup hides, restores and discards without changing the main conversation", async ({ page }, testInfo) => {
+test("assistant popup hides, restores and discards without changing the main conversation", async ({ page, browserName }, testInfo) => {
   await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [{
     ...entity, id: "provider-1", name: "Popup model", provider_type: "vllm", endpoint: "http://localhost:8001/v1", enabled: true, is_local: true,
     model_allowlist: ["model-1"], capabilities: { streaming: true }, privacy: { local_only: true }, metadata: { default_model: "model-1" },
@@ -8596,7 +8596,11 @@ test("assistant popup hides, restores and discards without changing the main con
   const popup = page.getByRole("dialog", { name: "Ask Nebula", exact: true });
   await expect(popup).toBeVisible();
   await expect(page).toHaveURL(originalUrl);
-  await popup.getByRole("textbox").fill("Explain the selected title");
+  // Type into the box the popup focused, once the selection toolbar has exited: that exit used
+  // to clear the document selection, which WebKit uses as the box's caret, dropping every key.
+  await expect(page.getByRole("toolbar", { name: "Selected text actions" })).toHaveCount(0);
+  await expect(popup.getByRole("textbox")).toBeFocused();
+  await page.keyboard.type("Explain the selected title");
   await expect(popup.getByRole("textbox")).toHaveValue("Explain the selected title");
   await popup.getByRole("button", { name: "Ask question" }).click();
   await expect(popup.getByText("A private answer with a follow-up.")).toBeVisible();
@@ -8630,7 +8634,11 @@ test("assistant popup hides, restores and discards without changing the main con
   const moved = await launcher.boundingBox();
   expect(moved!.x).toBeLessThan(start!.x);
   expect(requests).toHaveLength(2);
-  await moveLauncher.dragTo(page.locator("body"), { targetPosition: { x: 24, y: 120 } });
+  // Playwright's WebKit build segfaults in its compositor thread about a second after the mouse
+  // drags a fixed-position element: every drag loop crashed within 20 drags, keyboard loops never
+  // did. WebKit moves the pill and the popup with the keyboard; Chromium covers the pointer drags.
+  if (browserName === "webkit") for (let step = 0; step < 20; step++) await page.keyboard.press("ArrowUp");
+  else await moveLauncher.dragTo(page.locator("body"), { targetPosition: { x: 24, y: 120 } });
   const dragged = await launcher.boundingBox();
   expect(dragged!.x).toBeGreaterThanOrEqual(0);
   expect(dragged!.y).toBeGreaterThanOrEqual(0);
@@ -8665,10 +8673,15 @@ test("assistant popup hides, restores and discards without changing the main con
   const handle = popup.getByRole("button", { name: "Move Ask Nebula" });
   const handleBounds = (await handle.boundingBox())!;
   const beforeMove = (await popup.boundingBox())!;
-  await page.mouse.move(handleBounds.x + 20, handleBounds.y + 20);
-  await page.mouse.down();
-  await page.mouse.move(handleBounds.x + 20, handleBounds.y + 240, { steps: 8 });
-  await page.mouse.up();
+  if (browserName === "webkit") {
+    await handle.focus();
+    for (let step = 0; step < 9; step++) await page.keyboard.press("ArrowDown");
+  } else {
+    await page.mouse.move(handleBounds.x + 20, handleBounds.y + 20);
+    await page.mouse.down();
+    await page.mouse.move(handleBounds.x + 20, handleBounds.y + 240, { steps: 8 });
+    await page.mouse.up();
+  }
   expect((await popup.boundingBox())!.y).toBeGreaterThan(beforeMove.y);
   await handle.focus();
   await page.keyboard.press("ArrowUp");
