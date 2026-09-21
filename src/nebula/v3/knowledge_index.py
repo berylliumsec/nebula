@@ -148,8 +148,16 @@ class _TrackedDefaultEmbeddingFunction(DefaultEmbeddingFunction):
             self._tracker.preparing()
         try:
             embeddings = self._model(input)
-        except Exception:
+        except Exception as exc:
             self._tracker.failed()
+            record_caught_exception(
+                "knowledge",
+                "knowledge.embedding_model.failed",
+                "The local embedding model could not prepare or generate embeddings.",
+                exc,
+                stage="embedding",
+                metadata={"backend": INDEX_BACKEND},
+            )
             raise
         self._tracker.ready()
         return embeddings

@@ -5,6 +5,7 @@ import zipfile
 from typing import Any
 
 import numpy as np
+import pytest
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
 from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
 from fastapi.testclient import TestClient
@@ -14,6 +15,7 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatService
 from nebula.v3.domain import Artifact, Engagement, KnowledgeSource, LibraryItem
 from nebula.v3.knowledge import GLOBAL_LIBRARY_ARTIFACT_OWNER
+from nebula.v3 import knowledge_index
 from nebula.v3.knowledge_index import ChromaKnowledgeIndex
 from nebula.v3.storage import NebulaStore
 
@@ -53,6 +55,41 @@ class SecurityEmbeddingFunction(EmbeddingFunction[Documents]):
                 values.append(0.0)
             vectors.append(np.asarray(values, dtype=np.float32))
         return vectors
+
+
+def test_local_embedding_failure_records_diagnostic_and_failed_status(monkeypatch):
+    tracker = knowledge_index._ModelStatusTracker(ready=False)
+    embedding = knowledge_index._TrackedDefaultEmbeddingFunction.__new__(
+        knowledge_index._TrackedDefaultEmbeddingFunction
+    )
+    embedding._tracker = tracker
+
+    def fail(_input):
+        raise RuntimeError("private document text should not enter diagnostics")
+
+    embedding._model = fail
+    recorded = []
+    monkeypatch.setattr(knowledge_index, "_default_model_ready", lambda: True)
+    monkeypatch.setattr(
+        knowledge_index,
+        "record_caught_exception",
+        lambda *args, **kwargs: recorded.append((args, kwargs)),
+    )
+
+    with pytest.raises(RuntimeError):
+        embedding(["private document text"])
+
+    assert tracker.snapshot().state == "error"
+    assert recorded[0][0][:3] == (
+        "knowledge",
+        "knowledge.embedding_model.failed",
+        "The local embedding model could not prepare or generate embeddings.",
+    )
+    assert isinstance(recorded[0][0][3], RuntimeError)
+    assert recorded[0][1] == {
+        "stage": "embedding",
+        "metadata": {"backend": "chromadb"},
+    }
 
 
 def _auth() -> dict[str, str]:

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from nebula.v3 import mcp
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     McpCapabilitySnapshot,
@@ -253,6 +254,12 @@ def test_http_tool_timeout_is_reported_as_timed_out(tmp_path, monkeypatch):
     _slow_http_server(monkeypatch, answers_after=1.0, seen={})
     profile, service = _http_service(tmp_path, startup=0.2, tool=0.5)
     [plugin] = build_mcp_tool_plugins(service, (profile,))
+    recorded = []
+    monkeypatch.setattr(
+        mcp,
+        "record_caught_exception",
+        lambda *args, **kwargs: recorded.append((args, kwargs)),
+    )
 
     result = asyncio.run(
         plugin.execute(SimpleNamespace(engagement_id="eng", arguments={}), None)
@@ -260,6 +267,15 @@ def test_http_tool_timeout_is_reported_as_timed_out(tmp_path, monkeypatch):
 
     assert result.exit_code == 1
     assert result.execution["timed_out"] is True
+    assert recorded[0][0][:3] == (
+        "harnesses",
+        "harnesses.mcp.tool_call_failed",
+        "An MCP tool call could not complete.",
+    )
+    assert recorded[0][1] == {
+        "stage": "execute",
+        "metadata": {"transport": "mcp", "operation": "call_tool"},
+    }
 
 
 def test_mcp_plugin_carries_a_readable_name_beside_its_runtime_name(tmp_path):

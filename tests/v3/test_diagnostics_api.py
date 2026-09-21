@@ -110,6 +110,11 @@ def test_diagnostics_api_settings_correlation_fault_and_export(tmp_path: Path) -
             assert matching[0]["operation_id"] == operation_id
             assert matching[0]["stage"] == "dispatch"
             assert matching[0]["exception_type"] == "OSError"
+            assert matching[0]["metadata"] == {
+                "method": "GET",
+                "route": "/api/v1/test/diagnostic-fault",
+                "http_status": 500,
+            }
             api_failure = [
                 record
                 for record in _records(manager.log_dir / "api.log")

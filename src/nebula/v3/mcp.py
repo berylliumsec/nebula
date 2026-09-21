@@ -812,7 +812,15 @@ def build_mcp_tool_plugins(
                     tool_name=self.snapshot.name,
                     arguments=invocation.arguments,
                 )
-            except Exception as exc:  # diagnostic-expected: converted to a bounded tool failure receipt
+            except Exception as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.mcp.tool_call_failed",
+                    "An MCP tool call could not complete.",
+                    exc,
+                    stage="execute",
+                    metadata={"transport": "mcp", "operation": "call_tool"},
+                )
                 failure = exc
             completed = utc_now()
             blocks: list[dict[str, Any]] = []

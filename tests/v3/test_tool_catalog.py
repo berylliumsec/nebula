@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import nebula.v3.chat as chat_module
+import nebula.v3.tool_catalog as tool_catalog_module
 from nebula.v3.api import create_app
 from nebula.v3.chat import ChatRequestMessage
 from nebula.v3.artifacts import ArtifactStore
@@ -175,12 +176,30 @@ def test_semantic_search_finds_a_tool_that_shares_no_keyword(tmp_path):
     assert set(index.indexed) == {fingerprint(spec) for spec in specs.values()}
 
 
-def test_search_falls_back_to_keywords_when_the_index_is_not_ready(tmp_path):
+def test_search_falls_back_to_keywords_when_the_index_is_not_ready(
+    tmp_path, monkeypatch
+):
+    recorded = []
+    monkeypatch.setattr(
+        tool_catalog_module,
+        "record_caught_exception",
+        lambda *args, **kwargs: recorded.append((args, kwargs)),
+    )
     for index in (FakeIndex({}, state="downloading"), FakeIndex({}, fail=True)):
         broker = ToolCatalogBroker(_catalog(), index=index)
         found = _invoke(broker, CATALOG_SEARCH, {"query": "search issues"}, tmp_path)
         assert found["search"] == "keyword"
         assert found["matches"][0]["name"] == MCP_TOOL
+    assert len(recorded) == 1
+    assert recorded[0][0][:3] == (
+        "knowledge",
+        "knowledge.tool_catalog.semantic_fallback",
+        "Semantic tool ranking failed; keyword ranking remains available.",
+    )
+    assert recorded[0][1] == {
+        "stage": "rank",
+        "metadata": {"operation": "tool_ranking"},
+    }
 
 
 def test_fingerprint_tracks_the_indexed_text():

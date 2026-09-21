@@ -21,6 +21,7 @@ from typing import Any
 from pydantic import Field
 
 from . import ssh_environments as ssh
+from .diagnostics import record_caught_exception
 from .domain import (
     NebulaModel,
     RiskClass,
@@ -424,7 +425,15 @@ def build_ssh_tool_plugins(
                     timeout_seconds=timeout,
                     config_path=config_path,
                 )
-            except Exception as exc:  # diagnostic-expected: failed receipt
+            except Exception as exc:
+                record_caught_exception(
+                    "runtime",
+                    "runtime.ssh.command_start_failed",
+                    "An SSH command could not start.",
+                    exc,
+                    stage="execute",
+                    metadata={"transport": "ssh", "operation": "run_command"},
+                )
                 failure = str(exc) or type(exc).__name__
             completed = utc_now()
             error_text = stderr.decode("utf-8", errors="replace")
