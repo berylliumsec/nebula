@@ -56,6 +56,7 @@ from nebula.v3.providers import (
     ProviderHealth,
     ProviderKind,
     ToolCall as ModelToolCall,
+    ToolChoice,
 )
 from nebula.v3.storage import NebulaStore
 
@@ -108,9 +109,10 @@ class ChildProvider(ModelProvider):
             raise AssertionError("child script was exhausted")
         if isinstance(self.answers[0], ModelResponse):
             return self.answers.pop(0)  # type: ignore[return-value]
-        if request.tools:
+        if request.tool_choice != ToolChoice.NONE:
             # Every subagent routes tools, so a scripted answer first
-            # finishes routing.
+            # finishes routing. The synthesis keeps its tools declared with
+            # calling off.
             return ModelResponse(
                 provider_id=self.config.id,
                 model="model-a",

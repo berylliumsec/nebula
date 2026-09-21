@@ -2,7 +2,7 @@
 
 A model that still reaches for a tool while it answers, or whose attempt at a
 call arrives malformed or refused upstream, is a normal event at that point in
-a turn: the request offered no tools, so every call it makes is one it was not
+a turn: the request allows no call, so every call it makes is one it was not
 allowed to make. These tests pin what the turn does instead of failing.
 """
 
@@ -24,6 +24,7 @@ from nebula.v3.providers import (
     ProviderResponseError,
     StreamEventType,
     ToolCall,
+    ToolChoice,
 )
 from tests.v3.test_chat_tool_loop import (
     RecordingBroker,
@@ -189,8 +190,12 @@ def test_final_synthesis_recovers_from_a_nameless_tool_call_fragment(tmp_path):
     assert done[-1]["message"]["content"] == "Recovered answer."
     assert _visible(events) == "Recovered answer."
     assert [call.tool_name for call in broker.calls] == ["safe_read"]
-    # The synthesis requests offered no tools; the second one is the recovery.
-    assert [len(payload.get("tools", [])) for payload in seen[2:]] == [0, 0]
+    # The synthesis requests declared the routing tools with calling off; the
+    # second one is the recovery.
+    assert [
+        (len(payload.get("tools", [])), payload.get("tool_choice"))
+        for payload in seen[2:]
+    ] == [(2, "none"), (2, "none")]
     turn = store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.request_snapshot["final_answer_recovery"]["reason"] == "tool_call"
@@ -257,7 +262,9 @@ def test_final_synthesis_recovers_from_a_rejected_tool_call_event(tmp_path):
 
     class RejectingSynthesisProvider(ScriptedProvider):
         async def stream(self, request: ModelRequest):
-            if request.tools or request.metadata.get("final_answer_recovery"):
+            if request.tool_choice != ToolChoice.NONE or request.metadata.get(
+                "final_answer_recovery"
+            ):
                 async for event in super().stream(request):
                     yield event
                 return
@@ -396,7 +403,8 @@ def test_final_synthesis_tool_call_with_budget_routes_again(tmp_path):
     assert _visible(events) == "The stored values are a and b."
     assert [call.arguments for call in broker.calls] == [{"value": "a"}, {"value": "b"}]
     requests = _turn_requests(provider)
-    assert [bool(request.tools) for request in requests] == [
+    # Calls allowed: routing, routing, synthesis, routing again, synthesis.
+    assert [request.tool_choice != ToolChoice.NONE for request in requests] == [
         True,
         True,
         False,
@@ -434,7 +442,7 @@ def test_final_synthesis_routes_again_only_once_per_turn(tmp_path):
     assert _visible(events) == ANSWER
     assert [call.arguments for call in broker.calls] == [{"value": "a"}]
     requests = _turn_requests(provider)
-    assert [bool(request.tools) for request in requests] == [
+    assert [request.tool_choice != ToolChoice.NONE for request in requests] == [
         True,
         True,
         False,
@@ -465,7 +473,11 @@ def test_final_synthesis_tool_call_without_budget_is_re_asked(tmp_path):
     assert _visible(events) == ANSWER
     assert len(broker.calls) == 1
     requests = _turn_requests(provider)
-    assert [bool(request.tools) for request in requests] == [True, False, False]
+    assert [request.tool_choice != ToolChoice.NONE for request in requests] == [
+        True,
+        False,
+        False,
+    ]
     assert requests[-1].metadata["final_answer_recovery"] == "tool_call"
     turn = store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE

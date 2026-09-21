@@ -138,8 +138,12 @@ def test_routing_prose_without_a_call_is_the_answer(tmp_path):
     turn = store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1"]
-    # Both requests were routing steps; no synthesis request followed.
-    assert all(request.tools for request in _turn_requests(provider))
+    # Both requests were routing steps; no synthesis request followed. The
+    # synthesis also declares tools, with calling off, so the choice tells
+    # them apart.
+    assert all(
+        request.tool_choice != ToolChoice.NONE for request in _turn_requests(provider)
+    )
     assert len(_turn_requests(provider)) == 2
 
 
@@ -298,7 +302,7 @@ def test_repeated_deviations_finish_through_synthesis(tmp_path):
     assert turn.execution_tool_calls == 0
     requests = _turn_requests(provider)
     assert len(requests) == 4
-    assert requests[-1].tools == []
+    assert requests[-1].tool_choice == ToolChoice.NONE
 
 
 # ROUTE-9: a call cut off by the output limit is never executed.
@@ -478,7 +482,11 @@ def test_routing_retries_with_auto_when_required_is_rejected(tmp_path):
     assert completion.message.content == "Read a."
     assert [call.arguments["value"] for call in broker.calls] == ["a"]
     assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
-    routing = [request for request in _turn_requests(provider) if request.tools]
+    routing = [
+        request
+        for request in _turn_requests(provider)
+        if request.tool_choice != ToolChoice.NONE
+    ]
     # One rejected attempt, then the rest of the turn routes with auto.
     assert [request.tool_choice for request in routing] == [
         ToolChoice.REQUIRED,

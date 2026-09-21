@@ -40,6 +40,7 @@ from nebula.v3.providers import (
     ProviderKind,
     ProviderResponseError,
     ToolCall,
+    ToolChoice,
 )
 from nebula.v3.runtime_platform import RuntimeToolComponents
 from nebula.v3.storage import NebulaStore
@@ -378,9 +379,9 @@ def test_tool_turn_prompts_never_claim_the_turn_has_no_tools(tmp_path):
         instructions = request.instructions or ""
         assert _CHAT_BASE_INSTRUCTIONS in instructions
         assert "No tools are available" not in instructions
-    # The last request is final synthesis: it carries no functions, but tools
-    # did run, so it must not tell the operator the turn had none.
-    assert turn_requests[-1].tools == []
+    # The last request is final synthesis: calling is off, but tools did run,
+    # so it must not tell the operator the turn had none.
+    assert turn_requests[-1].tool_choice == ToolChoice.NONE
 
 
 def test_denied_tool_is_returned_as_error_context_without_reexecution(tmp_path):
