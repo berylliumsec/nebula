@@ -2774,6 +2774,7 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
         # operator can return to, so it has to round-trip as one.
         "reasoning_effort": None,
         "allow_subagents": False,
+        "max_active_subagents": None,
     }
     assert [message.sequence for message in service.session_messages(session.id)] == [
         1,
@@ -2835,6 +2836,7 @@ def test_existing_session_cursor_and_messages_roll_back_together(tmp_path, monke
         # operator can return to, so it has to round-trip as one.
         "reasoning_effort": None,
         "allow_subagents": False,
+        "max_active_subagents": None,
     }
     assert [message.sequence for message in service.session_messages(session.id)] == [
         1,

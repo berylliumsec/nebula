@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 
 from nebula.v3.chat import ChatCompletionRequest, ChatService
-from nebula.v3.chat_subagents import MAX_ACTIVE_SUBAGENTS
 from nebula.v3.domain import (
     ChatMessage,
     ChatSession,
@@ -333,8 +332,12 @@ def test_stopping_parent_stops_its_subagents(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_concurrent_subagent_limit_is_reported_to_the_model(tmp_path: Path) -> None:
-    async def scenario() -> None:
+def _fan_out(
+    tmp_path: Path, count: int, **flags
+) -> tuple[NebulaStore, ChatTurn, RoutedProvider]:
+    """Start ``count`` subagents in one response while every child is held."""
+
+    async def scenario() -> tuple[NebulaStore, ChatTurn, RoutedProvider]:
         starts = [
             _call(
                 f"p{index}",
@@ -343,32 +346,59 @@ def test_concurrent_subagent_limit_is_reported_to_the_model(tmp_path: Path) -> N
                 name=None,
                 context=None,
             )
-            for index in range(MAX_ACTIVE_SUBAGENTS + 1)
+            for index in range(count)
         ]
         provider = RoutedProvider(
-            parent=[*starts, _finish("done"), _response(text="Limited.")],
+            parent=[*starts, _finish("done"), _response(text="Fanned out.")],
             child=[],
         )
         store, project, _, chat = _setup(tmp_path, provider)
         provider.child_gate = asyncio.Event()
         prepared = await chat.prepare_async(
-            _request(project, content="Fan out.", allow_subagents=True)
+            _request(project, content="Fan out.", allow_subagents=True, **flags)
         )
         parent_turn_id = chat.start_provider_turn(prepared)
         await _drain(chat, parent_turn_id)
         parent = store.get(ChatTurn, parent_turn_id)
-        statuses = [entry["status"] for entry in parent.tool_history]
-        assert statuses == ["complete"] * MAX_ACTIVE_SUBAGENTS + ["failed"]
-        assert "already running" in parent.tool_history[-1]["provider_result"]
-        assert len(store.list_entities(ChatSubagent)) == MAX_ACTIVE_SUBAGENTS
         for record in store.list_entities(ChatSubagent):
             await chat.subagents.stop(record.id)
         assert {item.status for item in store.list_entities(ChatSubagent)} == {
             ChatSubagentStatus.STOPPED
         }
         await chat.shutdown()
+        return store, parent, provider
 
-    asyncio.run(scenario())
+    return asyncio.run(scenario())
+
+
+def test_subagents_are_unlimited_unless_the_operator_sets_a_limit(
+    tmp_path: Path,
+) -> None:
+    # More than the three-at-once and six-per-response caps that used to apply.
+    store, parent, provider = _fan_out(tmp_path, 8)
+
+    assert [entry["status"] for entry in parent.tool_history] == ["complete"] * 8
+    assert len(store.list_entities(ChatSubagent)) == 8
+    assert parent.request_snapshot["max_active_subagents"] is None
+    assert "running at once" not in (provider.parent_requests[0].instructions or "")
+
+
+def test_operator_subagent_limit_is_reported_to_the_model(tmp_path: Path) -> None:
+    store, parent, provider = _fan_out(tmp_path, 3, max_active_subagents=2)
+
+    statuses = [entry["status"] for entry in parent.tool_history]
+    assert statuses == ["complete", "complete", "failed"]
+    assert (
+        "operator allows 2 running at once"
+        in parent.tool_history[-1]["provider_result"]
+    )
+    assert len(store.list_entities(ChatSubagent)) == 2
+    assert parent.request_snapshot["max_active_subagents"] == 2
+    assert "at most 2 running at once" in (
+        provider.parent_requests[0].instructions or ""
+    )
+    session = store.get(ChatSession, parent.session_id)
+    assert session.metadata["max_active_subagents"] == 2
 
 
 def test_restart_interrupts_running_subagents_and_reports_it(tmp_path: Path) -> None:

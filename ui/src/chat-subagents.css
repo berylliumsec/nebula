@@ -85,4 +85,20 @@
 .chat-harness-subagent-status { color: var(--muted); font-size: 11px; }
 .chat-harness-subagent-status[data-tone="ok"] > span { color: var(--green); }
 .chat-harness-subagent-status[data-tone="error"] { color: var(--red); }
+
+/* The operator's optional running-at-once limit, beside its explanation. */
+.chat-settings-capabilities > .chat-provider-subagents { display: grid; align-items: stretch; gap: 6px; padding: 7px 9px; }
+.chat-provider-subagents > .chat-knowledge-toggle { justify-self: start; max-width: 100%; }
+.chat-provider-subagents > .chat-knowledge-toggle > span { min-width: 0; }
+.chat-subagent-limit { align-items: end; }
+.chat-subagent-limit input { width: 100%; min-width: 0; height: 34px; padding: 0 9px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--text); background: color-mix(in srgb, var(--canvas) 72%, transparent); font-size: 12px; }
+.chat-subagent-limit input:hover:not(:disabled) { border-color: var(--border); }
+.chat-subagent-limit input:focus-visible { border-color: var(--focus); outline-offset: 1px; }
+.chat-subagent-limit input[aria-invalid="true"] { border-color: var(--red); }
+.chat-subagent-limit > small { color: var(--muted); font-size: 11px; line-height: 1.4; }
+.chat-subagent-limit > small[data-tone="error"] { color: var(--red); }
+.chat-settings-floating .chat-subagent-limit input { height: 44px; }
+@media (hover: none), (pointer: coarse) {
+  .chat-subagent-limit input { height: var(--touch-target); }
+}
 .chat-subagent-result-model { overflow-wrap: anywhere; }

@@ -51,8 +51,9 @@ if TYPE_CHECKING:
     from .chat import ChatService
     from .storage import NebulaStore
 
-MAX_ACTIVE_SUBAGENTS = 3
-MAX_SUBAGENTS_PER_TURN = 6
+# Subagents are unlimited unless the operator sets how many may run at once
+# for a conversation. The ceiling only bounds that setting.
+SUBAGENT_LIMIT_CEILING = 100
 RESULT_CHARACTERS = 12_000
 RECENT_STEPS = 4
 # A harness waits inside one gateway call, which holds every other Nebula tool
@@ -81,8 +82,28 @@ Your final answer is returned to that assistant as your report: lead with the
 findings, keep it concise and factual, and say what you could not verify."""
 
 
+def subagent_limit(value: Any) -> int | None:
+    """The operator's running-at-once limit from a snapshot, if one was set."""
+
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value if 1 <= value <= SUBAGENT_LIMIT_CEILING else None
+
+
+def subagent_routing_instructions(limit: int | None) -> str:
+    """Routing instructions for a provider turn that may start subagents."""
+
+    if limit is None:
+        return SUBAGENT_ROUTING_INSTRUCTIONS
+    return SUBAGENT_ROUTING_INSTRUCTIONS + (
+        f" The operator allows at most {limit} running at once."
+    )
+
+
 def harness_subagent_instructions(
-    model: str, wait_seconds: int = HARNESS_WAIT_DEFAULT_SECONDS
+    model: str,
+    wait_seconds: int = HARNESS_WAIT_DEFAULT_SECONDS,
+    limit: int | None = None,
 ) -> str:
     """Developer instructions for a harness session with provider subagents."""
 
@@ -90,7 +111,9 @@ def harness_subagent_instructions(
         "Provider subagents: subagent.start hands one independent, multi-step task "
         f"to a child assistant on the Nebula provider model {model} with this "
         "project's command runtime and MCP servers. It returns immediately and "
-        f"runs in parallel; at most {MAX_ACTIVE_SUBAGENTS} run at once. Children "
+        "runs in parallel"
+        + (f"; at most {limit} run at once" if limit is not None else "")
+        + ". Children "
         "cannot see this conversation, so give complete, self-contained "
         "instructions and the expected report. Do not delegate single lookups. "
         "Call subagent.wait when you need their reports; it waits up to "
@@ -310,18 +333,19 @@ class SubagentService:
                 == invocation.idempotency_key
             ):
                 return existing
-        if len(self.active(siblings)) >= MAX_ACTIVE_SUBAGENTS:
-            raise InvalidToolArguments(
-                f"{MAX_ACTIVE_SUBAGENTS} subagents are already running; wait for one to finish"
-            )
-        if (
-            sum(1 for item in siblings if item.parent_turn_id == parent_turn.id)
-            >= MAX_SUBAGENTS_PER_TURN
-        ):
-            raise InvalidToolArguments(
-                f"this response already started {MAX_SUBAGENTS_PER_TURN} subagents"
-            )
         snapshot = parent_turn.request_snapshot
+        harness_setting = snapshot.get("provider_subagent")
+        limit = subagent_limit(
+            harness_setting.get("max_active")
+            if parent_turn.backend == ChatBackend.HARNESS
+            and isinstance(harness_setting, dict)
+            else snapshot.get("max_active_subagents")
+        )
+        if limit is not None and len(self.active(siblings)) >= limit:
+            raise InvalidToolArguments(
+                f"the operator allows {limit} running at once and {limit} "
+                "already are; wait for one to finish"
+            )
         mcp_server_ids = [
             item for item in snapshot.get("mcp_server_ids", []) if isinstance(item, str)
         ]
@@ -357,6 +381,7 @@ class SubagentService:
             "tools_enabled": tools_enabled,
             "mcp_server_ids": mcp_server_ids,
             "allow_subagents": allow_subagents,
+            "max_active_subagents": limit if allow_subagents else None,
         }
         subagent_id = str(uuid4())
         child_session = ChatSession(
@@ -572,8 +597,12 @@ class SubagentService:
     # -- harness parents ---------------------------------------------------
 
     def validate_harness_setting(
-        self, engagement_id: str, provider_profile_id: str, model: str
-    ) -> dict[str, str]:
+        self,
+        engagement_id: str,
+        provider_profile_id: str,
+        model: str,
+        max_active: int | None = None,
+    ) -> dict[str, Any]:
         """Check a harness chat's subagent model before any turn relies on it.
 
         Children always run with tools, so the model must have passed the tool
@@ -617,7 +646,16 @@ class SubagentService:
                 f"provider {profile.name!r} does not permit project data, so it "
                 "cannot run subagents"
             )
-        return {"provider_profile_id": profile.id, "model": model}
+        if max_active is not None and subagent_limit(max_active) is None:
+            raise ChatConfigurationError(
+                f"the subagent limit must be between 1 and {SUBAGENT_LIMIT_CEILING}"
+            )
+        # No key means no limit, so settings saved before limits existed match.
+        return {
+            "provider_profile_id": profile.id,
+            "model": model,
+            **({"max_active": max_active} if max_active is not None else {}),
+        }
 
     async def wait_for(
         self,
@@ -993,6 +1031,9 @@ class SubagentService:
                     tools_enabled=bool(flags.get("tools_enabled")),
                     mcp_server_ids=list(flags.get("mcp_server_ids") or []),
                     allow_subagents=bool(flags.get("allow_subagents")),
+                    max_active_subagents=subagent_limit(
+                        flags.get("max_active_subagents")
+                    ),
                     allow_cloud_tool_results=True,
                     stream=True,
                 )
@@ -1217,9 +1258,8 @@ def subagent_components(
 __all__ = [
     "HARNESS_WAIT_DEFAULT_SECONDS",
     "HARNESS_WAIT_MAX_SECONDS",
-    "MAX_ACTIVE_SUBAGENTS",
-    "MAX_SUBAGENTS_PER_TURN",
     "SUBAGENT_CHILD_INSTRUCTIONS",
+    "SUBAGENT_LIMIT_CEILING",
     "SUBAGENT_ROUTING_INSTRUCTIONS",
     "SUBAGENT_TOOL_NAMES",
     "SubagentBroker",
@@ -1228,5 +1268,7 @@ __all__ = [
     "harness_subagent_instructions",
     "is_subagent_session",
     "subagent_components",
+    "subagent_limit",
+    "subagent_routing_instructions",
     "subagent_specs",
 ]

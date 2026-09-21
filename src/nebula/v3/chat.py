@@ -180,11 +180,13 @@ from .project_instructions import (
 )
 from .chat_subagents import (
     SUBAGENT_CHILD_INSTRUCTIONS,
-    SUBAGENT_ROUTING_INSTRUCTIONS,
+    SUBAGENT_LIMIT_CEILING,
     SubagentService,
     SubagentWaitPending,
     is_subagent_session,
     subagent_components,
+    subagent_limit,
+    subagent_routing_instructions,
 )
 from .tool_results import (
     ToolResultStatus,
@@ -354,6 +356,10 @@ class ChatCompletionRequest(NebulaModel):
     tools_enabled: bool = False
     # Advertise start/wait/list/stop subagent tools. Ignored for subagent turns.
     allow_subagents: bool = False
+    # How many subagents may run at once. None, the default, is no limit.
+    max_active_subagents: int | None = Field(
+        default=None, ge=1, le=SUBAGENT_LIMIT_CEILING
+    )
     # Harness chats: the provider model their subagents run on. Provider chats
     # ignore these; their children share the chat's own model.
     subagent_provider_id: str | None = Field(default=None, max_length=200)
@@ -375,7 +381,7 @@ class ChatCompletionRequest(NebulaModel):
     )
     stream: bool = False
 
-    def harness_provider_subagent(self) -> dict[str, str] | None:
+    def harness_provider_subagent(self) -> dict[str, Any] | None:
         """The provider subagent model a harness chat turn asks for, if any."""
 
         if not self.allow_subagents:
@@ -383,6 +389,11 @@ class ChatCompletionRequest(NebulaModel):
         return {
             "provider_profile_id": self.subagent_provider_id or "",
             "model": self.subagent_model or "",
+            **(
+                {"max_active": self.max_active_subagents}
+                if self.max_active_subagents is not None
+                else {}
+            ),
         }
 
     @model_validator(mode="after")
@@ -1453,6 +1464,7 @@ class ChatService:
                     mcp_server_ids=settings.mcp_server_ids,
                     ssh_environment_ids=settings.ssh_environment_ids,
                     allow_subagents=settings.allow_subagents,
+                    max_active_subagents=settings.max_active_subagents,
                     allow_cloud_tool_results=settings.allow_cloud_tool_results,
                 )
             )
@@ -1680,6 +1692,7 @@ class ChatService:
                     ),
                     hook_ids=list(source.hook_ids),
                     allow_subagents=source.allow_subagents,
+                    max_active_subagents=source.max_active_subagents,
                     max_artifact_queries=source.max_artifact_queries,
                     allow_cloud_tool_results=source.allow_cloud_tool_results,
                     max_output_tokens=source.max_output_tokens,
@@ -1766,6 +1779,7 @@ class ChatService:
                     ssh_environment_ids=settings.ssh_environment_ids,
                     hook_ids=hook_ids,
                     allow_subagents=settings.allow_subagents,
+                    max_active_subagents=settings.max_active_subagents,
                     allow_cloud_tool_results=settings.allow_cloud_tool_results,
                     reasoning_effort=session.metadata.get("reasoning_effort"),
                     stream=True,
@@ -2681,6 +2695,9 @@ class ChatService:
                     "browser_session_id": browser_session_id,
                     "application_model_context": model_context,
                     "allow_subagents": subagents_enabled,
+                    "max_active_subagents": (
+                        request.max_active_subagents if subagents_enabled else None
+                    ),
                     "tool_suggestions": tool_suggestions,
                     "tool_catalog": tool_catalog,
                     "automation_runtime_digest": getattr(
@@ -3454,7 +3471,13 @@ class ChatService:
                         update={
                             "instructions": _CHAT_TOOL_INSTRUCTIONS
                             + (
-                                SUBAGENT_ROUTING_INSTRUCTIONS
+                                subagent_routing_instructions(
+                                    subagent_limit(
+                                        turn.request_snapshot.get(
+                                            "max_active_subagents"
+                                        )
+                                    )
+                                )
                                 if any(
                                     spec.name == "start_subagent"
                                     for spec in available_specs
@@ -7005,6 +7028,7 @@ class ChatService:
             # Delegation is a capability the operator selects per conversation,
             # so the choice survives a reload like the others.
             "allow_subagents": prepared.source_request.allow_subagents,
+            "max_active_subagents": prepared.source_request.max_active_subagents,
         }
 
     @staticmethod

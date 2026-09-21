@@ -180,6 +180,7 @@ import type {
   ChatSubagentView,
 } from "./types";
 import { REASONING_EFFORTS } from "./types";
+import { subagentLimit } from "./subagentLimits";
 import { websocketAuthProtocol } from "./events";
 import {
   logDiagnostic,
@@ -3299,6 +3300,7 @@ export function chatRequestBody(
     ...(body.allowSubagents && body.subagentProviderId && body.subagentModel
       ? { subagent_provider_id: body.subagentProviderId, subagent_model: body.subagentModel }
       : {}),
+    ...(body.allowSubagents && body.maxActiveSubagents ? { max_active_subagents: body.maxActiveSubagents } : {}),
     ...(body.sshEnvironmentIds !== undefined ? { ssh_environment_ids: body.sshEnvironmentIds } : {}),
     engagement_id: body.engagementId,
     session_id: body.sessionId,
@@ -3808,18 +3810,19 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
 /**
  * A provider chat remembers its delegation flag; a harness chat remembers the
  * provider model its subagents run on, and has delegation exactly when set.
+ * Either may carry a running-at-once limit; without one there is no limit.
  */
 function chatSessionSubagents(
   metadata: Record<string, unknown> | undefined,
-): Pick<ChatSessionSummary, "allowSubagents" | "subagentProviderId" | "subagentModel"> {
+): Pick<ChatSessionSummary, "allowSubagents" | "subagentProviderId" | "subagentModel" | "subagentLimit"> {
   const setting = metadata?.provider_subagent;
   if (setting && typeof setting === "object") {
-    const { provider_profile_id: providerId, model } = setting as Record<string, unknown>;
+    const { provider_profile_id: providerId, model, max_active: limit } = setting as Record<string, unknown>;
     if (typeof providerId === "string" && typeof model === "string") {
-      return { allowSubagents: true, subagentProviderId: providerId, subagentModel: model };
+      return { allowSubagents: true, subagentProviderId: providerId, subagentModel: model, subagentLimit: subagentLimit(limit) };
     }
   }
-  return { allowSubagents: metadata?.allow_subagents === true };
+  return { allowSubagents: metadata?.allow_subagents === true, subagentLimit: subagentLimit(metadata?.max_active_subagents) };
 }
 
 interface WireChatSubagent {

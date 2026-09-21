@@ -358,6 +358,34 @@ describe("ApiClient", () => {
     expect(items[1].subagentModel).toBeUndefined();
   });
 
+  it("sends a subagent limit only when the operator set one, and reads it back", async () => {
+    const body = (overrides: Record<string, unknown>) => chatRequestBody({
+      providerId: "provider",
+      messages: [{ role: "user", content: "Fan out" }],
+      ...overrides,
+    }, true);
+    expect(body({ allowSubagents: true, maxActiveSubagents: 3 }).max_active_subagents).toBe(3);
+    // No limit, or no delegation, leaves the key out for older remote Cores.
+    expect(body({ allowSubagents: true })).not.toHaveProperty("max_active_subagents");
+    expect(body({ maxActiveSubagents: 3 })).not.toHaveProperty("max_active_subagents");
+
+    const wire = {
+      created_at: "2026-09-21T10:00:00Z", updated_at: "2026-09-21T10:00:00Z", revision: 2,
+      id: "provider-chat", engagement_id: "engagement-1", title: "Provider chat", backend: "provider",
+      provider_profile_id: "provider", model: "model-a",
+      metadata: { allow_subagents: true, max_active_subagents: 4 },
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify([wire, {
+      ...wire, id: "harness-chat", backend: "harness", harness_profile_id: "codex",
+      metadata: { provider_subagent: { provider_profile_id: "openrouter", model: "deepseek/deepseek-v3.2", max_active: 2 } },
+    }, {
+      ...wire, id: "unlimited", metadata: { allow_subagents: true, max_active_subagents: null },
+    }]), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+    const { items } = await client.listChatSessions("engagement-1");
+    expect(items.map((item) => item.subagentLimit)).toEqual([4, 2, undefined]);
+  });
+
   it("reads and writes Core-owned guide progress and guide probes", async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify([{
