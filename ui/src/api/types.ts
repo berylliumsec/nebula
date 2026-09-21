@@ -1781,6 +1781,8 @@ export interface ChatCompletionRequest {
   harnessSkill?: HarnessSkillInvocation;
   /** Provider-side reasoning level; absent leaves the model's own default. */
   reasoningEffort?: ReasoningEffort;
+  /** Let this turn delegate work to parallel subagents on the same model. */
+  allowSubagents?: boolean;
   runtimeSwitchConfirmation?: string;
 }
 
@@ -2091,6 +2093,8 @@ export interface ChatSessionSummary {
   hookIds: Identifier[];
   /** The reasoning level this conversation was last sent with, if any. */
   reasoningEffort?: ReasoningEffort;
+  /** Whether this conversation last ran with delegation available. */
+  allowSubagents?: boolean;
   archivedAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -3264,4 +3268,50 @@ export interface StructuredResultRecord extends StructuredResultSummary {
   result: unknown;
   /** Optional presentation advice, kept separate from the result. */
   hints?: unknown;
+}
+
+/** How Core reports one delegated child conversation. */
+export type ChatSubagentStatus =
+  | "running"
+  | "waiting_approval"
+  | "completed"
+  | "failed"
+  | "stopped"
+  | "interrupted";
+
+export interface ChatSubagentStep {
+  tool: string;
+  detail: string;
+  status: string;
+}
+
+export interface ChatSubagentApproval {
+  id: Identifier;
+  status: string;
+  tool: string;
+  detail: string;
+  riskClass?: string;
+  rationale?: string;
+}
+
+export interface ChatSubagentView {
+  id: Identifier;
+  name: string;
+  task: string;
+  status: ChatSubagentStatus;
+  parentSessionId: Identifier;
+  parentTurnId: Identifier;
+  childSessionId: Identifier;
+  childTurnId?: Identifier;
+  stepCount: number;
+  /** The last few tool steps Core kept for the operator, newest last. */
+  recentSteps: ChatSubagentStep[];
+  approval?: ChatSubagentApproval;
+  usage: ChatUsage;
+  startedAt: string;
+  finishedAt?: string;
+  elapsedSeconds: number;
+  result: string;
+  error?: string;
+  resultMessageId?: Identifier;
 }

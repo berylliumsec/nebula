@@ -262,9 +262,11 @@ def test_successful_provider_turn_automatically_continues_running_goal(tmp_path)
         for _ in range(200):
             turns = store.list_entities(ChatTurn, engagement_id="project")
             goal = goals.get("session")
-            if len(turns) == 2 and all(
-                turn.status.value == "complete" for turn in turns
-            ) and goal.status == ChatGoalStatus.PAUSED:
+            if (
+                len(turns) == 2
+                and all(turn.status.value == "complete" for turn in turns)
+                and goal.status == ChatGoalStatus.PAUSED
+            ):
                 break
             await asyncio.sleep(0.01)
         else:

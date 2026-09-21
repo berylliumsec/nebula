@@ -176,6 +176,8 @@ import type {
   StructuredResultStats,
   StructuredResultSummary,
   ReasoningEffort,
+  ChatSubagentStatus,
+  ChatSubagentView,
 } from "./types";
 import { REASONING_EFFORTS } from "./types";
 import { websocketAuthProtocol } from "./events";
@@ -3291,6 +3293,7 @@ export function chatRequestBody(
     // with a slightly older remote Core, whose request models forbid extras.
     ...(body.hookIds?.length ? { hook_ids: body.hookIds } : {}),
     ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
+    ...(body.allowSubagents ? { allow_subagents: true } : {}),
     ...(body.sshEnvironmentIds !== undefined ? { ssh_environment_ids: body.sshEnvironmentIds } : {}),
     engagement_id: body.engagementId,
     session_id: body.sessionId,
@@ -3358,6 +3361,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     reasoningEffort: REASONING_EFFORTS.includes(value.metadata?.reasoning_effort as ReasoningEffort)
       ? (value.metadata?.reasoning_effort as ReasoningEffort)
       : undefined,
+    allowSubagents: value.metadata?.allow_subagents === true,
     archivedAt: typeof value.metadata?.archived_at === "string" ? value.metadata.archived_at : undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
@@ -3792,6 +3796,75 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
     unresolvedHookExecutionIds: value.unresolved_hook_execution_ids ?? [],
     resultsUrl: typeof value.results_url === "string" ? value.results_url : undefined,
     processId: typeof value.process_id === "string" ? value.process_id : undefined,
+  };
+}
+
+interface WireChatSubagent {
+  id: string;
+  name: string;
+  task: string;
+  status: string;
+  parent_session_id: string;
+  parent_turn_id: string;
+  child_session_id: string;
+  child_turn_id?: string | null;
+  step_count?: number;
+  recent_steps?: { tool?: string; detail?: string; status?: string }[];
+  approval?: { id: string; status?: string; tool?: string; detail?: string; risk_class?: string | null; rationale?: string | null } | null;
+  usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number };
+  started_at: string;
+  finished_at?: string | null;
+  elapsed_seconds?: number;
+  result?: string;
+  error?: string | null;
+  result_message_id?: string | null;
+}
+
+const SUBAGENT_STATUSES: ChatSubagentStatus[] = [
+  "running", "waiting_approval", "completed", "failed", "stopped", "interrupted",
+];
+
+function mapChatSubagent(value: WireChatSubagent): ChatSubagentView {
+  return {
+    id: value.id,
+    name: value.name,
+    task: value.task,
+    // An unknown status is reported as running rather than silently dropped:
+    // a delegated child that Core still tracks must stay visible.
+    status: SUBAGENT_STATUSES.includes(value.status as ChatSubagentStatus)
+      ? (value.status as ChatSubagentStatus)
+      : "running",
+    parentSessionId: value.parent_session_id,
+    parentTurnId: value.parent_turn_id,
+    childSessionId: value.child_session_id,
+    childTurnId: value.child_turn_id ?? undefined,
+    stepCount: value.step_count ?? 0,
+    recentSteps: (value.recent_steps ?? []).map((step) => ({
+      tool: step.tool ?? "",
+      detail: step.detail ?? "",
+      status: step.status ?? "",
+    })),
+    approval: value.approval
+      ? {
+        id: value.approval.id,
+        status: value.approval.status ?? "pending",
+        tool: value.approval.tool ?? "",
+        detail: value.approval.detail ?? "",
+        riskClass: value.approval.risk_class ?? undefined,
+        rationale: value.approval.rationale ?? undefined,
+      }
+      : undefined,
+    usage: {
+      inputTokens: value.usage?.input_tokens ?? 0,
+      outputTokens: value.usage?.output_tokens ?? 0,
+      totalTokens: value.usage?.total_tokens ?? 0,
+    },
+    startedAt: value.started_at,
+    finishedAt: value.finished_at ?? undefined,
+    elapsedSeconds: value.elapsed_seconds ?? 0,
+    result: value.result ?? "",
+    error: value.error ?? undefined,
+    resultMessageId: value.result_message_id ?? undefined,
   };
 }
 
@@ -7314,6 +7387,27 @@ export class ApiClient {
       signal,
       engagementId,
     ).then((items) => page(items.map(mapKnowledgeSource)));
+  }
+
+  listChatSubagents(sessionId: string, signal?: AbortSignal): Promise<ChatSubagentView[]> {
+    return this.request<{ subagents: WireChatSubagent[] }>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/subagents`,
+      { signal },
+    ).then((value) => (value.subagents ?? []).map(mapChatSubagent));
+  }
+
+  stopChatSubagent(sessionId: string, subagentId: string, signal?: AbortSignal): Promise<ChatSubagentView> {
+    return this.request<WireChatSubagent>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}/stop`,
+      { method: "POST", signal },
+    ).then(mapChatSubagent);
+  }
+
+  stopAllChatSubagents(sessionId: string, signal?: AbortSignal): Promise<ChatSubagentView[]> {
+    return this.request<{ subagents: WireChatSubagent[] }>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/subagents/stop`,
+      { method: "POST", signal },
+    ).then((value) => (value.subagents ?? []).map(mapChatSubagent));
   }
 
   listStructuredResults(
