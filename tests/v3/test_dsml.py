@@ -221,3 +221,100 @@ def test_a_response_whose_frame_is_unreadable_keeps_its_text_for_quarantine():
 
     assert response.tool_calls == []
     assert response.text == frame
+
+
+def test_function_calls_spelling_with_string_attribute_is_recovered():
+    """DeepSeek V3.2's published encoding: ``function_calls`` and typed values."""
+
+    frame = (
+        "<｜DSML｜function_calls>\n"
+        '<｜DSML｜invoke name="read_file">\n'
+        '<｜DSML｜parameter name="path" string="true">notes.md</｜DSML｜parameter>\n'
+        '<｜DSML｜parameter name="zip" string="true">007</｜DSML｜parameter>\n'
+        '<｜DSML｜parameter name="limit" string="false">20</｜DSML｜parameter>\n'
+        '<｜DSML｜parameter name="options" string="false">{"raw": true}'
+        "</｜DSML｜parameter>\n"
+        "</｜DSML｜invoke>\n"
+        "</｜DSML｜function_calls>"
+    )
+
+    found = recover(f"Reading the notes.\n\n{frame}")
+
+    assert [(call.name, call.arguments) for call in found.calls] == [
+        (
+            "read_file",
+            # A declared string stays exactly what the model wrote, even when
+            # it looks like a number; a declared non-string is its JSON value.
+            {"path": "notes.md", "zip": "007", "limit": 20, "options": {"raw": True}},
+        )
+    ]
+    assert found.text == "Reading the notes."
+
+
+def test_a_declared_json_value_that_is_not_json_leaves_the_frame_unread():
+    frame = (
+        '<｜DSML｜function_calls><｜DSML｜invoke name="read_file">'
+        '<｜DSML｜parameter name="limit" string="false">twenty</｜DSML｜parameter>'
+        "</｜DSML｜invoke></｜DSML｜function_calls>"
+    )
+
+    found = recover(frame)
+
+    assert found.calls == []
+    assert found.unparsed_frames == 1
+    assert found.text == frame
+
+
+def test_tool_calls_spelling_with_a_json_body_is_recovered():
+    """Cline has seen ``tool_calls`` frames whose invoke body is one JSON object."""
+
+    frame = (
+        "<｜DSML｜tool_calls>\n"
+        '<｜DSML｜invoke name="read_file">\n'
+        '{"path":"notes.md"}\n'
+        "</｜DSML｜invoke>\n"
+        "</｜DSML｜tool_calls>"
+    )
+
+    found = recover(frame)
+
+    assert [(call.name, call.arguments) for call in found.calls] == [
+        ("read_file", {"path": "notes.md"})
+    ]
+    assert found.text == ""
+
+
+def test_an_unknown_spelling_is_at_least_quarantined():
+    """A frame Core cannot read is found wherever it starts, never shown."""
+
+    from nebula.v3 import dsml
+
+    unknown = (
+        '<｜DSML｜tool_call><｜DSML｜invoke name="read_file">'
+        "</｜DSML｜invoke></｜DSML｜tool_call>"
+    )
+    truncated = '<|DSML|function_calls>\n<|DSML|invoke name="read_file">'
+    for frame in (unknown, truncated):
+        text = f"The notes say hello.\n\n{frame}"
+        found = recover(text)
+        assert found.calls == [], frame
+        assert dsml.frame_start(text) == len("The notes say hello.\n\n"), frame
+        assert dsml.frame_start(frame) == 0, frame
+    # Talking about the protocol is not a frame.
+    assert dsml.frame_start("I considered DSML and decided against it.") is None
+    assert dsml.frame_start("a < b | c") is None
+
+
+def test_a_streamed_tag_is_held_back_until_it_is_known_not_to_be_one():
+    from nebula.v3 import dsml
+
+    for text in [
+        "Answer.<",
+        "Answer.<｜",
+        "Answer.<|DS",
+        "Answer.<｜DSML",
+        "Answer.</",
+    ]:
+        assert dsml.partial_tag_start(text) == len("Answer."), text
+    for text in ["Answer.", "a < b", "Answer.<b>", "x <|DSX"]:
+        assert dsml.partial_tag_start(text) == len(text), text

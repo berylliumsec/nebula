@@ -90,6 +90,15 @@ class ProviderResponseError(ProviderError):
     status_code = 502
 
 
+class ProviderToolCallError(ProviderError):
+    """The model attempted a function call that could not be accepted.
+
+    Its arguments or identity were unreadable, or the upstream refused the
+    function it named. Either way the model reached for a tool, so a caller
+    that offered none can ask again for the answer instead of failing.
+    """
+
+
 class ProviderQuotaError(ProviderError):
     """The account's quota or billing limit is spent; retrying cannot help."""
 
@@ -490,7 +499,7 @@ def _normalized_tool_call(**values: Any) -> ToolCall:
             exc,
             stage="providers",
         )
-        raise ProviderError("provider returned a malformed tool call") from exc
+        raise ProviderToolCallError("provider returned a malformed tool call") from exc
 
 
 class ModelUsage(BaseModel):
@@ -593,6 +602,9 @@ class ModelStreamEvent(BaseModel):
     # A transient upstream failure the operator may simply retry, as opposed
     # to a request defect or a chat-side error.
     retryable: bool = False
+    # The model attempted a function call that was malformed or refused
+    # upstream. A request that offered no tools can recover the answer.
+    tool_call_rejected: bool = False
 
 
 class ProviderHealth(BaseModel):
@@ -755,6 +767,7 @@ class ModelProvider(ABC):
                 error=str(exc),
                 context_length_exceeded=isinstance(exc, ProviderContextLengthError),
                 retryable=isinstance(exc, ProviderOverloadedError),
+                tool_call_rejected=isinstance(exc, ProviderToolCallError),
             )
             return
         if response.reasoning:
@@ -1473,6 +1486,26 @@ def _error_detail(body: Any) -> tuple[str | None, str | None]:
     return (str(detail) if detail is not None else None), error_code
 
 
+# An upstream that holds decoding to the declared functions refuses a call
+# the model emitted anyway. A request that declared none gets this for any
+# call, so it is the model reaching for a tool rather than a broken route.
+_TOOL_REJECTION_CODES = frozenset({"tool_use_failed"})
+_TOOL_REJECTION_MARKERS = (
+    # Sail Research through OpenRouter.
+    "undeclared or disallowed function",
+    # Groq.
+    "not in request.tools",
+    "tool call validation failed",
+)
+
+
+def _tool_call_refused(detail: str | None, error_code: str | None) -> bool:
+    normalized = str(detail or "").casefold()
+    return error_code in _TOOL_REJECTION_CODES or any(
+        marker in normalized for marker in _TOOL_REJECTION_MARKERS
+    )
+
+
 def _context_length_error(detail: str | None, error_code: str | None) -> bool:
     normalized = str(detail or "").casefold()
     return error_code in _CONTEXT_ERROR_CODES or any(
@@ -1541,6 +1574,8 @@ def _safe_error(response: httpx.Response) -> ProviderError:
         response.status_code in {400, 413, 422} or response.status_code >= 500
     ) and context_overflow:
         return ProviderContextLengthError(message)
+    if response.status_code in {400, 422} and _tool_call_refused(detail, error_code):
+        return ProviderToolCallError(message)
     if response.status_code == 429 and _quota_exhausted(body, detail, error_code):
         # Retrying spent quota only burns attempts and then mislabels the
         # billing cause as a transient overload.
@@ -1575,6 +1610,10 @@ def _stream_error_frame(data: Any) -> ProviderError | None:
     )
     if _context_length_error(detail, error_code):
         return ProviderContextLengthError(message)
+    if _tool_call_refused(detail, error_code):
+        # Checked before the transient statuses: replaying the identical
+        # request invites the same call, so it is not an overload to retry.
+        return ProviderToolCallError(message)
     status = int(error_code) if error_code and error_code.isdigit() else None
     if status == 429 and _quota_exhausted(data, detail, error_code):
         return ProviderQuotaError(message)
@@ -1733,7 +1772,7 @@ def _arguments(
             metadata["validation"] = (
                 f"{exc.msg}; line {exc.lineno}; column {exc.colno}; character {exc.pos}"
             )
-        failure = ProviderError("provider returned malformed tool arguments")
+        failure = ProviderToolCallError("provider returned malformed tool arguments")
         failure.__cause__ = exc
         record_caught_exception(
             "providers",
@@ -1756,7 +1795,7 @@ def _arguments(
         except ValueError:  # diagnostic-expected: a plain string is refused just below
             pass
     if not isinstance(parsed, dict):
-        raise ProviderError("provider returned non-object tool arguments")
+        raise ProviderToolCallError("provider returned non-object tool arguments")
     return parsed
 
 
@@ -3094,6 +3133,7 @@ async def _stream_openai_compatible(
             # A transient upstream failure is the operator's to retry; chat
             # reports it as a provider overload rather than a chat defect.
             retryable=isinstance(exc, ProviderOverloadedError),
+            tool_call_rejected=isinstance(exc, ProviderToolCallError),
         )
 
 

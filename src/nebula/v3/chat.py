@@ -20,7 +20,7 @@ import json
 import logging
 import re
 import threading
-from collections.abc import AsyncIterator, Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -86,7 +86,9 @@ from .domain import (
     ToolCallStatus,
     utc_now,
 )
+from .dsml import frame_start as dsml_frame_start
 from .dsml import is_frame as dsml_is_frame
+from .dsml import partial_tag_start as dsml_partial_tag_start
 from .context import (
     ContextCallBudget,
     ContextCapacityError,
@@ -118,6 +120,7 @@ from .providers import (
     ModelProvider,
     ModelRequest,
     ModelResponse,
+    ModelStreamEvent,
     ModelToolResult,
     ModelUsage,
     ProviderContextLengthError,
@@ -754,19 +757,129 @@ def _is_provider_control_frame(text: str) -> bool:
     return dsml_is_frame(text)
 
 
+def _operator_answer_text(text: str) -> str:
+    """The answer in assistant text: everything before its first control frame.
+
+    A model may write its answer and then reach for a tool in DSML. A frame
+    Core could read is a tool call by now, so one still in the text is a frame
+    Core could not read, in whatever spelling. It and everything after it are
+    protocol, not an answer; the answer written before it stands.
+    """
+
+    content = text.strip()
+    start = dsml_frame_start(content)
+    return content if start is None else content[:start].rstrip()
+
+
 def _final_answer_problem(response: ModelResponse) -> str | None:
+    # An answer is kept even when the model also reached for a tool. The
+    # request offered none, so the call is dropped instead of the answer.
+    if _operator_answer_text(response.text):
+        return None
     if response.tool_calls:
         return "tool_call"
-    content = response.text.strip()
-    if not content:
-        if (response.finish_reason or "").lower() in _OUTPUT_LIMIT_FINISH_REASONS:
-            return "output_limit"
-        if response.reasoning.strip():
-            return "reasoning_only"
-        return "missing_answer"
-    if _is_provider_control_frame(content):
+    if _is_provider_control_frame(response.text):
         return "provider_control_frame"
-    return None
+    if (response.finish_reason or "").lower() in _OUTPUT_LIMIT_FINISH_REASONS:
+        return "output_limit"
+    if response.reasoning.strip():
+        return "reasoning_only"
+    return "missing_answer"
+
+
+def _final_answer_exhausted(problem: str) -> ProviderResponseError:
+    """The failure a turn records once its final-answer recovery is spent."""
+
+    message = "provider returned no operator-facing answer after bounded recovery"
+    if problem == "reasoning_only":
+        message += (
+            ": the model returned only reasoning and never wrote an answer, even "
+            "when asked for the answer alone"
+        )
+    return ProviderResponseError(message)
+
+
+def _rejected_tool_call_response(
+    provider_id: str, model: str, text: str, reasoning: str
+) -> ModelResponse:
+    """What a stream that ended in a rejected tool call had produced.
+
+    The provider reported the attempt instead of a completed response, so
+    the text and thinking it streamed first are all there is to judge. The
+    call itself is gone: it was malformed, or the upstream refused it.
+    """
+
+    return ModelResponse(
+        provider_id=provider_id,
+        model=model,
+        text=text.strip(),
+        reasoning=reasoning.strip(),
+        finish_reason="tool_calls",
+    )
+
+
+def _record_final_answer_fallback(response: ModelResponse) -> None:
+    record_diagnostic(
+        "warning",
+        "chat",
+        "chat.final_answer.answer_before_rejected_call",
+        "Final-answer recovery was spent; the turn completed with the answer "
+        "the model wrote before a tool call that was rejected.",
+        outcome="fallback",
+        stage="chat",
+        retryable=True,
+        safe_failure_cause=(
+            "The model kept attempting a tool call after its answer, and the "
+            "call was malformed or refused upstream."
+        ),
+        metadata={
+            "provider_id": response.provider_id,
+            "model": response.model,
+            "answer_characters": len(_operator_answer_text(response.text)),
+        },
+    )
+
+
+class _StreamedAnswer:
+    """Tool-free answer text, shown as it arrives until a control frame starts.
+
+    A route can serialize a tool call into the answer as DSML. Text before it
+    streams as usual, a tail that could still become a frame tag waits for the
+    next piece, and nothing is shown once a frame begins. The completed
+    response decides the answer, which ``done`` carries in full.
+    """
+
+    def __init__(self) -> None:
+        self._parts: list[str] = []
+        self._held = ""
+        self._stopped = False
+        self.shown = ""
+
+    @property
+    def text(self) -> str:
+        return "".join(self._parts)
+
+    def push(self, delta: str) -> str:
+        self._parts.append(delta)
+        if self._stopped:
+            return ""
+        pending = self._held + delta
+        start = dsml_frame_start(pending)
+        if start is not None:
+            self._stopped = True
+            visible = pending[:start]
+        else:
+            visible = pending[: dsml_partial_tag_start(pending)]
+        self._held = pending[len(visible) :]
+        self.shown += visible
+        return visible
+
+    def held_tail(self, answer: str) -> str:
+        """A tail held back as a possible tag that turned out to be answer."""
+
+        if self._stopped or not self._held:
+            return ""
+        return self._held if (self.shown + self._held).strip() == answer else ""
 
 
 def _final_answer_response_record(
@@ -3013,6 +3126,8 @@ class ChatService:
         prepared: PreparedChat,
         request: ModelRequest,
         response: ModelResponse,
+        *,
+        tool_call_rejected: bool = False,
     ) -> ModelResponse:
         """Ask again for a missing answer without repeating model or tool work.
 
@@ -3020,9 +3135,14 @@ class ChatService:
         constrained rather than merely enlarged. How many attempts there are is
         the caller's budget: one outside goal mode, and as many as a running
         goal's own budgets allow inside one.
+
+        ``tool_call_rejected`` says the response ended in a tool call that was
+        malformed or refused upstream: the model reached for a tool, so it is
+        asked again, and an answer it wrote first completes the turn if the
+        attempts run out.
         """
 
-        problem = _final_answer_problem(response)
+        problem = "tool_call" if tool_call_rejected else _final_answer_problem(response)
         if problem is None:
             return response
 
@@ -3031,6 +3151,7 @@ class ChatService:
         attempts = 0
         current = response
         current_problem: str | None = problem
+        fallback = response if _operator_answer_text(response.text) else None
         while current_problem is not None:
             turn = prepared.turn
             if turn is not None:
@@ -3053,8 +3174,11 @@ class ChatService:
             attempts += 1
             allowed, delay = self._may_retry_final_answer(prepared, attempts)
             if not allowed:
-                raise ProviderResponseError(
-                    "provider returned no operator-facing answer after bounded recovery"
+                if fallback is None:
+                    raise _final_answer_exhausted(current_problem)
+                _record_final_answer_fallback(fallback)
+                return fallback.model_copy(
+                    update={"reasoning": reasoning, "usage": usage}
                 )
             if delay:
                 await asyncio.sleep(delay)
@@ -3439,10 +3563,14 @@ class ChatService:
         request = self._fit_turn_goal_request(
             prepared, _tool_free_request(prepared.model_request)
         )
+        answer = _StreamedAnswer()
+        streamed_reasoning: list[str] = []
+        tool_call_rejected = False
         async for event in self._stream_with_context_recovery(prepared, request):
             if event.type == StreamEventType.STARTED:
                 continue
             if event.type == StreamEventType.REASONING_DELTA:
+                streamed_reasoning.append(event.delta or "")
                 yield (
                     "reasoning_delta",
                     {
@@ -3454,37 +3582,69 @@ class ChatService:
                 )
                 continue
             if event.type == StreamEventType.TEXT_DELTA:
-                yield (
-                    "delta",
-                    {
-                        "type": "delta",
-                        "provider_id": prepared.provider_profile.id,
-                        "model": prepared.resolved_model,
-                        "delta": event.delta or "",
-                    },
-                )
+                # A control frame in the answer is held back rather than shown
+                # and then taken away once the response is judged.
+                visible = answer.push(event.delta or "")
+                if visible:
+                    yield (
+                        "delta",
+                        {
+                            "type": "delta",
+                            "provider_id": prepared.provider_profile.id,
+                            "model": prepared.resolved_model,
+                            "delta": visible,
+                        },
+                    )
                 continue
             if event.type == StreamEventType.TOOL_CALL:
-                raise ChatError(
-                    "provider returned a tool call even though chat exposes no tools"
-                )
+                # Chat offered no tools. The completed response carries the
+                # call, and final-answer recovery decides what to answer.
+                continue
             if event.type == StreamEventType.ERROR:
-                if event.retryable:
+                if event.tool_call_rejected:
+                    # The model's call was malformed or refused upstream: it
+                    # reached for a tool, as above, so the answer is recovered.
+                    tool_call_rejected = True
+                    event = ModelStreamEvent(
+                        type=StreamEventType.COMPLETED,
+                        response=_rejected_tool_call_response(
+                            prepared.provider_profile.id,
+                            prepared.resolved_model,
+                            answer.text,
+                            "".join(streamed_reasoning),
+                        ),
+                    )
+                elif event.retryable:
                     # A transient upstream failure is the provider's, and the
                     # operator may simply retry; a ChatError would blame chat.
                     raise ProviderOverloadedError(
                         event.error or "provider stream failed"
                     )
-                raise ChatError(event.error or "provider stream failed")
+                else:
+                    raise ChatError(event.error or "provider stream failed")
             if event.type == StreamEventType.COMPLETED:
                 if prepared.turn is not None:
                     self._assert_execution_owner(prepared)
                 if event.response is None:
                     raise ChatError("provider stream completed without a response")
                 response = await self._recover_final_answer(
-                    prepared, request, event.response
+                    prepared,
+                    request,
+                    event.response,
+                    tool_call_rejected=tool_call_rejected,
                 )
                 completion = self._completion(prepared, response)
+                held_tail = answer.held_tail(completion.message.content)
+                if held_tail:
+                    yield (
+                        "delta",
+                        {
+                            "type": "delta",
+                            "provider_id": prepared.provider_profile.id,
+                            "model": prepared.resolved_model,
+                            "delta": held_tail,
+                        },
+                    )
                 await self._run_native_hooks(
                     prepared,
                     "chat.turn.completed",
@@ -3510,6 +3670,8 @@ class ChatService:
         components = prepared.tool_components
         if turn is None or components is None or prepared.engagement_id is None:
             raise ChatError("command response is missing its durable runtime lock")
+        # Set when the final synthesis asks for a tool the turn can still run.
+        route_again = False
         try:
             turn = self._refresh_turn(turn)
             if turn.status == ChatTurnStatus.WAITING_APPROVAL:
@@ -4095,13 +4257,19 @@ class ChatService:
             completed = False
             routing_thoughts = turn.reasoning
             recovery_attempts = 0
-            while not completed:
+            # An answer the model wrote before a tool call that was rejected.
+            # The turn asks again, and ends on this if the attempts run out.
+            fallback_answer: ModelResponse | None = None
+            while not completed and not route_again:
                 attempt_completed = False
-                attempted_tool_call = False
+                tool_call_rejected = False
+                streamed_text: list[str] = []
+                streamed_reasoning: list[str] = []
                 async for event in prepared.provider.stream(final_request):
                     if event.type == StreamEventType.STARTED:
                         continue
                     if event.type == StreamEventType.REASONING_DELTA:
+                        streamed_reasoning.append(event.delta or "")
                         delta = event.delta or ""
                         if routing_thoughts and delta.strip():
                             delta = f"\n\n{delta.lstrip()}"
@@ -4122,18 +4290,35 @@ class ChatService:
                         # completed response proves it is operator-facing text.
                         # Buffering prevents a leaked provider control frame
                         # from flashing in the transcript before recovery.
+                        streamed_text.append(event.delta or "")
                         continue
                     if event.type == StreamEventType.TOOL_CALL:
-                        attempted_tool_call = True
+                        # The completed response carries the call; whether it
+                        # costs the answer is decided there.
                         continue
                     if event.type == StreamEventType.ERROR:
-                        if event.retryable:
+                        if event.tool_call_rejected:
+                            # The request offered no tools, so a malformed call
+                            # or one the upstream refused is the model reaching
+                            # for a tool: recovered, not a failed turn.
+                            tool_call_rejected = True
+                            event = ModelStreamEvent(
+                                type=StreamEventType.COMPLETED,
+                                response=_rejected_tool_call_response(
+                                    prepared.provider_profile.id,
+                                    prepared.resolved_model,
+                                    "".join(streamed_text),
+                                    "".join(streamed_reasoning),
+                                ),
+                            )
+                        elif event.retryable:
                             raise ProviderOverloadedError(
                                 event.error or "provider final synthesis failed"
                             )
-                        raise ChatError(
-                            event.error or "provider final synthesis failed"
-                        )
+                        else:
+                            raise ChatError(
+                                event.error or "provider final synthesis failed"
+                            )
                     if event.type == StreamEventType.COMPLETED:
                         if event.response is None:
                             raise ChatError(
@@ -4144,12 +4329,17 @@ class ChatService:
                         turn = self._refresh_turn(turn)
                         turn = self._add_usage(turn, event.response)
                         prepared.turn = turn
+                        synthesis = event.response
                         problem = (
                             "tool_call"
-                            if attempted_tool_call
-                            else _final_answer_problem(event.response)
+                            if tool_call_rejected
+                            else _final_answer_problem(synthesis)
                         )
                         if problem is not None:
+                            if tool_call_rejected and _operator_answer_text(
+                                synthesis.text
+                            ):
+                                fallback_answer = synthesis
                             turn = self.store.update(
                                 ChatTurn,
                                 turn.id,
@@ -4158,7 +4348,7 @@ class ChatService:
                                         **turn.request_snapshot,
                                         "final_answer_recovery": _next_final_answer_recovery_state(
                                             turn.request_snapshot,
-                                            event.response,
+                                            synthesis,
                                             problem,
                                         ),
                                     }
@@ -4166,24 +4356,66 @@ class ChatService:
                                 expected_revision=turn.revision,
                             )
                             prepared.turn = turn
+                            if (
+                                problem == "tool_call"
+                                and not tool_call_rejected
+                                and self._final_tool_call_can_route(
+                                    turn, components.specs, synthesis.tool_calls
+                                )
+                            ):
+                                # The model still wants a tool the turn can
+                                # afford. Loop harnesses run such a call, so the
+                                # turn routes once more instead of asking again
+                                # for an answer the model does not have yet.
+                                turn = self.store.update(
+                                    ChatTurn,
+                                    turn.id,
+                                    {
+                                        "status": ChatTurnStatus.ROUTING,
+                                        "request_snapshot": {
+                                            **turn.request_snapshot,
+                                            "final_answer_rerouted": True,
+                                        },
+                                    },
+                                    expected_revision=turn.revision,
+                                )
+                                prepared.turn = turn
+                                record_diagnostic(
+                                    "warning",
+                                    "chat",
+                                    "chat.final_answer.tool_call_routed_again",
+                                    "The final synthesis asked for a tool the turn "
+                                    "could still run; the turn routed once more.",
+                                    outcome="fallback",
+                                    stage="chat",
+                                    retryable=True,
+                                    metadata={
+                                        "tool_calls": len(synthesis.tool_calls),
+                                        "execution_tool_calls": turn.execution_tool_calls,
+                                    },
+                                )
+                                route_again = True
+                                break
                             recovery_attempts += 1
                             allowed, delay = self._may_retry_final_answer(
                                 prepared, recovery_attempts
                             )
-                            if not allowed:
-                                raise ProviderResponseError(
-                                    "provider returned no operator-facing answer after bounded recovery"
+                            if allowed:
+                                if delay:
+                                    # A provider that just failed to answer is
+                                    # not asked again immediately; the turn
+                                    # stays open and the operator keeps its
+                                    # partial state.
+                                    await asyncio.sleep(delay)
+                                final_request = self._final_answer_recovery_request(
+                                    prepared, final_request, problem
                                 )
-                            if delay:
-                                # A provider that just failed to answer is not
-                                # asked again immediately; the turn stays open
-                                # and the operator keeps its partial state.
-                                await asyncio.sleep(delay)
-                            final_request = self._final_answer_recovery_request(
-                                prepared, final_request, problem
-                            )
-                            break
-                        completion = self._completion(prepared, event.response)
+                                break
+                            if fallback_answer is None:
+                                raise _final_answer_exhausted(problem)
+                            _record_final_answer_fallback(fallback_answer)
+                            synthesis = fallback_answer
+                        completion = self._completion(prepared, synthesis)
                         if completion.message.content:
                             yield (
                                 "delta",
@@ -4221,7 +4453,7 @@ class ChatService:
                         break
                 if not attempt_completed:
                     raise ChatError("provider stream ended before final synthesis")
-            if not completed:
+            if not completed and not route_again:
                 raise ChatError("provider stream ended before final synthesis")
         except asyncio.CancelledError as caught_error:
             record_caught_exception(
@@ -4283,6 +4515,41 @@ class ChatService:
                 )
                 self._release_execution(prepared)
             raise
+        if route_again:
+            # The turn is routing again and still holds its execution claim.
+            # The new pass has handlers of its own, so it runs outside these
+            # and a failure in it is recorded once.
+            async for item in self._stream_tool_turn(prepared):
+                yield item
+
+    @staticmethod
+    def _final_tool_call_can_route(
+        turn: ChatTurn, specs: Mapping[str, Any], calls: list[ModelToolCall]
+    ) -> bool:
+        """Whether a tool the final synthesis asked for may still run this turn.
+
+        Once per turn, and only for a tool the turn has and whose budget class
+        still has room. Otherwise the synthesis is asked again for its answer.
+        """
+
+        if turn.request_snapshot.get("final_answer_rerouted"):
+            return False
+        for call in calls:
+            spec = specs.get(call.name)
+            if spec is None:
+                continue
+            if spec.budget_class == "artifact_query":
+                if (
+                    turn.max_artifact_queries is None
+                    or turn.artifact_queries < turn.max_artifact_queries
+                ):
+                    return True
+            elif (
+                turn.max_tool_calls is None
+                or turn.execution_tool_calls < turn.max_tool_calls
+            ):
+                return True
+        return False
 
     @staticmethod
     def _finish_tool() -> ToolDefinition:
@@ -7614,17 +7881,32 @@ class ChatService:
     def _completion(
         prepared: PreparedChat, response: ModelResponse
     ) -> ChatCompletionResponse:
-        if response.tool_calls:
-            raise ChatError(
-                "provider returned a tool call even though chat exposes no tools"
-            )
-        content = response.text.strip()
+        content = _operator_answer_text(response.text)
         reasoning = response.reasoning.strip()
         if not content:
+            if _is_provider_control_frame(response.text):
+                raise ChatError(
+                    "provider returned a control frame instead of a chat response"
+                )
             raise ChatError("provider returned no operator-facing chat response")
-        if _is_provider_control_frame(content):
-            raise ChatError(
-                "provider returned a control frame instead of a chat response"
+        if response.tool_calls or content != response.text.strip():
+            # A final answer is requested with no tools, so a call made beside
+            # it, or a frame after it, is dropped and the answer stands.
+            record_diagnostic(
+                "warning",
+                "chat",
+                "chat.final_answer.tool_call_dropped",
+                "The final answer arrived with a tool call the request did not "
+                "offer; Core kept the answer and dropped the call.",
+                outcome="fallback",
+                stage="chat",
+                retryable=False,
+                metadata={
+                    "provider_id": response.provider_id,
+                    "model": response.model,
+                    "tool_calls": len(response.tool_calls),
+                    "control_frame": content != response.text.strip(),
+                },
             )
         # A tool turn thinks once per routing step and again while it answers.
         # The turn collected all of it; the final response holds only the last.

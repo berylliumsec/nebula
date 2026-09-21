@@ -776,7 +776,10 @@ def test_provider_chat_exhausted_final_answer_recovery_is_a_provider_failure(
 
     with pytest.raises(
         ProviderResponseError,
-        match="no operator-facing answer after bounded recovery",
+        match=(
+            "no operator-facing answer after bounded recovery: the model "
+            "returned only reasoning"
+        ),
     ):
         asyncio.run(service.complete(prepared))
 
@@ -3065,6 +3068,176 @@ def test_retryable_stream_error_surfaces_as_a_provider_overload(tmp_path):
             [event async for event in service.stream(prepared)]
 
     asyncio.run(scenario())
+
+
+def _plain_stream(tmp_path, provider_class, name: str):
+    """Run one tool-free streamed turn and return its events and turn."""
+
+    async def scenario():
+        store = NebulaStore(tmp_path / f"{name}.db")
+        engagement = store.create(Engagement(id=f"eng-{name}", name=name))
+        profile = store.create(_profile(local=True))
+        provider = provider_class(profile.id, local=True)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        prepared = await service.prepare_async(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                messages=[{"role": "user", "content": "What is stored?"}],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+        events = [event async for event in service.stream(prepared)]
+        return events, store.get(ChatTurn, prepared.turn.id), provider
+
+    return asyncio.run(scenario())
+
+
+def test_plain_stream_recovers_an_unrequested_tool_call(tmp_path):
+    """The streamed tool-free path recovers the call ``complete()`` recovers."""
+
+    class ToolCallingProvider(FakeProvider):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation"):
+                return await super().complete(request)
+            self.requests.append(request)
+            normal = [
+                item for item in self.requests if not item.metadata.get("operation")
+            ]
+            if len(normal) == 1:
+                return ModelResponse(
+                    provider_id=self.config.id,
+                    model="model-a",
+                    tool_calls=[{"id": "call-1", "name": "read_file", "arguments": {}}],
+                    finish_reason="tool_calls",
+                )
+            return ModelResponse(
+                provider_id=self.config.id,
+                model="model-a",
+                text="Recovered answer.",
+                finish_reason="stop",
+            )
+
+    events, turn, provider = _plain_stream(
+        tmp_path, ToolCallingProvider, "plain-tool-call"
+    )
+
+    done = [payload for name, payload in events if name == "done"]
+    assert done[-1]["message"]["content"] == "Recovered answer."
+    assert turn.status == ChatTurnStatus.COMPLETE
+    assert turn.request_snapshot["final_answer_recovery"]["reason"] == "tool_call"
+    normal = [item for item in provider.requests if not item.metadata.get("operation")]
+    assert len(normal) == 2
+    assert normal[-1].metadata["final_answer_recovery"] == "tool_call"
+
+
+def test_plain_stream_recovers_from_a_rejected_tool_call(tmp_path):
+    class RejectingProvider(FakeProvider):
+        async def stream(self, request: ModelRequest):
+            self.requests.append(request)
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            yield ModelStreamEvent(
+                type=StreamEventType.ERROR,
+                error="provider returned malformed tool arguments",
+                tool_call_rejected=True,
+            )
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation"):
+                return await super().complete(request)
+            self.requests.append(request)
+            return ModelResponse(
+                provider_id=self.config.id,
+                model="model-a",
+                text="Recovered answer.",
+                finish_reason="stop",
+            )
+
+    events, turn, provider = _plain_stream(
+        tmp_path, RejectingProvider, "plain-rejected-call"
+    )
+
+    done = [payload for name, payload in events if name == "done"]
+    assert done[-1]["message"]["content"] == "Recovered answer."
+    assert turn.status == ChatTurnStatus.COMPLETE
+    assert turn.request_snapshot["final_answer_recovery"]["reason"] == "tool_call"
+
+
+@pytest.mark.parametrize(
+    "deltas,shown,answer",
+    [
+        # A frame the route could not read, and nothing else: recovered, and
+        # the recovered answer arrives with ``done``.
+        (
+            [
+                "<｜DSML｜ calls> <｜DSML｜ invoke",
+                ' name="tool_output_read">x</｜DSML｜ invoke> </｜DSML｜ calls>',
+            ],
+            "",
+            "Real answer.",
+        ),
+        # An answer, then a frame whose tag arrives split across deltas.
+        (
+            [
+                "The stored value ",
+                "is a.\n\n<",
+                "｜DSML｜function_calls>\n<｜DSML｜invoke name=",
+                '"read_file">\n<｜DSML｜parameter name="path" string="true">'
+                "notes.md</｜DSML｜parameter>\n</｜DSML｜invoke>\n"
+                "</｜DSML｜function_calls>",
+            ],
+            "The stored value is a.",
+            "The stored value is a.",
+        ),
+        # Text that only looks like the start of a tag is shown whole.
+        (
+            ["Use a <", " b when sorting."],
+            "Use a < b when sorting.",
+            "Use a < b when sorting.",
+        ),
+        (["Compare: a <"], "Compare: a <", "Compare: a <"),
+    ],
+    ids=["frame-only", "answer-then-frame", "no-frame", "ends-like-a-tag"],
+)
+def test_plain_stream_never_shows_a_control_frame(tmp_path, deltas, shown, answer):
+    class FramingProvider(FakeProvider):
+        async def stream(self, request: ModelRequest):
+            self.requests.append(request)
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            for delta in deltas:
+                yield ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta=delta)
+            yield ModelStreamEvent(
+                type=StreamEventType.COMPLETED,
+                response=ModelResponse(
+                    provider_id=self.config.id,
+                    model="model-a",
+                    text="".join(deltas),
+                    finish_reason="stop",
+                ),
+            )
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation"):
+                return await super().complete(request)
+            self.requests.append(request)
+            return ModelResponse(
+                provider_id=self.config.id,
+                model="model-a",
+                text="Real answer.",
+                finish_reason="stop",
+            )
+
+    events, turn, _provider = _plain_stream(
+        tmp_path, FramingProvider, "plain-control-frame"
+    )
+
+    streamed = "".join(payload["delta"] for name, payload in events if name == "delta")
+    assert "DSML" not in streamed
+    assert streamed.strip() == shown
+    done = [payload for name, payload in events if name == "done"]
+    assert done[-1]["message"]["content"] == answer
+    assert turn.status == ChatTurnStatus.COMPLETE
 
 
 def test_core_shutdown_leaves_an_inflight_provider_turn_recoverable(tmp_path):
