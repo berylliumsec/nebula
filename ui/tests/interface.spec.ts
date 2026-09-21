@@ -8749,6 +8749,24 @@ const publishedResults = [
   },
   {
     ...entity,
+    id: "snapshot-3",
+    engagement_id: "scratch-project",
+    title: "Verdict snapshot",
+    summary: "",
+    producer: "dashboard.publish",
+    origin: "agent",
+    labels: [],
+    stats: { byte_size: 180, node_count: 8, max_depth: 2, root_type: "object", top_level_count: 3 },
+    has_hints: false,
+    preview: [],
+    stream: "goal-1",
+    stream_label: "Refactor the auth handler",
+    sequence: 3,
+    chat_session_id: "results-chat",
+    tool_call_id: null,
+  },
+  {
+    ...entity,
     id: "snapshot-1",
     engagement_id: "scratch-project",
     title: "Read the handler",
@@ -8777,6 +8795,11 @@ const publishedPayloads: Record<string, unknown> = {
     ],
     nodes: [{ id: "login" }, { id: "verify" }],
     edges: [{ source: "login", target: "verify" }],
+  },
+  "snapshot-3": {
+    verdict: "refuted",
+    rationale: "prior persistence failure cannot be reproduced against the current build",
+    checked: ["session-store", "token-refresh"],
   },
   "snapshot-1": {
     language: "python",
@@ -9256,5 +9279,52 @@ test("stabilization an operator allows delegation and acts on a waiting subagent
   expect((decisions[0] as { decision?: string }).decision).toBe("approve");
 
   const accessibility = await new AxeBuilder({ page }).include(".chat-subagent-pane").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+test("stabilization the result explorer stays readable in the conversation drawer", async ({ page }) => {
+  // The drawer is ~280px inside a wide window, so a viewport media query never
+  // matches it. A name column with a fixed floor left the value nothing to
+  // wrap in and its text rendered one character per line.
+  await installPublishedResults(page);
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{ ...entity, id: "results-chat", engagement_id: "scratch-project", title: "Refactor auth", backend: "provider", metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/results-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/results-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await page.goto("/?view=chat&session=results-chat&drawer=visuals");
+
+  const panel = page.getByRole("region", { name: "Published results for this conversation" });
+  await expect(panel).toBeVisible();
+  await panel.getByRole("button", { name: /Verdict snapshot/ }).click();
+
+  // Every value keeps a usable measure: one character per line means zero.
+  const values = panel.locator(".structured-property .structured-value");
+  await expect(values.first()).toBeVisible();
+  for (const box of await values.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width))) {
+    expect(box).toBeGreaterThan(80);
+  }
+
+  // The long prose wraps as words, so its row stays close to the text height.
+  const rationale = panel.locator(".structured-property", { hasText: "rationale" }).first();
+  const height = (await rationale.boundingBox())?.height ?? 0;
+  expect(height).toBeLessThan(160);
+
+  // The tree and the inspector share the same column and hold their measure.
+  await panel.getByRole("tab", { name: "Tree" }).click();
+  const treeValue = panel.locator(".structured-tree-value").first();
+  expect((await treeValue.boundingBox())?.width ?? 0).toBeGreaterThan(24);
+
+  await panel.getByRole("tab", { name: "Overview" }).click();
+  await panel.getByRole("button", { name: /^Inspect / }).first().click();
+  const path = panel.locator(".structured-inspector code").first();
+  expect((await path.boundingBox())?.width ?? 0).toBeGreaterThan(24);
+
+  const accessibility = await new AxeBuilder({ page }).include(".chat-result-stream").analyze();
   expect(accessibility.violations).toEqual([]);
 });
