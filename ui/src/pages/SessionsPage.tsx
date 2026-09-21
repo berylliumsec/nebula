@@ -171,6 +171,7 @@ import {
   reconcileCompletedAssistantMessage,
   recoverHarnessHistory,
   savedAssistantState,
+  withoutTurnOutcome,
   type ReconciledConversationMessage,
 } from "./chatMessageReconciliation";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -504,6 +505,7 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
     durable: true,
     sequence: message.sequence,
     harnessTurnId: message.harnessTurnId,
+    outcomeTurnId: message.outcomeTurnId,
     toolSuggestions: message.toolSuggestions,
   };
 }
@@ -2640,7 +2642,7 @@ export function SessionsPage() {
           messages: [],
           toolsEnabled: true,
         };
-        setMessages((current) => [...current, {
+        setMessages((current) => [...withoutTurnOutcome(current, pendingTurn.id), {
           id: assistantId,
           role: "assistant",
           content: "",
@@ -3697,9 +3699,9 @@ export function SessionsPage() {
           if (authoritative.length) {
             const recovered = await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId));
             setMessages((current) => {
-              if (!finalAnswerRetryable) return recovered;
+              if (!finalAnswerRetryable || !failedTurnId) return recovered;
               const failedAssistant = current.find((message) => message.id === assistantId);
-              return failedAssistant ? [...recovered, failedAssistant] : recovered;
+              return failedAssistant ? [...withoutTurnOutcome(recovered, failedTurnId), failedAssistant] : recovered;
             });
           }
           await refreshSessions(returnedSessionId);

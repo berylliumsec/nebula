@@ -4183,6 +4183,11 @@ function mapPersistedChatMessage(
       typeof value.metadata?.harness_turn_id === "string"
         ? value.metadata.harness_turn_id
         : undefined,
+    outcomeTurnId:
+      value.metadata?.kind === "turn_outcome" &&
+      typeof value.metadata.chat_turn_id === "string"
+        ? value.metadata.chat_turn_id
+        : undefined,
     replacedAt:
       typeof value.metadata?.retracted_at === "string"
         ? value.metadata.retracted_at

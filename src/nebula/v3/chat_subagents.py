@@ -2024,6 +2024,9 @@ class SubagentService:
             ConflictError
         ):  # diagnostic-expected: another worker took the turn over; its state stands
             return
+        # Before the held reports post, so the note follows the message the
+        # failed turn was answering.
+        self.chat.record_turn_outcome(latest.id)
         if child and record is not None:
             await self._child_settled(self.get(record.id), latest)
         else:

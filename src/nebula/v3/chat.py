@@ -134,6 +134,13 @@ from .providers import (
     provider_from_profile,
 )
 from .redaction import redact_text, sanitize_display_text
+from .chat_turn_outcomes import (
+    TURN_OUTCOME_FINISH_REASON,
+    is_turn_outcome,
+    join_consecutive_assistant_messages,
+    turn_outcome_metadata,
+    turn_outcome_text,
+)
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .tool_markup import frame_start as tool_frame_start
 from .tool_markup import is_frame as tool_frame_is_frame
@@ -1996,6 +2003,9 @@ class ChatService:
                         expected_revision=latest.revision,
                     )
                     self._release_execution(prepared)
+                # Before subagent reports held for this turn are posted, so
+                # the note follows the operator's message it answers.
+                self.record_turn_outcome(turn.id)
                 self._pause_running_session_goal(
                     turn.session_id,
                     (
@@ -2708,17 +2718,19 @@ class ChatService:
         model_request = ModelRequest(
             model=selected_model,
             instructions=instructions,
-            messages=[
-                ModelMessage(
-                    role=message.role.value,
-                    content=self._model_content(
-                        message,
-                        engagement_id,
-                        images_supported=profile.capabilities.vision,
-                    ),
-                )
-                for message in model_messages
-            ],
+            messages=join_consecutive_assistant_messages(
+                [
+                    ModelMessage(
+                        role=message.role.value,
+                        content=self._model_content(
+                            message,
+                            engagement_id,
+                            images_supported=profile.capabilities.vision,
+                        ),
+                    )
+                    for message in model_messages
+                ]
+            ),
             max_output_tokens=request_limits.max_output_tokens,
             temperature=request.temperature,
             reasoning_effort=request.reasoning_effort,
@@ -3267,6 +3279,8 @@ class ChatService:
         error, event_name, status = ended
         await self._run_terminal_native_hooks(prepared, event_name, detail)
         self._fail_closed_turn(prepared, status=status, error=detail)
+        if prepared.turn is not None:
+            self.record_turn_outcome(prepared.turn.id)
         raise error
 
     async def _complete_claimed(self, prepared: PreparedChat) -> ChatCompletionResponse:
@@ -3535,17 +3549,19 @@ class ChatService:
         recovered_base = prepared.model_request.model_copy(
             update={
                 "instructions": instructions,
-                "messages": [
-                    ModelMessage(
-                        role=item.role.value,
-                        content=self._model_content(
-                            item,
-                            prepared.engagement_id,
-                            images_supported=refreshed.capabilities.vision,
-                        ),
-                    )
-                    for item in model_messages
-                ],
+                "messages": join_consecutive_assistant_messages(
+                    [
+                        ModelMessage(
+                            role=item.role.value,
+                            content=self._model_content(
+                                item,
+                                prepared.engagement_id,
+                                images_supported=refreshed.capabilities.vision,
+                            ),
+                        )
+                        for item in model_messages
+                    ]
+                ),
                 "max_output_tokens": limits.max_output_tokens,
                 "metadata": metadata,
             }
@@ -6151,7 +6167,7 @@ class ChatService:
                     and not isinstance(operator_retries, bool)
                     else 0
                 )
-                return self.store.update(
+                resumed = self.store.update(
                     ChatTurn,
                     candidate.id,
                     {
@@ -6172,6 +6188,10 @@ class ChatService:
                     },
                     expected_revision=candidate.revision,
                 )
+                # The answer takes the failure note's place; if this attempt
+                # fails too, it records a new one.
+                self._withdraw_turn_outcome(resumed)
+                return resumed
             if not recovering:
                 return candidate
             return self.store.update(
@@ -6920,6 +6940,7 @@ class ChatService:
         if turn.status == ChatTurnStatus.COMPLETE:
             return turn
         if turn.status == ChatTurnStatus.CANCELLED:
+            self.record_turn_outcome(turn.id)
             self._pause_running_session_goal(
                 turn.session_id,
                 "Response stopped by the operator. Resume the goal when ready.",
@@ -7000,11 +7021,111 @@ class ChatService:
                     },
                     expected_revision=goal.revision,
                 )
+        self.record_turn_outcome(cancelled.id)
         self._pause_running_session_goal(
             turn.session_id,
             "Response stopped by the operator. Resume the goal when ready.",
         )
         return cancelled
+
+    def record_turn_outcome(self, turn_id: str) -> ChatMessage | None:
+        """Save how a provider turn ended when it failed or stopped unanswered.
+
+        Without it the operator's message stays unanswered in the transcript:
+        the next request carries two user messages in a row, and the model
+        never learns which tools the turn already ran. The note is written
+        once per turn, never after the turn's own answer, and never raises:
+        the turn has already ended, and its end must still settle.
+        """
+
+        try:
+            turn = self.store.get(ChatTurn, turn_id)
+            if (
+                turn.backend != ChatBackend.PROVIDER
+                or turn.status not in {ChatTurnStatus.FAILED, ChatTurnStatus.CANCELLED}
+                or turn.final_message_id is not None
+            ):
+                return None
+            for _ in range(3):
+                session = self.store.get(ChatSession, turn.session_id)
+                stored = self._session_messages(session, include_replaced=True)
+                if any(
+                    message.metadata.get("chat_turn_id") == turn.id
+                    for message in stored
+                ):
+                    # The turn's answer, or its note, is already recorded.
+                    return None
+                recorded = session.metadata.get("last_sequence")
+                sequence = (
+                    max(
+                        [message.sequence for message in stored]
+                        + [recorded if isinstance(recorded, int) else 0]
+                    )
+                    + 1
+                )
+                elapsed_ms, approval_wait_ms = self._turn_timing(turn)
+                note = ChatMessage(
+                    engagement_id=turn.engagement_id,
+                    session_id=session.id,
+                    sequence=sequence,
+                    role=ChatRole.ASSISTANT,
+                    content=turn_outcome_text(turn),
+                    provider_profile_id=turn.provider_profile_id,
+                    model=turn.model,
+                    usage=turn.usage if turn.usage.total_tokens else None,
+                    elapsed_ms=elapsed_ms,
+                    approval_wait_ms=approval_wait_ms,
+                    finish_reason=TURN_OUTCOME_FINISH_REASON,
+                    metadata=turn_outcome_metadata(turn),
+                )
+                try:
+                    with self.store.transaction() as transaction:
+                        transaction.update(
+                            ChatSession,
+                            session.id,
+                            {
+                                "metadata": {
+                                    **session.metadata,
+                                    "message_count": sequence,
+                                    "last_sequence": sequence,
+                                }
+                            },
+                            expected_revision=session.revision,
+                        )
+                        transaction.add(note)
+                except ConflictError:  # diagnostic-expected: another writer moved the conversation on; the note is retried against its newer revision
+                    continue
+                return note
+            raise ConflictError("conversation kept changing while the note was saved")
+        except NotFoundError:  # diagnostic-expected: the turn or its conversation was deleted; there is no transcript to record in
+            return None
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.turn_outcome.record_failed",
+                "A failed or stopped response could not be recorded in its conversation.",
+                exc,
+                stage="turn-outcome",
+            )
+            return None
+
+    def _withdraw_turn_outcome(self, turn: ChatTurn) -> None:
+        """Remove a turn's outcome note before the turn answers after all."""
+
+        session = self.store.get(ChatSession, turn.session_id)
+        notes = [
+            message
+            for message in self._session_messages(session)
+            if is_turn_outcome(message)
+            and message.metadata.get("chat_turn_id") == turn.id
+        ]
+        if not notes:
+            return
+        with self.store.transaction() as transaction:
+            for note in notes:
+                transaction.delete(
+                    ChatMessage, note.id, expected_revision=note.revision
+                )
 
     def session_messages(
         self, session_id: str, *, include_replaced: bool = False
@@ -7625,6 +7746,20 @@ class ChatService:
             return [*history, *new_messages], new_messages
         if len(incoming) == 1 and incoming[0].role == ChatRole.USER:
             return [*history, *incoming], incoming
+        # Core writes the outcome of a failed or stopped turn itself, so a
+        # client replaying the whole transcript has never seen those notes.
+        spoken = [
+            item
+            for item, message in zip(durable, stored, strict=True)
+            if not is_turn_outcome(message)
+        ]
+        if (
+            len(spoken) < len(durable)
+            and len(incoming) == len(spoken) + 1
+            and incoming[: len(spoken)] == spoken
+            and incoming[-1].role == ChatRole.USER
+        ):
+            return [*history, incoming[-1]], incoming[-1:]
         raise ChatHistoryConflict(
             "supplied history diverges from the durable chat transcript"
         )
