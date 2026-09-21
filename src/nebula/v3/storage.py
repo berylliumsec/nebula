@@ -1387,7 +1387,7 @@ class NebulaStore:
                     EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
                 ),
                 and_(
-                    EntityRow.kind == "chat_subagents",
+                    EntityRow.kind.in_(("chat_subagents", "chat_subagent_messages")),
                     EntityRow.payload["parent_session_id"].as_string() == session_id,
                 ),
                 and_(

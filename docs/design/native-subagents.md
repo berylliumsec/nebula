@@ -19,8 +19,8 @@ Static mockups; names, steps and token counts are illustrative.
 
 - Opt-in per request with `allow_subagents` (default off). When set on a
   project provider chat, the tool loop advertises `start_subagent`,
-  `wait_subagents`, `list_subagents` and `stop_subagent`. Subagent turns never
-  receive them (depth 1).
+  `wait_subagents`, `list_subagents`, `message_subagent` and `stop_subagent`.
+  Subagent turns never receive them (depth 1).
 - `start_subagent` creates a child `ChatSession` (`parent_session_id`,
   `metadata.subagent_id`) and a `ChatSubagent` record, then runs the child as an
   ordinary background provider turn with the parent's provider, model, command
@@ -57,6 +57,56 @@ Static mockups; names, steps and token counts are illustrative.
   a subagent is running.
 - Child token usage is charged to the parent's goal when one exists.
 
+## Talking both ways
+
+Parent and child exchange durable `ChatSubagentMessage` records
+(`to_child` / `to_parent`, `pending` → `delivered` or `undelivered`).
+
+- The parent sends with `message_subagent` (harness: `subagent.message`). A
+  working child reads the message before its next step; a child paused on a
+  question takes it as the answer and resumes; a finished child (any end
+  state) runs another round in the same child conversation, which keeps its
+  earlier work (`ChatSubagent.rounds`). A message that lands while the child
+  writes its report starts the next round right after it, and that report
+  reaches the parent as a message. The operator's running-at-once limit
+  applies to a new round.
+- Every subagent turn gets `message_parent` and `read_parent_messages`, so it
+  always routes tools. `message_parent` with `wait_for_reply` pauses the child
+  (`waiting_callback`, `subagent_wait.reply_to`) until the parent replies or
+  cannot: a parent whose response has ended, or ends without replying, closes
+  the question with that reason and the child continues on its own judgment.
+  No child waits on an idle conversation.
+- Delivery to a provider parent: a waiting `wait_subagents` returns as soon
+  as a child sends a message or asks (and returns at once while a question is
+  open); a working parent gets a `list_subagents` step Core adds before its
+  next routing call (`delivered_by_core`, no budget spent); an idle parent gets
+  the message posted to the conversation (`metadata.kind =
+  "subagent_message"`) and, with a running goal, the goal continues at once.
+  A child receives parent messages the same way, as a Core-added
+  `read_parent_messages` step.
+- Delivery to a harness parent: `subagent.wait` and `subagent.list` return
+  messages; `subagent.start`/`message`/`stop` results carry unread `updates`;
+  a running Codex or Claude turn is steered with a "Subagent update"; and
+  whatever the harness has not received is prepended to its next prompt, once.
+  Grok cannot be steered, so it relies on the other paths.
+
+## Failures reach the parent
+
+Every way a subagent ends reaches the parent model with the cause:
+
+- A start failure is the `start_subagent` tool error, with the exception type.
+- A finished, failed, stopped or interrupted round is a report carrying
+  `error`, `last_step`, `tool_failures` (failed or denied steps with their
+  error, last eight) and `undelivered_messages` (parent messages it never
+  read, with why). Posted result messages carry the same lines.
+- Core's own failures fail the subagent instead of leaving it running: a
+  settle that raises marks it `failed` with "Nebula could not record this
+  subagent's result (…)"; a waiting turn (parent or child) that cannot resume
+  fails visibly and its reports still post; a report that cannot be posted
+  stays unreceived (`reported_at` unset) and reaches the parent before its
+  next step or in its next harness prompt; a goal that cannot continue is
+  paused with the cause.
+
 API: `GET /chat/sessions/{id}/subagents`,
 `POST /chat/sessions/{id}/subagents/{subagent_id}/stop`,
 `POST /chat/sessions/{id}/subagents/stop`.
@@ -84,8 +134,9 @@ in the same file (`108:2`): H1 settings popover `108:3`, H2 desktop pane
   Local-only projects refuse cloud providers as usual. Turning the option on
   is the operator's consent to send the children's tool results to that
   provider, so children run with `allow_cloud_tool_results`.
-- The harness gets four Nebula gateway tools: `subagent.start`,
-  `subagent.wait`, `subagent.list` and `subagent.stop`, plus a developer
+- The harness gets five Nebula gateway tools: `subagent.start`,
+  `subagent.wait`, `subagent.list`, `subagent.message` and `subagent.stop`,
+  plus a developer
   instruction naming the model. The vendor catalog is fixed per connection,
   so changing the setting reopens the connection between turns
   (`subagent_binding_changed`); the external thread carries on.

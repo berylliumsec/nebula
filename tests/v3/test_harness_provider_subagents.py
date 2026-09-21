@@ -16,6 +16,8 @@ from nebula.v3.domain import (
     ChatMessage,
     ChatSession,
     ChatSubagent,
+    ChatSubagentMessage,
+    ChatSubagentMessageStatus,
     ChatSubagentStatus,
     ChatTurn,
     Engagement,
@@ -53,11 +55,18 @@ from nebula.v3.providers import (
     ProviderConfig,
     ProviderHealth,
     ProviderKind,
+    ToolCall as ModelToolCall,
 )
 from nebula.v3.storage import NebulaStore
 
 CHILD_MARKER = "You are a subagent."
-SUBAGENT_TOOLS = {"subagent.start", "subagent.wait", "subagent.list", "subagent.stop"}
+SUBAGENT_TOOLS = {
+    "subagent.start",
+    "subagent.wait",
+    "subagent.list",
+    "subagent.message",
+    "subagent.stop",
+}
 
 Script = Callable[["ScriptedConnection", str], Awaitable[str]]
 
@@ -81,7 +90,9 @@ class ChildProvider(ModelProvider):
                 ),
             )
         )
-        self.answers: list[str] = []
+        # Final answers, or a scripted routing response such as a message to
+        # the parent.
+        self.answers: list[str | ModelResponse] = []
         self.requests: list[ModelRequest] = []
         self.gate: asyncio.Event | None = None
 
@@ -95,7 +106,25 @@ class ChildProvider(ModelProvider):
             await self.gate.wait()
         if not self.answers:
             raise AssertionError("child script was exhausted")
-        return self._response(self.answers.pop(0))
+        if isinstance(self.answers[0], ModelResponse):
+            return self.answers.pop(0)  # type: ignore[return-value]
+        if request.tools:
+            # Every subagent routes tools, so a scripted answer first
+            # finishes routing.
+            return ModelResponse(
+                provider_id=self.config.id,
+                model="model-a",
+                tool_calls=[
+                    ModelToolCall(
+                        id=f"finish{len(self.requests)}",
+                        name="finish_response",
+                        arguments={},
+                    )
+                ],
+                usage=ModelUsage(input_tokens=2, output_tokens=1, total_tokens=3),
+                finish_reason="tool_calls",
+            )
+        return self._response(str(self.answers.pop(0)))
 
     def _response(self, text: str) -> ModelResponse:
         return ModelResponse(
@@ -122,6 +151,7 @@ class ScriptedConnection(HarnessConnection):
         self.runtime = runtime
         self.external_session_id = request.session.external_session_id
         self.prompts: list[str] = []
+        self.steered: list[str] = []
         self.script: Script | None = None
         self.interrupted = False
 
@@ -144,7 +174,7 @@ class ScriptedConnection(HarnessConnection):
         yield HarnessEvent(type="completed", message=answer)
 
     async def steer(self, text: str) -> None:
-        del text
+        self.steered.append(text)
 
     async def interrupt(self) -> None:
         self.interrupted = True
@@ -854,6 +884,152 @@ def test_harness_subagents_take_its_reasoning_level_unless_told_otherwise(tmp_pa
         assert started[-1]["reasoning_effort"] == "model default"
         assert child.requests[-1].messages[-1].content == "Count tests."
         assert child.requests[-1].reasoning_effort is None
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def _ask_parent(message: str, *, wait: bool) -> ModelResponse:
+    return ModelResponse(
+        provider_id="provider",
+        model="model-a",
+        tool_calls=[
+            ModelToolCall(
+                id="ask",
+                name="message_parent",
+                arguments={"message": message, "wait_for_reply": wait},
+            )
+        ],
+        usage=ModelUsage(input_tokens=2, output_tokens=1, total_tokens=3),
+        finish_reason="tool_calls",
+    )
+
+
+def test_harness_answers_a_subagent_question_with_subagent_message(tmp_path):
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        child.answers = [
+            _ask_parent("Staging or production?", wait=True),
+            "Checked staging: healthy.",
+        ]
+        seen: dict = {}
+
+        async def script(connection: ScriptedConnection, prompt: str) -> str:
+            del prompt
+            started = _payload(
+                await connection.call("subagent.start", task="Check the deploy.")
+            )
+            seen["asked"] = _payload(await connection.call("subagent.wait"))
+            seen["replied"] = _payload(
+                await connection.call(
+                    "subagent.message",
+                    subagent_id=started["subagent_id"],
+                    message="Use staging.",
+                )
+            )
+            seen["reported"] = _payload(await connection.call("subagent.wait"))
+            return "Staging is healthy."
+
+        adapter.script = script
+        _, _, turn = _prepare(runtime, project, harness, "Check the deploy.")
+        await asyncio.wait_for(runtime.start_chat_turn(turn.id), timeout=10)
+        (record,) = store.list_entities(ChatSubagent)
+
+        # The wait returned as soon as the subagent asked, well before timeout.
+        asked = seen["asked"]
+        assert asked["awaiting_your_reply"] == [record.id]
+        (question,) = asked["subagents"][0]["messages"]
+        assert question["content"] == "Staging or production?"
+        assert question["awaiting_reply"] is True
+        assert seen["replied"]["delivery"] == "answered"
+        assert seen["reported"]["subagents"][0]["report"] == "Checked staging: healthy."
+
+        child_turn = store.get(ChatTurn, record.child_turn_id)
+        (entry,) = [
+            item for item in child_turn.tool_history if item["name"] == "message_parent"
+        ]
+        assert "Use staging." in entry["provider_result"]
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_subagent_message_is_steered_into_the_running_harness_turn(tmp_path):
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        child.answers = [
+            _ask_parent("Found credentials in .env; stop the others?", wait=False),
+            "Reviewed the configuration.",
+        ]
+
+        async def script(connection: ScriptedConnection, prompt: str) -> str:
+            del prompt
+            await connection.call("subagent.start", task="Review the config.")
+            await _until(lambda: bool(connection.steered))
+            return "Handled the update."
+
+        adapter.script = script
+        _, _, turn = _prepare(runtime, project, harness, "Review config.")
+        await asyncio.wait_for(runtime.start_chat_turn(turn.id), timeout=10)
+        steered = adapter.connections[0].steered[0]
+        assert steered.startswith("Nebula subagent update")
+        assert "Found credentials in .env; stop the others?" in steered
+        (message,) = store.list_entities(ChatSubagentMessage)
+        assert message.status == ChatSubagentMessageStatus.DELIVERED
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_harness_gets_unread_subagent_messages_at_its_next_turn(tmp_path):
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        child.answers = [
+            _ask_parent("Which region?", wait=True),
+            "Used us-east-1.",
+        ]
+        child.gate = asyncio.Event()
+
+        async def delegate(connection: ScriptedConnection, prompt: str) -> str:
+            del prompt
+            await connection.call("subagent.start", task="Provision a bucket.")
+            return "Started provisioning."
+
+        adapter.script = delegate
+        parent_chat, _, turn = _prepare(runtime, project, harness, "Provision.")
+        await runtime.start_chat_turn(turn.id)
+        child.gate.set()
+        (record,) = store.list_entities(ChatSubagent)
+        await _until(
+            lambda: store.get(ChatSubagent, record.id).result_message_id is not None
+        )
+        # Asked while the harness was idle: the child went on without waiting.
+        child_turn = store.get(ChatTurn, record.child_turn_id)
+        (entry,) = [
+            item for item in child_turn.tool_history if item["name"] == "message_parent"
+        ]
+        assert "not working right now" in entry["provider_result"]
+        (question,) = store.list_entities(ChatSubagentMessage)
+        assert question.status == ChatSubagentMessageStatus.PENDING
+        kinds = [item.metadata.get("kind") for item in _messages(store, parent_chat.id)]
+        assert "subagent_message" in kinds
+
+        adapter.script = None
+        adapter.connections[0].script = None
+        _, _, second = _prepare(
+            runtime, project, harness, "What happened?", chat_id=parent_chat.id
+        )
+        assert "Which region?" in second.prompt
+        assert "continued without your answer" in second.prompt
+        assert "Used us-east-1." in second.prompt
+        assert (
+            store.get(ChatSubagentMessage, question.id).status
+            == ChatSubagentMessageStatus.DELIVERED
+        )
+        await runtime.start_chat_turn(second.id)
         await chat.shutdown()
 
     asyncio.run(scenario())
