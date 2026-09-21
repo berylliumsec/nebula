@@ -1216,7 +1216,8 @@ def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
             for item in events
             if item.type == "output_delta" and item.stream == "commentary"
         ] == ["I am checking ", " the interface. "]
-        assert events[-1].message == "The authoritative final answer."
+        # A completed plan item is Codex's proposed plan; it follows the answer.
+        assert events[-1].message == "The authoritative final answer.\n\nScan complete"
         assert not any(item.title == "User Message" for item in events)
         assert not any("unsupported" in (item.summary or "") for item in events)
         reasoning = [item for item in events if item.item_id == "reasoning-1"]
@@ -1244,7 +1245,9 @@ def test_codex_filters_commentary_and_declined_elicitation_is_nonterminal():
         trusted_events = [
             item async for item in trusted_connection.run_turn("scan", model="gpt-test")
         ]
-        assert trusted_events[-1].message == "The authoritative final answer."
+        assert trusted_events[-1].message == (
+            "The authoritative final answer.\n\nScan complete"
+        )
         assert trusted_rpc.responses == [(92, {"action": "accept", "content": {}})]
 
     asyncio.run(scenario())

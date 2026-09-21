@@ -741,6 +741,26 @@ class HarnessProviderError(HarnessTransportError):
         super().__init__(f"{provider} request failed: {self.data}")
 
 
+class HarnessTurnFailedError(HarnessError):
+    """The vendor ended a turn as failed while its process stayed healthy.
+
+    Unlike a transport error this keeps the connection: the next turn reuses the
+    vendor process. ``reason_code`` is the diagnostic reason the vendor's own
+    error classification implies, when it implies one.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason_code: str | None = None,
+        vendor_error_info: Any = None,
+    ) -> None:
+        self.reason_code = reason_code
+        self.vendor_error_info = _bounded(vendor_error_info, limit=1_000)
+        super().__init__(message)
+
+
 class HarnessPlanEntry(NebulaModel):
     id: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=2_000)
@@ -1273,6 +1293,18 @@ def _display_delta_chunks(value: str) -> list[str]:
         value[start : start + MAX_NORMALIZED_TEXT]
         for start in range(0, len(value), MAX_NORMALIZED_TEXT)
     ]
+
+
+def _bounded_harness_message(text: str) -> tuple[str, bool]:
+    """Fit a final answer into one chat message, marking a cut instead of failing."""
+
+    if len(text) <= MAX_NORMALIZED_TEXT:
+        return text, False
+    marker = (
+        f"\n\n[Response truncated: Nebula saves at most {MAX_NORMALIZED_TEXT:,} "
+        f"characters per message; the full response was {len(text):,} characters.]"
+    )
+    return text[: MAX_NORMALIZED_TEXT - len(marker)] + marker, True
 
 
 def _codex_reasoning_summary_index(value: Any) -> int:
@@ -1855,6 +1887,10 @@ class CodexAppServerConnection(HarnessConnection):
         message_phases: dict[str, str] = {}
         reasoning_items: set[str] = set()
         reasoning_summary_parts: dict[str, dict[int, str]] = {}
+        # Plan mode answers with a proposed plan item instead of an agentMessage.
+        plan_texts: dict[str, str] = {}
+        streamed_item_id: str | None = None
+        turn_usage = _CodexTurnUsage(model)
         # While a goal is active Codex keeps working in turns it starts itself.
         # They belong to this Nebula turn, so follow them until the goal stops.
         goal_running = False
@@ -1875,11 +1911,8 @@ class CodexAppServerConnection(HarnessConnection):
                 except TimeoutError:
                     # diagnostic-expected: no continuation means Codex is done with this turn.
                     self._awaiting_goal_turn = False
-                    yield HarnessEvent(
-                        type="completed",
-                        vendor=HarnessKind.CODEX_APP_SERVER,
-                        message="\n\n".join(earlier_messages),
-                        external_turn_id=self.last_turn_id,
+                    yield _codex_completed_event(
+                        earlier_messages, external_turn_id=self.last_turn_id
                     )
                     return
             if isinstance(raw, BaseException):
@@ -1900,6 +1933,8 @@ class CodexAppServerConnection(HarnessConnection):
                 self.active_turn_id = started["id"]
                 message_parts = []
                 authoritative_message = None
+                plan_texts = {}
+                streamed_item_id = None
                 yield HarnessEvent(
                     type="started",
                     external_session_id=self.external_session_id,
@@ -2078,9 +2113,13 @@ class CodexAppServerConnection(HarnessConnection):
                             delta=chunk,
                         )
                     continue
-                # Each goal turn's answer streams as its own paragraph.
-                separator = "\n\n" if earlier_messages and not message_parts else ""
-                message_parts.append(delta)
+                # Each agent message, and each goal turn's answer, streams as its
+                # own paragraph instead of running into the previous one.
+                separator = _codex_answer_separator(
+                    streamed_item_id, item_id, after_answer=bool(earlier_messages)
+                )
+                streamed_item_id = item_id
+                message_parts.append(separator + delta if message_parts else delta)
                 yield HarnessEvent(
                     type="message_delta",
                     vendor=HarnessKind.CODEX_APP_SERVER,
@@ -2177,7 +2216,27 @@ class CodexAppServerConnection(HarnessConnection):
                         payload={"reasoning_summary_state": "pending"},
                     )
                 continue
-            if method in {"turn/plan/updated", "item/plan/delta"}:
+            if method == "item/plan/delta":
+                # A plan-mode turn answers with a proposed plan: markdown text,
+                # not a step list. It streams as part of the answer.
+                delta = str(params.get("delta") or "")
+                item_id = str(params.get("itemId") or "plan")
+                if not delta:
+                    continue
+                plan_texts[item_id] = plan_texts.get(item_id, "") + delta
+                separator = _codex_answer_separator(
+                    streamed_item_id, item_id, after_answer=bool(earlier_messages)
+                )
+                streamed_item_id = item_id
+                yield HarnessEvent(
+                    type="message_delta",
+                    vendor=HarnessKind.CODEX_APP_SERVER,
+                    delta=separator + delta,
+                    item_id=item_id,
+                    external_turn_id=self.active_turn_id,
+                )
+                continue
+            if method == "turn/plan/updated":
                 plan = _acp_plan_entries(
                     params.get("plan") or params.get("items") or params.get("steps")
                 )
@@ -2242,11 +2301,8 @@ class CodexAppServerConnection(HarnessConnection):
                     )
                     if continuation_deadline is not None and not goal_running:
                         self._awaiting_goal_turn = False
-                        yield HarnessEvent(
-                            type="completed",
-                            vendor=HarnessKind.CODEX_APP_SERVER,
-                            message="\n\n".join(earlier_messages),
-                            external_turn_id=self.last_turn_id,
+                        yield _codex_completed_event(
+                            earlier_messages, external_turn_id=self.last_turn_id
                         )
                         return
                 continue
@@ -2368,12 +2424,15 @@ class CodexAppServerConnection(HarnessConnection):
                             title="Commentary",
                             payload=_bounded(item, limit=MAX_TOOL_RESULT_TEXT),
                         )
-                    elif method == "item/completed" and isinstance(
-                        item.get("text"), str
+                    elif (
+                        method == "item/completed"
+                        and isinstance(item.get("text"), str)
+                        and item["text"].strip()
                     ):
                         # The completed item is authoritative. Some app-server
                         # builds omit final-answer deltas, and reconnects may start
                         # after those deltas, so never depend on deltas alone.
+                        # Like Codex, a whitespace-only message is not an answer.
                         authoritative_message = str(item["text"])
                     continue
                 if item_type == "userMessage":
@@ -2422,6 +2481,11 @@ class CodexAppServerConnection(HarnessConnection):
                         if malformed_summary:
                             payload["reasoning_summary_malformed"] = True
                     else:
+                        if method == "item/completed" and isinstance(
+                            item.get("text"), str
+                        ):
+                            # The completed plan is authoritative over its deltas.
+                            plan_texts[completed_item_id or item_type] = item["text"]
                         payload = _bounded(item, limit=MAX_TOOL_RESULT_TEXT)
                     yield HarnessEvent(
                         type="item_upsert",
@@ -2485,12 +2549,12 @@ class CodexAppServerConnection(HarnessConnection):
                     )
                 continue
             if method == "thread/tokenUsage/updated":
-                usage = _codex_usage(params)
+                usage, detailed_usage = turn_usage.update(params)
                 yield HarnessEvent(
                     type="usage",
                     vendor=HarnessKind.CODEX_APP_SERVER,
                     usage=usage,
-                    detailed_usage=_codex_detailed_usage(params, model=model),
+                    detailed_usage=detailed_usage,
                     payload={},
                 )
                 continue
@@ -2546,14 +2610,43 @@ class CodexAppServerConnection(HarnessConnection):
                     yield HarnessEvent(type="interrupted", message=status)
                     return
                 if status != "completed":
-                    error = completed.get("error")
-                    if isinstance(error, dict):
-                        raise HarnessProviderError("Codex turn", error)
-                    raise HarnessTransportError(
-                        "Codex turn failed: "
-                        + str(_bounded(error or status, limit=1_000))
+                    # A failed turn is Codex's verdict, not a broken transport:
+                    # the process stays usable for the next turn.
+                    failure = _codex_turn_failure(completed.get("error"), status)
+                    answers = [
+                        *earlier_messages,
+                        *([authoritative_message] if authoritative_message else []),
+                    ]
+                    if not answers:
+                        raise failure
+                    # Codex also fails a turn for an error raised after its final
+                    # answer (an after_agent hook, a late compaction). Keep the
+                    # delivered answer and show the failure beside it.
+                    turn_error = {
+                        "message": str(failure),
+                        "reason_code": failure.reason_code,
+                        "codex_error_info": failure.vendor_error_info,
+                    }
+                    yield HarnessEvent(
+                        type="notice",
+                        vendor=HarnessKind.CODEX_APP_SERVER,
+                        external_turn_id=self.last_turn_id,
+                        title="Codex reported a failure after answering",
+                        summary=str(failure)[:4_000],
+                        payload={"severity": "warning", **turn_error},
                     )
-                message = authoritative_message or "".join(message_parts)
+                    yield _codex_completed_event(
+                        answers,
+                        external_turn_id=self.last_turn_id,
+                        payload={"turn_error": turn_error},
+                    )
+                    return
+                message = _codex_turn_answer(
+                    completed,
+                    completed_message=authoritative_message,
+                    streamed_message="".join(message_parts),
+                    plans=plan_texts,
+                )
                 if message:
                     earlier_messages.append(message)
                 if goal_running:
@@ -2563,10 +2656,8 @@ class CodexAppServerConnection(HarnessConnection):
                     )
                     self._awaiting_goal_turn = True
                     continue
-                yield HarnessEvent(
-                    type="completed",
-                    vendor=HarnessKind.CODEX_APP_SERVER,
-                    message="\n\n".join(earlier_messages),
+                yield _codex_completed_event(
+                    earlier_messages,
                     external_turn_id=str(completed.get("id") or "") or None,
                 )
                 return
@@ -2693,82 +2784,231 @@ class CodexAppServerConnection(HarnessConnection):
         await self.rpc.close()
 
 
-def _codex_usage(params: dict[str, Any]) -> ChatTokenUsage:
-    usage = params.get("tokenUsage") or params.get("usage") or {}
-    if not isinstance(usage, dict):
-        usage = {}
-    raw_last = usage.get("last")
-    last: dict[str, Any] = raw_last if isinstance(raw_last, dict) else usage
-    input_tokens = int(last.get("inputTokens") or last.get("input_tokens") or 0)
-    output_tokens = int(last.get("outputTokens") or last.get("output_tokens") or 0)
-    return ChatTokenUsage(
-        input_tokens=max(0, input_tokens),
-        output_tokens=max(0, output_tokens),
-        total_tokens=max(0, input_tokens + output_tokens),
+def _codex_answer_separator(
+    previous_item_id: str | None, item_id: str, *, after_answer: bool
+) -> str:
+    """Start a paragraph when streamed answer text moves to another item or turn."""
+
+    if previous_item_id is None:
+        return "\n\n" if after_answer else ""
+    return "\n\n" if item_id != previous_item_id else ""
+
+
+def _codex_completed_event(
+    answers: list[str],
+    *,
+    external_turn_id: str | None,
+    payload: dict[str, Any] | None = None,
+) -> HarnessEvent:
+    message, truncated = _bounded_harness_message("\n\n".join(answers))
+    event_payload = dict(payload or {})
+    if truncated:
+        event_payload["message_truncated"] = True
+    return HarnessEvent(
+        type="completed",
+        vendor=HarnessKind.CODEX_APP_SERVER,
+        message=message,
+        external_turn_id=external_turn_id,
+        payload=event_payload,
     )
 
 
-def _codex_detailed_usage(
-    params: dict[str, Any], *, model: str
-) -> HarnessDetailedUsage:
-    raw_usage = params.get("tokenUsage") or params.get("usage") or {}
-    usage = raw_usage if isinstance(raw_usage, dict) else {}
-    raw_last = usage.get("last")
-    last = raw_last if isinstance(raw_last, dict) else usage
+def _codex_final_answer(items: Any) -> str | None:
+    """Pick a turn's answer from ``turn/completed.turn.items`` as Codex clients do.
 
-    def count(*names: str) -> int:
+    The last ``final_answer`` agentMessage wins, else the last phase-less one;
+    commentary and whitespace-only messages are never the answer.
+    """
+
+    if not isinstance(items, list):
+        return None
+    phase_less: str | None = None
+    for item in reversed(items):
+        if not isinstance(item, dict) or item.get("type") != "agentMessage":
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text.strip():
+            continue
+        phase = item.get("phase")
+        if phase == "final_answer":
+            return text
+        if not phase and phase_less is None:
+            phase_less = text
+    return phase_less
+
+
+def _codex_turn_answer(
+    turn: dict[str, Any],
+    *,
+    completed_message: str | None,
+    streamed_message: str,
+    plans: Mapping[str, str],
+) -> str:
+    """One completed Codex turn's answer: its final message, then any proposed plan."""
+
+    answer = (
+        _codex_final_answer(turn.get("items")) or completed_message or streamed_message
+    )
+    plan = "\n\n".join(text for text in plans.values() if text.strip())
+    return "\n\n".join(part for part in (answer, plan) if part.strip())
+
+
+# Codex ``codexErrorInfo`` kinds (app-server-protocol v2 ``CodexErrorInfo``) whose
+# meaning maps onto a Nebula diagnostic reason. Others fall back to text rules.
+_CODEX_ERROR_REASON_CODES = {
+    "usageLimitExceeded": "quota_exhausted",
+    "rateLimitExceeded": "rate_limited",
+    "serverOverloaded": "dependency_unavailable",
+    "httpConnectionFailed": "dependency_unavailable",
+    "responseStreamConnectionFailed": "dependency_unavailable",
+    "responseStreamDisconnected": "dependency_unavailable",
+    "responseTooManyFailedAttempts": "dependency_unavailable",
+    "contextWindowExceeded": "invalid_input",
+    "unauthorized": "authentication_failed",
+}
+
+
+def _codex_turn_failure(error: Any, status: str) -> HarnessTurnFailedError:
+    """Describe a failed Codex turn by its ``TurnError`` message and error kind."""
+
+    if not isinstance(error, dict):
+        return HarnessTurnFailedError(
+            "Codex turn failed: " + str(_bounded(error or status, limit=1_000))
+        )
+    info = error.get("codexErrorInfo")
+    # Unit kinds arrive as a string, kinds with details as a one-key object.
+    kind = next(iter(info), None) if isinstance(info, dict) else info
+    kind = kind if isinstance(kind, str) else None
+    message = str(_bounded(error.get("message") or "", limit=2_000)).strip()
+    message = message or f"Codex turn failed ({kind or status})."
+    if kind == "contextWindowExceeded":
+        message += (
+            " Compact the conversation before retrying: start a new chat or send"
+            " a shorter request."
+        )
+    return HarnessTurnFailedError(
+        message,
+        reason_code=_CODEX_ERROR_REASON_CODES.get(kind or ""),
+        vendor_error_info=info,
+    )
+
+
+_CODEX_TOKEN_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("input_tokens", ("inputTokens", "input_tokens")),
+    ("cached_input_tokens", ("cachedInputTokens", "cached_input_tokens")),
+    ("output_tokens", ("outputTokens", "output_tokens")),
+    ("reasoning_output_tokens", ("reasoningOutputTokens", "reasoning_output_tokens")),
+    ("total_tokens", ("totalTokens", "total_tokens")),
+)
+
+
+def _codex_token_counts(value: Any) -> dict[str, int]:
+    """Read one Codex ``TokenUsageBreakdown`` as non-negative counts."""
+
+    breakdown = value if isinstance(value, dict) else {}
+    counts: dict[str, int] = {}
+    for key, names in _CODEX_TOKEN_FIELDS:
+        count = 0
         for name in names:
-            value = last.get(name)
-            if isinstance(value, (int, float)):
-                return max(0, int(value))
-        return 0
+            raw = breakdown.get(name)
+            if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                count = max(0, int(raw))
+                break
+        counts[key] = count
+    return counts
 
-    input_tokens = count("inputTokens", "input_tokens")
-    output_tokens = count("outputTokens", "output_tokens")
-    total_tokens = count("totalTokens", "total_tokens") or (
-        input_tokens + output_tokens
-    )
-    cached_input_tokens = count("cachedInputTokens", "cached_input_tokens")
-    context_window = usage.get("modelContextWindow")
-    pricing = codex_model_pricing(model)
-    cost_usd = (
-        pricing.estimate_cost_usd(
+
+class _CodexTurnUsage:
+    """One Nebula turn's usage, read from Codex's cumulative thread totals.
+
+    ``thread/tokenUsage/updated`` carries the thread's running ``total`` and the
+    latest model request's ``last``, and Codex re-sends unchanged totals (for
+    example on a rate-limit refresh). The first update counts its ``last`` (the
+    baseline is ``total - last``); later updates count how much ``total`` grew.
+    Each increment is priced on its own, so a per-request long-context price
+    tier is never applied to the sum of several requests.
+    """
+
+    def __init__(self, model: str) -> None:
+        self.model = model
+        self.pricing = codex_model_pricing(model)
+        self.counts = _codex_token_counts(None)
+        self.cost_usd = 0.0
+        self.total: dict[str, int] | None = None
+
+    def _cost(self, counts: Mapping[str, int]) -> float:
+        if self.pricing is None:
+            return 0.0
+        return self.pricing.estimate_cost_usd(
+            input_tokens=counts["input_tokens"],
+            output_tokens=counts["output_tokens"],
+            cached_input_tokens=counts["cached_input_tokens"],
+        )
+
+    def update(
+        self, params: dict[str, Any]
+    ) -> tuple[ChatTokenUsage, HarnessDetailedUsage]:
+        raw_usage = params.get("tokenUsage") or params.get("usage") or {}
+        usage = raw_usage if isinstance(raw_usage, dict) else {}
+        raw_last = usage.get("last")
+        last = _codex_token_counts(raw_last if isinstance(raw_last, dict) else usage)
+        raw_total = usage.get("total")
+        if isinstance(raw_total, dict):
+            total = _codex_token_counts(raw_total)
+            previous = self.total
+            if previous is None or any(total[key] < previous[key] for key in total):
+                # First update of the turn, or Codex reset the thread total.
+                increment = last
+            else:
+                increment = {key: total[key] - previous[key] for key in total}
+            self.total = total
+            self.counts = {key: self.counts[key] + increment[key] for key in increment}
+            self.cost_usd += self._cost(increment)
+        else:
+            # Without a cumulative total an update describes one request.
+            self.counts = last
+            self.cost_usd = self._cost(last)
+        input_tokens = self.counts["input_tokens"]
+        output_tokens = self.counts["output_tokens"]
+        context_window = usage.get("modelContextWindow")
+        pricing = self.pricing
+        cost_usd = self.cost_usd if pricing is not None else None
+        detailed = HarnessDetailedUsage(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
-            cached_input_tokens=cached_input_tokens,
-        )
-        if pricing is not None
-        else None
-    )
-    return HarnessDetailedUsage(
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        total_tokens=total_tokens,
-        cached_input_tokens=cached_input_tokens,
-        reasoning_output_tokens=count(
-            "reasoningOutputTokens", "reasoning_output_tokens"
-        ),
-        context_window=(
-            max(0, int(context_window))
-            if isinstance(context_window, (int, float))
-            else None
-        ),
-        context_used=input_tokens,
-        cost_usd=cost_usd,
-        model_usage=(
-            {
-                model: {
-                    "cost_usd": cost_usd,
-                    "pricing_basis": "standard_api_equivalent",
-                    "pricing_model": pricing.model,
-                    "pricing_verified_on": CATALOG_VERIFIED_ON,
-                    "pricing_source": pricing.source_url,
+            total_tokens=self.counts["total_tokens"] or input_tokens + output_tokens,
+            cached_input_tokens=self.counts["cached_input_tokens"],
+            reasoning_output_tokens=self.counts["reasoning_output_tokens"],
+            context_window=(
+                max(0, int(context_window))
+                if isinstance(context_window, (int, float))
+                else None
+            ),
+            # The context meter shows how full the latest request's prompt was.
+            context_used=last["input_tokens"],
+            cost_usd=cost_usd,
+            model_usage=(
+                {
+                    self.model: {
+                        "cost_usd": cost_usd,
+                        "pricing_basis": "standard_api_equivalent",
+                        "pricing_model": pricing.model,
+                        "pricing_verified_on": CATALOG_VERIFIED_ON,
+                        "pricing_source": pricing.source_url,
+                    }
                 }
-            }
-            if pricing is not None
-            else {}
-        ),
-    )
+                if pricing is not None
+                else {}
+            ),
+        )
+        return (
+            ChatTokenUsage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=input_tokens + output_tokens,
+            ),
+            detailed,
+        )
 
 
 def _codex_item_kind(item_type: str) -> Any:
@@ -4395,7 +4635,14 @@ def _acp_plan_entries(value: Any) -> list[HarnessPlanEntry]:
         if isinstance(raw, str):
             title, entry_id = raw, str(index)
         elif isinstance(raw, dict):
-            title = str(raw.get("content") or raw.get("title") or raw.get("text") or "")
+            title = str(
+                raw.get("content")
+                or raw.get("title")
+                or raw.get("text")
+                # Codex ``TurnPlanStep`` names the step ``step``.
+                or raw.get("step")
+                or ""
+            )
             entry_id = str(raw.get("id") or index)
             raw_status = str(raw.get("status") or "pending").lower()
             status = cast(
@@ -8447,7 +8694,14 @@ class HarnessRuntimeService:
                         )
                 error = _safe_error(exc)
                 reason = reason_code_for(
-                    exc, feature="harnesses", event_code="harnesses.turn.failed"
+                    exc,
+                    feature="harnesses",
+                    event_code="harnesses.turn.failed",
+                    supplied=(
+                        exc.reason_code
+                        if isinstance(exc, HarnessTurnFailedError)
+                        else None
+                    ),
                 )
                 guidance = guidance_for("harnesses", reason, operator_detail=error)
                 self._fail_turn(
@@ -12703,7 +12957,8 @@ class HarnessRuntimeService:
                 session_id=turn.chat_session_id,
                 sequence=max((item.sequence for item in existing), default=0) + 1,
                 role=ChatRole.ASSISTANT,
-                content=final_message or "Harness completed without a text response.",
+                content=_bounded_harness_message(final_message)[0]
+                or "Harness completed without a text response.",
                 model=self.store.get(HarnessSession, turn.harness_session_id).model,
                 usage=usage,
                 elapsed_ms=max(
