@@ -1,28 +1,19 @@
 {
-  "change_digest": "a835c04a45e5c4d0795750af5a8c81fa89cfd9f159e56d4d7c7239f0059050f6",
-  "reviewed_by": "Codex focused review for callback and queue restart recovery",
-  "reason": "Callback completion can race the UI pending-turn poll, while safe Core-update auto-resume can race queue startup reconciliation. Exact Python cases cover queue restart states, the claimed safe turn, and supervisor auto-resume. The paused-supervisor browser area covers callback completion across desktop and mobile engines. The provider real-Core area checks saved conversation restart through the production UI on LAN, with its resumed answer assertion bound to the durable outcome rather than obsolete streaming wording.",
-  "exclusions": "No unrelated native, frontend unit, or full suites. Callback timing is modeled at the UI boundary and queue behavior is checked against a durable Core store. Physical devices are unavailable.",
-  "expected_tests": {
-    "python": 7,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 19
-  },
-  "python_versions": [
-    "3.11"
-  ],
+  "change_digest": "df5b1e3b0107a2a0f4214ed7a86b36f65a6eb431565f59d72b882470d6666a3d",
+  "reviewed_by": "Codex focused review of native completion-hook feedback",
+  "reason": "A blocking native completion hook now supplies bounded feedback to one model correction attempt across provider chat paths. The selected cases cover feedback delivery, revised-answer recheck, tool-enabled rerouting, persistent rejection, and held streaming output.",
+  "exclusions": "No frontend, native, or Playwright tests are selected because this diff changes only provider-turn orchestration and its Python regression tests. No full suites or live provider calls. Production UI, LAN, and physical-device journeys remain unverified.",
+  "expected_tests": {"python": 5, "frontend": 0, "native": 0, "playwright": 0},
+  "python_versions": ["3.11"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_queue.py::test_restart_after_durable_turn_creation_reconciles_without_replay",
-    "tests/v3/test_chat_queue.py::test_core_update_reclaimed_provider_turn_keeps_linked_follow_up_running",
-    "tests/v3/test_chat.py::test_core_update_auto_resumes_safe_supervisor_with_saved_thinking"
+    "tests/v3/test_native_hook_turn_ends.py::test_required_completion_hook_feedback_reaches_model_and_rechecks_answer",
+    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_routes_again_with_completion_hook_feedback",
+    "tests/v3/test_native_hook_turn_ends.py::test_required_completion_hook_can_reject_final_answer",
+    "tests/v3/test_native_hook_turn_ends.py::test_stream_holds_answer_until_required_completion_hook_accepts"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "area:paused-supervisor-recovery",
-    "area:provider-native-hooks-core"
-  ]
+  "playwright": []
 }

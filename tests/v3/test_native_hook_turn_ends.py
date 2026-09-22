@@ -349,10 +349,112 @@ def test_required_completion_hook_can_reject_final_answer(tmp_path):
     )
 
 
+def test_required_completion_hook_feedback_reaches_model_and_rechecks_answer(tmp_path):
+    class RevisingProvider(FakeProvider):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("completion_hook_retry") == "1":
+                self.requests.append(request)
+                return ModelResponse(
+                    provider_id=self.config.id,
+                    model="model-a",
+                    text="Revised answer with evidence.",
+                    finish_reason="stop",
+                )
+            return await super().complete(request)
+
+    script = (
+        "#!/bin/sh\n"
+        "python3 -c 'import json,sys; "
+        'message=json.load(sys.stdin)["payload"]["assistant_message"]; '
+        'print("Missing evidence: cite the dossier"); '
+        'raise SystemExit(3 if "Revised answer" not in message else 0)\'\n'
+    )
+    store, service, provider, request, _ = _service(
+        tmp_path,
+        RevisingProvider,
+        hook_id="answer-guard",
+        events=["chat.turn.completed"],
+        script=script,
+        failure_policy="block",
+    )
+    prepared = service.prepare(request)
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == "Revised answer with evidence."
+    assert store.get(ChatTurn, prepared.turn.id).status == ChatTurnStatus.COMPLETE
+    assert len(service.list_turn_hook_executions(prepared.turn.id)) == 2
+    retry = next(
+        item
+        for item in provider.requests
+        if item.metadata.get("completion_hook_retry") == "1"
+    )
+    assert "Missing evidence: cite the dossier" in retry.messages[-1].content
+    assert retry.messages[-2].role == "assistant"
+    assert retry.messages[-2].content == "Evidence-backed answer [source-a:chunk-a]."
+
+
+def test_tool_turn_routes_again_with_completion_hook_feedback(tmp_path):
+    script = (
+        "#!/bin/sh\n"
+        "python3 -c 'import json,sys; "
+        'message=json.load(sys.stdin)["payload"]["assistant_message"]; '
+        'print("Check the repository state before answering"); '
+        'raise SystemExit(3 if "Initial answer" in message else 0)\'\n'
+    )
+    workspace = tmp_path / "workspace"
+    _write_native_hook(
+        workspace,
+        "repository-lifecycle",
+        events=["chat.turn.completed"],
+        script=script,
+        failure_policy="block",
+    )
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(text="Initial answer."),
+        _response(
+            calls=[
+                ToolCall(id="read-1", name="safe_read", arguments={"value": "state"})
+            ]
+        ),
+        _response(
+            calls=[ToolCall(id="finish-2", name="finish_response", arguments={})]
+        ),
+        _response(text="Answer after checking state."),
+    ]
+    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    prepared.hook_snapshots = [
+        snapshot_native_hook("repository-lifecycle", discover_native_hooks(workspace))
+    ]
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == "Answer after checking state."
+    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert len(broker.calls) == 1
+    assert len(service.list_turn_hook_executions("turn")) == 2
+    assert any(
+        "Check the repository state before answering" in str(message.content)
+        for message in provider.requests[2].messages
+    )
+
+
 @pytest.mark.parametrize("blocked", [False, True])
 def test_stream_holds_answer_until_required_completion_hook_accepts(tmp_path, blocked):
     class StreamingAnswerProvider(FakeProvider):
         answer_text = ""
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            self.requests.append(request)
+            return ModelResponse(
+                provider_id=self.config.id,
+                model="model-a",
+                text=self.answer_text,
+                finish_reason="stop",
+            )
 
         async def stream(self, request: ModelRequest):
             del request
