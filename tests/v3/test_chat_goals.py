@@ -12,7 +12,7 @@ from nebula.v3.chat import (
     ChatRuntimeSwitchRequest,
     ChatService,
 )
-from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
+from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalUpdate, GoalWrite
 from nebula.v3.context import estimate_model_request
 from nebula.v3.domain import (
     CHAT_GOAL_CHILD_LIMIT,
@@ -48,6 +48,79 @@ def setup_goal(tmp_path):
         )
     )
     return store, ChatGoalService(store)
+
+
+def test_goal_content_can_be_edited_before_and_after_start(tmp_path):
+    _, goals = setup_goal(tmp_path)
+    draft = goals.create(
+        "session",
+        GoalCreate(objective="Initial draft", completion_criteria=["Old criterion"]),
+    )
+    edited_draft = goals.update(
+        "session",
+        GoalUpdate(
+            expected_revision=draft.revision,
+            objective="Ready to start",
+            completion_criteria=["Draft edit persisted"],
+            plan=["Start"],
+            step_budget=3,
+        ),
+    )
+    running = goals.write(
+        "session", GoalWrite(expected_revision=edited_draft.revision, action="start")
+    )
+    edited_running = goals.update(
+        "session",
+        GoalUpdate(
+            expected_revision=running.revision,
+            objective="Updated while running",
+            completion_criteria=["Running edit persisted"],
+            plan=["Continue", "Verify"],
+            step_budget=4,
+        ),
+    )
+
+    assert edited_running.status == ChatGoalStatus.RUNNING
+    assert edited_running.objective == "Updated while running"
+    assert edited_running.completion_criteria == ["Running edit persisted"]
+    assert edited_running.plan == ["Continue", "Verify"]
+    assert edited_running.step_budget == 4
+
+
+def test_goal_edit_rejects_stale_revision_and_terminal_history(tmp_path):
+    _, goals = setup_goal(tmp_path)
+    draft = goals.create(
+        "session", GoalCreate(objective="Original", completion_criteria=["Done"])
+    )
+    edited = goals.update(
+        "session",
+        GoalUpdate(
+            expected_revision=draft.revision,
+            objective="Current",
+            completion_criteria=["Done"],
+        ),
+    )
+    with pytest.raises(ConflictError, match="review the latest goal"):
+        goals.update(
+            "session",
+            GoalUpdate(
+                expected_revision=draft.revision,
+                objective="Stale overwrite",
+                completion_criteria=["Done"],
+            ),
+        )
+    cancelled = goals.write(
+        "session", GoalWrite(expected_revision=edited.revision, action="cancel")
+    )
+    with pytest.raises(ConflictError, match="cannot be edited"):
+        goals.update(
+            "session",
+            GoalUpdate(
+                expected_revision=cancelled.revision,
+                objective="Rewrite history",
+                completion_criteria=["Done"],
+            ),
+        )
 
 
 def test_goal_resume_requires_interrupted_turn_recovery(tmp_path):

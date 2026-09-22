@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, ChevronDown, CirclePause, CirclePlay, Flag, LoaderCircle, OctagonX } from "lucide-react";
+import { Check, ChevronDown, CirclePause, CirclePlay, Flag, LoaderCircle, OctagonX, Pencil } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
 import type { ChatGoal, HarnessSkillSummary } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
@@ -79,6 +79,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   const [summary, setSummary] = useState("");
   const [evidence, setEvidence] = useState("");
   const [editingSkills, setEditingSkills] = useState(false);
+  const [editingGoal, setEditingGoal] = useState(false);
   const [selectedSkillPaths, setSelectedSkillPaths] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -178,6 +179,75 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
     } finally { setBusy(false); }
   };
 
+  const beginGoalEdit = () => {
+    if (!goal) return;
+    setObjective(goal.objective);
+    setCriteria(goal.completionCriteria.join("\n"));
+    setPlan(goal.plan.join("\n"));
+    setTokenBudget(goal.tokenBudget?.toString() ?? "");
+    setTimeBudget(goal.timeBudgetSeconds ? String(goal.timeBudgetSeconds / 60) : "");
+    setStepBudget(goal.stepBudget?.toString() ?? "");
+    setChildBudget(goal.childBudget?.toString() ?? "");
+    setEditingSkills(false);
+    setTransition(undefined);
+    setEditingGoal(true);
+    setError(undefined);
+  };
+
+  const saveGoal = async () => {
+    if (!goal || !sessionId || busy) return;
+    const completionCriteria = criteria.split("\n").map(item => item.trim()).filter(Boolean);
+    if (!objective.trim() || !completionCriteria.length) return;
+    setBusy(true); setError(undefined);
+    try {
+      onChange(await api.updateChatGoal(sessionId, {
+        expectedRevision: goal.revision,
+        objective: objective.trim(),
+        completionCriteria,
+        plan: plan.split("\n").map(item => item.trim()).filter(Boolean),
+        ...(tokenBudget ? { tokenBudget: Number(tokenBudget) } : {}),
+        ...(timeBudget ? { timeBudgetSeconds: Number(timeBudget) * 60 } : {}),
+        ...(stepBudget ? { stepBudget: Number(stepBudget) } : {}),
+        ...(childBudget ? { childBudget: Number(childBudget) } : {}),
+      }));
+      setEditingGoal(false);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 409) {
+        try {
+          const current = await api.getChatGoal(sessionId);
+          const contentUnchanged = current.objective === goal.objective
+            && JSON.stringify(current.completionCriteria) === JSON.stringify(goal.completionCriteria)
+            && JSON.stringify(current.plan) === JSON.stringify(goal.plan)
+            && current.tokenBudget === goal.tokenBudget
+            && current.timeBudgetSeconds === goal.timeBudgetSeconds
+            && current.stepBudget === goal.stepBudget
+            && current.childBudget === goal.childBudget;
+          onChange(current);
+          if (contentUnchanged) {
+            onChange(await api.updateChatGoal(sessionId, {
+              expectedRevision: current.revision,
+              objective: objective.trim(),
+              completionCriteria,
+              plan: plan.split("\n").map(item => item.trim()).filter(Boolean),
+              ...(tokenBudget ? { tokenBudget: Number(tokenBudget) } : {}),
+              ...(timeBudget ? { timeBudgetSeconds: Number(timeBudget) * 60 } : {}),
+              ...(stepBudget ? { stepBudget: Number(stepBudget) } : {}),
+              ...(childBudget ? { childBudget: Number(childBudget) } : {}),
+            }));
+            setEditingGoal(false);
+            return;
+          }
+          setError("The goal changed while you were editing. Your draft is still here; review the latest goal and save again.");
+          return;
+        } catch (refreshed) {
+          void logCaughtDiagnostic("interface.goal.edit_refresh_failed", "A changed conversation goal could not be refreshed.", refreshed, "goal");
+        }
+      }
+      void logCaughtDiagnostic("interface.goal.edit_failed", "A conversation goal edit could not be saved.", caught, "goal");
+      setError(caught instanceof Error ? caught.message : "Goal changes could not be saved.");
+    } finally { setBusy(false); }
+  };
+
   const beginSkillEdit = () => {
     setSelectedSkillPaths(goal?.skillSnapshots.map(skill => skill.path) ?? []);
     setEditingSkills(true);
@@ -251,7 +321,19 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
       {goal.status === "draft" && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("start")}><CirclePlay size={14} /> Start</button>}
       {goal.status === "running" && <><button className="button secondary chat-goal-pause" type="button" disabled={busy || settingsBusy} onClick={() => void act("pause")}><CirclePause size={14} /> Pause</button><div className="chat-goal-outcomes" role="group" aria-label="Set goal outcome"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("block")}>Block</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("complete")}><Check size={14} aria-hidden="true" /> Complete</button></div></>}
       {(goal.status === "paused" || goal.status === "blocked") && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("resume")}><CirclePlay size={14} /> Resume</button>}
-      <div className="chat-goal-utilities"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginSkillEdit}>Edit skills</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => void cancelGoal()}><OctagonX size={14} /> Cancel goal</button></div>
+      <div className="chat-goal-utilities"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginGoalEdit}><Pencil size={14} aria-hidden="true" /> Edit goal</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginSkillEdit}>Edit skills</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => void cancelGoal()}><OctagonX size={14} /> Cancel goal</button></div>
+    </div>}
+    {editingGoal && !terminal && <div className="chat-goal-form">
+      <label>Objective<textarea value={objective} maxLength={20_000} required onChange={event => setObjective(event.target.value)} /></label>
+      <label>Completion criteria<textarea value={criteria} required placeholder="One criterion per line" onChange={event => setCriteria(event.target.value)} /></label>
+      <label>Plan<textarea value={plan} placeholder="One optional step per line" onChange={event => setPlan(event.target.value)} /></label>
+      <details><summary>Limits</summary><div className="chat-goal-limits">
+        <label>Token budget<input type="number" min="1" value={tokenBudget} onChange={event => setTokenBudget(event.target.value)} /></label>
+        <label>Time budget (minutes)<input type="number" min="1" value={timeBudget} onChange={event => setTimeBudget(event.target.value)} /></label>
+        <label>Step budget<input type="number" min="1" value={stepBudget} onChange={event => setStepBudget(event.target.value)} /></label>
+        <label>Child budget<input type="number" min="0" value={childBudget} onChange={event => setChildBudget(event.target.value)} /></label>
+      </div></details>
+      <div><button className="button quiet" type="button" disabled={busy} onClick={() => setEditingGoal(false)}>Back</button><button className="button primary" type="button" disabled={busy || !objective.trim() || !criteria.trim()} onClick={() => void saveGoal()}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : null} Save changes</button></div>
     </div>}
     {editingSkills && !terminal && <div className="chat-goal-form">
       <fieldset><legend>Goal skills</legend>{skillOptions.length ? skillOptions.map(skill => <label key={skill.path}><input type="checkbox" checked={selectedSkillPaths.includes(skill.path)} onChange={event => setSelectedSkillPaths(current => event.target.checked ? [...current, skill.path] : current.filter(path => path !== skill.path))} /> <span><strong>{skill.name}</strong> <small>{skill.source} · {skill.path}{goal.skillSnapshots.some(item => item.path === skill.path) && !(skills ?? []).some(item => item.path === skill.path) ? " · retained snapshot; source unavailable" : ""}</small></span></label>) : <p>No skills are currently available.</p>}</fieldset>

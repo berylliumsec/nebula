@@ -46,6 +46,10 @@ class GoalWrite(BaseModel):
     completion_evidence: list[dict] = Field(default_factory=list, max_length=200)
 
 
+class GoalUpdate(GoalCreate):
+    expected_revision: int = Field(ge=1)
+
+
 class GoalSkillWrite(BaseModel):
     expected_revision: int = Field(ge=1)
     skills: list[SkillSelection] = Field(default_factory=list, max_length=20)
@@ -302,6 +306,45 @@ class ChatGoalService:
                 self._propagate_parent_stop(transaction, children, propagate, now)
         return updated
 
+    def update(self, session_id: str, body: GoalUpdate) -> ChatGoal:
+        goal = self.get(session_id)
+        if body.expected_revision != goal.revision:
+            raise ConflictError(
+                "goal changed on another device; review the latest goal before retrying"
+            )
+        if goal.status in {ChatGoalStatus.COMPLETED, ChatGoalStatus.CANCELLED}:
+            raise ConflictError("completed or cancelled goals cannot be edited")
+        if body.step_budget is not None and body.step_budget < goal.current_step:
+            raise ConflictError("step budget cannot be lower than completed steps")
+        if body.child_budget is not None and body.child_budget < goal.children_started:
+            raise ConflictError(
+                "child budget cannot be lower than children already started"
+            )
+        if (
+            body.time_budget_seconds is not None
+            and body.time_budget_seconds < goal.active_elapsed_seconds(utc_now())
+        ):
+            raise ConflictError("time budget cannot be lower than time already used")
+        if (
+            body.token_budget is not None
+            and body.token_budget < goal.usage.total_tokens
+        ):
+            raise ConflictError("token budget cannot be lower than tokens already used")
+        return self.store.update(
+            ChatGoal,
+            goal.id,
+            {
+                "objective": body.objective,
+                "completion_criteria": body.completion_criteria,
+                "plan": body.plan,
+                "token_budget": body.token_budget,
+                "time_budget_seconds": body.time_budget_seconds,
+                "step_budget": body.step_budget,
+                "child_budget": body.child_budget,
+            },
+            expected_revision=goal.revision,
+        )
+
     def reserve_child(self, goal_id: str, *, expected_revision: int) -> ChatGoal:
         """Reserve one cumulative child slot before delegation begins."""
 
@@ -481,6 +524,10 @@ def goals_router(
     @router.post("/chat/sessions/{session_id}/goal", response_model=ChatGoal)
     def create_goal(session_id: str, body: GoalCreate) -> ChatGoal:
         return service.create(session_id, body)
+
+    @router.patch("/chat/sessions/{session_id}/goal", response_model=ChatGoal)
+    def update_goal(session_id: str, body: GoalUpdate) -> ChatGoal:
+        return service.update(session_id, body)
 
     @router.post("/chat/sessions/{session_id}/goal/actions", response_model=ChatGoal)
     async def write_goal(session_id: str, body: GoalWrite) -> ChatGoal:

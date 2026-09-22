@@ -454,6 +454,10 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
     const sessionId = new URL(page.url()).searchParams.get("session")!;
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("draft");
+    await page.getByRole("button", { name: "Edit goal" }).click();
+    await page.getByRole("textbox", { name: "Objective" }).fill("Prove editable goal lifecycle");
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("Prove editable goal lifecycle");
     const emptyMessages = await api.get(`chat/sessions/${sessionId}/messages`);
     expect(emptyMessages.ok(), await emptyMessages.text()).toBe(true);
     expect(await emptyMessages.json()).toEqual([]);
@@ -464,6 +468,10 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
     await expect(composer).toHaveValue("");
     await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Edit goal" }).click();
+    await page.getByRole("textbox", { name: "Completion criteria" }).fill("The first turn is linked\nA running goal edit is durable");
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByRole("region", { name: "Conversation goal" })).not.toContainText("Save changes");
     // A running goal is always mid-response, so its model and effort stay
     // editable; Core applies the change to the next turn.
     await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
@@ -485,9 +493,11 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect(page.getByText(/^Stopped(?: ·|$)/)).toBeVisible();
     const messages = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{ role: string }>;
     expect(messages.filter(message => message.role === "user")).toHaveLength(1);
-    const persistedGoal = await (await api.get(`chat/sessions/${sessionId}/goal`)).json() as { linked_turn_ids: string[]; status: string };
+    const persistedGoal = await (await api.get(`chat/sessions/${sessionId}/goal`)).json() as { linked_turn_ids: string[]; status: string; objective: string; completion_criteria: string[] };
     expect(persistedGoal.linked_turn_ids).toHaveLength(1);
     expect(persistedGoal.status).toBe("paused");
+    expect(persistedGoal.objective).toBe("Prove editable goal lifecycle");
+    expect(persistedGoal.completion_criteria).toContain("A running goal edit is durable");
     const sessionState = await (await api.get(`chat/sessions/${sessionId}/state`)).json() as { execution: string; busy: boolean; actions: string[] };
     expect(sessionState).toMatchObject({ execution: "cancelled", busy: false });
     expect(sessionState.actions).not.toContain("stop");
@@ -497,6 +507,7 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
 
     await page.reload();
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("paused");
+    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("Prove editable goal lifecycle");
     await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
     const resumedSettings = page.getByRole("dialog", { name: "Assistant settings" });
     const effortSave = page.waitForResponse(response =>

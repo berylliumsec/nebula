@@ -110,6 +110,22 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     goal = created.json()
     assert goal["status"] == ChatGoalStatus.DRAFT.value
 
+    edited = client.patch(
+        "/api/v1/chat/sessions/goal-session/goal",
+        headers=_auth(),
+        json={
+            "expected_revision": goal["revision"],
+            "objective": "Finish the revised bounded task",
+            "completion_criteria": ["Revised focused evidence passes"],
+            "plan": ["Inspect", "Edit", "Validate"],
+            "step_budget": 5,
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    goal = edited.json()
+    assert goal["objective"] == "Finish the revised bounded task"
+    assert goal["step_budget"] == 5
+
     attached = client.put(
         "/api/v1/chat/sessions/goal-session/goal/skills",
         headers=_auth(),
@@ -158,6 +174,24 @@ def test_provider_chat_goal_api_persists_explicit_lifecycle(api, tmp_path):
     assert started.status_code == 200, started.text
     assert started.json()["status"] == ChatGoalStatus.RUNNING.value
     assert started.json()["current_step"] == 1
+
+    active = client.get(
+        "/api/v1/chat/sessions/goal-session/goal", headers=_auth()
+    ).json()
+    running_edit = client.patch(
+        "/api/v1/chat/sessions/goal-session/goal",
+        headers=_auth(),
+        json={
+            "expected_revision": active["revision"],
+            "objective": "Finish the active revised task",
+            "completion_criteria": ["Active edit persists"],
+            "plan": ["Continue"],
+            "step_budget": 6,
+        },
+    )
+    assert running_edit.status_code == 200, running_edit.text
+    assert running_edit.json()["status"] == active["status"]
+    assert running_edit.json()["objective"] == "Finish the active revised task"
 
 
 def test_goal_conversation_exists_before_its_first_message(api):
