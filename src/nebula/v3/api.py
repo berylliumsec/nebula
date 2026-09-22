@@ -2052,6 +2052,16 @@ def create_app(
                             exc,
                             stage="schedule",
                         )
+                    try:
+                        provider_chat.resume_turns_stopped_by_core()
+                    except Exception as exc:
+                        record_caught_exception(
+                            "chat",
+                            "chat.restart_recovery_tick_failed",
+                            "A chat restart recovery pass failed; the next pass retries.",
+                            exc,
+                            stage="restart-recovery",
+                        )
 
             schedule_loop = create_diagnostic_task(
                 _chat_schedule_loop(),

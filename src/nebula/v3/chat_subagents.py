@@ -271,22 +271,28 @@ def _step_error(entry: dict[str, Any]) -> str:
     return _bounded(str(summary), 300) if summary else ""
 
 
-def safely_stopped_by_core(turn: ChatTurn) -> bool:
-    """A graceful Core stop can replay this turn without an uncertain effect."""
+def recoverable_after_core_restart(turn: ChatTurn) -> bool:
+    """Whether Core owns automatic continuation of an interrupted turn."""
 
     if turn.status != ChatTurnStatus.INTERRUPTED:
         return False
     recovery = turn.request_snapshot.get("recovery")
     if not isinstance(recovery, dict) or recovery.get("auto_resume_attempted_at"):
         return False
-    if recovery.get("cause") != "core_shutdown" and not (
-        recovery.get("cause") is None and (turn.error or "").startswith("Core stopped ")
+    if recovery.get("cause") not in {"core_shutdown", "core_restart"} and not (
+        recovery.get("cause") is None
+        and (turn.error or "").startswith(("Core stopped ", "Core restarted "))
     ):
         return False
     return not (
         recovery.get("unknown_tool_call_ids")
         or recovery.get("unknown_hook_execution_ids")
     )
+
+
+# Compatibility for callers outside the lifecycle service.  Automatic recovery
+# now covers both a graceful stop and a process restart.
+safely_stopped_by_core = recoverable_after_core_restart
 
 
 def _step_view(entry: dict[str, Any]) -> dict[str, Any]:
@@ -517,7 +523,7 @@ class SubagentService:
         question: dict[str, Any] | None = None
         if record.status == ChatSubagentStatus.RUNNING and turn is not None:
             if turn.status == ChatTurnStatus.INTERRUPTED:
-                state = "recovery_required"
+                state = "recovering"
             if turn.status == ChatTurnStatus.WAITING_APPROVAL and turn.approval_id:
                 state = "waiting_approval"
                 try:
@@ -577,7 +583,7 @@ class SubagentService:
             "result": record.result,
             "error": (
                 turn.error
-                if state == "recovery_required" and turn is not None
+                if state == "recovering" and turn is not None
                 else record.error
             ),
             "result_message_id": record.result_message_id,

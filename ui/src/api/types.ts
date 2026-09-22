@@ -165,6 +165,8 @@ export interface AgentRunSummary {
   stages?: Array<{ title: string; objective: string }>;
   restartRecovery?: {
     required: boolean;
+    automatic?: boolean;
+    state?: string;
     reason?: string;
     unresolvedToolCallIds: Identifier[];
     effects: Array<{
@@ -3334,7 +3336,7 @@ export interface StructuredResultRecord extends StructuredResultSummary {
 export type ChatSubagentStatus =
   | "running"
   | "waiting_approval"
-  | "recovery_required"
+  | "recovering"
   | "completed"
   | "failed"
   | "stopped"

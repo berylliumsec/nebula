@@ -766,27 +766,16 @@ describe("Nebula workspace", () => {
     const conversationPanel = await screen.findByLabelText("Conversations");
     await user.click(within(conversationPanel).getByRole("button", { name: /Interrupted hookmodel-1/ }));
 
-    expect(await screen.findByText("What happened to Audit lifecycle?")).toBeVisible();
+    expect(await screen.findByText("Core is recovering this response automatically. Recorded receipts will be adopted; uncertain effects will not be replayed.")).toBeVisible();
     expect(screen.getByText("Lifecycle hooks · 0/1 completed")).toBeVisible();
     expect(screen.getByText("Audit lifecycle")).toBeVisible();
-    await user.type(screen.getByPlaceholderText("Operator verification note"), "Verified the external audit write.");
-    await user.click(screen.getByRole("button", { name: "Confirm completed" }));
-
-    expect(await screen.findByRole("button", { name: "Resume response" })).toBeVisible();
-    expect(screen.getByText("Verified the external audit write.")).toBeVisible();
-    expect(JSON.parse(String(fetchMock.mock.calls.find(([request, requestInit]) =>
-      String(request).endsWith("/chat/turns/turn-hook/reconcile-hook") && requestInit?.method === "POST"
-    )?.[1]?.body))).toMatchObject({
-      expected_revision: 3,
-      hook_execution_id: "hook-run-1",
-      outcome: "complete",
-      detail: "Verified the external audit write.",
-    });
-    await user.click(screen.getByRole("button", { name: "Resume response" }));
-    expect(await screen.findByText("Resumed after hook confirmation")).toBeVisible();
+    expect(screen.queryByPlaceholderText("Operator verification note")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Confirm completed" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Mark failed" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Resume response" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.some(([request, requestInit]) =>
-      String(request).endsWith("/chat/turns/turn-hook/resume") && requestInit?.method === "POST"
-    )).toBe(true);
+      (String(request).includes("reconcile-hook") || String(request).endsWith("/resume")) && requestInit?.method === "POST"
+    )).toBe(false);
   });
 
   it("opens selected text as an editable draft and hashes it only on explicit send", async () => {

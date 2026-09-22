@@ -1155,10 +1155,7 @@ kbd { font-size: 11px; }
 .mission-recovery-callout { align-items: flex-start; border-color: color-mix(in srgb, var(--orange) 34%, var(--border)); background: color-mix(in srgb, var(--orange) 8%, var(--surface)); }
 .mission-recovery-callout > svg { flex: 0 0 auto; color: var(--orange); }
 .mission-recovery-callout > div:first-of-type { display: grid; min-width: 0; flex: 1; gap: 7px; }
-.mission-recovery-callout label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
-.mission-recovery-callout input { width: 100%; min-height: 36px; }
-.mission-recovery-actions { display: flex; flex: 0 0 auto; gap: 7px; align-self: flex-end; }
-@media (max-width: 640px) { .mission-recovery-callout { display: grid; grid-template-columns: auto minmax(0, 1fr); } .mission-recovery-actions { grid-column: 1 / -1; width: 100%; } .mission-recovery-actions .button { flex: 1; } }
+@media (max-width: 640px) { .mission-recovery-callout { display: grid; grid-template-columns: auto minmax(0, 1fr); } }
 .mission-runtime-setup { display: inline-flex; max-width: 390px; align-items: center; gap: 8px; padding: 7px 9px; border: 1px solid color-mix(in srgb, var(--orange) 32%, var(--border-soft)); border-radius: 8px; color: var(--muted-strong); background: color-mix(in srgb, var(--orange) 7%, var(--surface)); font-size: 11px; line-height: 1.35; }
 .mission-runtime-setup a { flex: 0 0 auto; color: var(--blue); font-weight: var(--weight-semibold); }
 .mission-picker { margin-bottom: 13px; overflow: hidden; }.mission-picker > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--border-soft); }.mission-picker > header div { display: grid; gap: 2px; }.mission-picker > header strong { font-size: 12px; }.mission-picker > header small, .mission-picker > p { color: var(--muted); font-size: 11px; }.mission-picker > header > span { display: grid; min-width: 25px; height: 25px; place-items: center; border-radius: var(--radius-control); color: var(--blue); background: var(--blue-muted); font-size: 11px; font-weight: var(--weight-bold); }

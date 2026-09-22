@@ -213,7 +213,7 @@ class MissionService:
         return frozenset(self._tasks)
 
     async def startup(self) -> None:
-        """Fail stale API-owned runs whose work cannot survive a Core restart."""
+        """Reclaim stale API missions from their last durable checkpoint."""
 
         async with self._lock:
             if self._closed:
@@ -223,6 +223,7 @@ class MissionService:
 
         offset = 0
         stalled_series: list[AgentRun] = []
+        recoveries: list[AgentRun] = []
         while True:
             page = self.store.list_entities(AgentRun, offset=offset, limit=1_000)
             for run in page:
@@ -266,14 +267,45 @@ class MissionService:
                         continue
                 if (
                     run.id in owned_run_ids
-                    or run.status in _TERMINAL_RUN_STATUSES
+                    or (
+                        run.status in _TERMINAL_RUN_STATUSES
+                        and run.status != RunStatus.INTERRUPTED
+                    )
                     or run.metadata.get("origin") != "api"
                 ):
                     continue
-                self._reconcile_interrupted_run(run.id)
+                recoveries.append(self._reconcile_interrupted_run(run.id))
             if len(page) < 1_000:
                 break
             offset += len(page)
+        for run in recoveries:
+            try:
+                profile = self.store.get(
+                    ProviderProfile, run.supervisor_provider_id or ""
+                )
+                provider = self.provider_factory(profile)
+                task = create_diagnostic_task(
+                    self._scheduled_recover(run.id, provider),
+                    feature="missions",
+                    event_code="missions.restart_recovery",
+                    failure_message="Automatic Mission restart recovery stopped unexpectedly.",
+                    name=f"nebula-mission-recovery-{run.id}",
+                )
+                self._scheduled_tasks[run.id] = task
+            except Exception as exc:
+                record_caught_exception(
+                    "missions",
+                    "missions.restart_recovery.schedule_failed",
+                    "Automatic Mission restart recovery could not be scheduled.",
+                    exc,
+                    stage="startup-recovery",
+                )
+                latest = self.store.get(AgentRun, run.id)
+                if latest.status not in _TERMINAL_RUN_STATUSES:
+                    self._finalize_failed(
+                        latest.id,
+                        f"automatic restart recovery could not start: {self._safe_error(exc)}",
+                    )
         for run in stalled_series:
             # The previous Core could not schedule the next occurrence (capacity,
             # configuration, or a missing profile). Retry now that the series
@@ -830,7 +862,7 @@ class MissionService:
             after_sequence = page[-1].sequence
 
     async def shutdown(self) -> None:
-        """Request cancellation for every owned task and wait only a bounded time."""
+        """Stop local workers while leaving their durable runs restartable."""
 
         async with self._lock:
             if self._closed:
@@ -853,22 +885,17 @@ class MissionService:
                 failure_message="A scheduled Mission timer did not stop cleanly.",
                 stage="shutdown",
             )
-        if not run_ids:
-            return
-        await gather_diagnostic(
-            *(
-                self.stop_mission(
-                    run_id,
-                    reason="Nebula Core is shutting down",
-                    actor_id="system",
-                )
-                for run_id in run_ids
-            ),
-            feature="missions",
-            event_code="missions.shutdown.stop_failed",
-            failure_message="A mission could not be stopped cleanly during shutdown.",
-            stage="shutdown",
-        )
+        active = [self._tasks[run_id] for run_id in run_ids if run_id in self._tasks]
+        for task in active:
+            task.cancel()
+        if active:
+            await gather_diagnostic(
+                *active,
+                feature="missions",
+                event_code="missions.shutdown.worker_stop_failed",
+                failure_message="A Mission worker did not stop cleanly during Core shutdown.",
+                stage="shutdown",
+            )
 
     async def _execute(self, queued: AgentRun, provider: ModelProvider) -> None:
         try:
@@ -955,10 +982,11 @@ class MissionService:
                 caught_error,
                 stage="missions",
             )
-            reason, actor = self._cancel_reasons.get(
-                queued.id, ("Mission background task was cancelled", "system")
-            )
-            self._finalize_cancelled(queued.id, reason, actor)
+            if not self._closed:
+                reason, actor = self._cancel_reasons.get(
+                    queued.id, ("Mission background task was cancelled", "system")
+                )
+                self._finalize_cancelled(queued.id, reason, actor)
         except Exception as exc:
             record_caught_exception(
                 "missions",
@@ -1104,10 +1132,11 @@ class MissionService:
                 caught_error,
                 stage="missions",
             )
-            reason, actor = self._cancel_reasons.get(
-                run.id, ("Mission background task was cancelled", "system")
-            )
-            self._finalize_cancelled(run.id, reason, actor)
+            if not self._closed:
+                reason, actor = self._cancel_reasons.get(
+                    run.id, ("Mission background task was cancelled", "system")
+                )
+                self._finalize_cancelled(run.id, reason, actor)
         except Exception as exc:
             record_caught_exception(
                 "missions",
@@ -1311,28 +1340,34 @@ class MissionService:
     def _reconcile_interrupted_run(self, run_id: str) -> AgentRun:
         error = (
             "Nebula Core restarted while this API mission was active; "
-            "completion cannot be confirmed"
+            "the latest durable checkpoint will continue automatically"
         )
         for _ in range(3):
             current = self.store.get(AgentRun, run_id)
-            if current.status in _TERMINAL_RUN_STATUSES:
+            if (
+                current.status in _TERMINAL_RUN_STATUSES
+                and current.status != RunStatus.INTERRUPTED
+            ):
                 return current
             if current.metadata.get("origin") != "api":
                 return current
             try:
-                self._revoke_browser_control(current.id, error, "system")
-                self._fail_open_work(current, error)
-                current = self.store.get(AgentRun, run_id)
                 unresolved = [
                     call
                     for call in self._run_tool_calls(current)
                     if self._mission_effect_unknown(call)
                 ]
+                interrupted_at = utc_now().isoformat()
                 recovery = {
-                    "required": bool(unresolved),
+                    "required": False,
+                    "automatic": True,
+                    "state": "queued",
                     "reason": error,
-                    "interrupted_at": utc_now().isoformat(),
-                    "unresolved_tool_call_ids": [call.id for call in unresolved],
+                    "interrupted_at": interrupted_at,
+                    "unresolved_tool_call_ids": [],
+                    "auto_continued_unknown_tool_call_ids": [
+                        call.id for call in unresolved
+                    ],
                     "effects": [
                         {
                             "tool_call_id": call.id,
@@ -1342,33 +1377,46 @@ class MissionService:
                         }
                         for call in unresolved
                     ],
-                    "decisions": [],
+                    "decisions": [
+                        {
+                            "tool_call_id": call.id,
+                            "outcome": "unknown",
+                            "source": "automatic_restart_recovery",
+                            "detail": (
+                                "No trustworthy terminal receipt was present at restart. "
+                                "The original ledger slot remains authoritative and the "
+                                "checkpoint will continue without replaying it."
+                            ),
+                            "actor_id": "system",
+                            "recorded_at": interrupted_at,
+                        }
+                        for call in unresolved
+                    ],
                 }
-                interrupted, _ = self.store.update_with_event(
+                queued, _ = self.store.update_with_event(
                     AgentRun,
                     current.id,
                     {
-                        "status": RunStatus.INTERRUPTED,
-                        "completed_at": utc_now(),
+                        "status": RunStatus.QUEUED,
+                        "completed_at": None,
                         "metadata": {
                             **current.metadata,
-                            "error": error,
                             "restart_recovery": recovery,
                         },
                     },
                     expected_revision=current.revision,
                     run_id=current.id,
-                    event_type="run.interrupted",
+                    event_type="run.recovery_queued",
                     event_payload={
-                        "summary": "mission interrupted by Core restart",
-                        "unresolved_tool_call_ids": recovery[
-                            "unresolved_tool_call_ids"
+                        "summary": "mission queued for automatic restart recovery",
+                        "unknown_tool_call_ids": recovery[
+                            "auto_continued_unknown_tool_call_ids"
                         ],
                     },
                     actor_id="system",
-                    idempotency_key="run:service_interrupted",
+                    idempotency_key="run:automatic_restart_recovery_queued",
                 )
-                return interrupted
+                return queued
             except ConflictError as caught_error:
                 record_caught_exception(
                     "missions",
@@ -1381,6 +1429,189 @@ class MissionService:
         raise MissionServiceUnavailable(
             f"could not reconcile interrupted API mission {run_id!r}"
         )
+
+    async def _scheduled_recover(self, run_id: str, provider: ModelProvider) -> None:
+        """Wait for a bounded worker slot, then continue a restart checkpoint."""
+
+        moved_to_active = False
+        try:
+            while True:
+                async with self._lock:
+                    if self._closed:
+                        return
+                    self._discard_finished_tasks()
+                    if len(self._tasks) < self.max_active_missions:
+                        self._scheduled_tasks.pop(run_id, None)
+                        self._tasks[run_id] = asyncio.current_task()  # type: ignore[assignment]
+                        moved_to_active = True
+                        break
+                current = self.store.get(AgentRun, run_id)
+                if current.status != RunStatus.QUEUED:
+                    return
+                await asyncio.sleep(0.1)
+            await self._recover_execute(run_id, provider)
+        finally:
+            async with self._lock:
+                self._scheduled_tasks.pop(run_id, None)
+                if (
+                    moved_to_active
+                    and self._tasks.get(run_id) is asyncio.current_task()
+                ):
+                    self._tasks.pop(run_id, None)
+
+    async def _recover_execute(self, run_id: str, provider: ModelProvider) -> None:
+        """Resume one Mission checkpoint; never ask the operator to classify effects."""
+
+        for attempt in range(1, 4):
+            try:
+                current = self.store.get(AgentRun, run_id)
+                if current.status in _TERMINAL_RUN_STATUSES:
+                    return
+                recovery = current.metadata.get("restart_recovery")
+                recovery = dict(recovery) if isinstance(recovery, dict) else {}
+                if current.status == RunStatus.QUEUED:
+                    current, _ = self.store.update_with_event(
+                        AgentRun,
+                        current.id,
+                        {
+                            "status": RunStatus.RUNNING,
+                            "metadata": {
+                                **current.metadata,
+                                "restart_recovery": {
+                                    **recovery,
+                                    "state": "running",
+                                    "attempt": attempt,
+                                    "started_at": utc_now().isoformat(),
+                                },
+                            },
+                        },
+                        expected_revision=current.revision,
+                        run_id=current.id,
+                        event_type="run.recovery_started",
+                        event_payload={
+                            "summary": "automatic restart recovery resumed the durable checkpoint",
+                            "attempt": attempt,
+                        },
+                        actor_id="system",
+                        idempotency_key=f"run:automatic_restart_recovery_started:{attempt}",
+                    )
+                components = self._components(current, provider)
+                assert self.checkpoint_path is not None
+                async with self.runtime_factory(
+                    checkpoint_path=self.checkpoint_path,
+                    store=self.store,
+                    supervisor=components.supervisor,
+                    specialists=components.specialists,
+                ) as runtime:
+                    state = await runtime.recover(current.id)
+                latest = self.store.get(AgentRun, current.id)
+                if latest.status in _TERMINAL_RUN_STATUSES:
+                    latest_recovery = latest.metadata.get("restart_recovery")
+                    latest_recovery = (
+                        dict(latest_recovery)
+                        if isinstance(latest_recovery, dict)
+                        else {}
+                    )
+                    self.store.update_with_event(
+                        AgentRun,
+                        latest.id,
+                        {
+                            "metadata": {
+                                **latest.metadata,
+                                "restart_recovery": {
+                                    **latest_recovery,
+                                    "state": latest.status.value,
+                                    "finished_at": utc_now().isoformat(),
+                                },
+                            }
+                        },
+                        expected_revision=latest.revision,
+                        run_id=latest.id,
+                        event_type="run.recovery_finished",
+                        event_payload={
+                            "summary": "automatic restart recovery finished",
+                            "status": latest.status.value,
+                        },
+                        actor_id="system",
+                        idempotency_key="run:automatic_restart_recovery_finished",
+                    )
+                    return
+                if latest.status not in _TERMINAL_RUN_STATUSES:
+                    if state.get("__interrupt__"):
+                        self.store.update_with_event(
+                            AgentRun,
+                            latest.id,
+                            {
+                                "status": RunStatus.WAITING_APPROVAL,
+                                "metadata": {
+                                    **latest.metadata,
+                                    "waiting_approval": True,
+                                    "restart_recovery": {
+                                        **dict(
+                                            latest.metadata.get("restart_recovery")
+                                            or {}
+                                        ),
+                                        "state": "waiting_approval",
+                                    },
+                                },
+                            },
+                            expected_revision=latest.revision,
+                            run_id=latest.id,
+                            event_type="run.waiting_approval",
+                            event_payload={
+                                "reason": "recovered mission requires a new operator decision"
+                            },
+                            actor_id="system",
+                            idempotency_key="run:restart_recovery_waiting_approval",
+                        )
+                    else:
+                        self._finalize_failed(
+                            latest.id,
+                            "automatic restart recovery ended without a terminal result",
+                        )
+                return
+            except asyncio.CancelledError:
+                if self._closed:
+                    return
+                raise
+            except Exception as exc:
+                record_caught_exception(
+                    "missions",
+                    "missions.restart_recovery.attempt_failed",
+                    "An automatic Mission restart recovery attempt failed.",
+                    exc,
+                    stage="startup-recovery",
+                )
+                latest = self.store.get(AgentRun, run_id)
+                if latest.status in _TERMINAL_RUN_STATUSES:
+                    return
+                if attempt < 3:
+                    recovery = latest.metadata.get("restart_recovery")
+                    recovery = dict(recovery) if isinstance(recovery, dict) else {}
+                    self.store.update(
+                        AgentRun,
+                        latest.id,
+                        {
+                            "status": RunStatus.QUEUED,
+                            "metadata": {
+                                **latest.metadata,
+                                "restart_recovery": {
+                                    **recovery,
+                                    "state": "retrying",
+                                    "attempt": attempt,
+                                    "last_error": self._safe_error(exc),
+                                },
+                            },
+                        },
+                        expected_revision=latest.revision,
+                    )
+                    await asyncio.sleep(0)
+                    continue
+                self._finalize_failed(
+                    latest.id,
+                    f"automatic restart recovery failed after 3 attempts: {self._safe_error(exc)}",
+                )
+                return
 
     def reconcile_restart_effect(
         self,

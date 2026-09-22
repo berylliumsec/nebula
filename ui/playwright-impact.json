@@ -34,9 +34,9 @@
   ],
   "areas": {
     "mission-restart-recovery": [
-      {"area":"mission-restart-recovery","project":"desktop","test_match":"tests/interface.spec.ts","grep":"mission workflow restart recovery refreshes authority before enabling retry","runtime":"mock","shard":"1/1"},
-      {"area":"mission-restart-recovery","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"mission workflow restart recovery refreshes authority before enabling retry","runtime":"mock","shard":"1/1"},
-      {"area":"mission-restart-recovery","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"mission workflow restart recovery refreshes authority before enabling retry","runtime":"mock","shard":"1/1"}
+      {"area":"mission-restart-recovery","project":"desktop","test_match":"tests/interface.spec.ts","grep":"mission workflow recovers after restart without operator actions","runtime":"mock","shard":"1/1"},
+      {"area":"mission-restart-recovery","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"mission workflow recovers after restart without operator actions","runtime":"mock","shard":"1/1"},
+      {"area":"mission-restart-recovery","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"mission workflow recovers after restart without operator actions","runtime":"mock","shard":"1/1"}
     ],
     "mission-restart-recovery-core": [
       {"area":"mission-restart-recovery-core","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"production LAN mission ledger survives failure, retry, restart recovery, and relaunch through real Core","runtime":"real-core","shard":"1/1"}

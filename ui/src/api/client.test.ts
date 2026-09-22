@@ -1016,20 +1016,23 @@ describe("ApiClient", () => {
     );
   });
 
-  it("maps interrupted Mission effects and records one reconciliation", async () => {
+  it("maps automatic Mission restart recovery state", async () => {
     const run = {
       id: "run-recovery",
       engagement_id: "engagement-1",
       objective: "Apply change",
-      status: "interrupted",
+      status: "running",
       created_at: "2026-07-12T10:00:00Z",
       updated_at: "2026-07-12T11:00:00Z",
       revision: 4,
       metadata: {
         restart_recovery: {
-          required: true,
+          required: false,
+          automatic: true,
+          state: "running",
           reason: "Core restarted",
-          unresolved_tool_call_ids: ["call-1"],
+          unresolved_tool_call_ids: [],
+          auto_continued_unknown_tool_call_ids: ["call-1"],
           effects: [{
             tool_call_id: "call-1",
             tool_name: "write_file",
@@ -1040,34 +1043,19 @@ describe("ApiClient", () => {
       },
     };
     const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify([run]), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        ...run,
-        revision: 5,
-        metadata: { restart_recovery: { ...run.metadata.restart_recovery, required: false, unresolved_tool_call_ids: [] } },
-      }), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify([run]), { status: 200 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
 
     const listed = await client.listRuns("engagement-1");
     expect(listed.items[0]).toMatchObject({
       revision: 4,
       restartRecovery: {
-        required: true,
-        unresolvedToolCallIds: ["call-1"],
+        required: false,
+        automatic: true,
+        state: "running",
+        unresolvedToolCallIds: [],
         effects: [{ toolCallId: "call-1", toolName: "write_file" }],
       },
-    });
-    await client.reconcileMissionEffect("run-recovery", {
-      expectedRevision: 4,
-      toolCallId: "call-1",
-      outcome: "complete",
-      detail: "Verified the file.",
-    });
-    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
-      expected_revision: 4,
-      tool_call_id: "call-1",
-      outcome: "complete",
-      detail: "Verified the file.",
     });
   });
 

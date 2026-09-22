@@ -200,7 +200,7 @@ from .chat_subagents import (
     SubagentService,
     SubagentWaitPending,
     is_subagent_session,
-    safely_stopped_by_core,
+    recoverable_after_core_restart,
     subagent_child_components,
     subagent_components,
     subagent_limit,
@@ -1176,6 +1176,12 @@ _REPLAYED_CALL_REFUSAL = (
     "This call already ran; its result is above. Use that result instead of "
     "calling it again, or answer directly."
 )
+_RESTART_UNKNOWN_REPLAY_REFUSAL = (
+    "Core restarted after an identical invocation may have started and its "
+    "outcome is unknown. It was not replayed. Inspect current state with a "
+    "different read-only action, choose a safe compensating action, or answer "
+    "with the remaining uncertainty."
+)
 _TRUNCATED_CALL_REFUSAL = (
     "Your response was cut off by the output limit before this call was "
     "complete, so it did not run. Re-issue the call with complete arguments."
@@ -1295,6 +1301,19 @@ def _replays_a_run_call(history: Sequence[dict[str, Any]], call: ModelToolCall) 
     return any(
         str(entry.get("issued_call_id") or entry.get("model_call_id")) == call.id
         and entry.get("budget_class") != _REFUSED_BUDGET_CLASS
+        and entry.get("name") == call.name
+        and entry.get("arguments") == call.arguments
+        for entry in history
+    )
+
+
+def _replays_restart_unknown(
+    history: Sequence[dict[str, Any]], call: ModelToolCall
+) -> bool:
+    """Whether a call exactly repeats an effect left uncertain by restart."""
+
+    return any(
+        entry.get("recovered_from_restart_unknown") is True
         and entry.get("name") == call.name
         and entry.get("arguments") == call.arguments
         for entry in history
@@ -1537,12 +1556,11 @@ class ChatService:
         await self.subagents.reconcile_after_restart(preserve_graceful=True)
 
     def resume_turns_stopped_by_core(self) -> list[str]:
-        """Resume safe turns from a graceful Core stop after services start.
+        """Automatically reconcile and resume turns owned by the previous Core.
 
-        A crashed worker and an operator stop do not authorize automatic work.
-        A tool or hook with an unknown effect also stays parked for review.
-        Older Core versions recorded the graceful-stop cause only in ``error``;
-        accept that exact prefix so the first upgraded boot can recover them.
+        A trustworthy late receipt is adopted.  Every outcome that remains
+        unknowable becomes a bounded observation in provider history while its
+        original ledger record remains untouched for a possible late writer.
         """
 
         from .chat_goals import ChatGoalService, GoalWrite
@@ -1572,9 +1590,10 @@ class ChatService:
                 if pending is None or pending.id != saved.id:
                     continue
                 # A result may have reached the ledger after shutdown parked
-                # this turn. Read repair above has the latest effect facts;
-                # the page snapshot may still list them as unknown.
-                if not safely_stopped_by_core(pending):
+                # this turn. Adopt it first, then turn any remaining uncertainty
+                # into provider-visible history without replaying the effect.
+                pending = self._auto_reconcile_restart_uncertainty(pending.id)
+                if not recoverable_after_core_restart(pending):
                     continue
                 recovery = pending.request_snapshot["recovery"]
                 goal = (
@@ -1582,7 +1601,6 @@ class ChatService:
                 )
                 if goal is not None and (
                     goal.status != ChatGoalStatus.PAUSED
-                    or goal.blocked_reason != saved.error
                     or (
                         goal.time_budget_seconds is not None
                         and goal.elapsed_seconds >= goal.time_budget_seconds
@@ -1623,24 +1641,180 @@ class ChatService:
                     )
                     current = self.store.get(ChatTurn, saved.id)
                     if (
-                        current.status == ChatTurnStatus.ROUTING
+                        current.status
+                        in (
+                            ChatTurnStatus.INTERRUPTED,
+                            ChatTurnStatus.ROUTING,
+                        )
                         and current.execution_claim_id is None
                     ):
+                        current_recovery = current.request_snapshot.get("recovery")
+                        retry_recovery = (
+                            {
+                                **current_recovery,
+                                "auto_resume_attempted_at": None,
+                                "automatic_retry_pending": True,
+                            }
+                            if isinstance(current_recovery, dict)
+                            else current_recovery
+                        )
                         self.store.update(
                             ChatTurn,
                             current.id,
                             {
                                 "status": ChatTurnStatus.INTERRUPTED,
-                                "error": "Automatic recovery could not start. Review and resume this response.",
+                                "error": (
+                                    "Automatic recovery could not start; Core will retry "
+                                    "on the next recovery pass."
+                                ),
+                                "request_snapshot": {
+                                    **current.request_snapshot,
+                                    "recovery": retry_recovery,
+                                },
                             },
                             expected_revision=current.revision,
                         )
                     if goal is not None:
                         self._pause_running_session_goal(
                             saved.session_id,
-                            "Automatic recovery could not start. Review and resume this goal.",
+                            "Automatic recovery is waiting for the next Core recovery pass.",
                         )
         return resumed
+
+    def _auto_reconcile_restart_uncertainty(self, turn_id: str) -> ChatTurn:
+        """Materialize unresolved restart effects as non-replayable observations."""
+
+        turn = self.reconcile_recorded_effects(turn_id)
+        for _ in range(3):
+            recovery = turn.request_snapshot.get("recovery")
+            if turn.status != ChatTurnStatus.INTERRUPTED or not isinstance(
+                recovery, dict
+            ):
+                return turn
+            unknown_tools = [
+                item
+                for item in recovery.get("unknown_tool_call_ids", [])
+                if isinstance(item, str)
+            ]
+            unknown_hooks = [
+                item
+                for item in recovery.get("unknown_hook_execution_ids", [])
+                if isinstance(item, str)
+            ]
+            if (
+                not unknown_tools
+                and not unknown_hooks
+                and recovery.get("required") is False
+            ):
+                return turn
+            history = list(turn.tool_history)
+            next_step = turn.next_step
+            execution_count = turn.execution_tool_calls
+            artifact_count = turn.artifact_queries
+            recorded_unknown: list[str] = []
+            for call_id in unknown_tools:
+                try:
+                    call = self.store.get(ToolCall, call_id)
+                except NotFoundError:
+                    continue
+                if call.chat_turn_id != turn.id:
+                    continue
+                intent = call.metadata.get("provider_history_intent")
+                step = call.metadata.get("provider_step")
+                model_call_id = call.metadata.get("provider_call_id")
+                if not isinstance(step, int) or isinstance(step, bool) or step < 0:
+                    step = next_step
+                if not isinstance(model_call_id, str) or not model_call_id:
+                    model_call_id = f"restart-unknown-{step}"
+                if not isinstance(intent, dict):
+                    intent = {
+                        "step": step,
+                        "model_call_id": model_call_id,
+                        "tool_call_id": call.id,
+                        "name": call.tool_name,
+                        "arguments": call.arguments,
+                        "budget_class": call.metadata.get("budget_class", "execution"),
+                    }
+                existing = next(
+                    (item for item in history if item.get("tool_call_id") == call.id),
+                    None,
+                )
+                observation = {
+                    "schema": "nebula.restart-uncertain/v1",
+                    "status": "unknown",
+                    "tool_call_id": call.id,
+                    "tool_name": call.tool_name,
+                    "detail": (
+                        "Core restarted after this invocation may have started, but no "
+                        "trustworthy terminal receipt was recorded. Do not repeat the "
+                        "same invocation. Inspect current state before any follow-up."
+                    ),
+                }
+                entry = {
+                    **intent,
+                    **(existing or {}),
+                    "status": "failed",
+                    "provider_result": serialize_model_result(observation),
+                    "trusted_result": False,
+                    "result_summary": "Outcome unknown after Core restart; identical replay is blocked.",
+                    "recovered_from_restart_unknown": True,
+                }
+                history = [
+                    item for item in history if item.get("tool_call_id") != call.id
+                ]
+                history.append(entry)
+                if existing is None:
+                    if entry.get("budget_class") == "artifact_query":
+                        artifact_count += 1
+                    elif entry.get("budget_class") == "execution":
+                        execution_count += 1
+                next_step = max(next_step, step + 1)
+                recorded_unknown.append(call.id)
+            # Missing ledger rows still cannot be replayed. Their IDs and every
+            # uncertain hook remain in the durable audit metadata sent as an
+            # instruction on resume.
+            history.sort(key=lambda item: int(item.get("step", 0)))
+            automatic_note = (
+                "Core recovered this turn automatically after restart. Treat tool "
+                f"invocations {unknown_tools or 'none'} and hook executions "
+                f"{unknown_hooks or 'none'} as outcome unknown. Do not repeat an "
+                "identical effect; inspect current state before follow-up work."
+            )
+            try:
+                turn = self.store.update(
+                    ChatTurn,
+                    turn.id,
+                    {
+                        "tool_call_ids": list(
+                            dict.fromkeys([*turn.tool_call_ids, *recorded_unknown])
+                        ),
+                        "tool_history": history,
+                        "next_step": next_step,
+                        "execution_tool_calls": execution_count,
+                        "artifact_queries": artifact_count,
+                        "error": None,
+                        "request_snapshot": {
+                            **turn.request_snapshot,
+                            "recovery": {
+                                **recovery,
+                                "required": False,
+                                "unknown_tool_call_ids": [],
+                                "unknown_hook_execution_ids": [],
+                                "auto_continued_unknown_tool_call_ids": unknown_tools,
+                                "auto_continued_unknown_hook_execution_ids": unknown_hooks,
+                                "automatic_note": automatic_note,
+                                "automatically_reconciled_at": utc_now().isoformat(),
+                            },
+                        },
+                    },
+                    expected_revision=turn.revision,
+                )
+                return turn
+            except ConflictError:
+                turn = self.reconcile_recorded_effects(turn.id)
+        raise ChatHistoryConflict(
+            "interrupted response changed repeatedly during automatic recovery"
+        )
 
     def _interrupt_orphaned_turn(
         self,
@@ -1694,14 +1868,14 @@ class ChatService:
                     # Keep the old unknown ID; read repair uses its new state.
                     pass
         detail = (
-            f"{cause} while an effect outcome was unknown. Reconcile the "
-            "listed tool or hook execution before resuming."
+            f"{cause} while an effect outcome was unknown. Core will carry the "
+            "uncertainty forward and resume automatically without replaying the effect."
             if unknown or unknown_hooks
             else (
                 f"{cause} before this response completed. Interrupted read-only "
-                "hook attempts will rerun as new attempts when you resume."
+                "hook attempts will rerun as new attempts during automatic recovery."
                 if rerunnable_hooks
-                else f"{cause} before this response completed. Review and resume it."
+                else f"{cause} before this response completed. Core will resume it automatically."
             )
         )
         snapshot = {
@@ -2224,7 +2398,7 @@ class ChatService:
                                 interrupted.error
                                 if interrupted is not None and interrupted.error
                                 else "Core stopped before this response completed. "
-                                "Review and resume it."
+                                "It will resume automatically."
                             ),
                         },
                     )
@@ -4743,6 +4917,10 @@ class ChatService:
                         components, known_spec, call.arguments
                     )
                     call = call.model_copy(update={"arguments": normalized_arguments})
+                if refusal is None and _replays_restart_unknown(
+                    turn.tool_history, call
+                ):
+                    refusal = _RESTART_UNKNOWN_REPLAY_REFUSAL
                 issued_call_id: str | None = None
                 if routed.repeated_id:
                     if refusal is None and _replays_a_run_call(turn.tool_history, call):
@@ -6955,6 +7133,22 @@ class ChatService:
         model_request = ModelRequest.model_validate(
             turn.request_snapshot.get("model_request")
         )
+        automatic_note = (
+            recovery.get("automatic_note") if isinstance(recovery, dict) else None
+        )
+        if isinstance(automatic_note, str) and automatic_note.strip():
+            model_request = model_request.model_copy(
+                update={
+                    "instructions": "\n\n".join(
+                        item
+                        for item in (
+                            model_request.instructions,
+                            automatic_note.strip(),
+                        )
+                        if item
+                    )
+                }
+            )
         citations = [
             ChatCitation.model_validate(item)
             for item in turn.request_snapshot.get("citations", [])
@@ -7375,9 +7569,10 @@ class ChatService:
     def _turn_is_pending(turn: ChatTurn) -> bool:
         """Report whether an unfinished turn still blocks its conversation."""
 
-        return turn.status != ChatTurnStatus.INTERRUPTED or bool(
-            turn.request_snapshot.get("recovery", {}).get("required")
-        )
+        if turn.status != ChatTurnStatus.INTERRUPTED:
+            return True
+        recovery = turn.request_snapshot.get("recovery", {})
+        return bool(recovery.get("required") or recovery.get("automatic_retry_pending"))
 
     def pending_turn(self, session_id: str) -> ChatTurn | None:
         self.store.get(ChatSession, session_id)
@@ -7525,7 +7720,7 @@ class ChatService:
                         "execution_tool_calls": execution_count,
                         "artifact_queries": artifact_count,
                         "error": (
-                            "Core recovered the recorded tool result. Review and resume this response."
+                            "Core recovered the recorded tool result and will resume this response automatically."
                             if not remaining
                             and not recovery.get("unknown_hook_execution_ids")
                             else turn.error
@@ -7615,7 +7810,7 @@ class ChatService:
                         turn.id,
                         {
                             "error": (
-                                "Core recovered the recorded hook outcome. Review and resume this response."
+                                "Core recovered the recorded hook outcome and will resume this response automatically."
                                 if not remaining
                                 and not recovery.get("unknown_tool_call_ids")
                                 else turn.error

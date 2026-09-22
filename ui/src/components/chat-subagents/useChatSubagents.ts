@@ -8,7 +8,7 @@ const POLL_MS = 2_000;
 /** Consecutive failures after which polling stops until someone retries. */
 const FAILURE_LIMIT = 3;
 
-export const ACTIVE_STATUSES = new Set(["running", "waiting_approval", "recovery_required"]);
+export const ACTIVE_STATUSES = new Set(["running", "waiting_approval", "recovering"]);
 
 export interface ChatSubagentState {
   subagents: ChatSubagentView[];
@@ -90,12 +90,12 @@ export function useChatSubagents(
 export function subagentSummary(subagents: ChatSubagentView[]): { label: string; tone: string }[] {
   const running = subagents.filter((item) => item.status === "running").length;
   const approval = subagents.filter((item) => item.status === "waiting_approval").length;
-  const recovery = subagents.filter((item) => item.status === "recovery_required").length;
+  const recovery = subagents.filter((item) => item.status === "recovering").length;
   const done = subagents.filter((item) => !ACTIVE_STATUSES.has(item.status)).length;
   return [
     ...(running ? [{ label: `${running} running`, tone: "running" }] : []),
     ...(approval ? [{ label: `${approval} needs approval`, tone: "waiting_approval" }] : []),
-    ...(recovery ? [{ label: `${recovery} needs recovery`, tone: "recovery_required" }] : []),
+    ...(recovery ? [{ label: `${recovery} recovering`, tone: "recovering" }] : []),
     ...(done ? [{ label: `${done} done`, tone: "done" }] : []),
   ];
 }
@@ -116,7 +116,7 @@ export function elapsedLabel(seconds: number): string {
 const STATUS_LABELS: Record<string, string> = {
   running: "Running",
   waiting_approval: "Needs approval",
-  recovery_required: "Recovery required",
+  recovering: "Recovering",
   completed: "Done",
   failed: "Failed",
   stopped: "Stopped",

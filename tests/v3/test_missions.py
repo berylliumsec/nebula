@@ -321,66 +321,78 @@ def test_api_rejects_conflicting_mission_service_configuration(tmp_path):
 def test_startup_interrupts_api_runs_and_keeps_effect_recovery_separate(
     tmp_path,
 ):
-    store = NebulaStore(tmp_path / "restart.db")
-    engagement = store.create(Engagement(name="Restart reconciliation"))
-    interrupted = store.create(
-        AgentRun(
-            engagement_id=engagement.id,
-            objective="Interrupted API work",
-            status=RunStatus.RUNNING,
-            metadata={"origin": "api", "analysis_only": True},
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "restart.db")
+        engagement = store.create(Engagement(name="Restart reconciliation"))
+        profile = _profile(store)
+        provider = RecordingProvider(profile)
+        interrupted = store.create(
+            AgentRun(
+                engagement_id=engagement.id,
+                objective="Interrupted API work",
+                status=RunStatus.RUNNING,
+                supervisor_provider_id=profile.id,
+                supervisor_model="security-model",
+                metadata={"origin": "api", "analysis_only": True},
+            )
         )
-    )
-    task = store.create(
-        Task(
-            engagement_id=engagement.id,
-            run_id=interrupted.id,
-            specialist_role="scope_planning",
-            title="Interrupted task",
-            status=TaskStatus.RUNNING,
+        task = store.create(
+            Task(
+                engagement_id=engagement.id,
+                run_id=interrupted.id,
+                specialist_role="scope_planning",
+                title="Interrupted task",
+                status=TaskStatus.RUNNING,
+            )
         )
-    )
-    attempt = store.create(
-        AgentAttempt(
-            engagement_id=engagement.id,
-            run_id=interrupted.id,
-            task_id=task.id,
-            agent_role="scope_planning",
-            attempt_number=1,
-            status=TaskStatus.RUNNING,
+        attempt = store.create(
+            AgentAttempt(
+                engagement_id=engagement.id,
+                run_id=interrupted.id,
+                task_id=task.id,
+                agent_role="scope_planning",
+                attempt_number=1,
+                status=TaskStatus.RUNNING,
+            )
         )
-    )
-    external = store.create(
-        AgentRun(
-            engagement_id=engagement.id,
-            objective="Owned by a different runtime",
-            status=RunStatus.RUNNING,
+        external = store.create(
+            AgentRun(
+                engagement_id=engagement.id,
+                objective="Owned by a different runtime",
+                status=RunStatus.RUNNING,
+            )
         )
-    )
-    service = MissionService(
-        store,
-        checkpoint_path=tmp_path / "mission-checkpoints.db",
-    )
-    app = create_app(store, auth_token="test-token", mission_service=service)
+        gates: dict[str, asyncio.Event] = {}
+        stats = {"active": 0, "max_active": 0, "resumed": 0, "recovered": 0}
+        service = MissionService(
+            store,
+            checkpoint_path=tmp_path / "mission-checkpoints.db",
+            provider_factory=lambda selected: provider,
+            runtime_factory=_gated_runtime_factory(store, gates, stats),
+        )
 
-    with TestClient(app) as client:
-        assert (
-            client.get(
-                "/api/v1/health", headers={"Authorization": "Bearer test-token"}
-            ).status_code
-            == 200
-        )
+        await service.startup()
+        for _ in range(500):
+            if store.get(AgentRun, interrupted.id).status == RunStatus.COMPLETE:
+                break
+            await asyncio.sleep(0.01)
 
-    recovered = store.get(AgentRun, interrupted.id)
-    assert recovered.status == RunStatus.INTERRUPTED
-    assert recovered.completed_at is not None
-    assert "restarted" in str(recovered.metadata["error"])
-    assert recovered.metadata["restart_recovery"]["required"] is False
-    assert store.get(Task, task.id).status == TaskStatus.FAILED
-    assert store.get(AgentAttempt, attempt.id).status == TaskStatus.FAILED
-    assert store.replay_events(interrupted.id)[-1].event_type == "run.interrupted"
-    assert store.get(AgentRun, external.id).status == RunStatus.RUNNING
-    assert store.replay_events(external.id) == []
+        recovered = store.get(AgentRun, interrupted.id)
+        assert recovered.status == RunStatus.COMPLETE
+        recovery = recovered.metadata["restart_recovery"]
+        assert recovery["required"] is False
+        assert recovery["automatic"] is True
+        assert stats["recovered"] == 1
+        assert store.get(Task, task.id).status == TaskStatus.RUNNING
+        assert store.get(AgentAttempt, attempt.id).status == TaskStatus.RUNNING
+        assert [event.event_type for event in store.replay_events(interrupted.id)][
+            :2
+        ] == ["run.recovery_queued", "run.recovery_started"]
+        assert store.get(AgentRun, external.id).status == RunStatus.RUNNING
+        assert store.replay_events(external.id) == []
+        await service.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_startup_retries_an_optimistic_reconciliation_race(tmp_path, monkeypatch):
@@ -410,13 +422,13 @@ def test_startup_retries_an_optimistic_reconciliation_race(tmp_path, monkeypatch
 
     monkeypatch.setattr(store, "update_with_event", race_once)
 
-    asyncio.run(service.startup())
+    recovered = service._reconcile_interrupted_run(interrupted.id)
 
     assert calls == 2
-    assert store.get(AgentRun, interrupted.id).status == RunStatus.INTERRUPTED
+    assert recovered.status == RunStatus.QUEUED
 
 
-def test_restart_keeps_running_mission_effect_blocked_until_reconciled(tmp_path):
+def test_restart_auto_continues_mission_without_rewriting_unknown_effect(tmp_path):
     store = NebulaStore(tmp_path / "restart-effect.db")
     engagement = store.create(Engagement(name="Restart effect"))
     run = store.create(
@@ -439,44 +451,19 @@ def test_restart_keeps_running_mission_effect_blocked_until_reconciled(tmp_path)
     )
     service = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
 
-    asyncio.run(service.startup())
+    interrupted = service._reconcile_interrupted_run(run.id)
 
-    interrupted = store.get(AgentRun, run.id)
     recovery = interrupted.metadata["restart_recovery"]
-    assert interrupted.status == RunStatus.INTERRUPTED
-    assert recovery["required"] is True
-    assert recovery["unresolved_tool_call_ids"] == [call.id]
+    assert interrupted.status == RunStatus.QUEUED
+    assert recovery["required"] is False
+    assert recovery["automatic"] is True
+    assert recovery["unresolved_tool_call_ids"] == []
+    assert recovery["auto_continued_unknown_tool_call_ids"] == [call.id]
     # Restart classification must not overwrite a late worker's ledger slot.
     assert store.get(ToolCall, call.id).status == ToolCallStatus.RUNNING
 
-    with TestClient(
-        create_app(store, auth_token="test-token", mission_service=service)
-    ) as client:
-        blocked_retry = client.post(
-            f"/api/v1/runs/{run.id}/retry", headers=_auth(), json={}
-        )
-        assert blocked_retry.status_code == 409
-        assert "unknown tool effects" in blocked_retry.json()["detail"]
-        response = client.post(
-            f"/api/v1/runs/{run.id}/reconcile-effect",
-            headers=_auth(),
-            json={
-                "expected_revision": interrupted.revision,
-                "tool_call_id": call.id,
-                "outcome": "complete",
-                "detail": "Verified result.txt contains the expected bytes.",
-            },
-        )
-        assert response.status_code == 200, response.text
-        reconciled = AgentRun.model_validate(response.json())
-    assert reconciled.metadata["restart_recovery"]["required"] is False
-    saved_call = store.get(ToolCall, call.id)
-    assert saved_call.status == ToolCallStatus.COMPLETE
-    assert saved_call.result["verified"] is False
-    assert store.replay_events(run.id)[-1].event_type == "run.effect_reconciled"
 
-
-def test_mission_recovery_prefers_late_ledger_outcome_over_operator_guess(tmp_path):
+def test_mission_recovery_preserves_late_ledger_outcome_after_auto_continue(tmp_path):
     store = NebulaStore(tmp_path / "late-effect.db")
     engagement = store.create(Engagement(name="Late effect"))
     run = store.create(
@@ -498,8 +485,7 @@ def test_mission_recovery_prefers_late_ledger_outcome_over_operator_guess(tmp_pa
         )
     )
     service = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
-    asyncio.run(service.startup())
-    interrupted = store.get(AgentRun, run.id)
+    interrupted = service._reconcile_interrupted_run(run.id)
 
     # The old worker commits its bounded result after the restart snapshot.
     late = store.get(ToolCall, call.id)
@@ -514,17 +500,9 @@ def test_mission_recovery_prefers_late_ledger_outcome_over_operator_guess(tmp_pa
         expected_revision=late.revision,
     )
 
-    reconciled = service.reconcile_restart_effect(
-        run.id,
-        call.id,
-        outcome="failed",
-        detail="The operator had stale state.",
-        expected_revision=interrupted.revision,
-        actor_id="operator",
-    )
-    decision = reconciled.metadata["restart_recovery"]["decisions"][-1]
-    assert decision["source"] == "ledger"
-    assert decision["outcome"] == "complete"
+    decision = interrupted.metadata["restart_recovery"]["decisions"][-1]
+    assert decision["source"] == "automatic_restart_recovery"
+    assert decision["outcome"] == "unknown"
     assert store.get(ToolCall, call.id).status == ToolCallStatus.COMPLETE
 
 
@@ -585,10 +563,10 @@ def test_mission_restart_classifies_every_effect_without_trusting_status(tmp_pat
     )
     service = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
 
-    asyncio.run(service.startup())
+    service._reconcile_interrupted_run(run.id)
 
     recovery = store.get(AgentRun, run.id).metadata["restart_recovery"]
-    assert recovery["unresolved_tool_call_ids"] == [
+    assert recovery["auto_continued_unknown_tool_call_ids"] == [
         running.id,
         failed_without_receipt.id,
     ]
@@ -1020,7 +998,7 @@ def test_stop_refuses_to_fake_cancellation_for_an_unowned_run(tmp_path):
     assert store.replay_events(external.id) == []
 
 
-def test_app_shutdown_cancels_owned_background_missions(tmp_path):
+def test_app_shutdown_leaves_owned_background_missions_for_auto_recovery(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
     engagement = store.create(Engagement(name="Shutdown"))
     profile = _profile(store)
@@ -1043,12 +1021,34 @@ def test_app_shutdown_cancels_owned_background_missions(tmp_path):
         assert provider.started.wait(timeout=5)
 
     run = store.get(AgentRun, run_id)
-    assert run.status == RunStatus.CANCELLED
+    assert run.status not in {
+        RunStatus.CANCELLED,
+        RunStatus.COMPLETE,
+        RunStatus.FAILED,
+        RunStatus.INTERRUPTED,
+    }
     assert provider.cancelled.is_set()
-    events = store.replay_events(run_id)
-    assert events[-1].event_type == "run.cancelled"
-    assert events[-1].actor_id == "system"
-    assert events[-1].payload["reason"] == "Nebula Core is shutting down"
+
+    gates: dict[str, asyncio.Event] = {}
+    stats = {"active": 0, "max_active": 0, "resumed": 0, "recovered": 0}
+    restored = MissionService(
+        store,
+        checkpoint_path=tmp_path / "mission-checkpoints.db",
+        provider_factory=lambda selected: RecordingProvider(profile),
+        runtime_factory=_gated_runtime_factory(store, gates, stats),
+    )
+
+    async def recover() -> None:
+        await restored.startup()
+        for _ in range(500):
+            if store.get(AgentRun, run_id).status == RunStatus.COMPLETE:
+                break
+            await asyncio.sleep(0.01)
+        await restored.shutdown()
+
+    asyncio.run(recover())
+    assert store.get(AgentRun, run_id).status == RunStatus.COMPLETE
+    assert stats["recovered"] == 1
 
 
 def test_failure_cleanup_paginates_all_run_tasks_and_attempts(tmp_path):
@@ -1131,6 +1131,11 @@ class GatedRuntime:
 
     async def resume(self, run_id: str, response: dict) -> dict:
         self.stats["resumed"] += 1
+        self._complete(run_id)
+        return {}
+
+    async def recover(self, run_id: str) -> dict:
+        self.stats["recovered"] = self.stats.get("recovered", 0) + 1
         self._complete(run_id)
         return {}
 

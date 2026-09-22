@@ -736,11 +736,9 @@ test("assistant upgrade real Core provider selections survive reload and restart
     await page.getByRole("button", { name: "Pair device" }).click();
     await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
     await page.goto(`${core.origin}/?view=chat&session=${sessionId}`);
-    await expect(page.getByText("What happened to Persist workspace?")).toBeVisible({ timeout: 20_000 });
-    await page.getByPlaceholder("Operator verification note").fill("Workspace write was verified after restart.");
-    await page.getByRole("button", { name: "Confirm completed" }).click();
-    await expect(page.getByRole("button", { name: "Resume response" })).toBeVisible();
-    await page.getByRole("button", { name: "Resume response" }).click();
+    await expect(page.getByRole("button", { name: "Confirm completed" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Mark failed" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Resume response" })).toHaveCount(0);
     const resumedReply = page.locator(".chat-message.assistant .assistant-markdown").last();
     await expect(resumedReply).toContainText("Real Core retained the exact research context.", { timeout: 30_000 });
     await expect.poll(async () => (await api.get(`chat/sessions/${sessionId}/pending-turn`)).json()).toBeNull();
@@ -1472,18 +1470,14 @@ test("production LAN mission ledger survives failure, retry, restart recovery, a
     });
     const recoveryUrl = `${core.origin}/?view=missions&mission=${failedMission.id}#token=${encodeURIComponent(core.token)}`;
     await page.goto(recoveryUrl);
-    const recovery = page.getByRole("alert", { name: "Mission effect needs review" });
-    await expect(recovery).toBeVisible({ timeout: 20_000 });
-    await expect(page.getByRole("button", { name: "Retry mission" })).toHaveCount(0);
-    await recovery.getByLabel("Recovery note").fill("Verified the workspace effect after Core restart.");
-    await recovery.getByRole("button", { name: "Confirm completed" }).click();
-    await expect(recovery).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Retry mission" })).toBeVisible();
     await expect.poll(async () => {
       const response = await api.get(`runs/${failedMission.id}`);
-      const run = await response.json() as { metadata?: { restart_recovery?: { required?: boolean } } };
-      return run.metadata?.restart_recovery?.required;
-    }).toBe(false);
+      const run = await response.json() as { status?: string; metadata?: { restart_recovery?: { required?: boolean; automatic?: boolean } } };
+      return { status: run.status, required: run.metadata?.restart_recovery?.required, automatic: run.metadata?.restart_recovery?.automatic };
+    }, { timeout: 20_000 }).toMatchObject({ required: false, automatic: true });
+    await expect(page.getByRole("button", { name: "Confirm completed" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Mark failed" })).toHaveCount(0);
+    await expect(page.getByLabel("Recovery note")).toHaveCount(0);
 
     // Core intentionally keeps bearer credentials in memory; use the same
     // authorized launch URL to exercise a fresh production document.

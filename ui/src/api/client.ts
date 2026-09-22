@@ -2241,6 +2241,8 @@ function mapRun(value: WireAgentRun): AgentRunSummary {
     restartRecovery: recovery
       ? {
           required: recovery.required === true,
+          automatic: recovery.automatic === true,
+          state: typeof recovery.state === "string" ? recovery.state : undefined,
           reason: typeof recovery.reason === "string" ? recovery.reason : undefined,
           unresolvedToolCallIds: Array.isArray(recovery.unresolved_tool_call_ids)
             ? recovery.unresolved_tool_call_ids.filter((item): item is string => typeof item === "string")
@@ -3895,7 +3897,7 @@ interface WireChatSubagent {
 }
 
 const SUBAGENT_STATUSES: ChatSubagentStatus[] = [
-  "running", "waiting_approval", "recovery_required", "completed", "failed", "stopped", "interrupted",
+  "running", "waiting_approval", "recovering", "completed", "failed", "stopped", "interrupted",
 ];
 
 function mapChatSubagent(value: WireChatSubagent): ChatSubagentView {
