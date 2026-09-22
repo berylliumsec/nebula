@@ -3367,6 +3367,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     harnessProfileId: value.harness_profile_id ?? undefined,
     harnessSessionId: value.harness_session_id ?? undefined,
     parentSessionId: value.parent_session_id ?? undefined,
+    isSubagent: typeof value.metadata?.subagent_id === "string" && value.metadata.subagent_id.length > 0,
     forkedFromMessageId: value.forked_from_message_id ?? undefined,
     model: value.model ?? undefined,
     toolsEnabled: value.metadata?.tools_enabled === true,
