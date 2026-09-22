@@ -7383,7 +7383,9 @@ class ChatService:
         for _ in range(3):
             turn = self.store.get(ChatTurn, turn_id)
             recovery = turn.request_snapshot.get("recovery")
-            if turn.status != ChatTurnStatus.INTERRUPTED or not isinstance(recovery, dict):
+            if turn.status != ChatTurnStatus.INTERRUPTED or not isinstance(
+                recovery, dict
+            ):
                 return turn
             unknown = recovery.get("unknown_tool_call_ids")
             if not isinstance(unknown, list) or not unknown:
@@ -7402,7 +7404,8 @@ class ChatService:
                     continue
                 if (
                     call.chat_turn_id != turn.id
-                    or call.status not in {ToolCallStatus.COMPLETE, ToolCallStatus.FAILED}
+                    or call.status
+                    not in {ToolCallStatus.COMPLETE, ToolCallStatus.FAILED}
                     or not isinstance(call.result, dict)
                     or call.result.get("schema") != TOOL_RESULT_SCHEMA
                 ):
@@ -7454,7 +7457,9 @@ class ChatService:
                 entry = {
                     **intent,
                     **(existing or {}),
-                    "status": "complete" if call.status == ToolCallStatus.COMPLETE else "failed",
+                    "status": "complete"
+                    if call.status == ToolCallStatus.COMPLETE
+                    else "failed",
                     "provider_result": serialize_model_result(output),
                     "trusted_result": False,
                     "result_artifact_id": call.result_artifact_id,
@@ -7484,14 +7489,17 @@ class ChatService:
                     ChatTurn,
                     turn.id,
                     {
-                        "tool_call_ids": list(dict.fromkeys([*turn.tool_call_ids, *settled])),
+                        "tool_call_ids": list(
+                            dict.fromkeys([*turn.tool_call_ids, *settled])
+                        ),
                         "tool_history": history,
                         "next_step": next_step,
                         "execution_tool_calls": execution_count,
                         "artifact_queries": artifact_count,
                         "error": (
                             "Core recovered the recorded tool result. Review and resume this response."
-                            if not remaining and not recovery.get("unknown_hook_execution_ids")
+                            if not remaining
+                            and not recovery.get("unknown_hook_execution_ids")
                             else turn.error
                         ),
                         "request_snapshot": {
@@ -7523,7 +7531,9 @@ class ChatService:
         for _ in range(3):
             turn = self.store.get(ChatTurn, turn_id)
             recovery = turn.request_snapshot.get("recovery")
-            if turn.status != ChatTurnStatus.INTERRUPTED or not isinstance(recovery, dict):
+            if turn.status != ChatTurnStatus.INTERRUPTED or not isinstance(
+                recovery, dict
+            ):
                 return turn
             unknown = recovery.get("unknown_hook_execution_ids")
             if not isinstance(unknown, list) or not unknown:
@@ -7578,7 +7588,8 @@ class ChatService:
                         {
                             "error": (
                                 "Core recovered the recorded hook outcome. Review and resume this response."
-                                if not remaining and not recovery.get("unknown_tool_call_ids")
+                                if not remaining
+                                and not recovery.get("unknown_tool_call_ids")
                                 else turn.error
                             ),
                             "request_snapshot": {

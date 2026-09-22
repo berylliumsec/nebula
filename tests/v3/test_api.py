@@ -511,7 +511,9 @@ def test_pending_turn_api_recovers_recorded_result_after_restart(api):
     client, store, _ = api
     engagement = store.create(Engagement(id="late-result-project", name="Recovery"))
     provider = store.create(
-        ProviderProfile(id="late-result-provider", name="Provider", provider_type="ollama")
+        ProviderProfile(
+            id="late-result-provider", name="Provider", provider_type="ollama"
+        )
     )
     session = store.create(
         ChatSession(

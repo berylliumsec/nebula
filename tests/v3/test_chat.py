@@ -1412,7 +1412,11 @@ def test_restart_keeps_untrusted_terminal_result_for_operator_review(tmp_path):
     stored = store.update(
         ToolCall,
         call.id,
-        {"status": ToolCallStatus.COMPLETE, "result": malformed, "completed_at": utc_now()},
+        {
+            "status": ToolCallStatus.COMPLETE,
+            "result": malformed,
+            "completed_at": utc_now(),
+        },
         expected_revision=call.revision,
     )
 
@@ -1466,9 +1470,7 @@ def test_tool_ledger_binds_provider_replay_intent_to_idempotent_call(tmp_path):
     recorded = asyncio.run(ledger.reserve(invocation, spec))
     assert recorded.metadata["provider_history_intent"] == intent
     assert asyncio.run(ledger.reserve(invocation, spec)).id == recorded.id
-    changed = invocation.model_copy(
-        update={"provider_call_id": "provider-call-2"}
-    )
+    changed = invocation.model_copy(update={"provider_call_id": "provider-call-2"})
     with pytest.raises(ToolBrokerError, match="idempotency key was reused"):
         asyncio.run(ledger.reserve(changed, spec))
 
@@ -1638,7 +1640,9 @@ def test_restart_requires_reconciliation_for_uncertain_native_hook_effect(tmp_pa
         },
         expected_revision=store.get(NativeHookExecution, execution.id).revision,
     )
-    assert service.pending_turn(session.id).request_snapshot["recovery"]["unknown_hook_execution_ids"] == [execution.id]
+    assert service.pending_turn(session.id).request_snapshot["recovery"][
+        "unknown_hook_execution_ids"
+    ] == [execution.id]
     with pytest.raises(ChatHistoryConflict, match="unknown hook outcome"):
         service.prepare_resume(turn.id)
 
@@ -3543,7 +3547,9 @@ def test_core_shutdown_leaves_an_inflight_provider_turn_recoverable(tmp_path):
 
 
 @pytest.mark.parametrize("late_result", [False, True])
-def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(tmp_path, late_result):
+def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(
+    tmp_path, late_result
+):
     class WaitingProvider(FakeProvider):
         async def stream(self, request: ModelRequest):
             del request
@@ -3593,7 +3599,9 @@ def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(tmp_path, 
                     "recovery": {
                         "required": True,
                         "cause": "core_shutdown",
-                        "unknown_tool_call_ids": ["late-safe-tool"] if late_result else [],
+                        "unknown_tool_call_ids": ["late-safe-tool"]
+                        if late_result
+                        else [],
                         "unknown_hook_execution_ids": [],
                     },
                 },
@@ -3637,7 +3645,9 @@ def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(tmp_path, 
         assert service.has_active_provider_turn(turn.id)
         if late_result:
             resumed_turn = store.get(ChatTurn, turn.id)
-            assert resumed_turn.request_snapshot["recovery"]["unknown_tool_call_ids"] == []
+            assert (
+                resumed_turn.request_snapshot["recovery"]["unknown_tool_call_ids"] == []
+            )
             assert resumed_turn.tool_history[0]["tool_call_id"] == "late-safe-tool"
         follower = service.follow_provider_turn(turn.id)
         events = [await asyncio.wait_for(anext(follower), 2) for _ in range(3)]

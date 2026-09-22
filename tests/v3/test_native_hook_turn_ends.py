@@ -550,7 +550,13 @@ def test_a_hook_running_when_the_turn_ends_never_stays_running(tmp_path, ended_b
         else:
             await service.shutdown()
         (hook_dir / "release").touch()
-        await _poll(lambda: [item for item in started_hook() if item.exit_code == 0 or item.late_outcome is not None])
+        await _poll(
+            lambda: [
+                item
+                for item in started_hook()
+                if item.exit_code == 0 or item.late_outcome is not None
+            ]
+        )
         await asyncio.sleep(0.2)
         await service.shutdown()
         turn = store.get(ChatTurn, turn_id)
@@ -577,4 +583,6 @@ def test_a_hook_running_when_the_turn_ends_never_stays_running(tmp_path, ended_b
         assert started.late_outcome is not None
         assert started.late_outcome.status == "complete"
         assert turn.request_snapshot["recovery"]["unknown_hook_execution_ids"] == []
-        assert turn.request_snapshot["recovery"]["recorded_hook_outcome_ids"] == [started.id]
+        assert turn.request_snapshot["recovery"]["recorded_hook_outcome_ids"] == [
+            started.id
+        ]
