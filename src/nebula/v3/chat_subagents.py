@@ -1968,7 +1968,7 @@ class SubagentService:
                     expected_revision=latest_record.revision,
                 )
             return
-        except NotFoundError:
+        except NotFoundError:  # diagnostic-expected: fall back to charging the goal
             pass
         for _ in range(3):
             try:
@@ -2018,11 +2018,13 @@ class SubagentService:
                             expected_revision=latest_record.revision,
                         )
                 return
-            except ConflictError:
+            except ConflictError:  # diagnostic-expected: verify concurrent charge
                 try:
                     self.store.get(ChatGoalUsageCharge, charge_id)
                     return
-                except NotFoundError:
+                except (
+                    NotFoundError
+                ):  # diagnostic-expected: retry missing concurrent charge
                     continue
         raise ConflictError(
             "subagent usage could not be charged after concurrent updates"
