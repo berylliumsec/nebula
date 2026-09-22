@@ -24,6 +24,7 @@
     {"name": "phone-shell", "patterns": ["ui/src/mobile-shell.css", "ui/src/hooks/useCompactLayout*", "ui/src/components/Mobile*", "ui/src/components/CompactSettingsList*", "ui/src/components/terminalKeys*"], "areas": ["phone-shell", "mobile-layout"]},
     {"name": "settings-catalog", "patterns": ["ui/src/settingsCatalog.ts"], "areas": ["settings-search", "critical-workspaces"]},
     {"name": "project-lifecycle", "patterns": ["ui/src/components/Project*", "ui/src/components/Workspace*", "ui/src/components/HostFolder*", "ui/src/pages/Projects*", "src/nebula/v3/project*.py", "src/nebula/v3/workspace*.py"], "areas": ["project-lifecycle"]},
+    {"name": "mission-restart-recovery", "patterns": ["ui/src/pages/AgentsPage.tsx", "ui/src/components-workbench.css", "src/nebula/v3/missions.py"], "areas": ["mission-restart-recovery"]},
     {"name": "core-api", "patterns": ["src/nebula/v3/api.py", "src/nebula/v3/core.py", "src/nebula/v3/domain.py", "src/nebula/v3/storage.py", "src/nebula/v3/server.py"], "areas": ["core-api"]},
     {"name": "themes", "patterns": ["ui/src/components/Theme*", "ui/src/pages/Appearance*", "ui/src/theme/**"], "areas": ["themes"]},
     {"name": "desktop-shell", "patterns": ["ui/src-tauri/**"], "areas": ["desktop-shell"]},
@@ -32,6 +33,14 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "mission-restart-recovery": [
+      {"area":"mission-restart-recovery","project":"desktop","test_match":"tests/interface.spec.ts","grep":"mission workflow recovers after restart without operator actions","runtime":"mock","shard":"1/1"},
+      {"area":"mission-restart-recovery","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"mission workflow recovers after restart without operator actions","runtime":"mock","shard":"1/1"},
+      {"area":"mission-restart-recovery","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"mission workflow recovers after restart without operator actions","runtime":"mock","shard":"1/1"}
+    ],
+    "mission-restart-recovery-core": [
+      {"area":"mission-restart-recovery-core","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"production LAN mission ledger survives failure, retry, restart recovery, and relaunch through real Core","runtime":"real-core","shard":"1/1"}
+    ],
     "subagent-sidebar": [
       {"area":"subagent-sidebar","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade nests subagents beneath a collapsed main conversation","runtime":"mock","shard":"1/1"},
       {"area":"subagent-sidebar","project":"compact","test_match":"tests/interface.spec.ts","grep":"assistant upgrade nests subagents beneath a collapsed main conversation","runtime":"mock","shard":"1/1"},

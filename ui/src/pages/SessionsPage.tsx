@@ -764,9 +764,45 @@ export function SessionsPage() {
   const [waitingCallback, setWaitingCallback] = useState<{ turnId: string; assistantId: string; resultsUrl?: string; processId?: string; toolCallId: string; summary: string }>();
   const [interruptedRecovery, setInterruptedRecovery] = useState<InterruptedChatRecovery>();
   const [failedProviderRecovery, setFailedProviderRecovery] = useState<FailedProviderRecovery>();
-  const [recoveryNote, setRecoveryNote] = useState("");
-  const [recoveryBusy, setRecoveryBusy] = useState(false);
-  useEffect(() => setRecoveryNote(""), [interruptedRecovery?.turn.id]);
+  useEffect(() => {
+    if (!api || !sessionId || !interruptedRecovery) return;
+    const controller = new AbortController();
+    const turnId = interruptedRecovery.turn.id;
+    const generation = sessionSelectionGenerationRef.current;
+    const timer = window.setInterval(() => {
+      void api.listChatHookExecutions(turnId, controller.signal).then((items) => {
+        if (!controller.signal.aborted && sessionSelectionGenerationRef.current === generation) {
+          setHookExecutions(items);
+        }
+      }).catch((error) => {
+        if (!controller.signal.aborted) void logCaughtDiagnostic(
+          "interface.sessions_page.recovery_hook_refresh_failed",
+          "Interrupted hook outcomes could not be refreshed.",
+          error,
+          "sessions_page",
+        );
+      });
+      void api.getPendingChatTurn(sessionId, controller.signal).then((pending) => {
+        if (controller.signal.aborted || sessionSelectionGenerationRef.current !== generation) return;
+        if (!pending || pending.id !== turnId || pending.status !== "interrupted") {
+          void selectSession(sessionId, false);
+          return;
+        }
+        setInterruptedRecovery((current) => current?.turn.id === pending.id
+          && current.turn.revision !== pending.revision
+          ? { ...current, turn: pending }
+          : current);
+      }).catch((error) => {
+        if (!controller.signal.aborted) void logCaughtDiagnostic(
+          "interface.sessions_page.recovery_refresh_failed",
+          "An interrupted response could not refresh its recovery state.",
+          error,
+          "sessions_page",
+        );
+      });
+    }, 5_000);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [api, sessionId, interruptedRecovery?.turn.id]);
   useEffect(() => {
     if (!api || !sessionId || !waitingCallback) return;
     const pollController = new AbortController();
@@ -3855,43 +3891,6 @@ export function SessionsPage() {
     }
   };
 
-  const resumeInterruptedResponse = async () => {
-    if (!api || !interruptedRecovery || interruptedRecovery.turn.recoveryBlocked) return;
-    const recovery = interruptedRecovery;
-    // Own the viewer transport so a conversation switch detaches the resumed
-    // stream and its replayed ledger events cannot land in another transcript.
-    const stream = beginGuardedStream({ generation: sessionSelectionGenerationRef, abort: abortRef, backend: streamBackendRef }, recovery.request.backend);
-    setInterruptedRecovery(undefined);
-    setSending(true);
-    setChatError(undefined);
-    setMessages((current) => current.map((message) => message.id === recovery.assistantId
-      ? { ...message, state: "streaming", detail: undefined }
-      : message));
-    try {
-      const response = await api.resumeChatTurn(
-        recovery.turn.id,
-        recovery.request,
-        stream.guard((streamEvent) => applyChatEvent(streamEvent, recovery.assistantId, "", recovery.request)),
-        stream.controller.signal,
-      );
-      if (!stream.isCurrent()) return;
-      if (response?.sessionId) await refreshSessions(response.sessionId);
-    } catch (error) {
-      void logCaughtDiagnostic("interface.sessions_page.recovery_resume_failed", "An interrupted provider response could not resume.", error, "sessions_page");
-      if (!stream.isCurrent()) return;
-      const cancelled = stream.controller.signal.aborted;
-      const detail = cancelled ? "Response stopped by the operator." : error instanceof Error ? error.message : "Could not resume the interrupted response.";
-      if (!cancelled) setInterruptedRecovery(recovery);
-      setMessages((current) => current.map((message) => message.id === recovery.assistantId
-        ? { ...message, state: cancelled ? "cancelled" : "error", detail }
-        : message));
-      setChatError(cancelled ? undefined : detail);
-    } finally {
-      stream.release();
-      if (stream.isCurrent()) setSending(false);
-    }
-  };
-
   const retryProviderFinalAnswer = async () => {
     if (!api || !failedProviderRecovery) return;
     const recovery = failedProviderRecovery;
@@ -3947,39 +3946,6 @@ export function SessionsPage() {
     } finally {
       stream.release();
       if (stream.isCurrent()) setSending(false);
-    }
-  };
-
-  const reconcileInterruptedEffect = async (outcome: "complete" | "failed") => {
-    if (!api || !interruptedRecovery || recoveryBusy) return;
-    const toolCallId = interruptedRecovery.turn.unresolvedToolCallIds[0];
-    const hookExecutionId = interruptedRecovery.turn.unresolvedHookExecutionIds[0];
-    const detail = recoveryNote.trim();
-    if ((!toolCallId && !hookExecutionId) || !detail) return;
-    setRecoveryBusy(true);
-    setChatError(undefined);
-    try {
-      const turn = toolCallId
-        ? await api.reconcileChatTool(interruptedRecovery.turn.id, {
-          expectedRevision: interruptedRecovery.turn.revision,
-          toolCallId,
-          outcome,
-          detail,
-        })
-        : await api.reconcileChatHook(interruptedRecovery.turn.id, {
-          expectedRevision: interruptedRecovery.turn.revision,
-          hookExecutionId: hookExecutionId!,
-          outcome,
-          detail,
-        });
-      setInterruptedRecovery((current) => current ? { ...current, turn } : current);
-      if (hookExecutionId) setHookExecutions(await api.listChatHookExecutions(turn.id));
-      setRecoveryNote("");
-    } catch (error) {
-      void logCaughtDiagnostic("interface.sessions_page.recovery_reconcile_failed", "An interrupted effect outcome could not be reconciled.", error, "sessions_page");
-      setChatError(error instanceof Error ? error.message : "Could not reconcile the interrupted effect outcome.");
-    } finally {
-      setRecoveryBusy(false);
     }
   };
 
@@ -4365,12 +4331,6 @@ export function SessionsPage() {
   }, [assistantSettingsOpen]);
   const authoritativeProviderBusy = runtimeKind === "provider" && Boolean(authoritativeState?.busy);
   const composerBusy = sending || authoritativeProviderBusy || pendingResponseActive || Boolean(interruptedRecovery) || Boolean(waitingCallback);
-  const unresolvedHookExecution = interruptedRecovery
-    ? hookExecutions.find((item) => interruptedRecovery.turn.unresolvedHookExecutionIds.includes(item.id))
-    : undefined;
-  const unresolvedHookLabel = unresolvedHookExecution
-    ? nativeHooks.find((hook) => hook.id === unresolvedHookExecution.hookId)?.manifest.name ?? unresolvedHookExecution.hookId
-    : interruptedRecovery?.turn.unresolvedHookExecutionIds[0];
   const canSend = Boolean((!sessionId || sessionReadReady) && api && coreState === "online" && engagement && runtimeReady && model.trim() && (draft.trim() || pendingImages.length) && !composerBusy && !uploadingImage);
   const canSteerCurrentHarness = Boolean(
     !isHarnessCommand(draft)
@@ -4757,7 +4717,7 @@ export function SessionsPage() {
               <div className="chat-operator-updates">
               {stateSyncError && <div className="chat-recovery-notice" role="status"><p>{stateSyncError}</p><button className="icon-button subtle" type="button" aria-label="Retry response status" title="Retry response status" onClick={refreshSessionState}><RefreshCw size={16} aria-hidden="true" /></button></div>}
               {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} pendingActions={authoritativeState?.pending} ready={!loadingHistory} atLatest={!hasNewerMessages} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => updateSearchParams(next => {next.set("turn", id); next.set("drawer", "context");})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
-              {runtimeKind === "provider" && hookExecutions.length > 0 && <details className="chat-action-status" data-guide="hook-outcomes" open={Boolean(interruptedRecovery)}><summary>Lifecycle hooks · {hookExecutions.filter(item => item.status === "complete" || item.status === "reconciled").length}/{hookExecutions.length} completed</summary><div role="list" aria-label="Lifecycle hook outcomes">{hookExecutions.map(execution => { const hookName = nativeHooks.find(hook => hook.id === execution.hookId)?.manifest.name ?? execution.hookId; return <div role="listitem" key={execution.id}><strong>{hookName}</strong><small>{execution.eventName.replaceAll(".", " ")} · {execution.status.replaceAll("_", " ")}{execution.sideEffects !== "none" ? ` · ${execution.sideEffects} effects` : ""}</small>{execution.error && <span role="alert">{execution.error}</span>}{execution.reconciliation && typeof execution.reconciliation.detail === "string" && <small>{execution.reconciliation.detail}</small>}</div>; })}</div></details>}
+              {runtimeKind === "provider" && hookExecutions.length > 0 && <details className="chat-action-status" data-guide="hook-outcomes" open={Boolean(interruptedRecovery)}><summary>Lifecycle hooks · {hookExecutions.filter(item => item.status === "complete" || item.status === "reconciled").length}/{hookExecutions.length} completed</summary><div role="list" aria-label="Lifecycle hook outcomes">{hookExecutions.map(execution => { const hookName = nativeHooks.find(hook => hook.id === execution.hookId)?.manifest.name ?? execution.hookId; return <div role="listitem" key={execution.id}><strong>{hookName}</strong><small>{execution.eventName.replaceAll(".", " ")} · {execution.status.replaceAll("_", " ")}{execution.sideEffects !== "none" ? ` · ${execution.sideEffects} effects` : ""}</small>{execution.error && <span role="alert">{execution.error}</span>}{execution.status === "interrupted" && execution.lateOutcomeStatus && <small>Later process exit: {execution.lateOutcomeStatus}{execution.lateOutcomeExitCode !== undefined ? ` (code ${execution.lateOutcomeExitCode})` : ""}. {execution.lateOutcomeStatus === "complete" ? "Checking the saved result." : "Effects may be partial; verify before continuing."}</small>}{execution.reconciliation && typeof execution.reconciliation.detail === "string" && <small>{execution.reconciliation.detail}</small>}</div>; })}</div></details>}
               {waitingCallback && <div className="chat-action-status" role="status">
                 <span>{waitingCallback.summary}</span>
                 {waitingCallback.resultsUrl && <div className="chat-inline-approval-actions">
@@ -4766,14 +4726,8 @@ export function SessionsPage() {
                   <small>The command received an API key in NEBULA_RESULTS_KEY. POST the result to this LAN URL.</small>
                 </div>}
               </div>}
-              {interruptedRecovery && <div className="chat-action-status" role={interruptedRecovery.turn.recoveryBlocked ? "alert" : "status"}>
-                <span>{interruptedRecovery.turn.error ?? "Core restarted before this response completed."}</span>
-                {interruptedRecovery.turn.recoveryBlocked ? <div className="chat-inline-approval-actions">
-                  <label><span>What happened to {interruptedRecovery.turn.unresolvedToolCallIds[0] ? `tool call ${interruptedRecovery.turn.unresolvedToolCallIds[0]}` : unresolvedHookLabel ?? "the interrupted hook"}?</span><input value={recoveryNote} onChange={(event) => setRecoveryNote(event.target.value)} placeholder="Operator verification note" disabled={recoveryBusy} /></label>
-                  <button className="button secondary" type="button" disabled={recoveryBusy || !recoveryNote.trim()} onClick={() => void reconcileInterruptedEffect("failed")}>Mark failed</button>
-                  <button className="button primary" type="button" disabled={recoveryBusy || !recoveryNote.trim()} onClick={() => void reconcileInterruptedEffect("complete")}>Confirm completed</button>
-                  <small>This records your confirmation as unverified evidence. Nebula will not run the effect again.</small>
-                </div> : <button className="button quiet" type="button" disabled={sending} onClick={() => void resumeInterruptedResponse()}>Resume response</button>}
+              {interruptedRecovery && <div className="chat-action-status" role="status">
+                <span>Core is recovering this response automatically. Recorded receipts will be adopted; uncertain effects will not be replayed.</span>
               </div>}
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatReconnecting && <p role="status" className="chat-recovery-notice">Connection lost. Reconnecting to the existing turn…</p>}

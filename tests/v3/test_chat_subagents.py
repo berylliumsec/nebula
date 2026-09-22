@@ -7,6 +7,7 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompletionRequest, ChatService
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.domain import (
+    ChatGoalUsageCharge,
     ChatMessage,
     ChatSession,
     ChatSubagent,
@@ -528,7 +529,7 @@ def test_operator_subagent_limit_is_reported_to_the_model(tmp_path: Path) -> Non
     assert session.metadata["max_active_subagents"] == 2
 
 
-def test_restart_interrupts_running_subagents_and_reports_it(tmp_path: Path) -> None:
+def test_restart_keeps_recoverable_subagent_round_live(tmp_path: Path) -> None:
     async def scenario() -> None:
         provider = RoutedProvider(
             parent=[
@@ -578,8 +579,19 @@ def test_restart_interrupts_running_subagents_and_reports_it(tmp_path: Path) -> 
         await restarted.startup()
 
         interrupted = store.get(ChatSubagent, record.id)
-        assert interrupted.status == ChatSubagentStatus.INTERRUPTED
-        assert interrupted.result_message_id is not None
+        assert interrupted.status == ChatSubagentStatus.RUNNING
+        assert interrupted.result_message_id is None
+        child = store.get(ChatTurn, record.child_turn_id)
+        assert child.status == ChatTurnStatus.INTERRUPTED
+        assert child.request_snapshot["recovery"]["required"] is True
+        assert restarted.subagents.view(interrupted)["status"] == "recovering"
+        assert restarted.resume_turns_stopped_by_core() == [child.id]
+        assert restarted.has_active_provider_turn(child.id)
+        assert (
+            store.get(ChatTurn, child.id).request_snapshot["recovery"]["required"]
+            is False
+        )
+        assert restarted.subagents.view(interrupted)["status"] == "running"
         await restarted.shutdown()
         await chat.shutdown()
 
@@ -768,22 +780,12 @@ def test_restart_resumes_a_parent_waiting_on_an_interrupted_subagent(
         )
         await restarted.startup()
 
-        assert store.get(ChatSubagent, record.id).status == (
-            ChatSubagentStatus.INTERRUPTED
-        )
-        # The waiting parent must be resumed, not left waiting forever.
-        await _until(
-            lambda: (
-                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
-            )
-        )
-        parent = store.get(ChatTurn, parent_turn_id)
-        assert parent.tool_history[1]["name"] == "wait_subagents"
-        assert parent.tool_history[1]["status"] == "complete"
-        messages = _messages(store, parent.session_id)
-        assert any(
-            item.content == "The subagent was interrupted by a restart."
-            for item in messages
+        assert store.get(ChatSubagent, record.id).status == ChatSubagentStatus.RUNNING
+        # The parent keeps waiting for the same recoverable child instead of
+        # receiving a contradictory terminal interruption report.
+        assert (
+            store.get(ChatTurn, parent_turn_id).status
+            == ChatTurnStatus.WAITING_CALLBACK
         )
         await restarted.shutdown()
         await chat.shutdown()
@@ -956,14 +958,14 @@ def test_core_shutdown_interrupts_an_inflight_parent_tool_turn(tmp_path: Path) -
         parent = store.get(ChatTurn, parent_turn_id)
         assert parent.status == ChatTurnStatus.INTERRUPTED
         assert parent.error == (
-            "Core stopped before this response completed. Review and resume it."
+            "Core stopped before this response completed. Core will resume it automatically."
         )
         assert parent.request_snapshot["recovery"]["required"] is True
         assert parent.execution_claim_id is None
         assert parent.tool_history[0]["name"] == "start_subagent"
         interrupted = store.get(ChatSubagent, record.id)
-        assert interrupted.status == ChatSubagentStatus.INTERRUPTED
-        assert interrupted.error == "Core shut down while this subagent was running."
+        assert interrupted.status == ChatSubagentStatus.RUNNING
+        assert interrupted.error is None
         assert (
             store.get(ChatTurn, record.child_turn_id).status
             == ChatTurnStatus.INTERRUPTED
@@ -976,6 +978,11 @@ def test_core_shutdown_interrupts_an_inflight_parent_tool_turn(tmp_path: Path) -
         assert store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.INTERRUPTED
         pending = restarted.pending_turn(parent.session_id)
         assert pending is not None and pending.id == parent_turn_id
+        resumed = restarted.resume_turns_stopped_by_core()
+        assert set(resumed) == {parent_turn_id, record.child_turn_id}
+        assert restarted.has_active_provider_turn(parent_turn_id)
+        assert restarted.has_active_provider_turn(record.child_turn_id)
+        assert store.get(ChatSubagent, record.id).status == ChatSubagentStatus.RUNNING
         await restarted.shutdown()
 
     asyncio.run(scenario())
@@ -1190,6 +1197,22 @@ def test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level(
             if "Subagent reports are ready" in str(request.messages[-1].content)
         )
         assert continued.reasoning_effort == "high"
+        await _until(
+            lambda: (
+                store.get(ChatSubagent, record.id).status
+                == ChatSubagentStatus.COMPLETED
+            )
+        )
+        await _until(lambda: len(store.list_entities(ChatGoalUsageCharge)) == 1)
+        charged_usage = store.get(type(goal), goal.id).usage
+
+        # Startup may revisit terminal children after either the settlement,
+        # charge, or delivery write. The deterministic charge prevents a
+        # second debit while the delivery repair remains safe to repeat.
+        await chat.subagents.reconcile_after_restart()
+        await chat.subagents.reconcile_after_restart()
+        assert len(store.list_entities(ChatGoalUsageCharge)) == 1
+        assert store.get(type(goal), goal.id).usage == charged_usage
         await chat.shutdown()
 
     asyncio.run(scenario())

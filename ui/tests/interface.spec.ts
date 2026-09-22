@@ -1712,6 +1712,53 @@ test("Missions explains missing runtime setup and provides a working next action
   expect(widths.missions).toBeGreaterThanOrEqual(widths.workspace - 26);
 });
 
+test("mission workflow recovers after restart without operator actions", async ({ page }) => {
+  const run = {
+    ...entity,
+    id: "mission-recovery",
+    engagement_id: "scratch-project",
+    objective: "Apply the reviewed change",
+    status: "running",
+    backend: "native",
+    metadata: {
+      name: "Interrupted change",
+      restart_recovery: {
+        required: false,
+        automatic: true,
+        state: "running",
+        reason: "Core restarted while this API mission was active",
+        unresolved_tool_call_ids: [],
+        auto_continued_unknown_tool_call_ids: ["call-1"],
+        effects: [{
+          tool_call_id: "call-1",
+          tool_name: "write_file",
+          risk_class: "workspace_write",
+          status_at_restart: "running",
+        }],
+      },
+    },
+  };
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/runs") && request.method() === "GET") {
+      await route.fulfill({ status: 200, json: [run] });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=missions&mission=mission-recovery", "Workbench");
+  const recovery = page.getByRole("status", { name: "Core is recovering this Mission" });
+  await expect(recovery).toBeVisible();
+  await expect(recovery).toContainText("uncertain effects are not replayed");
+  await expect(page.getByRole("button", { name: "Confirm completed" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Mark failed" })).toHaveCount(0);
+  await expect(page.getByLabel("Recovery note")).toHaveCount(0);
+  const accessibility = await new AxeBuilder({ page }).include(".agents-page").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 test("mission workflow freezes harness options, stages, and URL identity", async ({ page }) => {
   const harness = {
     ...entity,
@@ -4538,7 +4585,7 @@ test("assistant upgrade names a provider turn that thinks without answering and 
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
 
-test("assistant upgrade provider lifecycle hooks require restart reconciliation before resume", async ({ page }) => {
+test("assistant upgrade provider lifecycle hooks recover without operator actions", async ({ page }) => {
   const provider = {
     ...entity,
     id: "provider-hooks",
@@ -4566,6 +4613,7 @@ test("assistant upgrade provider lifecycle hooks require restart reconciliation 
   let recoveryBlocked = true;
   let turnRevision = 3;
   let hookStatus = "interrupted";
+  let reconcileAttempts = 0;
   await installTruthfulCore(page);
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -4616,6 +4664,8 @@ test("assistant upgrade provider lifecycle hooks require restart reconciliation 
         side_effects: "external",
         started_at: entity.created_at,
         completed_at: entity.updated_at,
+        late_outcome_status: hookStatus === "interrupted" ? "failed" : null,
+        late_outcome_exit_code: hookStatus === "interrupted" ? 2 : null,
         reconciliation: recoveryBlocked ? null : { outcome: "complete", detail: "Verified the external audit write." },
       }] });
       return;
@@ -4641,6 +4691,12 @@ test("assistant upgrade provider lifecycle hooks require restart reconciliation 
       return;
     }
     if (path.endsWith("/chat/turns/turn-hook/reconcile-hook") && method === "POST") {
+      reconcileAttempts += 1;
+      if (reconcileAttempts === 1) {
+        turnRevision += 1;
+        await route.fulfill({ status: 409, json: { detail: "interrupted response changed; reload before reconciling" } });
+        return;
+      }
       recoveryBlocked = false;
       turnRevision += 1;
       hookStatus = "reconciled";
@@ -4669,12 +4725,13 @@ test("assistant upgrade provider lifecycle hooks require restart reconciliation 
   });
 
   await openWorkspace(page, "/?view=chat&session=session-hook", "Workbench");
-  await expect(page.getByText("What happened to Audit lifecycle?")).toBeVisible();
-  await page.getByPlaceholder("Operator verification note").fill("Verified the external audit write.");
-  await page.getByRole("button", { name: "Confirm completed" }).click();
-  await expect(page.getByRole("button", { name: "Resume response" })).toBeVisible();
-  await page.getByRole("button", { name: "Resume response" }).click();
-  await expect(page.getByText("Resumed after hook confirmation")).toBeVisible();
+  await expect(page.getByText("Core is recovering this response automatically. Recorded receipts will be adopted; uncertain effects will not be replayed.")).toBeVisible();
+  await expect(page.getByText("Later process exit: failed (code 2). Effects may be partial; verify before continuing.")).toBeVisible();
+  await expect(page.getByPlaceholder("Operator verification note")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Confirm completed" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Mark failed" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Resume response" })).toHaveCount(0);
+  expect(reconcileAttempts).toBe(0);
 });
 
 test("assistant settings expose provider metadata and harness model options", async ({ page }, testInfo) => {
@@ -9722,6 +9779,26 @@ const delegated = [
     error: null,
     result_message_id: null,
   },
+  {
+    id: "sub-3",
+    name: "Verify interrupted workspace update",
+    task: "Recover the interrupted child turn before reporting to its parent.",
+    status: "recovering",
+    parent_session_id: "subagent-chat",
+    parent_turn_id: "turn-1",
+    child_session_id: "child-3",
+    child_turn_id: "child-turn-3",
+    step_count: 2,
+    recent_steps: [{ tool: "write_file", detail: "recovery-proof.txt", status: "running" }],
+    approval: null,
+    usage: { input_tokens: 800, output_tokens: 100, total_tokens: 900 },
+    started_at: "2026-09-20T10:00:00Z",
+    finished_at: null,
+    elapsed_seconds: 66,
+    result: "",
+    error: "Core restarted while the child effect outcome was unknown.",
+    result_message_id: null,
+  },
 ];
 
 reloadTest("stabilization an operator allows delegation and acts on a waiting subagent", async ({ page }) => {
@@ -9776,12 +9853,15 @@ reloadTest("stabilization an operator allows delegation and acts on a waiting su
   const rail = page.getByRole("status", { name: "Subagents" });
   await expect(rail).toContainText("1 running");
   await expect(rail).toContainText("1 needs approval");
+  await expect(rail).toContainText("1 recovering");
   await expect(page.locator(".chat-composer textarea").first()).toBeEditable();
 
   await rail.getByRole("button", { name: "Show subagents" }).click();
   const pane = page.getByRole("region", { name: "Subagents" }).last();
-  await expect(pane).toContainText("2 of 3 running · limit 3");
+  await expect(pane).toContainText("3 of 3 running · limit 3");
   await expect(pane).toContainText("Map documented API routes");
+  await expect(pane).toContainText("Recovering");
+  await expect(pane).toContainText("Core restarted while the child effect outcome was unknown.");
 
   // The child waiting on a person shows exactly what it wants to run.
   await expect(pane).toContainText("Wants to run a command in the workspace");
@@ -9906,7 +9986,7 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
   await expect(rail).toContainText("1 running");
   await rail.getByRole("button", { name: "Show subagents" }).click();
   const pane = page.getByRole("region", { name: "Subagents" }).last();
-  await expect(pane).toContainText("2 running · no limit · deepseek/deepseek-v3.2");
+  await expect(pane).toContainText("3 running · no limit · deepseek/deepseek-v3.2");
   await expect(pane).toContainText("Their tool outputs go to Local subagents");
 
   const composer = page.locator(".chat-composer textarea").first();

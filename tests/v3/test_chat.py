@@ -29,6 +29,7 @@ from nebula.v3.domain import (
     Engagement,
     KnowledgeSource,
     NativeHookExecution,
+    NativeHookLateOutcome,
     ProviderPrivacy,
     ProviderProfile,
     RiskClass,
@@ -46,6 +47,7 @@ from nebula.v3.providers import (
     ModelRequest,
     ModelResponse,
     ModelStreamEvent,
+    ToolCall as ModelToolCall,
     ModelUsage,
     ProviderConfig,
     ProviderContextLengthError,
@@ -58,7 +60,8 @@ from nebula.v3.providers import (
 )
 from nebula.v3.model_catalog import ModelDescriptor, ModelRouteDescriptor
 from nebula.v3.storage import NebulaStore, StoreTransaction
-from nebula.v3.tools import ToolInvocation
+from nebula.v3.tools import StoreToolLedger, ToolInvocation, ToolSpec, ToolBrokerError
+from nebula.v3.tool_results import ToolResultReceipt, ToolResultStatus
 
 
 class FakeProvider(ModelProvider):
@@ -122,6 +125,13 @@ class FakeProvider(ModelProvider):
         return ProviderHealth(
             provider_id=self.config.id, healthy=True, models=["model-a"]
         )
+
+
+class WaitingRecoveryProvider(FakeProvider):
+    async def stream(self, request: ModelRequest):
+        del request
+        yield ModelStreamEvent(type=StreamEventType.STARTED)
+        await asyncio.Event().wait()
 
 
 class ContextRejectingProvider(FakeProvider):
@@ -1233,22 +1243,308 @@ def test_restart_interrupts_turns_and_blocks_unknown_tool_replay(tmp_path, monke
     ]
     assert service.pending_turn(session.id).id == turn.id
     assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.PAUSED
-    with pytest.raises(ChatHistoryConflict, match="unknown tool outcome"):
-        service.prepare_resume(turn.id)
+    reconciled = service._auto_reconcile_restart_uncertainty(turn.id)
+    # Core continues without asking a person to guess and does not take the
+    # original ledger slot away from a possible late worker.
+    assert store.get(ToolCall, "tool-unknown").status == ToolCallStatus.RUNNING
+    assert reconciled.request_snapshot["recovery"]["required"] is False
+    assert reconciled.request_snapshot["recovery"][
+        "auto_continued_unknown_tool_call_ids"
+    ] == ["tool-unknown"]
+    assert reconciled.tool_history[0]["model_call_id"] == "provider-call-1"
+    assert reconciled.tool_history[0]["recovered_from_restart_unknown"] is True
+    assert reconciled.tool_history[0]["trusted_result"] is False
+    assert chat_module._replays_restart_unknown(
+        reconciled.tool_history,
+        ModelToolCall(id="new-provider-id", name="run_command", arguments={}),
+    )
 
+
+def test_restart_keeps_terminal_tool_status_without_a_receipt_unknown(tmp_path):
+    store = NebulaStore(tmp_path / "chat-terminal-without-receipt.db")
+    engagement = store.create(Engagement(id="eng-terminal", name="Terminal status"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-terminal",
+            engagement_id=engagement.id,
+            title="Terminal status",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-terminal",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            tool_call_ids=["failed-without-receipt", "cancelled-after-start"],
+        )
+    )
+    for call_id, status in (
+        ("failed-without-receipt", ToolCallStatus.FAILED),
+        ("cancelled-after-start", ToolCallStatus.CANCELLED),
+    ):
+        store.create(
+            ToolCall(
+                id=call_id,
+                engagement_id=engagement.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=session.id,
+                chat_turn_id=turn.id,
+                tool_name="write_file",
+                status=status,
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                started_at=utc_now(),
+                completed_at=utc_now(),
+            )
+        )
+
+    service = ChatService(store)
+    asyncio.run(service.startup())
+
+    interrupted = store.get(ChatTurn, turn.id)
+    assert interrupted.status == ChatTurnStatus.INTERRUPTED
+    assert interrupted.request_snapshot["recovery"]["unknown_tool_call_ids"] == [
+        "failed-without-receipt",
+        "cancelled-after-start",
+    ]
+    recovered = service._auto_reconcile_restart_uncertainty(turn.id)
+    assert recovered.request_snapshot["recovery"]["required"] is False
+    assert all(
+        item["recovered_from_restart_unknown"] for item in recovered.tool_history
+    )
+    assert all(
+        store.get(ToolCall, call_id).status
+        in {ToolCallStatus.FAILED, ToolCallStatus.CANCELLED}
+        for call_id in ("failed-without-receipt", "cancelled-after-start")
+    )
+
+
+@pytest.mark.parametrize(
+    ("call_status", "receipt_status"),
+    [
+        (ToolCallStatus.COMPLETE, ToolResultStatus.COMPLETED),
+        (ToolCallStatus.FAILED, ToolResultStatus.FAILED),
+    ],
+)
+def test_restart_projects_late_recorded_tool_result_once(
+    tmp_path, call_status, receipt_status
+):
+    store = NebulaStore(tmp_path / "chat-late-result.db")
+    engagement = store.create(Engagement(id="eng-late", name="Late result"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-late",
+            engagement_id=engagement.id,
+            title="Late result",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    goal = store.create(
+        ChatGoal(
+            id="goal-late",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            objective="Recover without replay",
+            completion_criteria=["One tool result"],
+            status=ChatGoalStatus.RUNNING,
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-late",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            goal_id=goal.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            tools_enabled=True,
+        )
+    )
+    intent = {
+        "step": 0,
+        "model_call_id": "provider-call-late",
+        "tool_call_id": "tool-late",
+        "name": "run_command",
+        "arguments": {"command": "true"},
+        "budget_class": "execution",
+        "response_group": "group-late",
+        "response_text": "Checking the target",
+    }
+    call = store.create(
+        ToolCall(
+            id="tool-late",
+            engagement_id=engagement.id,
+            run_id=turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+            tool_name="run_command",
+            arguments=intent["arguments"],
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.LOCAL_READ,
+            metadata={
+                "provider_call_id": intent["model_call_id"],
+                "provider_step": 0,
+                "budget_class": "execution",
+                "provider_history_intent": intent,
+            },
+        )
+    )
+    service = ChatService(store)
+    asyncio.run(service.startup())
+    interrupted = store.get(ChatTurn, turn.id)
+    assert interrupted.request_snapshot["recovery"]["unknown_tool_call_ids"] == [
+        call.id
+    ]
+    receipt = ToolResultReceipt(
+        tool_call_id=call.id,
+        tool_name=call.tool_name,
+        tool_version="test",
+        status=receipt_status,
+        summary="Saved after the turn was interrupted",
+    ).as_model_result()
+    store.update(
+        ToolCall,
+        call.id,
+        {"status": call_status, "result": receipt, "completed_at": utc_now()},
+        expected_revision=call.revision,
+    )
+
+    recovered = service.pending_turn(session.id)
+    assert recovered is not None
+    assert recovered.request_snapshot["recovery"]["unknown_tool_call_ids"] == []
+    assert recovered.request_snapshot["recovery"]["recorded_tool_result_ids"] == [
+        call.id
+    ]
+    assert recovered.next_step == 1
+    assert recovered.execution_tool_calls == 1
+    assert recovered.tool_call_ids == [call.id]
+    assert len(recovered.tool_history) == 1
+    assert recovered.tool_history[0]["response_group"] == "group-late"
+    assert recovered.tool_history[0]["status"] == call_status.value
+    assert json.loads(recovered.tool_history[0]["provider_result"]) == receipt
+    assert service.pending_turn(session.id).revision == recovered.revision
+    assert store.get(ToolCall, call.id).revision == call.revision + 1
+
+
+def test_restart_keeps_untrusted_terminal_result_for_operator_review(tmp_path):
+    store = NebulaStore(tmp_path / "chat-invalid-late-result.db")
+    engagement = store.create(Engagement(id="eng-invalid-late", name="Recovery"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-invalid-late",
+            engagement_id=engagement.id,
+            title="Recovery",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-invalid-late",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+        )
+    )
+    call = store.create(
+        ToolCall(
+            id="tool-invalid-late",
+            engagement_id=engagement.id,
+            run_id=turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+            tool_name="run_command",
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.LOCAL_READ,
+            metadata={"provider_call_id": "provider-invalid", "provider_step": 0},
+        )
+    )
+    service = ChatService(store)
+    asyncio.run(service.startup())
+    malformed = ToolResultReceipt(
+        tool_call_id="different-call",
+        tool_name=call.tool_name,
+        tool_version="test",
+        status=ToolResultStatus.COMPLETED,
+    ).as_model_result()
+    stored = store.update(
+        ToolCall,
+        call.id,
+        {
+            "status": ToolCallStatus.COMPLETE,
+            "result": malformed,
+            "completed_at": utc_now(),
+        },
+        expected_revision=call.revision,
+    )
+
+    pending = service.pending_turn(session.id)
+    assert pending is not None
+    assert pending.request_snapshot["recovery"]["unknown_tool_call_ids"] == [call.id]
     reconciled = service.reconcile_interrupted_tool(
         turn.id,
-        "tool-unknown",
-        outcome="complete",
-        detail="Operator verified the command completed on the target.",
-        expected_revision=interrupted.revision,
+        call.id,
+        outcome="failed",
+        detail="The recorded result belongs to another invocation.",
+        expected_revision=pending.revision,
     )
-    reconciled_call = store.get(ToolCall, "tool-unknown")
-    assert reconciled_call.status == ToolCallStatus.COMPLETE
-    assert reconciled_call.result["verified"] is False
     assert reconciled.request_snapshot["recovery"]["unknown_tool_call_ids"] == []
-    assert reconciled.tool_history[0]["model_call_id"] == "provider-call-1"
     assert reconciled.tool_history[0]["trusted_result"] is False
+    assert store.get(ToolCall, call.id).result == malformed
+    assert store.get(ToolCall, call.id).status == stored.status
+
+
+def test_tool_ledger_binds_provider_replay_intent_to_idempotent_call(tmp_path):
+    store = NebulaStore(tmp_path / "chat-intent.db")
+    ledger = StoreToolLedger(store, enforce_run_budget=False)
+    spec = ToolSpec(
+        name="run_command",
+        description="Run a bounded command",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        risk_class=RiskClass.LOCAL_READ,
+    )
+    intent = {
+        "step": 0,
+        "model_call_id": "provider-call-1",
+        "tool_call_id": "bound-by-idempotency",
+        "name": "run_command",
+        "arguments": {},
+        "response_group": "group-1",
+    }
+    invocation = ToolInvocation(
+        engagement_id="eng-intent",
+        run_id="turn-intent",
+        origin=ToolCallOrigin.CHAT,
+        chat_session_id="session-intent",
+        chat_turn_id="turn-intent",
+        tool_name="run_command",
+        workspace=tmp_path,
+        idempotency_key="chat:turn-intent:step:0",
+        provider_call_id="provider-call-1",
+        provider_step=0,
+        provider_history_intent=intent,
+    )
+    recorded = asyncio.run(ledger.reserve(invocation, spec))
+    assert recorded.metadata["provider_history_intent"] == intent
+    assert asyncio.run(ledger.reserve(invocation, spec)).id == recorded.id
+    changed = invocation.model_copy(update={"provider_call_id": "provider-call-2"})
+    with pytest.raises(ToolBrokerError, match="idempotency key was reused"):
+        asyncio.run(ledger.reserve(changed, spec))
 
 
 def test_restart_allows_explicit_resume_when_no_tool_effect_is_unknown(
@@ -1353,7 +1649,7 @@ def test_native_provider_turn_snapshots_and_runs_agents_hooks_once(
     assert all(item.stdout.strip() == item.event_name for item in executions)
 
 
-def test_restart_requires_reconciliation_for_uncertain_native_hook_effect(tmp_path):
+def test_restart_auto_continues_uncertain_native_hook_effect(tmp_path):
     store = NebulaStore(tmp_path / "chat-hook-recovery.db")
     engagement = store.create(Engagement(id="eng-hook-recovery", name="Hook recovery"))
     profile = store.create(_profile(local=True))
@@ -1404,18 +1700,85 @@ def test_restart_requires_reconciliation_for_uncertain_native_hook_effect(tmp_pa
         execution.id
     ]
     assert store.get(NativeHookExecution, execution.id).status == "interrupted"
-    with pytest.raises(ChatHistoryConflict, match="unknown hook outcome"):
-        service.prepare_resume(turn.id)
-
-    reconciled = service.reconcile_interrupted_hook(
-        turn.id,
+    store.update(
+        NativeHookExecution,
         execution.id,
-        outcome="complete",
-        detail="Operator verified the external audit write completed.",
-        expected_revision=interrupted.revision,
+        {
+            "late_outcome": NativeHookLateOutcome(
+                status="failed",
+                exit_code=2,
+                error="Hook exited after the turn stopped.",
+            )
+        },
+        expected_revision=store.get(NativeHookExecution, execution.id).revision,
     )
-    assert reconciled.request_snapshot["recovery"]["unknown_hook_execution_ids"] == []
-    assert store.get(NativeHookExecution, execution.id).status == "reconciled"
+    assert service.pending_turn(session.id).request_snapshot["recovery"][
+        "unknown_hook_execution_ids"
+    ] == [execution.id]
+    reconciled = service._auto_reconcile_restart_uncertainty(turn.id)
+    assert reconciled.request_snapshot["recovery"]["required"] is False
+    assert reconciled.request_snapshot["recovery"][
+        "auto_continued_unknown_hook_execution_ids"
+    ] == [execution.id]
+    # A late process exit remains evidence; automatic continuation does not
+    # rewrite it into a guessed success or failure.
+    assert store.get(NativeHookExecution, execution.id).status == "interrupted"
+
+
+def test_restart_discloses_read_only_hook_attempt_before_rerun(tmp_path):
+    store = NebulaStore(tmp_path / "chat-read-only-hook-recovery.db")
+    engagement = store.create(Engagement(id="eng-read-hook", name="Read hook"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-read-hook",
+            engagement_id=engagement.id,
+            title="Read hook",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-read-hook",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            request_snapshot={
+                "model_request": ModelRequest(
+                    model="model-a",
+                    messages=[{"role": "user", "content": "continue"}],
+                ).model_dump(mode="json"),
+                "context_usage": {},
+            },
+        )
+    )
+    execution = store.create(
+        NativeHookExecution(
+            id="read-hook-attempt-1",
+            engagement_id=engagement.id,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+            hook_id="inspect",
+            hook_snapshot={"id": "inspect"},
+            event_name="chat.turn.started",
+            side_effects="none",
+            started_at=utc_now(),
+        )
+    )
+
+    service = ChatService(store)
+    asyncio.run(service.startup())
+
+    interrupted = store.get(ChatTurn, turn.id)
+    recovery = interrupted.request_snapshot["recovery"]
+    assert recovery["unknown_hook_execution_ids"] == []
+    assert recovery["rerunnable_hook_execution_ids"] == [execution.id]
+    assert "read-only hook attempts will rerun as new attempts" in interrupted.error
+    assert store.get(NativeHookExecution, execution.id).status == "interrupted"
+    assert service.prepare_resume(turn.id).turn.id == turn.id
 
 
 def _write_native_hook(
@@ -1624,6 +1987,62 @@ def test_cancelled_turn_pauses_the_session_goal_even_when_created_late(
     assert paused.blocked_reason == (
         "Response stopped by the operator. Resume the goal when ready."
     )
+
+
+def test_cancel_turn_cancels_every_open_call_in_a_provider_batch(tmp_path):
+    store = NebulaStore(tmp_path / "cancel-provider-batch.db")
+    engagement = store.create(Engagement(id="eng-cancel-batch", name="Batch stop"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-cancel-batch",
+            engagement_id=engagement.id,
+            title="Batch stop",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-cancel-batch",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            tool_call_ids=["batch-proposed", "batch-running", "batch-complete"],
+        )
+    )
+    for call_id, status in (
+        ("batch-proposed", ToolCallStatus.PROPOSED),
+        ("batch-running", ToolCallStatus.RUNNING),
+        ("batch-complete", ToolCallStatus.COMPLETE),
+    ):
+        store.create(
+            ToolCall(
+                id=call_id,
+                engagement_id=engagement.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=session.id,
+                chat_turn_id=turn.id,
+                tool_name="run_command",
+                status=status,
+                risk_class=RiskClass.LOCAL_READ,
+                started_at=utc_now() if status != ToolCallStatus.PROPOSED else None,
+                completed_at=utc_now() if status == ToolCallStatus.COMPLETE else None,
+                result={"status": "complete"}
+                if status == ToolCallStatus.COMPLETE
+                else None,
+            )
+        )
+
+    cancelled = ChatService(store).cancel_turn(turn.id)
+
+    assert cancelled.status == ChatTurnStatus.CANCELLED
+    assert store.get(ToolCall, "batch-proposed").status == ToolCallStatus.CANCELLED
+    assert store.get(ToolCall, "batch-running").status == ToolCallStatus.CANCELLED
+    assert store.get(ToolCall, "batch-complete").status == ToolCallStatus.COMPLETE
 
 
 def test_provider_turn_and_goal_have_one_durable_worker_owner(tmp_path):
@@ -3285,7 +3704,7 @@ def test_core_shutdown_leaves_an_inflight_provider_turn_recoverable(tmp_path):
         interrupted = store.get(ChatTurn, turn_id)
         assert interrupted.status == ChatTurnStatus.INTERRUPTED
         assert interrupted.error == (
-            "Core stopped before this response completed. Review and resume it."
+            "Core stopped before this response completed. Core will resume it automatically."
         )
         assert interrupted.request_snapshot["recovery"]["required"] is True
         assert interrupted.request_snapshot["recovery"]["cause"] == "core_shutdown"
@@ -3299,15 +3718,17 @@ def test_core_shutdown_leaves_an_inflight_provider_turn_recoverable(tmp_path):
         assert store.get(ChatTurn, turn_id).status == ChatTurnStatus.INTERRUPTED
         pending = restarted.pending_turn(interrupted.session_id)
         assert pending is not None and pending.id == turn_id
-        resumed = restarted.prepare_resume(turn_id)
-        assert resumed.turn is not None
-        assert resumed.turn.status == ChatTurnStatus.ROUTING
+        assert restarted.resume_turns_stopped_by_core() == [turn_id]
+        assert restarted.has_active_provider_turn(turn_id)
         await restarted.shutdown()
 
     asyncio.run(scenario())
 
 
-def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(tmp_path):
+@pytest.mark.parametrize("late_result", [False, True])
+def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(
+    tmp_path, late_result
+):
     class WaitingProvider(FakeProvider):
         async def stream(self, request: ModelRequest):
             del request
@@ -3357,13 +3778,43 @@ def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(tmp_path):
                     "recovery": {
                         "required": True,
                         "cause": "core_shutdown",
-                        "unknown_tool_call_ids": [],
+                        "unknown_tool_call_ids": ["late-safe-tool"]
+                        if late_result
+                        else [],
                         "unknown_hook_execution_ids": [],
                     },
                 },
             )
         )
-        provider = WaitingProvider(profile.id, local=True)
+        if late_result:
+            store.create(
+                ToolCall(
+                    id="late-safe-tool",
+                    engagement_id=engagement.id,
+                    run_id=turn.id,
+                    origin=ToolCallOrigin.CHAT,
+                    chat_session_id=session.id,
+                    chat_turn_id=turn.id,
+                    tool_name="run_command",
+                    arguments={"command": "true"},
+                    status=ToolCallStatus.COMPLETE,
+                    risk_class=RiskClass.LOCAL_READ,
+                    completed_at=utc_now(),
+                    metadata={
+                        "provider_call_id": "late-safe-provider-call",
+                        "provider_step": 0,
+                        "budget_class": "execution",
+                    },
+                    result=ToolResultReceipt(
+                        tool_call_id="late-safe-tool",
+                        tool_name="run_command",
+                        tool_version="test",
+                        status=ToolResultStatus.COMPLETED,
+                        summary="The effect finished before shutdown completed.",
+                    ).as_model_result(),
+                )
+            )
+        provider = WaitingRecoveryProvider(profile.id, local=True)
         service = ChatService(store, provider_factory=lambda _: provider)
         await service.startup()
 
@@ -3371,6 +3822,12 @@ def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(tmp_path):
         assert service.resume_turns_stopped_by_core() == []
         assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.RUNNING
         assert service.has_active_provider_turn(turn.id)
+        if late_result:
+            resumed_turn = store.get(ChatTurn, turn.id)
+            assert (
+                resumed_turn.request_snapshot["recovery"]["unknown_tool_call_ids"] == []
+            )
+            assert resumed_turn.tool_history[0]["tool_call_id"] == "late-safe-tool"
         follower = service.follow_provider_turn(turn.id)
         events = [await asyncio.wait_for(anext(follower), 2) for _ in range(3)]
         assert [event for event, _ in events] == ["started", "reasoning_delta", "delta"]
@@ -3382,7 +3839,7 @@ def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(tmp_path):
     asyncio.run(scenario())
 
 
-def test_core_startup_pauses_running_goal_with_parked_recovery(tmp_path):
+def test_core_startup_auto_resumes_running_goal_with_unknown_effect(tmp_path):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "parked-goal.db")
         engagement = store.create(Engagement(name="Parked recovery"))
@@ -3415,32 +3872,43 @@ def test_core_startup_pauses_running_goal_with_parked_recovery(tmp_path):
                 status=ChatTurnStatus.INTERRUPTED,
                 error=reason,
                 request_snapshot={
+                    "model_request": ModelRequest(
+                        model="model-a",
+                        messages=[{"role": "user", "content": "Continue."}],
+                    ).model_dump(mode="json"),
+                    "context_usage": {},
                     "recovery": {
                         "required": True,
                         "cause": "core_shutdown",
                         "unknown_tool_call_ids": ["unknown-tool"],
-                    }
+                    },
                 },
             )
         )
-        service = ChatService(store)
+        provider = WaitingRecoveryProvider(profile.id, local=True)
+        service = ChatService(store, provider_factory=lambda _: provider)
         await service.startup()
         parked = store.get(ChatGoal, goal.id)
         assert parked.status == ChatGoalStatus.PAUSED
         assert parked.blocked_reason == reason
-        assert service.resume_turns_stopped_by_core() == []
-        assert store.get(ChatTurn, turn.id).status == ChatTurnStatus.INTERRUPTED
+        assert service.resume_turns_stopped_by_core() == [turn.id]
+        assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.RUNNING
+        assert service.has_active_provider_turn(turn.id)
+        recovery = store.get(ChatTurn, turn.id).request_snapshot["recovery"]
+        assert recovery["required"] is False
+        assert recovery["auto_continued_unknown_tool_call_ids"] == ["unknown-tool"]
         await service.shutdown()
 
     asyncio.run(scenario())
 
 
-def test_core_update_auto_resume_keeps_uncertain_and_crashed_turns_parked(tmp_path):
+def test_core_update_auto_resumes_uncertain_and_crashed_turns(tmp_path):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "auto-resume-gates.db")
         engagement = store.create(Engagement(name="Recovery gates"))
         profile = store.create(_profile(local=True))
-        service = ChatService(store)
+        provider = WaitingRecoveryProvider(profile.id, local=True)
+        service = ChatService(store, provider_factory=lambda _: provider)
         for cause, unknown in (
             ("core_shutdown", ["tool-unknown"]),
             ("core_restart", []),
@@ -3462,21 +3930,88 @@ def test_core_update_auto_resume_keeps_uncertain_and_crashed_turns_parked(tmp_pa
                     status=ChatTurnStatus.INTERRUPTED,
                     error="Core stopped while an effect outcome was unknown.",
                     request_snapshot={
+                        "model_request": ModelRequest(
+                            model="model-a",
+                            messages=[{"role": "user", "content": "Continue."}],
+                        ).model_dump(mode="json"),
+                        "context_usage": {},
                         "recovery": {
                             "required": True,
                             "cause": cause,
                             "unknown_tool_call_ids": unknown,
                             "unknown_hook_execution_ids": [],
-                        }
+                        },
                     },
                 )
             )
         await service.startup()
-        assert service.resume_turns_stopped_by_core() == []
+        assert len(service.resume_turns_stopped_by_core()) == 2
         assert all(
-            turn.status == ChatTurnStatus.INTERRUPTED
+            turn.status == ChatTurnStatus.ROUTING
             for turn in store.list_entities(ChatTurn)
         )
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_core_restart_recovery_retries_without_operator_action(tmp_path, monkeypatch):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "auto-recovery-retry.db")
+        engagement = store.create(Engagement(name="Recovery retry"))
+        profile = store.create(_profile(local=True))
+        session = store.create(
+            ChatSession(
+                engagement_id=engagement.id,
+                title="Supervisor",
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        turn = store.create(
+            ChatTurn(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                status=ChatTurnStatus.INTERRUPTED,
+                request_snapshot={
+                    "model_request": ModelRequest(
+                        model="model-a",
+                        messages=[{"role": "user", "content": "Continue."}],
+                    ).model_dump(mode="json"),
+                    "context_usage": {},
+                    "recovery": {
+                        "required": True,
+                        "cause": "core_restart",
+                        "unknown_tool_call_ids": [],
+                        "unknown_hook_execution_ids": [],
+                    },
+                },
+            )
+        )
+        provider = WaitingRecoveryProvider(profile.id, local=True)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        await service.startup()
+        original_prepare_resume = service.prepare_resume
+        attempts = 0
+
+        def fail_once(turn_id: str):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("transient startup failure")
+            return original_prepare_resume(turn_id)
+
+        monkeypatch.setattr(service, "prepare_resume", fail_once)
+        assert service.resume_turns_stopped_by_core() == []
+        waiting = store.get(ChatTurn, turn.id)
+        assert waiting.status == ChatTurnStatus.INTERRUPTED
+        assert waiting.request_snapshot["recovery"]["automatic_retry_pending"] is True
+        assert waiting.request_snapshot["recovery"]["auto_resume_attempted_at"] is None
+
+        assert service.resume_turns_stopped_by_core() == [turn.id]
+        assert service.has_active_provider_turn(turn.id)
         await service.shutdown()
 
     asyncio.run(scenario())

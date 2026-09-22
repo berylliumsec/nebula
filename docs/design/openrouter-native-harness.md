@@ -188,7 +188,7 @@ All unchecked items below are required work; none is satisfied by the mockup alo
 | G4 | External-harness `/goal` handling; mission planning and budgets | Nebula-owned persistent goals in provider-backed chat, independent of vendor goal RPCs | Create/start/pause/resume/cancel, blocked/completed states, visible progress and restart recovery |
 | G5 | Harness skill discovery, invocation interfaces and autocomplete | Reuse discovery for provider-backed chat; load selected skill instructions/resources and preserve provenance | Browse project/installed skills → invoke through OpenRouter → reload; missing skill and changed skill recovery |
 | G6 | Durable conversations/turns, usage and context compaction | Preserve goals, selected skills, instructions, permissions and pending decisions through compaction and compatible model changes | Long conversation and model-switch tests retain authoritative state; unsupported context changes are explained |
-| G7 | Background provider-turn tasks and reconnect mechanisms | Durable goal execution ownership, restart-paused recovery and uncertain-action reconciliation | Disconnect/reconnect and restart at request/tool/receipt boundaries do not duplicate work or resume silently |
+| G7 | Background provider-turn tasks and reconnect mechanisms | Durable goal execution ownership and automatic restart recovery with uncertain outcomes carried forward | Disconnect/reconnect and restart at request/tool/receipt boundaries automatically continue without duplicate effects or operator recovery clicks |
 | G8 | Mission delegation infrastructure and external-harness agent controls | Provider-backed workspace delegation with inherited permissions, shared budgets, bounded concurrency and visible child controls | Child start/status/stop, parent cancellation and aggregate limits behave consistently |
 | G9 | Existing harness capability flags and vendor-specific controls | Explicit lifecycle hooks, conflict-aware checkpoints and conversation forks for provider-backed workspace sessions | Hook timeout/failure, later user edits and independent fork lineage covered |
 | G10 | Existing automation infrastructure | Scheduled workspace tasks using the same saved provider, goal, workspace and permission contract | Discover/create/disable schedule; run receipt; unavailable credential/provider recovery; no overlapping duplicate invocation |
@@ -560,6 +560,16 @@ failed/cancelled service tests, production UI build, catalogued mocked Playwrigh
 on desktop and mobile Chromium/WebKit, and production-bundle real-Core LAN
 discovery/use/reload/source-loss/restart reconciliation on desktop plus 390px
 Chromium and WebKit.
+
+G9 automatic-recovery checkpoint (2026-09-22): the operator reconciliation
+controls above have been retired. On startup, Core adopts trustworthy terminal
+receipts, records each remaining effect outcome as explicitly unknown, blocks an
+identical replay, and resumes the supervisor and its live descendants from durable
+state. A transient recovery-start failure remains interrupted and is retried by the
+Core recovery pass; it does not create a per-agent operator task. The UI presents
+read-only progress while this runs. Mission workers continue from their latest
+durable checkpoint with bounded automatic retries under the normal concurrency
+limit.
 
 G9 checkpoint/fork increment (2026-09-18): provider conversation forks copy the
 parent objective as an independent draft goal with no running state, usage, or

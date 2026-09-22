@@ -597,6 +597,23 @@ class MissionRuntime:
             ),
         )
 
+    async def recover(self, run_id: str) -> MissionState:
+        """Continue the latest durable checkpoint after a Core restart.
+
+        LangGraph resumes at the last committed boundary. Broker invocation
+        identities are deterministic, so an effect whose ledger row is still
+        ambiguous is returned to the specialist as an unknown failure instead
+        of being executed again.
+        """
+
+        return cast(
+            MissionState,
+            await self.graph.ainvoke(
+                None,
+                config={"configurable": {"thread_id": run_id}},
+            ),
+        )
+
     async def stream(
         self,
         state_or_command: MissionState | Command[Any],

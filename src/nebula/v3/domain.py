@@ -3702,6 +3702,17 @@ class ChatGoal(Entity):
         return elapsed
 
 
+class ChatGoalUsageCharge(Entity):
+    """One idempotent usage debit from a child turn to its parent goal."""
+
+    entity_kind: ClassVar[str] = "chat_goal_usage_charges"
+    engagement_id: str
+    goal_id: str = Field(min_length=1, max_length=200)
+    subagent_id: str = Field(min_length=1, max_length=200)
+    child_turn_id: str = Field(min_length=1, max_length=200)
+    usage: ChatTokenUsage
+
+
 class ChatContentBlock(NebulaModel):
     """One ordered, durable block in a multimodal chat message."""
 
@@ -3843,6 +3854,9 @@ class ChatSubagent(Entity):
     result: str = Field(default="", max_length=20_000)
     error: str | None = Field(default=None, max_length=1_000)
     result_message_id: str | None = Field(default=None, max_length=200)
+    # Set in the terminal-state write and cleared atomically with the durable
+    # goal charge. Older records default to None and are never back-charged.
+    pending_goal_charge_turn_id: str | None = Field(default=None, max_length=200)
     # Request flags inherited from the parent turn so a Core-owned continuation
     # can reuse the same capabilities without re-asking the operator.
     parent_request: dict[str, Any] = Field(default_factory=dict)
@@ -3945,6 +3959,17 @@ class ChatSchedule(Entity):
         return value.astimezone(timezone.utc)
 
 
+class NativeHookLateOutcome(NebulaModel):
+    """A hook's process result observed after its turn was interrupted."""
+
+    status: Literal["complete", "failed", "timed_out"]
+    exit_code: int | None = None
+    stdout: str = Field(default="", max_length=64 * 1024)
+    stderr: str = Field(default="", max_length=64 * 1024)
+    error: str | None = Field(default=None, max_length=1_000)
+    observed_at: datetime = Field(default_factory=utc_now)
+
+
 class NativeHookExecution(Entity):
     """A durable provider-native lifecycle-hook attempt and recovery boundary."""
 
@@ -3966,6 +3991,7 @@ class NativeHookExecution(Entity):
     stdout: str = Field(default="", max_length=64 * 1024)
     stderr: str = Field(default="", max_length=64 * 1024)
     error: str | None = Field(default=None, max_length=1_000)
+    late_outcome: NativeHookLateOutcome | None = None
     reconciliation: dict[str, Any] | None = None
 
     @model_validator(mode="after")
@@ -4682,6 +4708,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ScopeImport,
     ChatSession,
     ChatGoal,
+    ChatGoalUsageCharge,
     ChatBookmark,
     ChatQueue,
     ChatDecision,

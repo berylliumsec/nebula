@@ -25,12 +25,16 @@ from nebula.v3.domain import (
     ChatTurnStatus,
     Engagement,
     NativeHookExecution,
+    NativeHookLateOutcome,
     ProviderProfile,
     RiskClass,
     ScopePolicy,
+    ToolCall as StoredToolCall,
     ToolCallOrigin,
+    ToolCallStatus,
     utc_now,
 )
+from nebula.v3.tool_results import ToolResultReceipt, ToolResultStatus
 from nebula.v3.providers import (
     ModelResponse,
     OpenAICompatibleProvider,
@@ -447,7 +451,7 @@ def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(ap
             },
         )
     )
-    store.create(
+    hook_execution = store.create(
         NativeHookExecution(
             id="hook-run",
             engagement_id=turn.engagement_id,
@@ -462,6 +466,12 @@ def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(ap
             completed_at=utc_now(),
             error="Core restarted before the hook outcome was known.",
         )
+    )
+    store.update(
+        NativeHookExecution,
+        hook_execution.id,
+        {"late_outcome": NativeHookLateOutcome(status="failed", exit_code=2)},
+        expected_revision=hook_execution.revision,
     )
 
     pending = client.get(
@@ -478,6 +488,8 @@ def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(ap
     outcomes = client.get(f"/api/v1/chat/turns/{turn.id}/hooks", headers=_auth())
     assert outcomes.status_code == 200, outcomes.text
     assert outcomes.json()[0]["hook_id"] == "audit"
+    assert outcomes.json()[0]["late_outcome_status"] == "failed"
+    assert outcomes.json()[0]["late_outcome_exit_code"] == 2
     assert "hook_snapshot" not in outcomes.json()[0]
 
     reconciled = client.post(
@@ -493,6 +505,78 @@ def test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api(ap
     assert reconciled.status_code == 200, reconciled.text
     assert reconciled.json()["recovery_blocked"] is False
     assert reconciled.json()["unresolved_hook_execution_ids"] == []
+
+
+def test_pending_turn_api_recovers_recorded_result_after_restart(api):
+    client, store, _ = api
+    engagement = store.create(Engagement(id="late-result-project", name="Recovery"))
+    provider = store.create(
+        ProviderProfile(
+            id="late-result-provider", name="Provider", provider_type="ollama"
+        )
+    )
+    session = store.create(
+        ChatSession(
+            id="late-result-session",
+            engagement_id=engagement.id,
+            title="Recovery",
+            provider_profile_id=provider.id,
+            model="model",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="late-result-turn",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=provider.id,
+            model="model",
+            status=ChatTurnStatus.INTERRUPTED,
+            request_snapshot={
+                "recovery": {
+                    "required": True,
+                    "unknown_tool_call_ids": ["late-result-tool"],
+                    "unknown_hook_execution_ids": [],
+                }
+            },
+        )
+    )
+    receipt = ToolResultReceipt(
+        tool_call_id="late-result-tool",
+        tool_name="run_command",
+        tool_version="test",
+        status=ToolResultStatus.COMPLETED,
+        summary="The command completed before the old worker exited.",
+    ).as_model_result()
+    store.create(
+        StoredToolCall(
+            id="late-result-tool",
+            engagement_id=engagement.id,
+            run_id=turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+            tool_name="run_command",
+            status=ToolCallStatus.COMPLETE,
+            risk_class=RiskClass.LOCAL_READ,
+            result=receipt,
+            completed_at=utc_now(),
+            metadata={"provider_call_id": "provider-call", "provider_step": 0},
+        )
+    )
+
+    first = client.get(
+        f"/api/v1/chat/sessions/{session.id}/pending-turn", headers=_auth()
+    )
+    assert first.status_code == 200, first.text
+    assert first.json()["recovery_blocked"] is False
+    assert first.json()["unresolved_tool_call_ids"] == []
+    second = client.get(
+        f"/api/v1/chat/sessions/{session.id}/pending-turn", headers=_auth()
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["revision"] == first.json()["revision"]
+    assert len(store.get(ChatTurn, turn.id).tool_history) == 1
 
 
 def test_hook_execution_summaries_page_beyond_the_store_cap(api):

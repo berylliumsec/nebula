@@ -131,6 +131,7 @@ export interface EngagementCreateRequest {
 
 export interface AgentRunSummary {
   id: Identifier;
+  revision?: number;
   engagementId: Identifier;
   title: string;
   status:
@@ -162,6 +163,19 @@ export interface AgentRunSummary {
   scheduledFor?: string;
   repeatIntervalSeconds?: number;
   stages?: Array<{ title: string; objective: string }>;
+  restartRecovery?: {
+    required: boolean;
+    automatic?: boolean;
+    state?: string;
+    reason?: string;
+    unresolvedToolCallIds: Identifier[];
+    effects: Array<{
+      toolCallId: Identifier;
+      toolName: string;
+      riskClass: string;
+      statusAtRestart: string;
+    }>;
+  };
 }
 
 export interface MissionCreateRequest {
@@ -2101,6 +2115,8 @@ export interface NativeHookExecution {
   startedAt: string;
   completedAt?: string;
   error?: string;
+  lateOutcomeStatus?: "complete" | "failed" | "timed_out";
+  lateOutcomeExitCode?: number;
   reconciliation?: Record<string, unknown>;
 }
 
@@ -3320,6 +3336,7 @@ export interface StructuredResultRecord extends StructuredResultSummary {
 export type ChatSubagentStatus =
   | "running"
   | "waiting_approval"
+  | "recovering"
   | "completed"
   | "failed"
   | "stopped"

@@ -215,6 +215,9 @@ class ToolInvocation(BaseModel):
     requested_by: str = "agent"
     provider_call_id: str | None = Field(default=None, max_length=500)
     provider_step: int | None = Field(default=None, ge=0)
+    # The provider call and replay context must survive a crash between the
+    # broker's result commit and the owning turn's history commit.
+    provider_history_intent: dict[str, Any] | None = None
     runtime_session_kind: Literal["chat", "mission", "harness", "api"] | None = None
     runtime_session_id: str | None = None
 
@@ -440,6 +443,23 @@ class StoreToolLedger:
             )
         return invocation.id
 
+    @staticmethod
+    def _same_intent(existing: PersistedToolCall, proposed: PersistedToolCall) -> bool:
+        if (
+            existing.tool_name != proposed.tool_name
+            or existing.arguments != proposed.arguments
+            or existing.run_id != proposed.run_id
+        ):
+            return False
+        # An approval continuation may supply only the stable step key. Fresh
+        # provider calls supply the exact identity and replay context; they
+        # must not inherit a different response's completed effect.
+        for key in ("provider_call_id", "provider_step", "provider_history_intent"):
+            value = proposed.metadata.get(key)
+            if value is not None and existing.metadata.get(key) != value:
+                return False
+        return True
+
     async def reserve(
         self,
         invocation: ToolInvocation,
@@ -470,16 +490,17 @@ class StoreToolLedger:
                     if invocation.provider_step is not None
                     else {}
                 ),
+                **(
+                    {"provider_history_intent": invocation.provider_history_intent}
+                    if invocation.provider_history_intent is not None
+                    else {}
+                ),
             },
         )
         try:
             if self.enforce_run_budget:
                 call = await asyncio.to_thread(self.store.reserve_tool_call, proposed)
-                if (
-                    call.tool_name != proposed.tool_name
-                    or call.arguments != proposed.arguments
-                    or call.run_id != proposed.run_id
-                ):
+                if not self._same_intent(call, proposed):
                     raise ToolBrokerError(
                         "idempotency key was reused for a different request"
                     )
@@ -505,11 +526,7 @@ class StoreToolLedger:
             existing = await asyncio.to_thread(
                 self.store.get, PersistedToolCall, call_id
             )
-            if (
-                existing.tool_name != proposed.tool_name
-                or existing.arguments != proposed.arguments
-                or existing.run_id != proposed.run_id
-            ):
+            if not self._same_intent(existing, proposed):
                 raise ToolBrokerError(
                     "idempotency key was reused for a different request"
                 )
