@@ -9,6 +9,7 @@ import type {
 } from "./types";
 import { diagnosticFeatures } from "./types";
 import { randomId } from "../randomId";
+import { pairedCsrfToken } from "../api/pairedCsrf";
 
 const DEFAULT_SETTINGS: DiagnosticSettings = {
   schema: "nebula.diagnostics-settings/v1",
@@ -394,12 +395,14 @@ async function sendNative(
 
 async function sendBrowser(records: DiagnosticRecord[]): Promise<string[]> {
   if (!browserSink) throw new Error("browser diagnostics sink is not configured");
+  const csrf = pairedCsrfToken();
   const response = await fetch(`${browserSink.baseUrl.replace(/\/+$/, "")}/diagnostics/events`, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
       ...(browserSink.token ? { Authorization: `Bearer ${browserSink.token}` } : {}),
+      ...(csrf ? { "X-Nebula-CSRF": csrf } : {}),
     },
     credentials: "same-origin",
     body: JSON.stringify({ events: records }),

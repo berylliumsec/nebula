@@ -1,13 +1,13 @@
 {
-  "change_digest": "ad92e594d28877df52fca01a963a2bad51924f01ae25ce4eefa6c4dc192f3d62",
-  "reviewed_by": "Codex focused review for searchable Assistant model picker",
-  "reason": "The changed journey is selecting a provider model from Assistant settings when the catalog is large. Three component cases cover name, ID and description filtering, keyboard movement, selection and empty states. Six collected browser cases cover Assistant settings in desktop Chromium, mobile Chromium and mobile WebKit, including 320 and 430 px geometry checks for the searchable picker.",
-  "exclusions": "No Python or native source changes. Unrelated UI and Playwright suites are excluded. The browser fixtures use a mock Core; real-Core persistence, LAN origin and physical-device behavior remain separate verification gates.",
+  "change_digest": "d3b9f187e9f76769d867a14d78154e2d069c771df42d7cd04c83f85b47c08668",
+  "reviewed_by": "Codex focused review for paired-browser diagnostics CSRF",
+  "reason": "Paired browser diagnostics POSTs received 403 because their sender omitted the device CSRF header. The selected logger tests cover the failed write, buffered retry, cookie decoding and same-origin credentials; API client tests guard the shared header reader. A production LAN paired-browser check is performed separately.",
+  "exclusions": "No Python or native source changes. Existing broad mock-browser areas do not exercise the paired cookie against real Core, so unrelated Playwright suites are excluded. Physical-device testing is unavailable.",
   "expected_tests": {
     "python": 0,
-    "frontend": 3,
+    "frontend": 91,
     "native": 0,
-    "playwright": 6
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -16,12 +16,9 @@
   "python_node": false,
   "python": [],
   "frontend": [
-    "ui/src/components/SearchableModelPicker.test.tsx"
+    "ui/src/diagnostics/logger.test.ts",
+    "ui/src/api/client.test.ts"
   ],
   "native": [],
-  "playwright": [
-    "entry:assistant-settings-navigation/desktop",
-    "entry:assistant-settings-navigation/mobile-chromium",
-    "entry:assistant-settings-navigation/mobile-webkit"
-  ]
+  "playwright": []
 }

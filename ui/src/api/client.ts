@@ -1,4 +1,5 @@
 import { readChatChunk, waitForChatReconnect } from "./chatReconnect";
+import { pairedCsrfToken } from "./pairedCsrf";
 import type {
   AgentRunSummary,
   ActionDescriptor,
@@ -4993,12 +4994,9 @@ export class ApiClient {
   private authorizeHeaders(headers: Headers, method = "GET"): Headers {
     const token = this.getToken();
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase()) && typeof document !== "undefined") {
-      const csrf = document.cookie
-        .split("; ")
-        .find((item) => item.startsWith("nebula_csrf="))
-        ?.slice("nebula_csrf=".length);
-      if (csrf) headers.set("X-Nebula-CSRF", decodeURIComponent(csrf));
+    if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) {
+      const csrf = pairedCsrfToken();
+      if (csrf) headers.set("X-Nebula-CSRF", csrf);
     }
     return headers;
   }
