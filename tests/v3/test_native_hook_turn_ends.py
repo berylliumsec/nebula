@@ -275,6 +275,7 @@ def test_every_turn_end_sends_one_payload_shape(
             if ending == "completed"
             else None
         ),
+        "assistant_message_truncated": False,
     }
 
 
@@ -314,6 +315,7 @@ def test_tool_turn_runs_the_completed_hook_once(tmp_path):
         "finish_reason": "stop",
         "detail": None,
         "assistant_message": "Final answer.",
+        "assistant_message_truncated": False,
     }
 
 

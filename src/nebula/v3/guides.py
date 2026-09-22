@@ -181,10 +181,13 @@ HOOK_SCRIPT = """#!/bin/sh
 # {"schema":"nebula.native-hook-event/v1","event":"chat.turn.started",...}
 # "payload" always has provider_id and model. The three turn-end events
 # (chat.turn.completed, chat.turn.failed, chat.turn.cancelled) also all have
-# finish_reason ("stop" or the provider's reason, "failed", "cancelled") and
-# detail (null, the error, "response stopped"), so one hook can handle all
-# three. A "block" hook failing on chat.turn.completed fails the turn; on
-# failed or cancelled the turn has already ended, so it is only reported.
+# finish_reason ("stop" or the provider's reason, "failed", "cancelled"),
+# detail (null, the error, "response stopped"), assistant_message (the answer
+# the turn is storing, first 64 KiB; null when failed or cancelled) and
+# assistant_message_truncated (true when the answer was longer), so one hook
+# can handle all three. A "block" hook failing on chat.turn.completed fails the
+# turn; on failed or cancelled the turn has already ended, so it is only
+# reported.
 # This starter appends each event to events.jsonl beside this script.
 # Replace it with your own logic. Exit non-zero to report a failure.
 cat >> events.jsonl

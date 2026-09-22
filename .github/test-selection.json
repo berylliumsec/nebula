@@ -1,18 +1,22 @@
 {
-  "change_digest": "1be4b8abedc607a0944e64498abfda6d92533731aad1fd12740b5c0a1bee6d2f",
-  "reviewed_by": "Codex focused hook completion review",
-  "reason": "Core now passes the operator-facing final answer to selected native completion hooks before persisting it. A blocking completion hook holds streamed answer text until it accepts. The selected turn-end tests cover completed, failed, cancelled, tool-turn, streaming acceptance and rejection payloads; provider-chat and API tests cover hook selection and durable execution through Core.",
-  "exclusions": "No frontend or native files changed. The existing UI controls and browser-origin behavior are unchanged, so frontend, native, and Playwright tests are excluded. Unrelated provider, workspace, harness, browser, and full suites are excluded. A focused live Core integration check with a selected project hook is performed separately.",
+  "change_digest": "301fb4e9e9890583ec4dd6429c902c278a4138b3885420527248dabb2d7af173",
+  "reviewed_by": "Claude review of hook-assistant-message",
+  "reason": "#513 made chat.turn.completed hooks receive assistant_message (the answer the turn is about to store) on every completion path, which fixed operator Stop-hook ports that require it, but left the payload unbounded and undocumented: the starter hook's run.sh comment in guides.py (the only payload documentation) still listed only finish_reason and detail, and no test checked assistant_message on the routing-answer path (#501). _turn_end_hook_payload now bounds assistant_message to 64 KiB of UTF-8 (cut on a character boundary, the stored answer untouched) and adds assistant_message_truncated, false on every event including failed and cancelled, so all three turn ends keep one key set; the starter hook comment documents both keys. tests/v3/test_hook_assistant_message.py (5 tests, all fail on origin/main 8eced0a) covers the routing-answer completed hook with a guard hook that refuses a completion without a string answer, a 70,001-byte answer cut mid-character end to end, and the helper at, over and without the limit. The edited exact-payload tests in test_native_hook_turn_ends.py (4, fail on main for the new key) and the existing tests of the changed helper (#513's rejection and streaming-hold tests, the routing-answer hook test, the starter-files test) are selected by node id.",
+  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite) does not exercise native hook payload contents; the Python tests drive the hook runner directly. No full suites. test_chat.py, test_chat_tool_loop.py, test_native_hook_turn_ends.py, test_routing_prose_answer.py and test_guides.py were run in full locally (122 passed), plus the hook tests of test_chat_api.py and test_api.py (4 passed).",
   "expected_tests": {
-    "python": 13,
+    "python": 14,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_native_hook_turn_ends.py",
-    "tests/v3/test_chat.py::test_native_provider_turn_snapshots_and_runs_agents_hooks_once",
-    "tests/v3/test_api.py::test_provider_chat_api_runs_selected_native_hooks"
+    "tests/v3/test_hook_assistant_message.py",
+    "tests/v3/test_native_hook_turn_ends.py::test_every_turn_end_sends_one_payload_shape",
+    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_runs_the_completed_hook_once",
+    "tests/v3/test_native_hook_turn_ends.py::test_required_completion_hook_can_reject_final_answer",
+    "tests/v3/test_native_hook_turn_ends.py::test_stream_holds_answer_until_required_completion_hook_accepts",
+    "tests/v3/test_routing_prose_answer.py::test_routing_answer_runs_the_completed_hook_once",
+    "tests/v3/test_guides.py::test_starter_files_are_discovered_and_never_overwritten"
   ],
   "frontend": [],
   "native": [],
