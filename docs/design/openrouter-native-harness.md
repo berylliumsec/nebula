@@ -544,6 +544,16 @@ restart. This path is provider-only and does not enter the Codex/Grok harness ru
 Operator selection and visible execution/reconciliation UI, failed/cancelled lifecycle
 events, and production real-Core browser acceptance remain open, so G9 is incomplete.
 
+G9 command-boundary checkpoint (2026-09-22): Core automatically discovers project
+hooks subscribed to `tool.before` or `tool.after` around the fixed `run_command`
+and `process_io` broker. These security boundaries do not depend on the optional
+per-chat lifecycle selection. A blocking `tool.before` failure denies the tool
+before a runtime session or process is created. `tool.after` receives the durable
+tool identity, request, execution mode and outcome; because the effect has already
+happened, an after-hook failure is retained and diagnosed without rewriting the
+primary command result. Chat, mission, harness and API owners use the same durable
+hook record with explicit owner identity.
+
 G9 operator-workflow checkpoint (2026-09-18): provider Assistant settings discover
 project `.agents/hooks`, allow explicit per-turn selection, and send exact hook IDs
 only on provider requests. Durable outcomes reload with the conversation. Restart

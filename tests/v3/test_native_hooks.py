@@ -120,3 +120,15 @@ def test_native_hook_runner_times_out_without_treating_output_as_approval(tmp_pa
     assert execution.error == "hook timed out"
     assert execution.stdout == ""
     assert execution.reconciliation is None
+
+
+def test_native_hook_catalog_accepts_project_tool_boundaries(tmp_path):
+    workspace = tmp_path / "workspace"
+    directory = _hook(workspace)
+    manifest = json.loads((directory / "hook.json").read_text(encoding="utf-8"))
+    manifest["events"] = ["tool.before", "tool.after"]
+    (directory / "hook.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    [descriptor] = discover_native_hooks(workspace)
+
+    assert descriptor.manifest.events == ["tool.before", "tool.after"]

@@ -25,6 +25,8 @@ HOOK_EVENTS = {
     "chat.turn.completed",
     "chat.turn.failed",
     "chat.turn.cancelled",
+    "tool.before",
+    "tool.after",
 }
 MAX_HOOK_OUTPUT_BYTES = 64 * 1024
 
@@ -212,8 +214,10 @@ class NativeHookRunner:
         snapshot: NativeHookSnapshot,
         *,
         engagement_id: str,
-        chat_session_id: str,
-        chat_turn_id: str,
+        chat_session_id: str | None,
+        chat_turn_id: str | None,
+        owner_kind: Literal["chat", "mission", "harness", "api"] = "chat",
+        owner_id: str | None = None,
         event_name: str,
         payload: dict[str, Any],
     ) -> NativeHookExecution:
@@ -241,6 +245,8 @@ class NativeHookRunner:
                 engagement_id=engagement_id,
                 chat_session_id=chat_session_id,
                 chat_turn_id=chat_turn_id,
+                owner_kind=owner_kind,
+                owner_id=owner_id or chat_session_id or chat_turn_id,
                 hook_id=snapshot.id,
                 hook_snapshot=snapshot.model_dump(mode="json"),
                 event_name=event_name,
@@ -256,6 +262,8 @@ class NativeHookRunner:
                 "engagement_id": engagement_id,
                 "chat_session_id": chat_session_id,
                 "chat_turn_id": chat_turn_id,
+                "owner_kind": owner_kind,
+                "owner_id": owner_id or chat_session_id or chat_turn_id,
                 "payload": payload,
             },
             ensure_ascii=False,
@@ -355,6 +363,53 @@ class NativeHookRunner:
             )
 
 
+async def run_project_tool_hooks(
+    store: NebulaStore,
+    workspace: Path,
+    *,
+    engagement_id: str,
+    event_name: Literal["tool.before", "tool.after"],
+    payload: dict[str, Any],
+    owner_kind: Literal["chat", "mission", "harness", "api"],
+    owner_id: str,
+    chat_session_id: str | None = None,
+    chat_turn_id: str | None = None,
+    enforce_blocking: bool,
+) -> list[NativeHookExecution]:
+    """Run automatically selected project hooks at one command-tool boundary."""
+
+    catalog = discover_native_hooks(workspace)
+    snapshots = [
+        snapshot_native_hook(item.id, catalog)
+        for item in catalog
+        if event_name in item.manifest.events
+    ]
+    runner = NativeHookRunner(store)
+    executions: list[NativeHookExecution] = []
+    for snapshot in snapshots:
+        outcome = await runner.run(
+            snapshot,
+            engagement_id=engagement_id,
+            chat_session_id=chat_session_id,
+            chat_turn_id=chat_turn_id,
+            owner_kind=owner_kind,
+            owner_id=owner_id,
+            event_name=event_name,
+            payload=payload,
+        )
+        executions.append(outcome)
+        if (
+            enforce_blocking
+            and snapshot.manifest.failure_policy == "block"
+            and outcome.status != "complete"
+        ):
+            raise NativeHookError(
+                f"required project hook {snapshot.id!r} did not complete: "
+                f"{outcome.error or outcome.status}"
+            )
+    return executions
+
+
 __all__ = [
     "HOOK_EVENTS",
     "NativeHookDescriptor",
@@ -365,4 +420,5 @@ __all__ = [
     "NativeHookSnapshot",
     "discover_native_hooks",
     "snapshot_native_hook",
+    "run_project_tool_hooks",
 ]

@@ -29,9 +29,13 @@ from nebula.v3.domain import (
     AutomationProjectPolicy,
     AutomationSession,
     AutomationSessionStatus,
+    ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
     CommandExecution,
     CommandExecutionStatus,
     Engagement,
+    NativeHookExecution,
     ProviderProfile,
     RunnerIsolation,
     RunnerProfile,
@@ -54,6 +58,7 @@ from nebula.v3.tool_results import (
     WorkspaceOutputService,
     sanitize_model_history_result,
 )
+from nebula.v3.tools import PolicyDenied, ToolInvocation
 
 
 IMAGE = "registry.invalid/nebula-automation@sha256:" + "a" * 64
@@ -210,6 +215,156 @@ def runtime(tmp_path: Path):
         session_factory=launch,
     )
     return manager, store, artifacts, engagement, sessions
+
+
+def command_hook(workspace: Path, log: Path, *, block: bool = False) -> None:
+    directory = workspace / ".agents" / "hooks" / "command-policy"
+    directory.mkdir(parents=True)
+    script = directory / "run.py"
+    script.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "event = json.load(sys.stdin)\n"
+        f"with open({str(log)!r}, 'a', encoding='utf-8') as stream:\n"
+        "    stream.write(json.dumps(event, sort_keys=True) + '\\n')\n"
+        + (
+            "if event['event'] == 'tool.before':\n    raise SystemExit(9)\n"
+            if block
+            else ""
+        ),
+        encoding="utf-8",
+    )
+    script.chmod(0o700)
+    (directory / "hook.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "name": "Command policy",
+                "events": ["tool.before", "tool.after"],
+                "command": ["run.py"],
+                "timeout_seconds": 5,
+                "side_effects": "none",
+                "failure_policy": "block",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def tool_invocation(engagement, workspace: Path, name: str, arguments: dict, step: int):
+    return ToolInvocation(
+        engagement_id=engagement.id,
+        run_id="turn-1",
+        origin=ToolCallOrigin.CHAT,
+        chat_session_id="chat-1",
+        chat_turn_id="turn-1",
+        tool_name=name,
+        arguments=arguments,
+        workspace=workspace,
+        idempotency_key=f"chat:turn-1:step:{step}",
+        requested_by="chat-assistant",
+    )
+
+
+def create_tool_chat(store: NebulaStore, engagement: Engagement) -> None:
+    store.create(
+        ChatSession(
+            id="chat-1",
+            engagement_id=engagement.id,
+            title="Command hook test",
+            provider_profile_id="provider-1",
+            model="test-model",
+        )
+    )
+    store.create(
+        ChatTurn(
+            id="turn-1",
+            engagement_id=engagement.id,
+            session_id="chat-1",
+            provider_profile_id="provider-1",
+            model="test-model",
+            status=ChatTurnStatus.ROUTING,
+            tools_enabled=True,
+        )
+    )
+
+
+def test_command_tools_run_automatic_project_hooks_before_and_after(tmp_path):
+    async def scenario():
+        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+        create_tool_chat(store, engagement)
+        workspace = tmp_path / "workspaces" / engagement.id
+        log = tmp_path / "command-hooks.jsonl"
+        command_hook(workspace, log)
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+        command = await broker.execute(
+            tool_invocation(
+                engagement, workspace, "run_command", {"command": "echo hook-ok"}, 1
+            ),
+            store.get(ScopePolicy, f"scope:{engagement.id}"),
+        )
+        await broker.execute(
+            tool_invocation(
+                engagement,
+                workspace,
+                PROCESS_IO_NAME,
+                {"process_id": command.receipt.process_id, "action": "poll"},
+                2,
+            ),
+            store.get(ScopePolicy, f"scope:{engagement.id}"),
+        )
+
+        events = [json.loads(line) for line in log.read_text().splitlines()]
+        assert [item["event"] for item in events] == [
+            "tool.before",
+            "tool.after",
+            "tool.before",
+            "tool.after",
+        ]
+        assert [item["payload"]["tool_name"] for item in events] == [
+            "run_command",
+            "run_command",
+            "process_io",
+            "process_io",
+        ]
+        assert events[1]["payload"]["status"] == "completed"
+        executions = store.list_entities(NativeHookExecution)
+        assert len(executions) == 4
+        assert all(item.owner_id == "chat-1" for item in executions)
+
+    asyncio.run(scenario())
+
+
+def test_blocking_before_hook_denies_command_before_runtime_execution(tmp_path):
+    async def scenario():
+        manager, store, artifacts, engagement, sessions = runtime(tmp_path)
+        create_tool_chat(store, engagement)
+        workspace = tmp_path / "workspaces" / engagement.id
+        command_hook(workspace, tmp_path / "blocked-hooks.jsonl", block=True)
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+        invocation = tool_invocation(
+            engagement, workspace, "run_command", {"command": "echo must-not-run"}, 1
+        )
+
+        with pytest.raises(PolicyDenied, match="required project hook"):
+            await broker.execute(
+                invocation, store.get(ScopePolicy, f"scope:{engagement.id}")
+            )
+
+        assert sessions == []
+        [call] = store.list_entities(ToolCall)
+        assert call.status == ToolCallStatus.DENIED
+        assert store.list_entities(CommandExecution) == []
+
+    asyncio.run(scenario())
 
 
 def test_general_command_reuses_session_and_persists_artifacts(tmp_path):
