@@ -34,6 +34,20 @@ it("shows an explicitly estimated token total while a goal turn streams", () => 
   expect(estimateLiveTokens("streaming response")).toBeGreaterThan(0);
 });
 
+it("collapses goal controls while keeping the objective and progress visible", () => {
+  render(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={{ ...draft, status: "running" }} onChange={vi.fn()} /></DialogProvider>);
+  const collapse = screen.getByRole("button", { name: "Collapse goal controls" });
+  expect(screen.getByText("Inspect safely")).toBeVisible();
+  expect(screen.getByText("step 0")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
+  fireEvent.click(collapse);
+  expect(screen.getByRole("button", { name: "Expand goal controls" })).toHaveAttribute("aria-expanded", "false");
+  expect(screen.getByText("Inspect safely")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Expand goal controls" }));
+  expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
+});
+
 it("creates a durable draft from explicit objective and criteria", async () => {
   const createChatGoal = vi.fn().mockResolvedValue(draft);
   const onChange = vi.fn();
@@ -114,7 +128,8 @@ it("requires an explicit Start and uses the latest revision", async () => {
   const onWorkDispatched = vi.fn().mockResolvedValue(undefined);
   const api = { getChatGoal: vi.fn().mockResolvedValue(draft), writeChatGoal } as unknown as ApiClient;
   render(<DialogProvider><ProviderGoalPanel api={api} sessionId="session" goal={draft} onChange={onChange} onWorkDispatched={onWorkDispatched} /></DialogProvider>);
-  expect(screen.getByText(/draft · step 0/)).toBeVisible();
+  expect(screen.getByText("draft")).toBeVisible();
+  expect(screen.getByText("step 0")).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Start" }));
   await waitFor(() => expect(writeChatGoal).toHaveBeenCalledWith("session", {
     expectedRevision: 1, action: "start",
