@@ -1,24 +1,28 @@
 {
-  "change_digest": "d3b9f187e9f76769d867a14d78154e2d069c771df42d7cd04c83f85b47c08668",
-  "reviewed_by": "Codex focused review for paired-browser diagnostics CSRF",
-  "reason": "Paired browser diagnostics POSTs received 403 because their sender omitted the device CSRF header. The selected logger tests cover the failed write, buffered retry, cookie decoding and same-origin credentials; API client tests guard the shared header reader. A production LAN paired-browser check is performed separately.",
-  "exclusions": "No Python or native source changes. Existing broad mock-browser areas do not exercise the paired cookie against real Core, so unrelated Playwright suites are excluded. Physical-device testing is unavailable.",
+  "change_digest": "d149bf3d30ac4565f3faedd014cf5720b1026841def88e73a44145dc573a06f3",
+  "reviewed_by": "Codex focused review for paused supervisor recovery",
+  "reason": "Core stored supervisor reasoning and partial text but pending-turn hydration dropped them. A graceful Core update also parked safe interrupted provider turns. Exact tests cover persisted pending payload, safe and unsafe restart recovery, stream replay, and refreshed UI across responsive browsers.",
+  "exclusions": "No unrelated chat, provider, native, or full suites. Mocked browser tests do not prove the live service; an authenticated production Core check follows deployment. Physical devices are unavailable.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 91,
+    "python": 4,
+    "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
   "python_versions": [
-    "3.12"
+    "3.11"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/diagnostics/logger.test.ts",
-    "ui/src/api/client.test.ts"
+  "python": [
+    "tests/v3/test_chat.py::test_core_shutdown_leaves_an_inflight_provider_turn_recoverable",
+    "tests/v3/test_chat.py::test_core_update_auto_resumes_safe_supervisor_with_saved_thinking",
+    "tests/v3/test_chat.py::test_core_update_auto_resume_keeps_uncertain_and_crashed_turns_parked",
+    "tests/v3/test_chat_api.py::test_pending_callback_turn_returns_saved_thinking_and_partial_answer"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:paused-supervisor-recovery"
+  ]
 }

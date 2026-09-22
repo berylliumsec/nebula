@@ -4224,6 +4224,68 @@ test("assistant settings expose provider metadata when switching a saved provide
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
 
+reloadTest("assistant upgrade restores paused provider supervisor thinking and partial text after refresh", async ({ page }) => {
+  await installTruthfulCore(page);
+  await page.context().route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "paused-supervisor",
+        engagement_id: "scratch-project",
+        title: "Paused supervisor",
+        backend: "provider",
+        provider_profile_id: "provider-thinking",
+        model: "deepseek/deepseek-v4.1-flash",
+        metadata: { allow_subagents: true },
+      }] });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/paused-supervisor/messages")) {
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "resume-prompt",
+        engagement_id: "scratch-project",
+        session_id: "paused-supervisor",
+        sequence: 1,
+        role: "user",
+        content: "Resume work on the active conversation goal now.",
+        citations: [],
+        metadata: {},
+      }] });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/paused-supervisor/pending-turn")) {
+      await route.fulfill({ json: {
+        ...entity,
+        id: "paused-turn",
+        session_id: "paused-supervisor",
+        started_at: entity.created_at,
+        status: "waiting_callback",
+        tool_call_ids: ["command-call"],
+        content: "I have dispatched the command.",
+        reasoning: "Check the returned evidence before continuing.",
+      } });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=paused-supervisor", "Workbench");
+  const reply = page.locator(".chat-message.assistant").last();
+  const thinking = reply.getByLabel("Thinking");
+  await expect(reply).toContainText("I have dispatched the command.");
+  await expect(thinking).toBeVisible();
+  await expect(thinking).not.toHaveAttribute("open");
+  await thinking.locator("summary").click();
+  await expect(thinking).toContainText("Check the returned evidence before continuing.");
+
+  await page.reload();
+  await expect(reply).toContainText("I have dispatched the command.");
+  await expect(reply.getByLabel("Thinking")).toBeVisible();
+  await expect(reply.getByLabel("Thinking")).toContainText("Check the returned evidence before continuing.");
+});
+
 test("assistant upgrade provider thinking stays collapsed and out of the reply", async ({ page }) => {
   const provider = {
     ...entity,

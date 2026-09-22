@@ -782,6 +782,12 @@ export function SessionsPage() {
         // conversations detaches it and its replayed events stay out of the
         // next transcript.
         const stream = beginGuardedStream({ generation: sessionSelectionGenerationRef, abort: abortRef, backend: streamBackendRef }, "provider");
+        // The follower replays this turn from its first event. Replace the
+        // paused snapshot before applying those events to avoid duplicate text.
+        setMessages((current) => current.map((message) => message.id === waitingCallback.assistantId
+          ? { ...message, content: "", reasoning: "" }
+          : message));
+        setWaitingCallback(undefined);
         setSending(true);
         void api.followChatTurn(
           waitingCallback.turnId,
@@ -2647,7 +2653,8 @@ export function SessionsPage() {
         setMessages((current) => [...withoutTurnOutcome(current, pendingTurn.id), {
           id: assistantId,
           role: "assistant",
-          content: "",
+          content: ["waiting_approval", "waiting_callback"].includes(pendingTurn.status) ? pendingTurn.content : "",
+          reasoning: ["waiting_approval", "waiting_callback"].includes(pendingTurn.status) ? pendingTurn.reasoning : "",
           createdAt: pendingTurn.startedAt ?? new Date().toISOString(),
           citations: [],
           state: pendingTurn.status === "waiting_approval" ? "waiting_approval" : ["interrupted", "failed"].includes(pendingTurn.status) ? "error" : "streaming",
@@ -3816,7 +3823,7 @@ export function SessionsPage() {
       }
       setSending(true);
       setMessages((current) => current.map((message) => message.id === pendingResponse.assistantId
-        ? { ...message, state: "streaming" }
+        ? { ...message, state: "streaming", content: "", reasoning: "" }
         : message));
       const response = await api.resumeChatTurn(
         pendingResponse.turnId,
@@ -4704,7 +4711,7 @@ export function SessionsPage() {
                         {interaction.containsSecret && <small>Secret answer is forwarded in memory and will not be persisted.</small>}
                         <div><button className="button secondary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "decline")}>Decline</button><button className="button primary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "answer")}>Submit</button></div>
                       </div>)}
-                      {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : "Waiting for provider"}</div>}
+                      {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {waitingCallback?.assistantId === message.id ? "Waiting for command results" : runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : "Waiting for provider"}</div>}
                       {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && pendingResponseActive && <div className="chat-approval-card" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Approval required"><strong>Approval required</strong><AssistantApprovalDetails request={pendingResponse.approval} /><div>{pendingSshApproval && <button className="button quiet" type="button" disabled={approvalDecisionBusy} title={`Stop asking before commands on ${pendingSshApproval.label}, then run this one`} onClick={() => void alwaysAllowSshHost(pendingSshApproval.alias)}>Always allow on this host</button>}<button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
                       {message.state === "cancelled" && <small className="muted" role="status">Stopped{message.elapsedMs !== undefined ? ` · ${formatTurnElapsed(message.elapsedMs)}` : ""}</small>}
                       {message.detail && message.state !== "cancelled" && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}

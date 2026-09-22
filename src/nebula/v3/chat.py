@@ -1487,6 +1487,111 @@ class ChatService:
             offset += len(goal_page)
         await self.subagents.reconcile_after_restart()
 
+    def resume_turns_stopped_by_core(self) -> list[str]:
+        """Resume safe turns from a graceful Core stop after services start.
+
+        A crashed worker and an operator stop do not authorize automatic work.
+        A tool or hook with an unknown effect also stays parked for review.
+        Older Core versions recorded the graceful-stop cause only in ``error``;
+        accept that exact prefix so the first upgraded boot can recover them.
+        """
+
+        from .chat_goals import ChatGoalService, GoalWrite
+
+        resumed: list[str] = []
+        goals = ChatGoalService(self.store)
+        offset = 0
+        while page := self.store.list_entities(ChatTurn, offset=offset, limit=1_000):
+            offset += len(page)
+            for saved in page:
+                if (
+                    saved.backend != ChatBackend.PROVIDER
+                    or saved.status != ChatTurnStatus.INTERRUPTED
+                ):
+                    continue
+                recovery = saved.request_snapshot.get("recovery")
+                if not isinstance(recovery, dict) or recovery.get(
+                    "auto_resume_attempted_at"
+                ):
+                    continue
+                if recovery.get("cause") != "core_shutdown" and not (
+                    recovery.get("cause") is None
+                    and (saved.error or "").startswith("Core stopped ")
+                ):
+                    continue
+                if (
+                    recovery.get("unknown_tool_call_ids")
+                    or recovery.get("unknown_hook_execution_ids")
+                    or saved.request_snapshot.get("subagent_child")
+                ):
+                    continue
+                pending = self.pending_turn(saved.session_id)
+                if pending is None or pending.id != saved.id:
+                    continue
+                goal = (
+                    self.store.get(ChatGoal, saved.goal_id) if saved.goal_id else None
+                )
+                if goal is not None and (
+                    goal.status != ChatGoalStatus.PAUSED
+                    or goal.blocked_reason != saved.error
+                    or (
+                        goal.time_budget_seconds is not None
+                        and goal.elapsed_seconds >= goal.time_budget_seconds
+                    )
+                ):
+                    continue
+                latest = self.store.update(
+                    ChatTurn,
+                    saved.id,
+                    {
+                        "request_snapshot": {
+                            **saved.request_snapshot,
+                            "recovery": {
+                                **recovery,
+                                "auto_resume_attempted_at": utc_now().isoformat(),
+                            },
+                        }
+                    },
+                    expected_revision=saved.revision,
+                )
+                try:
+                    prepared = self.prepare_resume(latest.id)
+                    if goal is not None:
+                        goals.write(
+                            saved.session_id,
+                            GoalWrite(expected_revision=goal.revision, action="resume"),
+                        )
+                    self.start_provider_turn(prepared)
+                    resumed.append(saved.id)
+                except Exception as exc:
+                    record_caught_exception(
+                        "chat",
+                        "chat.core_shutdown_auto_resume_failed",
+                        "A safely interrupted conversation could not resume after Core restarted.",
+                        exc,
+                        stage="startup-recovery",
+                    )
+                    current = self.store.get(ChatTurn, saved.id)
+                    if (
+                        current.status == ChatTurnStatus.ROUTING
+                        and current.execution_claim_id is None
+                    ):
+                        self.store.update(
+                            ChatTurn,
+                            current.id,
+                            {
+                                "status": ChatTurnStatus.INTERRUPTED,
+                                "error": "Automatic recovery could not start. Review and resume this response.",
+                            },
+                            expected_revision=current.revision,
+                        )
+                    if goal is not None:
+                        self._pause_running_session_goal(
+                            saved.session_id,
+                            "Automatic recovery could not start. Review and resume this goal.",
+                        )
+        return resumed
+
     def _interrupt_orphaned_turn(
         self,
         turn: ChatTurn,
@@ -1536,6 +1641,9 @@ class ChatService:
             **turn.request_snapshot,
             "recovery": {
                 "required": True,
+                "cause": (
+                    "core_shutdown" if cause == "Core stopped" else "core_restart"
+                ),
                 "unknown_tool_call_ids": unknown,
                 "unknown_hook_execution_ids": unknown_hooks,
                 "interrupted_at": utc_now().isoformat(),
@@ -1972,9 +2080,43 @@ class ChatService:
         failure: BaseException | None = None
         try:
             try:
+                replay_saved = bool(prepared.inputs_persisted and prepared.turn)
                 async for event in self.stream(prepared):
                     async with runtime.condition:
                         runtime.events.append(event)
+                        if replay_saved and event[0] == "started":
+                            # A new Core process has no prior in-memory stream.
+                            # Recreate the saved prefix once before new deltas.
+                            saved_turn = prepared.turn
+                            assert saved_turn is not None
+                            common = {
+                                "turn_id": saved_turn.id,
+                                "provider_id": prepared.provider_profile.id,
+                                "model": prepared.resolved_model,
+                            }
+                            if saved_turn.reasoning:
+                                runtime.events.append(
+                                    (
+                                        "reasoning_delta",
+                                        {
+                                            "type": "reasoning_delta",
+                                            **common,
+                                            "delta": saved_turn.reasoning,
+                                        },
+                                    )
+                                )
+                            if saved_turn.content:
+                                runtime.events.append(
+                                    (
+                                        "delta",
+                                        {
+                                            "type": "delta",
+                                            **common,
+                                            "delta": saved_turn.content,
+                                        },
+                                    )
+                                )
+                            replay_saved = False
                         runtime.condition.notify_all()
             except asyncio.CancelledError as exc:
                 record_caught_exception(
