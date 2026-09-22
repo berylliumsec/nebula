@@ -4005,12 +4005,14 @@ class NativeHookLateOutcome(NebulaModel):
 
 
 class NativeHookExecution(Entity):
-    """A durable provider-native lifecycle-hook attempt and recovery boundary."""
+    """A durable project-native lifecycle or tool-hook attempt."""
 
     entity_kind: ClassVar[str] = "native_hook_executions"
     engagement_id: str
-    chat_session_id: str
-    chat_turn_id: str
+    chat_session_id: str | None = None
+    chat_turn_id: str | None = None
+    owner_kind: Literal["chat", "mission", "harness", "api"] = "chat"
+    owner_id: str | None = None
     hook_id: str
     hook_snapshot: dict[str, Any]
     event_name: str

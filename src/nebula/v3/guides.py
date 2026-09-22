@@ -188,6 +188,9 @@ HOOK_SCRIPT = """#!/bin/sh
 # can handle all three. A "block" hook failing on chat.turn.completed fails the
 # turn; on failed or cancelled the turn has already ended, so it is only
 # reported.
+# Hooks that subscribe to tool.before or tool.after run automatically around
+# run_command and process_io. A blocking tool.before failure denies execution;
+# tool.after is audit-only because the command effect has already occurred.
 # This starter appends each event to events.jsonl beside this script.
 # Replace it with your own logic. Exit non-zero to report a failure.
 cat >> events.jsonl

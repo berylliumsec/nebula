@@ -1,17 +1,16 @@
 {
-  "change_digest": "8784cbeafdab903d4ca3698e45c9cff809efd35dcbcc74e3a5c3238d71cdf9ea",
-  "reviewed_by": "Codex diagnostic control-flow classification review",
-  "reason": "Classify intentional optimistic retries, stale-reference skips, typed routing catches, and unsupported-steering fallbacks so the repository-wide diagnostic blind-spot audit distinguishes reviewed control flow from lost failures. Five focused lifecycle cases cover restart recovery, agent-message delivery, goal charging, and harness steering.",
-  "exclusions": "No frontend, native, Playwright, browser, mobile, LAN-origin, command runtime, provider transport, or unrelated backend tests are selected. This is a comment-only classification repair with no runtime behavior or API/UI shape change; the authoritative diagnostic audit is also run directly and in CI.",
-  "expected_tests": {"python": 5, "frontend": 0, "native": 0, "playwright": 0},
+  "change_digest": "0914188020af650cbc717b375497f464d3b2ced730e540a7fcb90dec2726c04e",
+  "reviewed_by": "Codex native command hook boundary review",
+  "reason": "Core now automatically runs project-native tool.before and tool.after hooks around run_command and process_io. The focused native-hook and automation-runtime files cover manifest admission, durable outcomes, both command tools, blocking denial before runtime creation, existing runtime behavior, and the existing storage cleanup regression for generalized hook ownership.",
+  "exclusions": "No frontend, native, Playwright, provider, harness, Docker, VPN, proxy, network-scope, or unrelated backend tests are selected. The API/UI shape is unchanged; provider and harness native command paths remain harness-owned. A packaged real-Core command-hook workflow is exercised after merge and deployment.",
+  "expected_tests": {"python": 46, "frontend": 0, "native": 0, "playwright": 0},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat.py::test_restart_projects_late_recorded_tool_result_once",
-    "tests/v3/test_chat_agent_messages.py::test_harness_catalog_send_and_next_turn_delivery",
-    "tests/v3/test_chat_subagents.py::test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level",
-    "tests/v3/test_harness_provider_subagents.py::test_subagent_message_is_steered_into_the_running_harness_turn"
+    "tests/v3/test_native_hooks.py",
+    "tests/v3/test_automation_runtime.py",
+    "tests/v3/test_storage.py::test_delete_chat_session_removes_native_checkpoints_and_hook_executions"
   ],
   "frontend": [],
   "native": [],

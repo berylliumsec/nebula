@@ -28,6 +28,7 @@ from .automation_runtime import (
     RunCommandRequest,
 )
 from .context import default_output_tokens
+from .diagnostics import record_caught_exception
 from .domain import (
     AgentRun,
     Approval,
@@ -41,6 +42,7 @@ from .domain import (
     ToolCallStatus,
 )
 from .missions import MissionComponents, MissionConfigurationError
+from .native_hooks import NativeHookError, run_project_tool_hooks
 from .orchestration import SpecialistRole
 from .providers import ModelProvider
 from .storage import NebulaStore
@@ -272,6 +274,98 @@ class AutomationBroker:
             )
         self.ledger = StoreToolLedger(store)
 
+    def _hook_payload(
+        self,
+        invocation: ToolInvocation,
+        call_id: str,
+        *,
+        status: str | None = None,
+        exit_code: int | None = None,
+        error: str | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "tool_name": invocation.tool_name,
+            "tool_call_id": call_id,
+            "arguments": invocation.arguments,
+            "origin": invocation.origin.value,
+            "requested_by": invocation.requested_by,
+            "execution_mode": self.execution_mode,
+            **({"status": status} if status is not None else {}),
+            **({"exit_code": exit_code} if exit_code is not None else {}),
+            **({"error": error[:1_000]} if error else {}),
+        }
+
+    async def _run_tool_hooks(
+        self,
+        invocation: ToolInvocation,
+        call_id: str,
+        event_name: Literal["tool.before", "tool.after"],
+        *,
+        status: str | None = None,
+        exit_code: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        owner_kind = invocation.runtime_session_kind or (
+            "chat" if invocation.origin.value == "chat" else "mission"
+        )
+        owner_id = (
+            invocation.runtime_session_id
+            or invocation.chat_session_id
+            or invocation.run_id
+        )
+        await run_project_tool_hooks(
+            self.store,
+            invocation.workspace,
+            engagement_id=invocation.engagement_id,
+            event_name=event_name,
+            payload=self._hook_payload(
+                invocation,
+                call_id,
+                status=status,
+                exit_code=exit_code,
+                error=error,
+            ),
+            owner_kind=owner_kind,
+            owner_id=owner_id,
+            chat_session_id=invocation.chat_session_id,
+            chat_turn_id=invocation.chat_turn_id,
+            enforce_blocking=event_name == "tool.before",
+        )
+
+    async def _audit_tool_outcome(
+        self,
+        invocation: ToolInvocation,
+        call_id: str,
+        *,
+        status: str,
+        exit_code: int | None = None,
+        error: str | None = None,
+    ) -> None:
+        try:
+            await self._run_tool_hooks(
+                invocation,
+                call_id,
+                "tool.after",
+                status=status,
+                exit_code=exit_code,
+                error=error,
+            )
+        except Exception as exc:
+            # The command effect already happened. Preserve its primary result;
+            # the durable hook attempt (when one started) and this diagnostic
+            # make the audit failure visible without pretending it prevented it.
+            record_caught_exception(
+                "automation",
+                "automation.tool_after_hook_failed",
+                "A project after-tool hook did not complete.",
+                exc,
+                stage="tool.after",
+                metadata={
+                    "project_id": invocation.engagement_id,
+                    "tool_call_id": call_id,
+                },
+            )
+
     async def execute(
         self,
         invocation: ToolInvocation,
@@ -335,6 +429,20 @@ class AutomationBroker:
                 running, ToolCallStatus.COMPLETE, result=output
             )
             return ToolExecutionResult(output=output)
+        if call.status == ToolCallStatus.PROPOSED:
+            try:
+                await self._run_tool_hooks(invocation, call.id, "tool.before")
+            except (NativeHookError, OSError) as exc:
+                await self.ledger.transition(
+                    call, ToolCallStatus.DENIED, error=str(exc)
+                )
+                raise PolicyDenied(
+                    PolicyDecision(
+                        effect=PolicyEffect.DENY,
+                        reason=str(exc),
+                        rule="project_native_hook",
+                    )
+                ) from exc
         running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
         owner_kind = invocation.runtime_session_kind or (
             "chat" if invocation.origin.value == "chat" else "mission"
@@ -385,6 +493,9 @@ class AutomationBroker:
             raise ApprovalRequired(updated) from exc
         except AutomationPolicyDenied as exc:
             await self.ledger.transition(running, ToolCallStatus.DENIED, error=str(exc))
+            await self._audit_tool_outcome(
+                invocation, call.id, status="denied", error=str(exc)
+            )
             raise PolicyDenied(
                 PolicyDecision(
                     effect=PolicyEffect.DENY,
@@ -394,6 +505,9 @@ class AutomationBroker:
             ) from exc
         except Exception as exc:
             await self.ledger.transition(running, ToolCallStatus.FAILED, error=str(exc))
+            await self._audit_tool_outcome(
+                invocation, call.id, status="failed", error=str(exc)
+            )
             raise
         receipt = self._receipt(call.id, invocation.tool_name, result)
         waiting_callback = bool(result.results_url and result.results_api_key)
@@ -410,6 +524,12 @@ class AutomationBroker:
                     ],
                 }
             )
+        await self._audit_tool_outcome(
+            invocation,
+            call.id,
+            status="waiting_callback" if waiting_callback else receipt.status.value,
+            exit_code=result.exit_code,
+        )
         await self.ledger.transition(
             running,
             ToolCallStatus.RUNNING if waiting_callback else ToolCallStatus.COMPLETE,
