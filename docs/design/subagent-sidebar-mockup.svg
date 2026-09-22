@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1360 800" role="img" aria-labelledby="title desc">
+  <title id="title">Nebula assistant sidebar: nested subagents</title>
+  <desc id="desc">Two desktop mockups. The first shows three subagents collapsed beneath their main conversation by default. The second shows those subagents indented beneath the expanded parent.</desc>
+  <defs>
+    <style>
+      text { font-family: 'Geist Variable', Arial, sans-serif; }
+      .heading { fill: #f4f7fa; font-size: 22px; font-weight: 650; }
+      .caption { fill: #98a2ad; font-size: 13px; }
+      .chrome { fill: #98a2ad; font-size: 11px; font-weight: 600; letter-spacing: 1px; }
+      .label { fill: #dfe5ec; font-size: 12px; font-weight: 600; }
+      .meta { fill: #98a2ad; font-size: 11px; }
+      .tiny { fill: #98a2ad; font-size: 10px; font-weight: 600; letter-spacing: .7px; }
+      .chat-title { fill: #f4f7fa; font-size: 20px; font-weight: 600; }
+      .chat-copy { fill: #aab3bd; font-size: 13px; }
+    </style>
+    <clipPath id="left-clip"><rect x="36" y="115" width="626" height="615" rx="14"/></clipPath>
+    <clipPath id="right-clip"><rect x="698" y="115" width="626" height="615" rx="14"/></clipPath>
+  </defs>
+  <rect width="1360" height="800" fill="#0c0f13"/>
+  <text x="36" y="43" class="heading">Subagents live under their main conversation</text>
+  <text x="36" y="68" class="caption">Proposed assistant sidebar · Nebula dark theme · 280 px conversation pane</text>
+
+  <text x="36" y="103" class="label">Default · collapsed</text>
+  <text x="698" y="103" class="label">After opening the parent</text>
+
+  <!-- App frames -->
+  <rect x="36" y="115" width="626" height="615" rx="14" fill="#151a20" stroke="#2b333d"/>
+  <rect x="698" y="115" width="626" height="615" rx="14" fill="#151a20" stroke="#2b333d"/>
+  <g clip-path="url(#left-clip)">
+    <rect x="36" y="115" width="280" height="615" fill="#11151a"/>
+    <rect x="36" y="115" width="280" height="54" fill="#11151a"/>
+    <path d="M36 169H316 M316 115V730" stroke="#202731"/>
+    <text x="50" y="137" class="chrome">CONVERSATIONS</text>
+    <text x="50" y="155" class="label">8 saved</text>
+    <text x="286" y="147" fill="#98a2ad" font-size="18" text-anchor="middle">⋯</text>
+    <rect x="44" y="177" width="264" height="48" rx="8" fill="#284a68" stroke="#426f98"/>
+    <text x="58" y="205" fill="#f4f8fc" font-size="20">+</text>
+    <text x="84" y="196" class="label" fill="#f4f8fc">New chat</text>
+    <text x="84" y="212" class="meta" fill="#c8d9e7">Codex harness</text>
+    <rect x="44" y="234" width="264" height="42" rx="8" fill="#0c0f13" stroke="#202731"/>
+    <circle cx="61" cy="253" r="5" fill="none" stroke="#98a2ad" stroke-width="1.5"/>
+    <path d="m65 257 4 4" stroke="#98a2ad" stroke-width="1.5"/>
+    <text x="78" y="260" class="meta">Search conversations</text>
+    <text x="49" y="306" class="tiny">NEEDS YOU</text>
+    <rect x="44" y="316" width="264" height="62" rx="8" fill="#202731"/>
+    <text x="58" y="353" fill="#d49a5b" font-size="15">◆</text>
+    <text x="76" y="340" class="label">Investigate authorization flow</text>
+    <text x="76" y="359" fill="#d49a5b" font-size="11">3 subagents · 1 needs you</text>
+    <rect x="274" y="331" width="24" height="30" rx="6" fill="#29313a"/>
+    <path d="m283 342 5 5-5 5" fill="none" stroke="#dfe5ec" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="49" y="410" class="tiny">TODAY</text>
+    <circle cx="62" cy="439" r="4.5" fill="none" stroke="#98a2ad"/>
+    <text x="76" y="433" class="label">Review release notes</text>
+    <text x="76" y="452" class="meta">gpt-5.6-sol</text>
+    <circle cx="62" cy="494" r="4.5" fill="none" stroke="#98a2ad"/>
+    <text x="76" y="488" class="label">Map provider settings</text>
+    <text x="76" y="507" class="meta">gpt-5.6-terra</text>
+    <path d="M316 170H662" stroke="#202731"/>
+    <text x="342" y="144" class="meta">Assistant / Investigate authorization flow</text>
+    <text x="350" y="231" class="chat-title">Investigate authorization flow</text>
+    <text x="350" y="262" class="chat-copy">Main conversation remains selected.</text>
+    <rect x="350" y="291" width="280" height="90" rx="10" fill="#1a2027" stroke="#2b333d"/>
+    <text x="366" y="317" class="label">Delegated work</text>
+    <text x="366" y="341" class="chat-copy">Three subagents are attached here.</text>
+    <text x="366" y="361" class="chat-copy">One is waiting for your input.</text>
+    <rect x="350" y="650" width="280" height="52" rx="10" fill="#1a2027" stroke="#2b333d"/>
+    <text x="366" y="681" class="meta">Ask Nebula…</text>
+  </g>
+
+  <g clip-path="url(#right-clip)">
+    <rect x="698" y="115" width="280" height="615" fill="#11151a"/>
+    <rect x="698" y="115" width="280" height="54" fill="#11151a"/>
+    <path d="M698 169H978 M978 115V730" stroke="#202731"/>
+    <text x="712" y="137" class="chrome">CONVERSATIONS</text>
+    <text x="712" y="155" class="label">8 saved</text>
+    <text x="948" y="147" fill="#98a2ad" font-size="18" text-anchor="middle">⋯</text>
+    <rect x="706" y="177" width="264" height="48" rx="8" fill="#284a68" stroke="#426f98"/>
+    <text x="720" y="205" fill="#f4f8fc" font-size="20">+</text>
+    <text x="746" y="196" class="label" fill="#f4f8fc">New chat</text>
+    <text x="746" y="212" class="meta" fill="#c8d9e7">Codex harness</text>
+    <rect x="706" y="234" width="264" height="42" rx="8" fill="#0c0f13" stroke="#202731"/>
+    <circle cx="723" cy="253" r="5" fill="none" stroke="#98a2ad" stroke-width="1.5"/>
+    <path d="m727 257 4 4" stroke="#98a2ad" stroke-width="1.5"/>
+    <text x="740" y="260" class="meta">Search conversations</text>
+    <text x="711" y="306" class="tiny">NEEDS YOU</text>
+    <rect x="706" y="316" width="264" height="62" rx="8" fill="#202731"/>
+    <text x="720" y="353" fill="#d49a5b" font-size="15">◆</text>
+    <text x="738" y="340" class="label">Investigate authorization flow</text>
+    <text x="738" y="359" fill="#d49a5b" font-size="11">3 subagents · 1 needs you</text>
+    <rect x="936" y="331" width="24" height="30" rx="6" fill="#29313a"/>
+    <path d="m943 343 5 5 5-5" fill="none" stroke="#dfe5ec" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M730 384V546" stroke="#2b333d" stroke-width="1.5"/>
+    <rect x="736" y="386" width="234" height="49" rx="8" fill="#1f2c3a"/>
+    <circle cx="751" cy="409" r="4.5" fill="#6aa8eb"/>
+    <text x="764" y="405" class="label">API mapping</text>
+    <text x="764" y="422" class="meta">Working · gpt-5.6-terra</text>
+    <rect x="736" y="440" width="234" height="49" rx="8" fill="#2a2520" stroke="#564531"/>
+    <path d="m751 461 5 5-5 5-5-5z" fill="#d49a5b"/>
+    <text x="764" y="459" class="label">Edge-case review</text>
+    <text x="764" y="476" fill="#d49a5b" font-size="11">Needs your input</text>
+    <rect x="736" y="494" width="234" height="49" rx="8" fill="#151a20"/>
+    <circle cx="751" cy="517" r="4.5" fill="none" stroke="#98a2ad"/>
+    <text x="764" y="513" class="label">Evidence summary</text>
+    <text x="764" y="530" class="meta">Completed · gpt-5.6-sol</text>
+    <text x="711" y="577" class="tiny">TODAY</text>
+    <circle cx="724" cy="606" r="4.5" fill="none" stroke="#98a2ad"/>
+    <text x="738" y="600" class="label">Review release notes</text>
+    <text x="738" y="619" class="meta">gpt-5.6-sol</text>
+    <path d="M978 170H1324" stroke="#202731"/>
+    <text x="1004" y="144" class="meta">Assistant / Investigate authorization flow</text>
+    <text x="1012" y="231" class="chat-title">Investigate authorization flow</text>
+    <text x="1012" y="262" class="chat-copy">Select a child to inspect its own thread.</text>
+    <rect x="1012" y="291" width="280" height="90" rx="10" fill="#1a2027" stroke="#2b333d"/>
+    <text x="1028" y="317" class="label">Delegated work</text>
+    <text x="1028" y="341" class="chat-copy">Three subagents are attached here.</text>
+    <text x="1028" y="361" class="chat-copy">One is waiting for your input.</text>
+    <rect x="1012" y="650" width="280" height="52" rx="10" fill="#1a2027" stroke="#2b333d"/>
+    <text x="1028" y="681" class="meta">Ask Nebula…</text>
+  </g>
+  <text x="36" y="763" class="caption">Disclosure changes only the list. Selecting the title opens the main conversation; selecting a child opens its own conversation.</text>
+</svg>

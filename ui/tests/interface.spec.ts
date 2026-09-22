@@ -2303,6 +2303,69 @@ test("stabilization conversations sidebar icon reveals the left pane", async ({ 
   await page.screenshot({path: testInfo.outputPath("conversations-sidebar.png")});
 });
 
+reloadTest("assistant upgrade nests subagents beneath a collapsed main conversation", async ({ page }) => {
+  const parent = { ...entity, id: "sidebar-parent", engagement_id: "scratch-project", title: "Main investigation", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
+  const childA = { ...entity, id: "sidebar-child-a", engagement_id: "scratch-project", title: "Subagent · API mapping", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: { subagent_id: "sub-a" } };
+  const childB = { ...entity, id: "sidebar-child-b", engagement_id: "scratch-project", title: "Subagent · Edge review", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: { subagent_id: "sub-b" } };
+  const branch = { ...entity, id: "sidebar-branch", engagement_id: "scratch-project", title: "Ordinary branch", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: {} };
+  const items = [childA, branch, childB, parent];
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions") && route.request().method() === "GET") return route.fulfill({ json: items });
+    if (path.endsWith("/chat/session-activity")) return route.fulfill({ json: [{ session_id: childB.id, state: "waiting", turn_id: "waiting-turn" }] });
+    const selected = items.find(item => path.endsWith(`/chat-sessions/${item.id}`));
+    if (selected && route.request().method() === "GET") return route.fulfill({ json: selected });
+    if (/\/chat\/sessions\/sidebar-[^/]+\/messages$/.test(path)) return route.fulfill({ json: [] });
+    if (/\/chat\/sessions\/sidebar-[^/]+\/pending-turn$/.test(path)) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const openSidebar = async () => {
+    const sidebar = page.getByRole("complementary", { name: "Conversations" });
+    const show = page.getByRole("button", { name: mobile ? "Open conversations" : "Show conversations" });
+    await expect(sidebar.or(show).first()).toBeVisible();
+    if (await show.isVisible()) await show.click();
+    await expect(sidebar).toBeVisible();
+    return sidebar;
+  };
+  let sidebar = await openSidebar();
+  const parentRow = sidebar.locator(".session-list-item").filter({ has: page.locator('[data-session-id="sidebar-parent"]') });
+  await expect(parentRow).toContainText("2 subagents · 1 needs you");
+  await expect(sidebar.locator('[data-session-id="sidebar-child-a"]')).toHaveCount(0);
+  await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toHaveCount(0);
+  await expect(sidebar.locator('[data-session-id="sidebar-branch"]')).toBeVisible();
+  await expect(parentRow.locator(".conversation-activity-marker")).toHaveAttribute("aria-label", "Waiting for you");
+  const toggle = sidebar.getByRole("button", { name: "Expand 2 subagents for Main investigation" });
+  if (mobile) {
+    const bounds = await toggle.boundingBox();
+    expectTouchTarget(bounds?.width, "subagent disclosure width");
+    expectTouchTarget(bounds?.height, "subagent disclosure height");
+  }
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(sidebar.locator('[data-session-id="sidebar-child-a"]')).toBeVisible();
+  await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toBeVisible();
+  await expect(sidebar.locator(".nested-subagent")).toHaveCount(2);
+  await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toContainText("Needs your input");
+  await sidebar.locator('[data-session-id="sidebar-child-b"]').click();
+  await expect(page).toHaveURL(/session=sidebar-child-b/);
+  await expect(page.getByText("Subagent conversation · files remain shared.")).toBeVisible();
+
+  await page.reload();
+  sidebar = await openSidebar();
+  await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "Collapse 2 subagents for Main investigation" })).toHaveAttribute("aria-expanded", "true");
+  await sidebar.getByRole("searchbox", { name: "Search conversations" }).fill("API mapping");
+  await expect(sidebar.locator('[data-session-id="sidebar-parent"]')).toBeVisible();
+  await expect(sidebar.locator('[data-session-id="sidebar-child-a"]')).toBeVisible();
+  await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toHaveCount(0);
+  await expect(sidebar.getByRole("button", { name: "Collapse 2 subagents for Main investigation" })).toBeDisabled();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).include(".session-list").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 test("stabilization conversation bulk delete reconciles stale rows and preserves the blocking diagnostic", async ({ page }, testInfo) => {
   let deleteStarted = false;
   const active = { ...entity, id: "conversation-active", engagement_id: "scratch-project", title: "Active investigation", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };

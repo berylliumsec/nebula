@@ -3789,6 +3789,34 @@ reliabilityTest("stabilization real Core keeps the Subagents choice across refre
   } finally {await core.stop();}
 });
 
+reliabilityTest("assistant upgrade real Core nests durable subagent conversations", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "sidebar");
+  try {
+    const listed = await (await core.api.get("chat-sessions")).json() as Array<{id: string; parent_session_id?: string; metadata: Record<string, unknown>}>;
+    expect(listed.find(item => item.id === "sidebar-child")).toMatchObject({parent_session_id: "sidebar-parent", metadata: {subagent_id: "fixture-subagent"}});
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Sidebar hierarchy acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Sidebar hierarchy acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", {name: "Show conversations"}).click();
+    const sidebar = page.getByRole("complementary", {name: "Conversations"});
+    await expect(sidebar.locator('[data-session-id="sidebar-parent"]')).toBeVisible();
+    await expect(sidebar.locator('[data-session-id="sidebar-child"]')).toHaveCount(0);
+    await expect(sidebar.locator('[data-session-id="sidebar-branch"]')).toBeVisible();
+    await sidebar.getByRole("button", {name: "Expand 1 subagent for Main investigation"}).click();
+    await expect(sidebar.locator('[data-session-id="sidebar-child"]')).toBeVisible();
+    await sidebar.locator('[data-session-id="sidebar-child"]').click();
+    await expect(page).toHaveURL(/session=sidebar-child/);
+    await page.reload();
+    await expect(sidebar.locator('[data-session-id="sidebar-child"]')).toBeVisible();
+    await testInfo.attach("subagent-sidebar-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId: "sidebar-child"}), contentType: "application/json"});
+    await testInfo.attach("subagent-sidebar-screen", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {await core.stop();}
+});
+
 reliabilityTest("assistant upgrade conversation bulk delete clears rows already absent from real Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
