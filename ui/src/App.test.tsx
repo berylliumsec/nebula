@@ -47,6 +47,11 @@ function unmatchedCoreResponse(input: RequestInfo | URL) {
   if (pathname.endsWith("/goal")) {
     return new Response(JSON.stringify({ detail: "Goal not found" }), { status: 404 });
   }
+  // Core answers null when a chat has no pending turn. A list here would read
+  // as a running turn with no id and replace the loaded transcript.
+  if (pathname.endsWith("/pending-turn")) {
+    return new Response(JSON.stringify(null), { status: 200 });
+  }
   return new Response(JSON.stringify([]), { status: 200 });
 }
 

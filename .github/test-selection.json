@@ -1,30 +1,18 @@
 {
-  "change_digest": "1e0a4cbb7547cd1b934cad5f59fb0d7518d1969d3cb81a89c5d3833443939831",
-  "reviewed_by": "Claude review of subagent-choice-new-chats",
-  "reason": "Operator report: Subagents unchecks after being checked. #483 saves the choice by PATCH and #516 stops Core-started turns overwriting it, but two conversation-creation paths still dropped a choice made before the conversation existed, and a list refresh could re-sync an older revision. (1) POST /chat/goal-conversations (GoalConversationCreate) had no reasoning_effort, allow_subagents or max_active_subagents and createGoalConversation sent none, so the goal's first Core-started turn (which reads the conversation's saved settings since #516) ran with allow_subagents=0, as seen on the live Core; MCP servers and hooks were already carried. The model now accepts and saves them into metadata as the assistant-settings PATCH does and the UI sends them. (2) A new harness chat's first send omits a subagent model that is still being verified, so Core never learned the choice; ChatCompletionRequest gains pending_provider_subagent, which prepare_chat saves as the chat's provider_subagent without binding it to the vendor session (the turn still runs without subagent tools), and the composer sends it via subagentRequestFields. (3) refreshSessions() replaced the list wholesale; it now keeps each conversation's higher revision (reconcileListedSessions). tests/v3/test_subagent_choice_new_chats.py (4 tests, all fail on origin/main 683479f) drives goal-conversation creation through the API into a real goal dispatch, the captured first-turn request, the limit validation, and a new harness chat over /chat/completions. Frontend: App.subagentChoice.test.tsx renders the Assistant and fails on main for all three paths (box unchecked); chatSubagentChoice.test.ts and chatSessionList.test.ts cover the extracted helpers; chatSubagentsSettings.test.ts covers the wire bodies. Selected existing Python node ids are the edited goal-conversation metadata test and the tests that directly drive _remember_chat_provider_subagent and the harness subagent PATCH.",
-  "exclusions": "No native tests: no Tauri or Rust change. Playwright limited to entry:chat-subagents/desktop (the subagent settings journeys) and entry:assistant/desktop (SessionsPage send and list refresh); both ran locally. Not selected but run locally: test_subagent_choice_sticks.py, test_harness_provider_subagents.py, test_chat_goals.py, test_chat_subagents.py, test_chat_schedules.py, test_chat_api.py, test_api.py and test_chat_queue.py in full (177 passed); vitest client.test.ts, ProviderGoalPanel.test.tsx, HarnessSubagentSettings.test.tsx and App.test.tsx (134 passed, 2 App.test.tsx failures that fail identically on origin/main without this change). No full suites.",
+  "change_digest": "8c74a147618f44aecc632a1f68dcbb6e046c5251b82d9000ac503957ac647480",
+  "reviewed_by": "Claude review of app-test-red-on-main",
+  "reason": "Two vitest tests in ui/src/App.test.tsx, 'keeps chat drafts durable while saved memory stays behind explicit disclosure' and 'edits a sent message in place instead of branching the conversation', fail on origin/main (683479f and a924636), alone under -t and with the whole file. git bisect over the ui/ commits since 337630e names 710b785 (#507, Record failed and stopped turns) as the first bad commit; f0294ac passes 42/42. Cause: the file's catch-all fixture unmatchedCoreResponse answers every unmatched path, including GET /chat/sessions/{id}/pending-turn, with []. Core answers that route with a ChatTurnSummary or null, never a list, but getPendingChatTurn maps any truthy body, so [] became a pending turn with no id or status. Before #507 that phantom turn only appended a 'Waiting for provider' placeholder after the loaded history. #507 filters the history through withoutTurnOutcome(current, pendingTurn.id), which keeps messages whose outcomeTurnId differs from the turn id; with an undefined id every ordinary message (outcomeTurnId undefined) matched and the whole transcript disappeared, so 'Port retained' and 'Any update on the certificate?' never rendered. The product path is correct for anything Core can send: a real pending turn always has an id. The fix is test-only: unmatchedCoreResponse answers /pending-turn with null, as Core does when a chat has no pending turn, which also removes the phantom running turn (and its GET /chat/turns/undefined/events stream) from every other test in the file that relied on the fallback. App.test.tsx: 2 failed / 40 passed before, 42 passed after.",
+  "exclusions": "No Python tests: no src/ or tests/ change. No native tests: no Tauri or Rust change. No Playwright: no product code changed, only a vitest fixture. Run locally but not selected: App.subagentChoice.test.tsx with App.test.tsx (45 passed), App.projectBoundary.test.tsx, WorkbenchBrowser.test.tsx, chatMessageReconciliation.test.ts and turnOutcomeNotes.test.ts (37 passed); npm run build and npm run audit:diagnostics clean. No full suites.",
   "expected_tests": {
-    "python": 8,
-    "frontend": 13,
+    "python": 0,
+    "frontend": 42,
     "native": 0,
-    "playwright": 57
+    "playwright": 0
   },
-  "python": [
-    "tests/v3/test_subagent_choice_new_chats.py",
-    "tests/v3/test_api.py::test_goal_conversation_exists_before_its_first_message",
-    "tests/v3/test_chat_api.py::test_harness_subagent_choice_is_saved_before_model_verification",
-    "tests/v3/test_subagent_choice_sticks.py::test_unverified_harness_send_keeps_the_saved_subagent_choice",
-    "tests/v3/test_harness_provider_subagents.py::test_subagent_tools_follow_the_chat_setting"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/App.subagentChoice.test.tsx",
-    "ui/src/pages/chatSubagentChoice.test.ts",
-    "ui/src/pages/chatSessionList.test.ts",
-    "ui/src/api/chatSubagentsSettings.test.ts"
+    "ui/src/App.test.tsx"
   ],
   "native": [],
-  "playwright": [
-    "entry:chat-subagents/desktop",
-    "entry:assistant/desktop"
-  ]
+  "playwright": []
 }
