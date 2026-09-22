@@ -9656,10 +9656,17 @@ class HarnessRuntimeService:
     def _remember_chat_provider_subagent(
         self, chat: ChatSession, setting: dict[str, Any] | None
     ) -> ChatSession:
-        """Keep the operator's choice with the conversation for the composer."""
+        """Keep the operator's choice with the conversation for the composer.
+
+        Checking or unchecking Subagents saves the choice on the conversation
+        at once. A send records a setting it carries, which is how a new chat
+        keeps one, but a send without one never erases the saved choice: the
+        composer leaves the setting out while the subagent model is still
+        being verified, and that turn simply runs without subagents.
+        """
 
         chat = self.store.get(ChatSession, chat.id)
-        if chat.metadata.get("provider_subagent") == setting:
+        if setting is None or chat.metadata.get("provider_subagent") == setting:
             return chat
         return self.store.update(
             ChatSession,
