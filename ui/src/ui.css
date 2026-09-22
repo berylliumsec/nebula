@@ -217,11 +217,21 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 @media (max-width: 760px) {
   .compact-workbench-toolbar .session-conversations-toggle { display: none; }
 }
-.chat-goal-panel { border: 1px solid var(--border-soft); border-radius: 10px; padding: 8px 10px; display: grid; gap: 8px; }
-.chat-goal-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
-.chat-goal-panel > header > span { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.chat-goal-panel > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-goal-panel > header small { flex: none; color: var(--text-muted); }
+.chat-goal-panel:not(.empty) { border: 1px solid var(--border-soft); border-radius: 14px; padding: 10px 12px; display: grid; gap: 10px; background: var(--surface); box-shadow: 0 1px 8px rgb(0 0 0 / 5%); }
+.chat-goal-panel:not(.empty) > header { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.chat-goal-toggle { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border: 0; border-radius: 8px; color: var(--text-muted); background: transparent; cursor: pointer; }
+.chat-goal-toggle:hover { color: var(--text-strong); background: var(--surface-hover); }
+.chat-goal-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chat-goal-panel.is-collapsed .chat-goal-toggle svg { transform: rotate(-90deg); }
+.chat-goal-heading { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.chat-goal-heading > svg { flex: none; color: var(--text-muted); }
+.chat-goal-panel > header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 650; }
+.chat-goal-panel > header small { display: flex; align-items: center; gap: 8px; flex: none; color: var(--text-muted); white-space: nowrap; }
+.chat-goal-panel > header small > span + span::before { content: "·"; margin-right: 8px; color: var(--border-soft); }
+.chat-goal-status { text-transform: capitalize; font-weight: 650; }
+.chat-goal-status.running { color: var(--text-strong); }
+.chat-goal-details { display: grid; gap: 8px; }
+.chat-goal-details[hidden] { display: none; }
 .chat-goal-form { display: grid; gap: 8px; }
 .chat-goal-form label { display: grid; gap: 4px; }
 .chat-goal-form fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 4px; min-width: 0; }
@@ -232,7 +242,15 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 .chat-goal-form textarea { min-height: 64px; resize: vertical; }
 .chat-goal-limits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
 .chat-goal-form > div, .chat-goal-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-@media (max-width: 430px) { .chat-goal-panel > header { align-items: flex-start; flex-direction: column; } .chat-goal-limits { grid-template-columns: 1fr; } .chat-goal-actions .button { min-height: 44px; } }
+.chat-goal-actions { align-items: center; gap: 12px; }
+.chat-goal-actions .button { min-height: 36px; padding: 6px 10px; }
+.chat-goal-pause { margin-right: auto; }
+.chat-goal-outcomes, .chat-goal-utilities { display: flex; align-items: center; gap: 4px; }
+.chat-goal-outcomes { padding-right: 12px; border-right: 1px solid var(--border-soft); }
+.chat-goal-outcomes .button, .chat-goal-utilities .button { color: var(--text-muted); }
+.chat-goal-outcomes .button:hover:not(:disabled), .chat-goal-utilities .button:hover:not(:disabled) { color: var(--text-strong); }
+@media (max-width: 1100px) { .chat-goal-panel:not(.empty) > header { flex-wrap: wrap; } .chat-goal-panel > header small { width: 100%; padding-left: 42px; flex-wrap: wrap; white-space: normal; } }
+@media (max-width: 430px) { .chat-goal-limits { grid-template-columns: 1fr; } .chat-goal-actions { justify-content: flex-start; gap: 8px; } .chat-goal-actions .button { min-height: 44px; } .chat-goal-outcomes { border: 0; padding-right: 0; } .chat-goal-utilities { width: 100%; } .chat-goal-toggle { width: 44px; height: 44px; } .chat-goal-panel > header small { padding-left: 54px; } }
 
 /* A goal is optional: without one, the panel is a compact chip, not a full row. */
 .chat-goal-panel.empty:not(:has(.chat-goal-form)) { display: flex; padding: 0; border: 0; background: transparent; }

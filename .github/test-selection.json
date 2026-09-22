@@ -1,11 +1,11 @@
 {
-  "change_digest": "b9aa06b41030511b8c4ea97cc2a0da586310215ee9bf0cdb0faad477df84f525",
-  "reviewed_by": "Codex focused review for provider response channels",
-  "reason": "The changed journeys are provider chat response channels and model output sizing. Forty-five collected context cases cover model, catalog, OpenRouter route, configured and unknown limits; seventy-two chat/provider cases cover routing, durable turns and replay; nineteen tool-failure contract cases check the adjacent routing behavior merged on main. All use local stores or mocked providers.",
-  "exclusions": "No frontend or Playwright selection: UI source did not change and these tests exercise Core sizing, events and persisted transcript boundaries. No native selection: no Rust or Tauri change. Unrelated Python tests and all full suites are excluded. Real provider and production browser journeys remain separate verification gates.",
+  "change_digest": "c17f201f220525bfc0804fce3818d04dc23d5f4cf003f52937f8a08379247778",
+  "reviewed_by": "Codex focused review for collapsible goal banner",
+  "reason": "The branch changes goal banner presentation, collapse behavior, and action hierarchy. Twelve collected ProviderGoalPanel component cases cover local display, disclosure, and goal actions.",
+  "exclusions": "No Python or native change. Unrelated UI tests and full suites are excluded. Browser responsive, real Core, LAN origin, and production journey checks are pending and are not claimed by this focused component run.",
   "expected_tests": {
-    "python": 136,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 12,
     "native": 0,
     "playwright": 0
   },
@@ -14,17 +14,10 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_context.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_routing_prose_answer.py",
-    "tests/v3/test_reasoning_replay.py",
-    "tests/v3/test_providers.py::test_openai_responses_translates_flattened_tools_and_parses_calls",
-    "tests/v3/test_providers.py::test_openai_compatible_uses_chat_completions_shape",
-    "tests/v3/test_chat_routing_tolerance.py",
-    "tests/v3/test_tool_failures.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/ProviderGoalPanel.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": []
 }
