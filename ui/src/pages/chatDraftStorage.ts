@@ -1,5 +1,32 @@
 const DRAFT_PREFIX = "nebula.assistant.draft.v1";
 
+/**
+ * Keeps the current tab's drafts authoritative even when sessionStorage is
+ * unavailable or a conversation switch happens before React flushes effects.
+ */
+export class ChatDraftStore {
+  private readonly drafts = new Map<string, string>();
+
+  constructor(private readonly storage: Storage) {}
+
+  read(key: string): string {
+    if (this.drafts.has(key)) return this.drafts.get(key) ?? "";
+    const value = readChatDraft(this.storage, key);
+    this.drafts.set(key, value);
+    return value;
+  }
+
+  write(key: string, value: string): void {
+    this.drafts.set(key, value);
+    writeChatDraft(this.storage, key, value);
+  }
+
+  clear(key: string): void {
+    this.drafts.set(key, "");
+    clearChatDraft(this.storage, key);
+  }
+}
+
 export function chatDraftStorageKey(engagementId: string, sessionId?: string): string {
   return `${DRAFT_PREFIX}:${encodeURIComponent(engagementId)}:${encodeURIComponent(sessionId || "new")}`;
 }

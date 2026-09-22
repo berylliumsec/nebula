@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chatDraftStorageKey, clearChatDraft, readChatDraft, writeChatDraft } from "./chatDraftStorage";
+import { ChatDraftStore, chatDraftStorageKey, clearChatDraft, readChatDraft, writeChatDraft } from "./chatDraftStorage";
 
 describe("assistant draft recovery", () => {
   it("isolates unsent text by project and conversation", () => {
@@ -21,5 +21,25 @@ describe("assistant draft recovery", () => {
     writeChatDraft(window.sessionStorage, key, "draft");
     writeChatDraft(window.sessionStorage, key, "");
     expect(window.sessionStorage.getItem(key)).toBeNull();
+  });
+
+  it("keeps independent drafts in memory when browser storage is unavailable", () => {
+    const unavailable = {
+      getItem: () => { throw new DOMException("Storage blocked", "SecurityError"); },
+      setItem: () => { throw new DOMException("Storage blocked", "SecurityError"); },
+      removeItem: () => { throw new DOMException("Storage blocked", "SecurityError"); },
+    } as unknown as Storage;
+    const drafts = new ChatDraftStore(unavailable);
+    const unattached = chatDraftStorageKey("project", undefined);
+    const saved = chatDraftStorageKey("project", "saved-chat");
+
+    drafts.write(unattached, "unsent new-chat draft");
+    drafts.write(saved, "saved-chat follow-up");
+
+    expect(drafts.read(unattached)).toBe("unsent new-chat draft");
+    expect(drafts.read(saved)).toBe("saved-chat follow-up");
+    drafts.clear(unattached);
+    expect(drafts.read(unattached)).toBe("");
+    expect(drafts.read(saved)).toBe("saved-chat follow-up");
   });
 });
