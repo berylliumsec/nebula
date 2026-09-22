@@ -1480,9 +1480,24 @@ class ChatService:
             ChatGoal, offset=offset, limit=1_000
         ):
             for goal in goal_page:
+                pending = (
+                    self.pending_turn(goal.session_id)
+                    if goal.status == ChatGoalStatus.RUNNING
+                    else None
+                )
+                interrupted_recovery = (
+                    pending
+                    if pending is not None
+                    and pending.status == ChatTurnStatus.INTERRUPTED
+                    and pending.request_snapshot.get("recovery", {}).get("required")
+                    else None
+                )
                 if (
                     goal.status == ChatGoalStatus.RUNNING
-                    and goal.execution_claim_id is not None
+                    and (
+                        goal.execution_claim_id is not None
+                        or interrupted_recovery is not None
+                    )
                 ):
                     paused_at = utc_now()
                     self.store.update(
@@ -1494,7 +1509,9 @@ class ChatService:
                             "active_since": None,
                             "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
                             "blocked_reason": (
-                                "Core restarted while this goal had an active worker. "
+                                interrupted_recovery.error
+                                if interrupted_recovery is not None
+                                else "Core restarted while this goal had an active worker. "
                                 "Review its latest turn before resuming."
                             ),
                             "execution_owner_id": None,
@@ -1576,6 +1593,7 @@ class ChatService:
                         goals.write(
                             saved.session_id,
                             GoalWrite(expected_revision=goal.revision, action="resume"),
+                            allow_pending_recovery=True,
                         )
                     self.start_provider_turn(prepared)
                     resumed.append(saved.id)

@@ -3382,6 +3382,59 @@ def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(tmp_path):
     asyncio.run(scenario())
 
 
+def test_core_startup_pauses_running_goal_with_parked_recovery(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "parked-goal.db")
+        engagement = store.create(Engagement(name="Parked recovery"))
+        profile = store.create(_profile(local=True))
+        session = store.create(
+            ChatSession(
+                engagement_id=engagement.id,
+                title="Parked supervisor",
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        goal = store.create(
+            ChatGoal(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                objective="Continue safely",
+                completion_criteria=["Evidence reviewed"],
+                status=ChatGoalStatus.RUNNING,
+            )
+        )
+        reason = "Reconcile the unknown tool outcome before resuming."
+        turn = store.create(
+            ChatTurn(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                goal_id=goal.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                status=ChatTurnStatus.INTERRUPTED,
+                error=reason,
+                request_snapshot={
+                    "recovery": {
+                        "required": True,
+                        "cause": "core_shutdown",
+                        "unknown_tool_call_ids": ["unknown-tool"],
+                    }
+                },
+            )
+        )
+        service = ChatService(store)
+        await service.startup()
+        parked = store.get(ChatGoal, goal.id)
+        assert parked.status == ChatGoalStatus.PAUSED
+        assert parked.blocked_reason == reason
+        assert service.resume_turns_stopped_by_core() == []
+        assert store.get(ChatTurn, turn.id).status == ChatTurnStatus.INTERRUPTED
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_core_update_auto_resume_keeps_uncertain_and_crashed_turns_parked(tmp_path):
     async def scenario() -> None:
         store = NebulaStore(tmp_path / "auto-resume-gates.db")

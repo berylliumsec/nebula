@@ -1,17 +1,24 @@
 {
-  "change_digest": "df5b1e3b0107a2a0f4214ed7a86b36f65a6eb431565f59d72b882470d6666a3d",
-  "reviewed_by": "Codex focused review of native completion-hook feedback",
-  "reason": "A blocking native completion hook now supplies bounded feedback to one model correction attempt across provider chat paths. The selected cases cover feedback delivery, revised-answer recheck, tool-enabled rerouting, persistent rejection, and held streaming output.",
-  "exclusions": "No frontend, native, or Playwright tests are selected because this diff changes only provider-turn orchestration and its Python regression tests. No full suites or live provider calls. Production UI, LAN, and physical-device journeys remain unverified.",
-  "expected_tests": {"python": 5, "frontend": 0, "native": 0, "playwright": 0},
-  "python_versions": ["3.11"],
+  "change_digest": "c90067418136eb84ba7c60225a21645bc98abc3c17a7d4bda479a7276b146fc0",
+  "reviewed_by": "Codex focused restart-recovery review",
+  "reason": "Goal resume must remain paused while an interrupted turn needs recovery, and Core startup must repair a running goal stranded behind that turn. The selected cases cover those paths plus safe and uncertain automatic resume.",
+  "exclusions": "No frontend, native, or Playwright tests are selected because this diff changes Core goal and provider-turn state only. No full suites, live provider calls, or production UI journey were run.",
+  "expected_tests": {
+    "python": 4,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
+  "python_versions": [
+    "3.11"
+  ],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_native_hook_turn_ends.py::test_required_completion_hook_feedback_reaches_model_and_rechecks_answer",
-    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_routes_again_with_completion_hook_feedback",
-    "tests/v3/test_native_hook_turn_ends.py::test_required_completion_hook_can_reject_final_answer",
-    "tests/v3/test_native_hook_turn_ends.py::test_stream_holds_answer_until_required_completion_hook_accepts"
+    "tests/v3/test_chat_goals.py::test_goal_resume_requires_interrupted_turn_recovery",
+    "tests/v3/test_chat.py::test_core_startup_pauses_running_goal_with_parked_recovery",
+    "tests/v3/test_chat.py::test_core_update_auto_resumes_safe_supervisor_with_saved_thinking",
+    "tests/v3/test_chat.py::test_core_update_auto_resume_keeps_uncertain_and_crashed_turns_parked"
   ],
   "frontend": [],
   "native": [],

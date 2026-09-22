@@ -21,6 +21,7 @@ from nebula.v3.domain import (
     ChatSession,
     ChatTokenUsage,
     ChatTurn,
+    ChatTurnStatus,
     Engagement,
     ProviderProfile,
     utc_now,
@@ -47,6 +48,45 @@ def setup_goal(tmp_path):
         )
     )
     return store, ChatGoalService(store)
+
+
+def test_goal_resume_requires_interrupted_turn_recovery(tmp_path):
+    store, goals = setup_goal(tmp_path)
+    goal = goals.create(
+        "session",
+        GoalCreate(objective="Continue", completion_criteria=["Done"]),
+    )
+    running = goals.write(
+        "session", GoalWrite(expected_revision=goal.revision, action="start")
+    )
+    paused = goals.write(
+        "session", GoalWrite(expected_revision=running.revision, action="pause")
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id="project",
+            session_id="session",
+            goal_id=goal.id,
+            provider_profile_id="provider",
+            model="model",
+            status=ChatTurnStatus.INTERRUPTED,
+            request_snapshot={"recovery": {"required": True, "cause": "core_shutdown"}},
+        )
+    )
+    with pytest.raises(ConflictError, match="interrupted response needs recovery"):
+        goals.write(
+            "session", GoalWrite(expected_revision=paused.revision, action="resume")
+        )
+    assert goals.get("session").status == ChatGoalStatus.PAUSED
+    store.update(
+        ChatTurn,
+        turn.id,
+        {"request_snapshot": {"recovery": {"required": False}}},
+        expected_revision=turn.revision,
+    )
+    assert goals.write(
+        "session", GoalWrite(expected_revision=paused.revision, action="resume")
+    ).status == ChatGoalStatus.RUNNING
 
 
 def test_parent_cancel_stops_child_and_reserves_budget(tmp_path):

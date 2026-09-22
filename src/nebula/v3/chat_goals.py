@@ -16,6 +16,8 @@ from .domain import (
     ChatGoal,
     ChatGoalStatus,
     ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
     Engagement,
     McpServerProfile,
     ProviderProfile,
@@ -185,7 +187,9 @@ class ChatGoalService:
             transaction.add_all([session, goal])
         return GoalConversationCreated(session=session, goal=goal)
 
-    def write(self, session_id: str, body: GoalWrite) -> ChatGoal:
+    def write(
+        self, session_id: str, body: GoalWrite, *, allow_pending_recovery: bool = False
+    ) -> ChatGoal:
         goal = self.get(session_id)
         if body.expected_revision != goal.revision:
             raise ConflictError(
@@ -219,6 +223,16 @@ class ChatGoalService:
         elif body.action == "resume":
             if goal.status not in {ChatGoalStatus.PAUSED, ChatGoalStatus.BLOCKED}:
                 raise ConflictError("only a paused or blocked goal can be resumed")
+            interrupted = [
+                turn
+                for turn in self.store.list_session_entities(ChatTurn, session_id)
+                if turn.status == ChatTurnStatus.INTERRUPTED
+                and turn.request_snapshot.get("recovery", {}).get("required")
+            ]
+            if interrupted and not allow_pending_recovery:
+                raise ConflictError(
+                    "the interrupted response needs recovery before the goal can resume"
+                )
             if (
                 goal.time_budget_seconds is not None
                 and goal.elapsed_seconds >= goal.time_budget_seconds
