@@ -180,7 +180,7 @@ import {
 } from "./chatMessageReconciliation";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { readConversationPanelOpen, writeConversationPanelOpen } from "./workbenchPreferences";
-import { chatDraftStorageKey, clearChatDraft, readChatDraft, writeChatDraft } from "./chatDraftStorage";
+import { ChatDraftStore, chatDraftStorageKey } from "./chatDraftStorage";
 import {
   chatFollowUpStorageKey,
   maxChatFollowUps,
@@ -1015,6 +1015,7 @@ export function SessionsPage() {
   const liveGoalStreamTextRef = useRef("");
   const streamFrameRef = useRef<number | undefined>(undefined);
   const draftStorageKeyRef = useRef("");
+  const draftStore = useMemo(() => new ChatDraftStore(sessionStorage), []);
   const followUpStorageKeyRef = useRef("");
   const followUpAutoDrainRef = useRef(false);
   const followUpDrainIdRef = useRef<string | undefined>(undefined);
@@ -1088,20 +1089,20 @@ export function SessionsPage() {
     : "";
   useEffect(() => {
     if (!activeDraftStorageKey || draftStorageKeyRef.current !== activeDraftStorageKey) return;
-    writeChatDraft(sessionStorage, activeDraftStorageKey, draft);
-  }, [activeDraftStorageKey, draft]);
+    draftStore.write(activeDraftStorageKey, draft);
+  }, [activeDraftStorageKey, draft, draftStore]);
   useEffect(() => {
     const previousKey = draftStorageKeyRef.current;
     if (previousKey && previousKey !== activeDraftStorageKey) {
-      writeChatDraft(sessionStorage, previousKey, draft);
+      draftStore.write(previousKey, draft);
     }
     draftStorageKeyRef.current = activeDraftStorageKey;
-    setDraft(activeDraftStorageKey ? readChatDraft(sessionStorage, activeDraftStorageKey) : "");
+    setDraft(activeDraftStorageKey ? draftStore.read(activeDraftStorageKey) : "");
     setSkillToken(undefined);
     setHarnessSkillPath("");
   // The outgoing draft is intentionally captured at the identity boundary.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeDraftStorageKey]);
+  }, [activeDraftStorageKey, draftStore]);
   useEffect(() => {
     if (!activeFollowUpStorageKey || followUpStorageKeyRef.current !== activeFollowUpStorageKey) return;
     writeChatFollowUps(sessionStorage, activeFollowUpStorageKey, queuedFollowUps);
@@ -2007,7 +2008,7 @@ export function SessionsPage() {
       }
       chatPreviews.delete(session.id);
       if (engagement) {
-        clearChatDraft(sessionStorage, chatDraftStorageKey(engagement.id, session.id));
+        draftStore.clear(chatDraftStorageKey(engagement.id, session.id));
         clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, session.id));
       }
       setSessions((current) => current.filter((item) => item.id !== session.id));
@@ -2047,7 +2048,7 @@ export function SessionsPage() {
     deletedIds.forEach(id => chatPreviews.delete(id));
     if (engagement) {
       for (const deletedId of deletedIds) {
-        clearChatDraft(sessionStorage, chatDraftStorageKey(engagement.id, deletedId));
+        draftStore.clear(chatDraftStorageKey(engagement.id, deletedId));
         clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, deletedId));
       }
     }
@@ -3447,6 +3448,10 @@ export function SessionsPage() {
   };
 
   const updateComposerDraft = (nextDraft: string, caret = nextDraft.length) => {
+    // Persist in the input event itself. A chat selection or route change can
+    // otherwise unmount this composer before its passive effect is allowed to
+    // save the last keystroke.
+    if (activeDraftStorageKey) draftStore.write(activeDraftStorageKey, nextDraft);
     setDraft(nextDraft);
     const skillEnabled = runtimeKind === "provider" || (
       Boolean(selectedHarness?.capabilities?.skillInvocation)
@@ -3648,7 +3653,7 @@ export function SessionsPage() {
     }
     setMessages((current) => [...current, userMessage, assistantMessage]);
     if (!queuedFollowUp && !resent) {
-      if (activeDraftStorageKey) clearChatDraft(sessionStorage, activeDraftStorageKey);
+      if (activeDraftStorageKey) draftStore.clear(activeDraftStorageKey);
       setDraft("");
       pendingImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
       setPendingImages([]);
@@ -4159,7 +4164,7 @@ export function SessionsPage() {
     setChatError(undefined);
     try {
       await api.steerHarnessTurn(turnId, text);
-      if (activeDraftStorageKey) clearChatDraft(sessionStorage, activeDraftStorageKey);
+      if (activeDraftStorageKey) draftStore.clear(activeDraftStorageKey);
       setDraft("");
       setMessageActionStatus("Guidance sent to the active harness turn.");
     } catch (error) {

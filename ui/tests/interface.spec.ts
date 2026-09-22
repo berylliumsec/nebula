@@ -3943,6 +3943,13 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   releaseRefresh(); refreshGate = undefined;
   await expect(page.getByText("Target transcript", {exact: true})).toBeVisible();
   await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(targetSessionId);
+  await page.getByRole("button", {name: "New chat", exact: true}).click();
+  const newChatComposer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+  await newChatComposer.fill("Unsent new-chat draft survives a conversation switch");
+  await selectChat("Target conversation");
+  await expect(page.getByText("Target transcript", {exact: true})).toBeVisible();
+  await page.getByRole("button", {name: "New chat", exact: true}).click();
+  await expect(newChatComposer).toHaveValue("Unsent new-chat draft survives a conversation switch");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   expect((await new AxeBuilder({page}).include(".chat-thread").analyze()).violations).toEqual([]);
 });
