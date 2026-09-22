@@ -1048,6 +1048,9 @@ _ENDED_TURN_HOOK_FINISH_REASONS = {
     "chat.turn.cancelled": "cancelled",
 }
 _HOOK_STDERR_EXCERPT_CHARS = 500
+# A completed turn's hook gets the answer it is about to store (a Codex Stop
+# hook's last_assistant_message), bounded in UTF-8 bytes like hook output.
+_HOOK_ASSISTANT_MESSAGE_BYTES = 64 * 1024
 
 
 def _turn_end_hook_payload(
@@ -1055,12 +1058,26 @@ def _turn_end_hook_payload(
     detail: str | None,
     assistant_message: str | None = None,
 ) -> dict[str, Any]:
-    """Every turn-ending hook event carries the same keys, so one hook serves all."""
+    """Every turn-ending hook event carries the same keys, so one hook serves all.
 
+    ``assistant_message`` is the completed turn's answer and null for a turn
+    that failed or was stopped, which stored none.
+    """
+
+    truncated = False
+    if assistant_message is not None:
+        encoded = assistant_message.encode("utf-8")
+        if len(encoded) > _HOOK_ASSISTANT_MESSAGE_BYTES:
+            # A cut inside a multi-byte character drops that character.
+            assistant_message = encoded[:_HOOK_ASSISTANT_MESSAGE_BYTES].decode(
+                "utf-8", "ignore"
+            )
+            truncated = True
     return {
         "finish_reason": finish_reason,
         "detail": detail,
         "assistant_message": assistant_message,
+        "assistant_message_truncated": truncated,
     }
 
 
