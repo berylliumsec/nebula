@@ -1,22 +1,18 @@
 {
-  "change_digest": "882923c7df59efb9cd46e65840817b5591f3f9fd798a37bb614c6eb1366cb225",
-  "reviewed_by": "Claude review of claude-harness-turn-cost",
-  "reason": "The Claude CLI's ResultMessage.total_cost_usd is the running total of the whole CLI session, not the turn's cost: the CLI bundled with SDK 0.2.118 (Claude Code 2.1.209) fills it from its process-wide totalCostUSD counter, restores that counter from its config when it resumes a session, and zeroes it on a conversation reset; against a mock Messages API three identical turns reported 0.000105, 0.00021 and 0.000315. The ResultMessage usage token counts are per turn (10 in / 5 out each time; the CLI builds them per submitted message), so only the cost was wrong. ClaudeAgentSdkConnection recorded total_cost_usd as the turn's cost, so every Claude turn after the first over-charged and _record_harness_run_usage summed the running totals into the run's spent_usd (0.00063 instead of 0.000315 for three turns). The connection now keeps the last total it read as a baseline and records each turn's growth, as #490 does for Codex and #495 for Grok: a new CLI session starts at 0; a resumed one starts unknown, so its first turn's cost is None rather than invented; a total below the baseline means the counter restarted and counts from zero; every ResultMessage the connection reads (stopped-turn tails, turns the CLI ran on its own) moves the baseline so the next turn is not billed for them; and a #511 steered turn joined across two CLI turns records the growth across both. The usage event keeps the running total in payload.session_cost. tests/v3/test_claude_harness_turn_cost.py (7 tests, all fail on origin/main) drives the real ClaudeSDKClient over scripted CLI transports: per-turn deltas, a three-stage mission whose spent_usd equals the final total, a resumed session after a CLI exit, a dropping total, a steered turn, and a stopped/background turn before the prompt. The other node ids are the existing tests of the changed drain, steer and adapter-resume paths.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through harnesses.py) does not run a Claude CLI or read harness turn cost; the Python tests drive the connection and the runtime directly. test_claude_harness_turns.py, test_harness_leftovers.py, test_harness_adapters.py, test_harnesses.py, test_vendor_session_recreate.py, test_grok_acp_compliance.py, test_harness_stopped_turns.py and test_harness_connection_state.py were run locally in full and pass but are not selected beyond the node ids listed. No full suites.",
+  "change_digest": "1be4b8abedc607a0944e64498abfda6d92533731aad1fd12740b5c0a1bee6d2f",
+  "reviewed_by": "Codex focused hook completion review",
+  "reason": "Core now passes the operator-facing final answer to selected native completion hooks before persisting it. A blocking completion hook holds streamed answer text until it accepts. The selected turn-end tests cover completed, failed, cancelled, tool-turn, streaming acceptance and rejection payloads; provider-chat and API tests cover hook selection and durable execution through Core.",
+  "exclusions": "No frontend or native files changed. The existing UI controls and browser-origin behavior are unchanged, so frontend, native, and Playwright tests are excluded. Unrelated provider, workspace, harness, browser, and full suites are excluded. A focused live Core integration check with a selected project hook is performed separately.",
   "expected_tests": {
-    "python": 16,
+    "python": 13,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_claude_harness_turn_cost.py",
-    "tests/v3/test_claude_harness_turns.py::test_claude_stop_drains_the_interrupted_turn_before_the_next_prompt",
-    "tests/v3/test_claude_harness_turns.py::test_claude_abandoned_turn_is_stopped_and_drained_by_the_next_prompt",
-    "tests/v3/test_claude_harness_turns.py::test_claude_background_turn_the_cli_started_is_not_the_next_answer",
-    "tests/v3/test_harness_leftovers.py::test_claude_guidance_answered_in_its_own_cli_turn_stays_in_the_steered_turn",
-    "tests/v3/test_harness_leftovers.py::test_claude_stop_after_guidance_also_stops_the_guidance_turn",
-    "tests/v3/test_harness_adapters.py::test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages"
+    "tests/v3/test_native_hook_turn_ends.py",
+    "tests/v3/test_chat.py::test_native_provider_turn_snapshots_and_runs_agents_hooks_once",
+    "tests/v3/test_api.py::test_provider_chat_api_runs_selected_native_hooks"
   ],
   "frontend": [],
   "native": [],
