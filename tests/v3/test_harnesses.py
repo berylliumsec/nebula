@@ -35,6 +35,7 @@ from nebula.v3.domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    AutomationProjectPolicy,
     ChatBackend,
     ChatMessage,
     ChatContentBlock,
@@ -1560,6 +1561,26 @@ def test_harness_session_freezes_native_capabilities(tmp_path):
     assert frozen.web_search is True
     assert frozen.subagents is True
     assert session.metadata["execution_mode"] == "docker"
+    assert session.metadata["approval_policy"] == "prompt"
+
+
+def test_harness_session_freezes_project_never_approval_policy(tmp_path):
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+    store.create(
+        AutomationProjectPolicy(
+            id=f"automation:{engagement.id}",
+            engagement_id=engagement.id,
+            approval_policy="never",
+        )
+    )
+
+    session = runtime.create_session(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model=None,
+    )
+
+    assert session.metadata["approval_policy"] == "never"
 
 
 def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path):
@@ -2820,6 +2841,74 @@ def test_native_command_policy_denies_legacy_host_shell_capabilities(tmp_path):
         )
         assert frozen.shell is False
         assert frozen.workspace_access == HarnessWorkspaceAccess.NONE
+
+    asyncio.run(scenario())
+
+
+def test_project_never_policy_auto_approves_harness_tool_request(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store.create(
+            AutomationProjectPolicy(
+                id=f"automation:{engagement.id}",
+                engagement_id=engagement.id,
+                approval_policy="never",
+            )
+        )
+        _, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Run the command",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=["mcp-a"],
+        )
+
+        ticket = await runtime._request_permission(
+            turn.id,
+            HarnessPermissionRequest(
+                vendor_request_id="mcp-delete-never",
+                category="mcp",
+                vendor_name="mcp__workspace__delete_file",
+                server_name="workspace",
+                tool_name="delete_file",
+                arguments={"path": "evidence.txt"},
+            ),
+        )
+
+        decision = await ticket.decision
+        assert decision.allowed is True
+        assert decision.reason == "Approved by the Project's no-prompt tool policy"
+        assert ticket.approval_id is None
+        assert store.list_entities(Approval, engagement_id=engagement.id) == []
+        assert (
+            store.get(ToolCall, ticket.tool_call_id or "").status
+            == ToolCallStatus.APPROVED
+        )
+
+        session = store.get(HarnessSession, turn.harness_session_id)
+        snapshot = McpServerProfile.model_validate(session.mcp_snapshot[0])
+        snapshot.tool_overrides = {"delete_file": McpApprovalMode.DENY}
+        store.update(
+            HarnessSession,
+            session.id,
+            {"mcp_snapshot": [snapshot.model_dump(mode="json")]},
+            expected_revision=session.revision,
+        )
+        denied = await runtime._request_permission(
+            turn.id,
+            HarnessPermissionRequest(
+                vendor_request_id="mcp-delete-explicit-deny",
+                category="mcp",
+                vendor_name="mcp__workspace__delete_file",
+                server_name="workspace",
+                tool_name="delete_file",
+                arguments={"path": "evidence.txt"},
+            ),
+        )
+        assert (await denied.decision).allowed is False
+        assert denied.approval_id is None
 
     asyncio.run(scenario())
 

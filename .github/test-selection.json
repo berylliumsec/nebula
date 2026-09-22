@@ -1,23 +1,31 @@
 {
-  "change_digest": "297b850ec3c3b57e48fe34c42807c42cfbba1bc35252a477f58c537ec417b3bb",
-  "reviewed_by": "Codex SSH host metadata workflow review",
-  "reason": "SSH comments directly below a concrete Host line now remain optional discovery metadata and are added to each selected host's model-visible tool description without mutating saved operator notes. Thirty-one focused Python cases cover SSH discovery, selection, optional metadata enrichment, tool descriptions, approval, execution, timeout, cancellation, API persistence, and failure handling. Ten component cases cover the changed environment settings guidance and existing host lifecycle. Eight catalogued real-Core browser cases exercise discovery, enable, probe, metadata display, save, reload, accessibility, touch geometry, and responsive layout in the permanent desktop and emulated mobile Chromium/WebKit matrix.",
-  "exclusions": "No full suites, unrelated chat, harness, MCP, packaging, or native tests. The catalogued real-Core SSH environment journey already uses the production bundle on a non-loopback LAN origin. The uncatalogued generic real-core duplicate is excluded. Physical-device coverage is unavailable and is not inferred from emulation.",
-  "expected_tests": {"python": 31, "frontend": 10, "native": 0, "playwright": 8},
+  "change_digest": "e0f4234914d085d075db3026a65f96c00cee6eb7c2ed6d1dd13c0a3a83b63174",
+  "reviewed_by": "Codex project no-prompt provider and harness policy review",
+  "reason": "Project approval policy Never now suppresses would-prompt tool approvals for provider brokers and harness runtimes while retaining scope, disabled-capability, and explicit-deny enforcement. Thirty-eight focused Python cases cover provider SSH execution, frozen harness policy, harness MCP allow and explicit deny behavior, and Codex app-server approval policy. Seven component cases cover policy hydration and accessible guidance. Eight catalogued real-Core cases verify save, reload, frozen-session behavior, wording, and responsive operation across desktop, compact, and 320-430 px Chromium/WebKit profiles.",
+  "exclusions": "No full suites, unrelated provider, harness, MCP, packaging, or native tests. The selected real-Core journey uses the production bundle and non-loopback LAN origin. Physical-device coverage is unavailable and is not inferred from emulation.",
+  "expected_tests": {"python": 38, "frontend": 7, "native": 0, "playwright": 8},
   "python_versions": ["3.11"],
   "python_browser": false,
   "python_node": false,
-  "python": ["tests/v3/test_ssh_environments.py"],
-  "frontend": ["ui/src/components/EnvironmentSettings.test.tsx"],
+  "python": [
+    "tests/v3/test_ssh_environments.py",
+    "tests/v3/test_harnesses.py::test_harness_session_freezes_native_capabilities",
+    "tests/v3/test_harnesses.py::test_harness_session_freezes_project_never_approval_policy",
+    "tests/v3/test_harnesses.py::test_project_never_policy_auto_approves_harness_tool_request",
+    "tests/v3/test_harnesses.py::test_mcp_policy_fails_closed_and_routes_exact_approval",
+    "tests/v3/test_harness_adapters.py::test_codex_schema_pinned_handshake_streaming_and_approvals",
+    "tests/v3/test_harness_adapters.py::test_codex_project_never_policy_auto_approves_native_and_gateway_tools"
+  ],
+  "frontend": ["ui/src/components/EngagementPolicySettings.loading.test.tsx"],
   "native": [],
   "playwright": [
-    "entry:ssh-environments/assistant-real-desktop",
-    "entry:ssh-environments/assistant-real-compact",
-    "entry:ssh-environments/assistant-real-chromium-320",
-    "entry:ssh-environments/assistant-real-webkit-320",
-    "entry:ssh-environments/assistant-real-chromium-390",
-    "entry:ssh-environments/assistant-real-webkit-390",
-    "entry:ssh-environments/assistant-real-chromium-430",
-    "entry:ssh-environments/assistant-real-webkit-430"
+    "entry:project-runtime-policy/assistant-real-desktop",
+    "entry:project-runtime-policy/assistant-real-compact",
+    "entry:project-runtime-policy/assistant-real-chromium-320",
+    "entry:project-runtime-policy/assistant-real-webkit-320",
+    "entry:project-runtime-policy/assistant-real-chromium-390",
+    "entry:project-runtime-policy/assistant-real-webkit-390",
+    "entry:project-runtime-policy/assistant-real-chromium-430",
+    "entry:project-runtime-policy/assistant-real-webkit-430"
   ]
 }

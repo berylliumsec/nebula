@@ -935,6 +935,7 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert rpc.calls[0][1]["capabilities"]["experimentalApi"] is True
         assert rpc.calls[0][1]["capabilities"]["mcpServerOpenaiFormElicitation"] is True
         _validate("v2/ThreadStartParams.json", rpc.calls[1][1])
+        assert rpc.calls[1][1]["approvalPolicy"] == "never"
         assert rpc.calls[1][1]["reasoningEffort"] == "high"
         assert rpc.calls[1][1]["serviceTier"] == "fast"
         _validate("v2/TurnStartParams.json", rpc.calls[2][1])
@@ -969,6 +970,54 @@ def test_codex_schema_pinned_handshake_streaming_and_approvals(tmp_path):
         assert "TRUSTED" not in instructions
         assert "untrusted" not in instructions
         _validate("CommandExecutionRequestApprovalResponse.json", rpc.responses[0][1])
+
+    asyncio.run(scenario())
+
+
+def test_codex_project_never_policy_auto_approves_native_and_gateway_tools(tmp_path):
+    async def scenario() -> None:
+        rpc = FixtureCodexRpc()
+        profile = HarnessProfile(
+            id="codex-never",
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="gpt-test",
+        )
+        session = HarnessSession(
+            id="session-never",
+            engagement_id="eng-never",
+            harness_profile_id=profile.id,
+            model="gpt-test",
+            metadata={"approval_policy": "never"},
+        )
+
+        connection = await FixtureCodexAdapter(rpc).open(
+            AdapterOpenRequest(
+                profile=profile,
+                session=session,
+                workspace=tmp_path,
+                mcp_profiles=(),
+                credential_store=CredentialStore(),
+                permission_handler=lambda _request: None,
+                gateway_config={
+                    "nebula": {
+                        "url": "http://127.0.0.1/never",
+                        "transport": "streamable_http",
+                        "required": True,
+                        "startup_timeout_seconds": 10.0,
+                        "tool_timeout_seconds": 900.0,
+                    }
+                },
+            )
+        )
+
+        thread_start = next(
+            params for method, params in rpc.calls if method == "thread/start"
+        )
+        assert thread_start["approvalPolicy"] == "never"
+        assert connection.approval_policy == "never"
+        await connection.close()
 
     asyncio.run(scenario())
 

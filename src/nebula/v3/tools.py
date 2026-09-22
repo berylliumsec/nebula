@@ -1501,6 +1501,7 @@ class ToolBroker:
         workspace_resolver: Callable[[str], Path],
         dns_resolver: Callable[[str], Awaitable[list[str]]] | None = None,
         evidence_recorder: ToolEvidenceRecorder | None = None,
+        auto_approve: bool = False,
     ) -> None:
         self.registry = registry
         self.policy_engine = policy_engine
@@ -1509,6 +1510,7 @@ class ToolBroker:
         self.workspace_resolver = workspace_resolver
         self.dns_resolver = dns_resolver or _resolve_addresses
         self.evidence_recorder = evidence_recorder
+        self.auto_approve = auto_approve
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def prepare(
@@ -1615,7 +1617,11 @@ class ToolBroker:
                 cloud_transfer=plugin.spec.cloud_transfer,
             ),
         )
-        if decision.effect == PolicyEffect.ALLOW and plugin.spec.requires_approval:
+        if (
+            decision.effect == PolicyEffect.ALLOW
+            and plugin.spec.requires_approval
+            and not self.auto_approve
+        ):
             decision = PolicyDecision(
                 effect=PolicyEffect.REQUIRE_APPROVAL,
                 reason="the installed capability explicitly requires operator approval",

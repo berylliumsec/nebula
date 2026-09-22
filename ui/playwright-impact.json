@@ -13,7 +13,8 @@
     {"name": "subagent-sidebar", "patterns": ["ui/src/pages/conversationSidebar.ts"], "areas": ["subagent-sidebar"]},
     {"name": "conversation-details", "patterns": ["ui/src/components/ChatWorkspaceDrawer.tsx", "ui/src/components/ProviderGoalChildren.tsx"], "areas": ["conversation-details"]},
     {"name": "structured-results", "patterns": ["ui/src/components/structured-result/*", "ui/src/pages/ResultsPage*", "ui/src/structured-results.css", "src/nebula/v3/structured_results.py", "ui/src/components/ProviderGoalPanel*", "src/nebula/v3/chat_goals.py"], "areas": ["structured-results"]},
-    {"name": "tool-suggestions", "patterns": ["ui/src/components/ToolSuggestion*", "ui/src/components/TypeSafe*", "ui/src/components/EngagementPolicySettings*", "src/nebula/v3/tool_suggestions.py"], "areas": ["tool-suggestions"]},
+    {"name": "project-runtime-policy", "patterns": ["ui/src/components/EngagementPolicySettings*", "src/nebula/v3/harness*.py", "src/nebula/v3/runtime_platform.py", "src/nebula/v3/tools.py"], "areas": ["project-runtime-policy"]},
+    {"name": "tool-suggestions", "patterns": ["ui/src/components/ToolSuggestion*", "ui/src/components/TypeSafe*", "src/nebula/v3/tool_suggestions.py"], "areas": ["tool-suggestions"]},
     {"name": "mcp-import", "patterns": ["ui/src/components/McpImportDialog*", "ui/src/components/HarnessSettings*", "src/nebula/v3/mcp*.py"], "areas": ["mcp-import"]},
     {"name": "ssh-environments", "patterns": ["ui/src/components/Environment*", "ui/src/sshTools.ts", "src/nebula/v3/environments.py", "src/nebula/v3/ssh_environments.py"], "areas": ["ssh-environments"]},
     {"name": "assistant", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/components/Chat*", "ui/src/components/Assistant*", "src/nebula/v3/chat*.py", "src/nebula/v3/harness*.py"], "areas": ["assistant", "chat-edit-in-place", "provider-thinking"]},
@@ -33,6 +34,16 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "project-runtime-policy": [
+      {"area":"project-runtime-policy","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
+      {"area":"project-runtime-policy","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
+      {"area":"project-runtime-policy","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
+      {"area":"project-runtime-policy","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
+      {"area":"project-runtime-policy","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
+      {"area":"project-runtime-policy","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
+      {"area":"project-runtime-policy","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
+      {"area":"project-runtime-policy","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"}
+    ],
     "mission-restart-recovery": [
       {"area":"mission-restart-recovery","project":"desktop","test_match":"tests/interface.spec.ts","grep":"mission workflow recovers after restart without operator actions","runtime":"mock","shard":"1/1"},
       {"area":"mission-restart-recovery","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"mission workflow recovers after restart without operator actions","runtime":"mock","shard":"1/1"},

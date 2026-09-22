@@ -25,7 +25,7 @@ describe("project policy hydration", () => {
     await act(async () => { resolve(policy("first")); });
     expect(approval).toBeEnabled();
     expect(approval).toHaveValue("on_boundary");
-    expect(approval).toHaveAccessibleDescription(/Harness, MCP and browser permissions are separate/);
+    expect(approval).toHaveAccessibleDescription(/provider and harness tool approvals/);
   });
 
   it("ignores an earlier project's policy response after switching projects", async () => {
