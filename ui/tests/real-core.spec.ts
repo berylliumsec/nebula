@@ -3725,9 +3725,9 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
         return context.getImageData(0, 0, 1, 1).data[3];
       }), `${theme}: settings must not show the underlying page through their content`).toBe(255);
     }
-    await expect(approvalPolicy).toHaveAccessibleDescription(/Harness, MCP and browser permissions are separate/);
+    await expect(approvalPolicy).toHaveAccessibleDescription(/provider and harness tool approvals/);
     await approvalPolicy.selectOption("never");
-    await expect(page.getByText("Commands run without per-command approval; scope and other permission checks still apply.", {exact: true})).toBeVisible();
+    await expect(page.getByText("Provider and harness tools run without approval prompts; scope and deny rules still apply.", {exact: true})).toBeVisible();
     await approvalPolicy.selectOption("on_boundary");
     await expect(page.getByText("Existing sessions keep their frozen policy revision.", {exact: true})).toBeVisible();
     const mode = page.getByRole("combobox", { name: "Project execution mode" });

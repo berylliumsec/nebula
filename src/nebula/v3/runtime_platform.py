@@ -18,6 +18,8 @@ from .artifacts import ArtifactStore
 from .diagnostics import gather_diagnostic, record_caught_exception
 from .domain import (
     Approval,
+    AutomationApprovalPolicy,
+    AutomationProjectPolicy,
     ChatGoal,
     Engagement,
     McpServerProfile,
@@ -70,6 +72,15 @@ KALI_RUNTIME_METADATA_SCHEMA = "nebula.kali-runtime/v1"
 # Compatibility name used by the human-terminal surface. Both the human and
 # agent runtimes are deliberately prepared from this one image.
 DEFAULT_HUMAN_TERMINAL_SOURCE_IMAGE = DEFAULT_KALI_SOURCE_IMAGE
+
+
+def project_auto_approves_tools(store: NebulaStore, engagement_id: str) -> bool:
+    policies = store.list_entities(
+        AutomationProjectPolicy, engagement_id=engagement_id, limit=1
+    )
+    return bool(
+        policies and policies[0].approval_policy == AutomationApprovalPolicy.NEVER
+    )
 
 
 class RuntimePlatformError(RuntimeError):
@@ -275,6 +286,7 @@ class RuntimePlatform:
             evidence_recorder=StoreToolEvidenceRecorder(
                 self.store, self.artifact_store
             ),
+            auto_approve=project_auto_approves_tools(self.store, engagement_id),
         )
         return RuntimeToolComponents(
             broker=broker,

@@ -87,6 +87,8 @@ from .domain import (
     AgentRun,
     Approval,
     ApprovalStatus,
+    AutomationApprovalPolicy,
+    AutomationProjectPolicy,
     ChatBackend,
     ChatCitation,
     ChatContentBlock,
@@ -3882,9 +3884,13 @@ class CodexAppServerAdapter(HarnessAdapter):
             request.session, request.profile
         )
         approval_policy: Literal["untrusted", "never"] = (
-            "untrusted"
-            if managed_gateway or _native_capability_names(native_capabilities)
-            else "never"
+            "never"
+            if request.session.metadata.get("approval_policy") == "never"
+            else (
+                "untrusted"
+                if managed_gateway or _native_capability_names(native_capabilities)
+                else "never"
+            )
         )
         effective_mcp, _ = _mcp_runtime_config(
             request.mcp_profiles,
@@ -7866,6 +7872,17 @@ class HarnessRuntimeService:
             return "docker"
         return self.automation_tool_platform.project_execution_mode(engagement_id)
 
+    def _project_approval_policy(self, engagement_id: str) -> str:
+        policies = self.store.list_entities(
+            AutomationProjectPolicy, engagement_id=engagement_id, limit=1
+        )
+        return (
+            "never"
+            if policies
+            and policies[0].approval_policy == AutomationApprovalPolicy.NEVER
+            else "prompt"
+        )
+
     def bind_browser_automation_platform(
         self, platform: BrowserAutomationToolPlatform
     ) -> None:
@@ -8663,6 +8680,7 @@ class HarnessRuntimeService:
         metadata: dict[str, Any] = {
             "context_management": "runtime_managed",
             "execution_mode": execution_mode,
+            "approval_policy": self._project_approval_policy(engagement_id),
             "native_capabilities": native_capabilities.model_dump(mode="json"),
             "command_runtime_enabled": oci_snapshot is not None,
             "runtime_options": {
@@ -13423,7 +13441,10 @@ class HarnessRuntimeService:
             return existing
         profile = self.store.get(HarnessProfile, session.harness_profile_id)
         analysis_only = bool(session.metadata.get("analysis_only"))
-        if not analysis_only and "execution_mode" not in session.metadata:
+        if not analysis_only and (
+            "execution_mode" not in session.metadata
+            or "approval_policy" not in session.metadata
+        ):
             execution_mode = self._project_execution_mode(session.engagement_id)
             session = self.store.update(
                 HarnessSession,
@@ -13432,6 +13453,9 @@ class HarnessRuntimeService:
                     "metadata": {
                         **session.metadata,
                         "execution_mode": execution_mode,
+                        "approval_policy": self._project_approval_policy(
+                            session.engagement_id
+                        ),
                         "native_capabilities": _native_capabilities_for_execution_mode(
                             profile.native_capabilities, execution_mode
                         ).model_dump(mode="json"),
@@ -13623,6 +13647,12 @@ class HarnessRuntimeService:
         policy, server, tool, risk, rationale = self._permission_policy(
             session, request
         )
+        if (
+            policy == McpApprovalMode.ASK
+            and session.metadata.get("approval_policy") == "never"
+        ):
+            policy = McpApprovalMode.ALLOW
+            rationale = "Approved by the Project's no-prompt tool policy"
         origin = (
             ToolCallOrigin.CHAT
             if turn.origin == HarnessTurnOrigin.CHAT

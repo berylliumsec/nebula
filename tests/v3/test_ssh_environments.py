@@ -12,6 +12,7 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     Approval,
     ApprovalStatus,
+    AutomationProjectPolicy,
     ChatTurn,
     ChatTurnStatus,
     Engagement,
@@ -591,6 +592,30 @@ def test_ask_host_stops_for_approval_then_runs_once_approved(tmp_path, monkeypat
     )
 
     assert result.exit_code == 0
+
+
+def test_project_never_policy_auto_approves_provider_ssh_tool(tmp_path, monkeypatch):
+    _local_shell(monkeypatch)
+    store = NebulaStore(tmp_path / "nebula.db")
+    store.create(
+        AutomationProjectPolicy(
+            id="automation:eng-1",
+            engagement_id="eng-1",
+            approval_policy="never",
+        )
+    )
+    environment = SshEnvironment(id="ssh:lab", alias="lab", enabled=True)
+    components = _platform_components(tmp_path, store, environment)
+
+    result = asyncio.run(
+        components.broker.execute(
+            _invocation(components, ssh_tool_name("lab"), {"command": "echo approved"}),
+            components.scope,
+        )
+    )
+
+    assert result.exit_code == 0
+    assert store.list_entities(Approval, engagement_id="eng-1") == []
 
 
 def test_remote_command_timeout_stops_the_process(monkeypatch):
