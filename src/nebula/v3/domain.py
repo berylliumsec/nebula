@@ -3918,6 +3918,40 @@ class ChatSubagentMessage(Entity):
         return self
 
 
+class ChatAgentMessageStatus(StringEnum):
+    """Delivery state for a message between independent main conversations."""
+
+    PENDING = "pending"
+    DELIVERED = "delivered"
+    UNDELIVERED = "undelivered"
+
+
+class ChatAgentMessage(Entity):
+    """One durable, project-scoped message between independent main agents."""
+
+    entity_kind: ClassVar[str] = "chat_agent_messages"
+    engagement_id: str
+    sender_session_id: str = Field(min_length=1, max_length=200)
+    recipient_session_id: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=20_000)
+    status: ChatAgentMessageStatus = ChatAgentMessageStatus.PENDING
+    delivered_at: datetime | None = None
+    note: str | None = Field(default=None, max_length=1_000)
+    transcript_message_id: str = Field(min_length=1, max_length=200)
+    idempotency_key: str | None = Field(default=None, max_length=300)
+
+    @model_validator(mode="after")
+    def endpoints_and_delivery_are_coherent(self) -> "ChatAgentMessage":
+        if self.sender_session_id == self.recipient_session_id:
+            raise ValueError("agent messages require different sender and recipient")
+        terminal = self.status != ChatAgentMessageStatus.PENDING
+        if terminal != (self.delivered_at is not None):
+            raise ValueError(
+                "delivered_at is required exactly for terminal agent messages"
+            )
+        return self
+
+
 class NativeCheckpoint(Entity):
     """A conflict-aware snapshot of workspace files under Nebula edit control."""
 
@@ -4716,6 +4750,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatTurn,
     ChatSubagent,
     ChatSubagentMessage,
+    ChatAgentMessage,
     NativeCheckpoint,
     ChatSchedule,
     NativeHookExecution,

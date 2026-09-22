@@ -1390,6 +1390,15 @@ class NebulaStore:
                     EntityRow.kind.in_(("chat_subagents", "chat_subagent_messages")),
                     EntityRow.payload["parent_session_id"].as_string() == session_id,
                 ),
+                # Incoming peer-message records are private to the recipient
+                # transcript. Outgoing records survive sender deletion so the
+                # recipient keeps durable attribution to the deleted session ID.
+                and_(
+                    EntityRow.kind == "chat_agent_messages",
+                    EntityRow.payload["recipient_session_id"]
+                    .as_string()
+                    .in_(session_ids),
+                ),
                 and_(
                     EntityRow.kind == "chat_sessions",
                     EntityRow.id.in_(session_ids[1:]),

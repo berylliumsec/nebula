@@ -318,6 +318,12 @@ textarea { border-radius: var(--radius-control); }
 .chat-message:has(.assistant-code-block, .tool-call, pre, table) { max-width: 100%; }
 .chat-message.assistant,
 .chat-message.operator { border-color: transparent; background: transparent; }
+.chat-message.agent-message { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--blue) 28%, var(--border)); border-radius: var(--radius-panel); background: color-mix(in srgb, var(--blue) 6%, var(--surface)); }
+.chat-message.agent-message > .chat-message-body { min-width: 0; }
+.chat-message.agent-message header { align-items: baseline; margin-bottom: 8px; }
+.chat-message.agent-message header strong { color: var(--muted-strong); font-weight: var(--weight-semibold); }
+.chat-message.agent-message header strong + span { color: var(--muted); font-size: var(--type-meta); }
+.chat-message.agent-message header .chat-message-time { margin-left: auto; }
 .chat-message.operator { position: relative; width: fit-content; max-width: min(560px, 82%); margin-right: max(0px, calc((100% - var(--chat-reading-track)) / 2)); margin-left: auto; padding: 9px 14px; border-radius: 14px; background: var(--surface-muted); }
 .chat-message.operator > .chat-message-body { display: grid; }
 .chat-message.operator .chat-message-body > p { margin-block: 0; }

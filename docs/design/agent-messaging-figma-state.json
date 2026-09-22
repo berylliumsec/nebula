@@ -1,0 +1,20 @@
+{
+  "fileKey": "tVEa0PXZaa7H4ZLflwgcb7",
+  "pageId": "21:2",
+  "pageName": "Subagents",
+  "updatedAt": "2026-09-22",
+  "approval": "requested",
+  "frames": [
+    {"id": "124:7", "name": "A1 · Desktop · Agent messaging enabled", "viewport": "1440x960"},
+    {"id": "124:46", "name": "A2 · Desktop · Active peer message delivered", "viewport": "1440x960"},
+    {"id": "124:87", "name": "A3 · Mobile 390 · Peer message next turn", "viewport": "390x844"},
+    {"id": "124:113", "name": "A4 · Agent messaging lifecycle and boundaries", "viewport": "1870x350"}
+  ],
+  "audit": {
+    "missingFonts": false,
+    "placeholders": 0,
+    "overflowingChildren": 0,
+    "fontFamily": "Geist",
+    "semanticVariablesBound": true
+  }
+}

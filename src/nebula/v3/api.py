@@ -159,6 +159,7 @@ from .chat import (
     ChatService,
     unarchive_chat_session,
 )
+from .chat_subagents import is_subagent_session
 from .chat_media import MAX_CHAT_IMAGE_BYTES, ChatImageError, validate_chat_image
 from .chat_schedules import ChatScheduleService, ScheduleCreate, ScheduleWrite
 from .container_terminal import (
@@ -552,6 +553,7 @@ READ_ONLY_RESOURCES = {
 APPEND_ONLY_RESOURCES: set[str] = set()
 CUSTOM_RESOURCES = {
     "browser_companion_actions",
+    "chat_agent_messages",
     "chat_subagent_messages",
     "structured_results",
     "chat_read_cursors",
@@ -798,6 +800,7 @@ class ChatSessionUpdateRequest(NebulaModel):
     hook_ids: list[str] | None = Field(default=None, max_length=32)
     reasoning_effort: ReasoningEffort | None = None
     allow_subagents: bool | None = None
+    allow_agent_messaging: bool | None = None
     max_active_subagents: int | None = Field(default=None, ge=1, le=100)
     subagent_provider_id: str | None = Field(default=None, max_length=200)
     subagent_model: str | None = Field(default=None, max_length=300)
@@ -812,6 +815,7 @@ class ChatSessionUpdateRequest(NebulaModel):
             and self.hook_ids is None
             and "reasoning_effort" not in self.model_fields_set
             and self.allow_subagents is None
+            and self.allow_agent_messaging is None
             and "max_active_subagents" not in self.model_fields_set
             and self.subagent_provider_id is None
             and self.subagent_model is None
@@ -1782,6 +1786,8 @@ def create_app(
     # runs provider-chat subagents.
     if harness_runtime.provider_subagents is None:
         harness_runtime.bind_provider_subagents(provider_chat.subagents)
+    if harness_runtime.agent_messages is None:
+        harness_runtime.bind_agent_messages(provider_chat.agent_messages)
 
     executions = execution_service
     if executions is None and artifact_store is not None and tool_platform is not None:
@@ -8950,6 +8956,7 @@ def create_app(
                 ),
                 provider_subagent=request.harness_provider_subagent(),
                 pending_provider_subagent=request.harness_pending_provider_subagent(),
+                allow_agent_messaging=request.allow_agent_messaging,
             )
             if companion_ids:
                 browser_companion.bind(next(iter(companion_ids)), chat.id)
@@ -10064,6 +10071,16 @@ def create_app(
             metadata["hook_ids"] = request.hook_ids
         if "reasoning_effort" in request.model_fields_set:
             metadata["reasoning_effort"] = request.reasoning_effort
+        if request.allow_agent_messaging is not None:
+            if request.allow_agent_messaging and (
+                is_subagent_session(current)
+                or current.metadata.get("temporary_assistant") is True
+                or isinstance(current.metadata.get("archived_at"), str)
+            ):
+                raise ConflictError(
+                    "agent messaging is available only to saved main conversations"
+                )
+            metadata["allow_agent_messaging"] = request.allow_agent_messaging
         if (
             request.allow_subagents is not None
             or "max_active_subagents" in request.model_fields_set

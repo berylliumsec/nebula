@@ -1,26 +1,23 @@
 {
-  "change_digest": "857af0190dbb3690265f4de4287d259df7c10ad66cb97dbc33b24a2c4115f893",
-  "reviewed_by": "Codex unsent new-chat draft lifecycle review",
-  "reason": "The Assistant composer now keeps an immediate in-memory draft per project and conversation while retaining sessionStorage recovery. Four focused frontend cases cover denied browser storage, isolation, explicit clearing, and the exact New Chat to saved conversation to New Chat journey. Eight catalogued conversation-switching entries cover desktop Chromium plus 320, 390, and 430 px emulated Chromium and WebKit profiles.",
-  "exclusions": "No Python, Rust, backend, provider, harness, streaming, or unrelated browser tests: the change is limited to device-local unsent composer state and its conversation identity boundary. The selected browser journey is mocked because no Core mutation should occur before the first message is sent. Production build is checked separately. Physical-device coverage is unavailable and is not inferred from emulation.",
-  "expected_tests": {"python": 0, "frontend": 4, "native": 0, "playwright": 8},
+  "change_digest": "a68d53645f7441ffb415a2f627e5fedad41aaed9d227fff247870d3bf7540cac",
+  "reviewed_by": "Codex main-agent messaging lifecycle review",
+  "reason": "Independent top-level agents can explicitly opt into same-project discovery, send durable idempotent peer messages, consume them through provider or harness runtimes, and see sender-attributed system callouts in chat. Five focused Python tests cover eligibility, project isolation, idempotency, provider injection, and harness steering/inbox fallback. Forty-six selected Vitest cases include four settings serialization tests and the existing App render matrix with a peer-message assertion. Three catalogued Assistant-settings entries match six browser checks across desktop and mobile Chromium/WebKit.",
+  "exclusions": "No full suite, native tests, unrelated provider tests, or unrelated browser journeys. The selected Playwright journey uses a mocked Core and validates the adjacent Assistant settings surface; there is not yet a catalogued real-Core two-agent browser journey. Production build is checked separately. LAN-origin and physical-device evidence are unavailable, so those completion gates will be reported as unverified rather than inferred from emulation.",
+  "expected_tests": {"python": 5, "frontend": 46, "native": 0, "playwright": 6},
   "python_versions": ["3.11"],
   "python_browser": false,
   "python_node": false,
-  "python": [],
+  "python": [
+    "tests/v3/test_chat_agent_messages.py"
+  ],
   "frontend": [
-    "ui/src/pages/chatDraftStorage.test.ts",
-    "ui/src/pages/chatDraftNavigation.test.tsx"
+    "ui/src/api/chatSubagentsSettings.test.ts",
+    "ui/src/App.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:conversation-switch-performance/desktop",
-    "entry:conversation-switch-performance/compact",
-    "entry:conversation-switch-performance/mobile-chromium-small",
-    "entry:conversation-switch-performance/mobile-chromium-ledger-390",
-    "entry:conversation-switch-performance/mobile-chromium-wide",
-    "entry:conversation-switch-performance/mobile-webkit-small",
-    "entry:conversation-switch-performance/mobile-webkit",
-    "entry:conversation-switch-performance/mobile-webkit-wide"
+    "entry:assistant-settings-navigation/desktop",
+    "entry:assistant-settings-navigation/mobile-chromium",
+    "entry:assistant-settings-navigation/mobile-webkit"
   ]
 }

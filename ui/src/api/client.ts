@@ -1614,7 +1614,7 @@ interface WirePersistedChatMessage extends WireEntity {
   engagement_id: string;
   session_id: string;
   sequence: number;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   reasoning?: string;
   content_blocks?: Array<{
@@ -3331,6 +3331,7 @@ export function chatRequestBody(
     ...(body.hookIds?.length ? { hook_ids: body.hookIds } : {}),
     ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
     ...(body.allowSubagents ? { allow_subagents: true } : {}),
+    ...(body.allowAgentMessaging ? { allow_agent_messaging: true } : {}),
     ...(body.allowSubagents && body.subagentProviderId && body.subagentModel
       ? { subagent_provider_id: body.subagentProviderId, subagent_model: body.subagentModel }
       : {}),
@@ -3414,6 +3415,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
       ? (value.metadata?.reasoning_effort as ReasoningEffort)
       : undefined,
     ...chatSessionSubagents(value.metadata),
+    allowAgentMessaging: value.metadata?.allow_agent_messaging === true,
     archivedAt: typeof value.metadata?.archived_at === "string" ? value.metadata.archived_at : undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
@@ -4176,6 +4178,7 @@ function mapPersistedChatMessage(
     sequence: value.sequence,
     role: value.role,
     content: value.content,
+    metadata: value.metadata ?? {},
     reasoning: value.reasoning || undefined,
     contentBlocks: (value.content_blocks ?? []).map((block) => ({
       type: block.type,
@@ -8723,6 +8726,7 @@ export class ApiClient {
           ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
           ...(body.useModelReasoningDefault ? { reasoning_effort: null } : {}),
           ...(body.allowSubagents !== undefined ? { allow_subagents: body.allowSubagents } : {}),
+          ...(body.allowAgentMessaging !== undefined ? { allow_agent_messaging: body.allowAgentMessaging } : {}),
           ...(body.maxActiveSubagents !== undefined ? { max_active_subagents: body.maxActiveSubagents } : {}),
           ...(body.subagentProviderId ? { subagent_provider_id: body.subagentProviderId } : {}),
           ...(body.subagentModel ? { subagent_model: body.subagentModel } : {}),
@@ -9089,6 +9093,7 @@ export class ApiClient {
     /** The composer's other choices, saved on the new conversation. */
     reasoningEffort?: ReasoningEffort;
     allowSubagents?: boolean;
+    allowAgentMessaging?: boolean;
     maxActiveSubagents?: number;
     objective: string;
     completionCriteria: string[];
@@ -9110,6 +9115,7 @@ export class ApiClient {
           hook_ids: body.hookIds,
           ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
           ...(body.allowSubagents ? { allow_subagents: true } : {}),
+          ...(body.allowAgentMessaging ? { allow_agent_messaging: true } : {}),
           ...(body.allowSubagents && body.maxActiveSubagents ? { max_active_subagents: body.maxActiveSubagents } : {}),
           objective: body.objective,
           completion_criteria: body.completionCriteria,

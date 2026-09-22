@@ -206,6 +206,11 @@ from .chat_subagents import (
     subagent_limit,
     subagent_routing_instructions,
 )
+from .chat_agent_messages import (
+    AGENT_MESSAGE_ROUTING_INSTRUCTIONS,
+    AgentMessageService,
+    agent_message_components,
+)
 from .tool_results import (
     TOOL_RESULT_SCHEMA,
     ToolResultReceipt,
@@ -424,6 +429,8 @@ class ChatCompletionRequest(NebulaModel):
     tools_enabled: bool = False
     # Advertise start/wait/list/stop subagent tools. Ignored for subagent turns.
     allow_subagents: bool = False
+    # Let this independent main conversation discover and message project peers.
+    allow_agent_messaging: bool = False
     # How many subagents may run at once. None, the default, is no limit.
     max_active_subagents: int | None = Field(
         default=None, ge=1, le=SUBAGENT_LIMIT_CEILING
@@ -734,6 +741,15 @@ def _stored_model_text(message: ChatMessage) -> str:
     turn was first sent with, so the selection does not vanish after its turn.
     """
 
+    if (
+        message.role == ChatRole.SYSTEM
+        and message.metadata.get("kind") == "agent_message"
+    ):
+        sender = message.metadata.get("sender_title")
+        sender_id = message.metadata.get("sender_session_id")
+        label = sender if isinstance(sender, str) and sender else "Peer agent"
+        identity = f" ({sender_id})" if isinstance(sender_id, str) else ""
+        return f"Peer agent message from {label}{identity}:\n\n{message.content}"
     raw = message.metadata.get("context_attachments")
     if message.role != ChatRole.USER or not isinstance(raw, list) or not raw:
         return message.content
@@ -1441,6 +1457,7 @@ class ChatService:
         self._active_provider_turns: dict[str, _ActiveProviderTurn] = {}
         self._naming_tasks: set[asyncio.Task[Any]] = set()
         self.subagents = SubagentService(store, self)
+        self.agent_messages = AgentMessageService(store)
         self.shutting_down = False
 
     @staticmethod
@@ -2285,6 +2302,7 @@ class ChatService:
                     ssh_environment_ids=settings.ssh_environment_ids,
                     hook_ids=settings.hook_ids,
                     allow_subagents=settings.allow_subagents,
+                    allow_agent_messaging=settings.allow_agent_messaging,
                     max_active_subagents=settings.max_active_subagents,
                     allow_cloud_tool_results=settings.allow_cloud_tool_results,
                     reasoning_effort=settings.reasoning_effort,
@@ -2564,6 +2582,7 @@ class ChatService:
                     ),
                     hook_ids=settings.hook_ids,
                     allow_subagents=settings.allow_subagents,
+                    allow_agent_messaging=settings.allow_agent_messaging,
                     max_active_subagents=settings.max_active_subagents,
                     max_artifact_queries=source.max_artifact_queries,
                     allow_cloud_tool_results=source.allow_cloud_tool_results,
@@ -2637,6 +2656,7 @@ class ChatService:
                     ssh_environment_ids=settings.ssh_environment_ids,
                     hook_ids=settings.hook_ids,
                     allow_subagents=settings.allow_subagents,
+                    allow_agent_messaging=settings.allow_agent_messaging,
                     max_active_subagents=settings.max_active_subagents,
                     allow_cloud_tool_results=settings.allow_cloud_tool_results,
                     reasoning_effort=settings.reasoning_effort,
@@ -2799,6 +2819,12 @@ class ChatService:
             stored_messages = self._session_messages(session)
             incoming, _ = self._merge_history(stored_messages, incoming)
             _, new_messages = self._merge_history(stored_messages, durable_incoming)
+            # Peer messages are already present as system transcript entries, so
+            # this turn receives them through canonical history. Mark them before
+            # routing to avoid injecting the same content a second time.
+            self.agent_messages.mark_history_delivered(
+                session.id, {message.id for message in stored_messages}
+            )
         else:
             new_messages = durable_incoming
         # Only an image this request adds must reach the model as an image.
@@ -2944,6 +2970,9 @@ class ChatService:
         subagents_enabled = bool(
             request.allow_subagents and not subagent_child and engagement_id
         )
+        agent_messaging_enabled = bool(
+            request.allow_agent_messaging and not subagent_child and engagement_id
+        )
         # Every subagent turn can message the assistant that delegated to it,
         # so it always routes tools, even when its task has no others.
         child_messaging = bool(subagent_child and engagement_id)
@@ -2951,6 +2980,7 @@ class ChatService:
             request.tools_enabled
             or subagents_enabled
             or child_messaging
+            or agent_messaging_enabled
             or request.mcp_server_ids
             or request.ssh_environment_ids
             or any(item.resources for item in skill_snapshots)
@@ -3282,6 +3312,7 @@ class ChatService:
             or skill_resources_selected
             or subagents_enabled
             or child_messaging
+            or agent_messaging_enabled
         )
         if tools_enabled:
             if engagement_id is None:
@@ -3358,6 +3389,7 @@ class ChatService:
                     and not skill_resources_selected
                     and not subagents_enabled
                     and not child_messaging
+                    and not agent_messaging_enabled
                 ):
                     raise ChatConfigurationError(
                         "no runtime capabilities were selected"
@@ -3421,6 +3453,23 @@ class ChatService:
                         tool_components,
                         subagent_child_components(
                             self.subagents,
+                            engagement_id=engagement_id,
+                            workspace=(
+                                tool_components.workspace
+                                if tool_components is not None
+                                else Path(
+                                    (engagement.workspace_path if engagement else None)
+                                    or "."
+                                ).resolve()
+                            ),
+                            scope=tool_components.scope if tool_components else None,
+                        ),
+                    )
+                if agent_messaging_enabled:
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        agent_message_components(
+                            self.agent_messages,
                             engagement_id=engagement_id,
                             workspace=(
                                 tool_components.workspace
@@ -3595,6 +3644,7 @@ class ChatService:
                     "application_model_context": model_context,
                     "allow_subagents": subagents_enabled,
                     "subagent_child": child_messaging,
+                    "allow_agent_messaging": agent_messaging_enabled,
                     "max_active_subagents": (
                         request.max_active_subagents if subagents_enabled else None
                     ),
@@ -4661,6 +4711,10 @@ class ChatService:
                     delivery = self.subagents.routing_delivery(
                         turn, {spec.name for spec in available_specs}
                     )
+                    if delivery is None:
+                        delivery = self.agent_messages.routing_delivery(
+                            turn, {spec.name for spec in available_specs}
+                        )
                     if delivery is not None:
                         turn, events = self._subagent_delivery_step(
                             turn, components, *delivery
@@ -4680,6 +4734,14 @@ class ChatService:
                                 )
                                 if any(
                                     spec.name == "start_subagent"
+                                    for spec in available_specs
+                                )
+                                else ""
+                            )
+                            + (
+                                AGENT_MESSAGE_ROUTING_INSTRUCTIONS
+                                if any(
+                                    spec.name == "send_agent_message"
                                     for spec in available_specs
                                 )
                                 else ""
@@ -7307,6 +7369,25 @@ class ChatService:
                         scope=components.scope if components else None,
                     ),
                 )
+            if turn.request_snapshot.get("allow_agent_messaging"):
+                components = combine_tool_components(
+                    components,
+                    agent_message_components(
+                        self.agent_messages,
+                        engagement_id=turn.engagement_id,
+                        workspace=(
+                            components.workspace
+                            if components is not None
+                            else Path(
+                                self.store.get(
+                                    Engagement, turn.engagement_id
+                                ).workspace_path
+                                or "."
+                            ).resolve()
+                        ),
+                        scope=components.scope if components else None,
+                    ),
+                )
             resumed_goal = (
                 self.store.get(ChatGoal, turn.goal_id) if turn.goal_id else None
             )
@@ -9557,6 +9638,7 @@ class ChatService:
             # so the choice survives a reload like the others.
             "allow_subagents": prepared.source_request.allow_subagents,
             "max_active_subagents": prepared.source_request.max_active_subagents,
+            "allow_agent_messaging": prepared.source_request.allow_agent_messaging,
         }
 
     @staticmethod
