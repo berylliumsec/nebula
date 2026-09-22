@@ -229,7 +229,11 @@ def tool_failure(
         if selected
         else None
     )
-    if safe_field and len(json.dumps(safe_field, default=str)) > 1_000:
+    if (
+        isinstance(selected, dict)
+        and safe_field
+        and len(json.dumps(safe_field, default=str)) > 1_000
+    ):
         safe_field = {
             key: selected[key] for key in ("type", "format") if key in selected
         }

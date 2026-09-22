@@ -464,14 +464,15 @@ class BrokeredToolSpecialist:
                 stage="agent_tooling",
             )
             status = "denied"
-            provider_result: dict[str, Any] | str = tool_failure(
+            failure = tool_failure(
                 self.specs[invocation.tool_name],
                 invocation.arguments,
                 denial,
                 phase="before_execution",
                 call_id=invocation.id,
             )
-            summary = str(provider_result["problem"])
+            provider_result: dict[str, Any] | str = failure
+            summary = str(failure["problem"])
             evidence_ids: list[str] = []
             reproducible: list[str] = []
             exit_code = None
