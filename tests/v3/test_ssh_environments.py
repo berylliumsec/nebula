@@ -336,6 +336,43 @@ def test_chat_selection_defaults_to_enabled_hosts_and_rejects_disabled(service):
         resolve_ssh_environments(service.store, ["ssh:jetson"])
 
 
+def test_chat_selection_adds_optional_config_metadata_to_model_tool(service):
+    service.save(
+        "research3",
+        SshEnvironmentSettings(enabled=True, notes="Prefer it for exact-build tests."),
+    )
+
+    selected = resolve_ssh_environments(
+        service.store, ["ssh:research3"], config_path=service.config_path
+    )
+    plugin = build_ssh_tool_plugins(selected)[0]
+
+    assert selected[0].notes == (
+        "SSH config metadata: Apple Silicon research Mac\n"
+        "Nebula notes: Prefer it for exact-build tests."
+    )
+    assert "SSH config metadata: Apple Silicon research Mac" in plugin.spec.description
+    assert "Nebula notes: Prefer it for exact-build tests." in plugin.spec.description
+    # Enrichment is per turn; discovery never overwrites the operator's saved notes.
+    assert service.get("research3").notes == "Prefer it for exact-build tests."
+
+
+def test_chat_selection_without_config_metadata_keeps_saved_notes(service):
+    service.save(
+        "jetson", SshEnvironmentSettings(enabled=True, notes="Use for CUDA work.")
+    )
+
+    selected = resolve_ssh_environments(
+        service.store, ["ssh:jetson"], config_path=service.config_path
+    )
+
+    assert selected[0].notes == "Use for CUDA work."
+    assert (
+        "SSH config metadata:"
+        not in build_ssh_tool_plugins(selected)[0].spec.description
+    )
+
+
 def test_several_hosts_can_be_enabled_for_one_chat_at_once(service):
     service.save("research3", SshEnvironmentSettings(enabled=True))
     service.save("jetson", SshEnvironmentSettings(enabled=True))

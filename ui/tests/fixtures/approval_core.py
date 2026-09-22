@@ -226,7 +226,8 @@ Host *
     ServerAliveInterval 30
 
 Host lab-mac lab-mac.local
-    # Build and test machine for the lab.
+    # Nebula-Purpose: Build and test machine for the lab.
+    # Nebula-Avoid: Production deployment.
     HostName 127.0.0.1
     User research
 

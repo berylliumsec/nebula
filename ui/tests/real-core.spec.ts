@@ -4694,8 +4694,9 @@ reliabilityTest("ssh environments list config hosts, enable, test, edit, and sur
     // The title follows the display name as it is typed.
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByRole("heading", {name: "lab-mac"})).toBeVisible();
-    await expect(dialog.getByText("Build and test machine for the lab.").first()).toBeVisible();
-    await expect(dialog.getByRole("textbox", {name: /Notes for agents/})).toHaveValue("Build and test machine for the lab.");
+    await expect(dialog.getByText("Nebula-Purpose: Build and test machine for the lab. Nebula-Avoid: Production deployment.").first()).toBeVisible();
+    await expect(dialog.getByRole("textbox", {name: /Notes for agents/})).toHaveValue("Nebula-Purpose: Build and test machine for the lab. Nebula-Avoid: Production deployment.");
+    await expect(dialog.getByText(/Comments directly below its/)).toBeVisible();
     await dialog.getByRole("textbox", {name: "Display name"}).fill("Lab Mac");
     await dialog.getByRole("textbox", {name: "Working directory"}).fill("~/lab");
     await dialog.getByRole("combobox", {name: "Command approval"}).selectOption("allow");
