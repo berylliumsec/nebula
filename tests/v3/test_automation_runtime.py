@@ -401,9 +401,14 @@ def test_historical_process_io_preserves_agent_ownership(tmp_path):
     asyncio.run(scenario())
 
 
-def test_command_receipt_records_workspace_changes(tmp_path):
+def test_command_execution_does_not_walk_workspace(tmp_path, monkeypatch):
     async def scenario():
         manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        monkeypatch.setattr(
+            automation_runtime.os,
+            "walk",
+            lambda *_args, **_kwargs: pytest.fail("command execution walked workspace"),
+        )
 
         result = await manager.run_command(
             engagement_id=engagement.id,
@@ -412,11 +417,12 @@ def test_command_receipt_records_workspace_changes(tmp_path):
             request=RunCommandRequest(command="write-generated-file"),
         )
 
-        assert [item.model_dump() for item in result.workspace_changes] == [
-            {"path": "generated.txt", "change": "added", "size": 9}
-        ]
+        assert (tmp_path / "workspaces" / engagement.id / "generated.txt").read_text(
+            encoding="utf-8"
+        ) == "generated"
+        assert result.workspace_changes == []
         execution = store.get(CommandExecution, result.execution_id)
-        assert execution.workspace_changes == result.workspace_changes
+        assert execution.workspace_changes == []
 
     asyncio.run(scenario())
 

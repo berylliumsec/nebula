@@ -94,10 +94,10 @@ and its background processes.
 
 Every command records the command hash, working directory, runtime digest,
 runner and policy revisions, effective network grant, timestamps, status, exit
-code, cancellation/timeout state, output sizes, and observed workspace changes.
-Complete retained stdout and stderr are immutable artifacts. Models receive
-redacted bounded results and use artifact search/read capabilities for focused
-retrieval.
+code, cancellation/timeout state, and output sizes. Complete retained stdout and
+stderr are immutable artifacts. Models receive redacted bounded results and use
+artifact search/read capabilities for focused retrieval. Command execution does
+not scan the workspace to infer file changes.
 
 Use `nebula-core runtime status` to inspect readiness and
 `nebula-core runtime prepare` to prepare or re-verify the Kali runtime. The main
