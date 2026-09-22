@@ -23,13 +23,13 @@
   "frontend": [],
   "native": [],
   "playwright": [
-    "assistant-reliability/assistant-real-desktop",
-    "assistant-reliability/assistant-real-compact",
-    "assistant-reliability/assistant-real-chromium-320",
-    "assistant-reliability/assistant-real-chromium-390",
-    "assistant-reliability/assistant-real-chromium-430",
-    "assistant-reliability/assistant-real-webkit-320",
-    "assistant-reliability/assistant-real-webkit-390",
-    "assistant-reliability/assistant-real-webkit-430"
+    "entry:assistant-reliability/assistant-real-desktop",
+    "entry:assistant-reliability/assistant-real-compact",
+    "entry:assistant-reliability/assistant-real-chromium-320",
+    "entry:assistant-reliability/assistant-real-chromium-390",
+    "entry:assistant-reliability/assistant-real-chromium-430",
+    "entry:assistant-reliability/assistant-real-webkit-320",
+    "entry:assistant-reliability/assistant-real-webkit-390",
+    "entry:assistant-reliability/assistant-real-webkit-430"
   ]
 }
