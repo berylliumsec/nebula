@@ -8,7 +8,7 @@ import time
 import pytest
 
 from nebula.v3 import diagnostic_sensitive, diagnostics
-from nebula.v3.chat import ChatCompletionRequest, ChatService
+from nebula.v3.chat import ChatCompletionRequest, ChatError, ChatService
 from nebula.v3.domain import ChatTurn, ChatTurnStatus, Engagement
 from nebula.v3.native_hooks import discover_native_hooks, snapshot_native_hook
 from nebula.v3.providers import (
@@ -270,6 +270,11 @@ def test_every_turn_end_sends_one_payload_shape(
         "model": "model-a",
         "finish_reason": finish_reason,
         "detail": detail,
+        "assistant_message": (
+            "Evidence-backed answer [source-a:chunk-a]."
+            if ending == "completed"
+            else None
+        ),
     }
 
 
@@ -308,7 +313,96 @@ def test_tool_turn_runs_the_completed_hook_once(tmp_path):
         "model": "model-a",
         "finish_reason": "stop",
         "detail": None,
+        "assistant_message": "Final answer.",
     }
+
+
+def test_required_completion_hook_can_reject_final_answer(tmp_path):
+    script = (
+        "#!/bin/sh\n"
+        "python3 -c 'import json,sys; "
+        'payload=json.load(sys.stdin)["payload"]; '
+        'raise SystemExit(3 if "Evidence-backed answer" in '
+        'payload["assistant_message"] else 0)\'\n'
+    )
+    store, service, _, request, _ = _service(
+        tmp_path,
+        FakeProvider,
+        hook_id="answer-guard",
+        events=["chat.turn.completed"],
+        script=script,
+        failure_policy="block",
+    )
+    prepared = service.prepare(request)
+
+    with pytest.raises(ChatError, match="required native hook 'answer-guard'"):
+        asyncio.run(service.complete(prepared))
+
+    assert store.get(ChatTurn, prepared.turn.id).status == ChatTurnStatus.FAILED
+    execution = service.list_turn_hook_executions(prepared.turn.id)[0]
+    assert (execution.event_name, execution.status, execution.exit_code) == (
+        "chat.turn.completed",
+        "failed",
+        3,
+    )
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+def test_stream_holds_answer_until_required_completion_hook_accepts(tmp_path, blocked):
+    class StreamingAnswerProvider(FakeProvider):
+        answer_text = ""
+
+        async def stream(self, request: ModelRequest):
+            del request
+            answer = self.answer_text
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            yield ModelStreamEvent(type=StreamEventType.TEXT_DELTA, delta=answer)
+            yield ModelStreamEvent(
+                type=StreamEventType.COMPLETED,
+                response=ModelResponse(
+                    provider_id=self.config.id,
+                    model="model-a",
+                    text=answer,
+                    finish_reason="stop",
+                ),
+            )
+
+    script = (
+        "#!/bin/sh\n"
+        "python3 -c 'import json,sys; "
+        'message=json.load(sys.stdin)["payload"]["assistant_message"]; '
+        'raise SystemExit(3 if "down" in message else 0)\'\n'
+    )
+    _, service, provider, request, _ = _service(
+        tmp_path,
+        StreamingAnswerProvider,
+        hook_id="stream-answer-guard",
+        events=["chat.turn.completed"],
+        script=script,
+        failure_policy="block",
+    )
+    provider.answer_text = (
+        "The example service is down." if blocked else "The example service is active."
+    )
+
+    async def scenario():
+        prepared = await service.prepare_async(
+            request.model_copy(update={"stream": True})
+        )
+        visible = []
+        if blocked:
+            with pytest.raises(ChatError, match="stream-answer-guard"):
+                async for event, payload in service.stream(prepared):
+                    visible.append((event, payload))
+        else:
+            async for event, payload in service.stream(prepared):
+                visible.append((event, payload))
+        return visible
+
+    visible = asyncio.run(scenario())
+    assert [event for event, _ in visible] == (
+        ["started"] if blocked else ["started", "delta", "done"]
+    )
 
 
 @pytest.mark.parametrize("ended_by", ["operator_stop", "core_shutdown"])

@@ -1050,10 +1050,18 @@ _ENDED_TURN_HOOK_FINISH_REASONS = {
 _HOOK_STDERR_EXCERPT_CHARS = 500
 
 
-def _turn_end_hook_payload(finish_reason: str, detail: str | None) -> dict[str, Any]:
+def _turn_end_hook_payload(
+    finish_reason: str,
+    detail: str | None,
+    assistant_message: str | None = None,
+) -> dict[str, Any]:
     """Every turn-ending hook event carries the same keys, so one hook serves all."""
 
-    return {"finish_reason": finish_reason, "detail": detail}
+    return {
+        "finish_reason": finish_reason,
+        "detail": detail,
+        "assistant_message": assistant_message,
+    }
 
 
 def _tool_free_request(request: ModelRequest) -> ModelRequest:
@@ -3347,7 +3355,9 @@ class ChatService:
         await self._run_native_hooks(
             prepared,
             "chat.turn.completed",
-            _turn_end_hook_payload(completion.finish_reason or "stop", None),
+            _turn_end_hook_payload(
+                completion.finish_reason or "stop", None, completion.message.content
+            ),
         )
         self._persist(prepared, completion)
         self.start_optional_naming(
@@ -3863,6 +3873,11 @@ class ChatService:
             prepared, _tool_free_request(prepared.model_request)
         )
         answer = _StreamedAnswer()
+        hold_answer_for_completion_hook = any(
+            "chat.turn.completed" in snapshot.manifest.events
+            and snapshot.manifest.failure_policy == "block"
+            for snapshot in prepared.hook_snapshots
+        )
         streamed_reasoning: list[str] = []
         tool_call_rejected = False
         async for event in self._stream_with_context_recovery(prepared, request):
@@ -3884,7 +3899,7 @@ class ChatService:
                 # A control frame in the answer is held back rather than shown
                 # and then taken away once the response is judged.
                 visible = answer.push(event.delta or "")
-                if visible:
+                if visible and not hold_answer_for_completion_hook:
                     yield (
                         "delta",
                         {
@@ -3933,21 +3948,30 @@ class ChatService:
                 )
                 completion = self._completion(prepared, response)
                 held_tail = answer.held_tail(completion.message.content)
-                if held_tail:
+                await self._run_native_hooks(
+                    prepared,
+                    "chat.turn.completed",
+                    _turn_end_hook_payload(
+                        completion.finish_reason or "stop",
+                        None,
+                        completion.message.content,
+                    ),
+                )
+                visible_completion = (
+                    completion.message.content
+                    if hold_answer_for_completion_hook
+                    else held_tail
+                )
+                if visible_completion:
                     yield (
                         "delta",
                         {
                             "type": "delta",
                             "provider_id": prepared.provider_profile.id,
                             "model": prepared.resolved_model,
-                            "delta": held_tail,
+                            "delta": visible_completion,
                         },
                     )
-                await self._run_native_hooks(
-                    prepared,
-                    "chat.turn.completed",
-                    _turn_end_hook_payload(completion.finish_reason or "stop", None),
-                )
                 self._persist(prepared, completion)
                 self.start_optional_naming(
                     self._name_initial_session(prepared, completion.message.content)
@@ -4772,6 +4796,15 @@ class ChatService:
                             _record_final_answer_fallback(fallback_answer)
                             synthesis = fallback_answer
                         completion = self._completion(prepared, synthesis)
+                        await self._run_native_hooks(
+                            prepared,
+                            "chat.turn.completed",
+                            _turn_end_hook_payload(
+                                completion.finish_reason or "stop",
+                                None,
+                                completion.message.content,
+                            ),
+                        )
                         if completion.message.content:
                             yield (
                                 "delta",
@@ -4783,13 +4816,6 @@ class ChatService:
                                     "delta": completion.message.content,
                                 },
                             )
-                        await self._run_native_hooks(
-                            prepared,
-                            "chat.turn.completed",
-                            _turn_end_hook_payload(
-                                completion.finish_reason or "stop", None
-                            ),
-                        )
                         self._persist(prepared, completion)
                         turn = prepared.turn or turn
                         self.start_optional_naming(
@@ -4959,6 +4985,13 @@ class ChatService:
 
         prepared.turn = turn
         completion = self._completion(prepared, response)
+        await self._run_native_hooks(
+            prepared,
+            "chat.turn.completed",
+            _turn_end_hook_payload(
+                completion.finish_reason or "stop", None, completion.message.content
+            ),
+        )
         yield (
             "delta",
             {
@@ -4968,11 +5001,6 @@ class ChatService:
                 "model": prepared.resolved_model,
                 "delta": completion.message.content,
             },
-        )
-        await self._run_native_hooks(
-            prepared,
-            "chat.turn.completed",
-            _turn_end_hook_payload(completion.finish_reason or "stop", None),
         )
         self._persist(prepared, completion)
         turn = prepared.turn or turn
