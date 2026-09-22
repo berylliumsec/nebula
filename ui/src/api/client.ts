@@ -9052,6 +9052,33 @@ export class ApiClient {
     ).then(mapChatGoal);
   }
 
+  updateChatGoal(sessionId: string, body: {
+    expectedRevision: number;
+    objective: string;
+    completionCriteria: string[];
+    plan: string[];
+    tokenBudget?: number;
+    timeBudgetSeconds?: number;
+    stepBudget?: number;
+    childBudget?: number;
+  }): Promise<ChatGoal> {
+    return this.request<Record<string, any>>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/goal`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          expected_revision: body.expectedRevision,
+          objective: body.objective,
+          completion_criteria: body.completionCriteria,
+          plan: body.plan,
+          token_budget: body.tokenBudget,
+          time_budget_seconds: body.timeBudgetSeconds,
+          step_budget: body.stepBudget,
+          child_budget: body.childBudget,
+        }),
+      },
+    ).then(mapChatGoal);
+  }
+
   createChatGoalConversation(body: {
     engagementId: string;
     providerId: string;

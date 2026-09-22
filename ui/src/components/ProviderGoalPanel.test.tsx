@@ -85,6 +85,75 @@ it("creates the conversation with its goal before the first message", async () =
   expect(onChange).toHaveBeenCalledWith(draft);
 });
 
+it.each(["draft", "running"] as const)("edits goal content while %s", async status => {
+  const current = { ...draft, status, revision: status === "draft" ? 1 : 4 };
+  const updated = {
+    ...current,
+    objective: "Revised objective",
+    completionCriteria: ["Revised criterion", "Visible after refresh"],
+    plan: ["Continue"],
+    stepBudget: 5,
+    revision: current.revision + 1,
+  };
+  const updateChatGoal = vi.fn().mockResolvedValue(updated);
+  const onChange = vi.fn();
+  render(<DialogProvider><ProviderGoalPanel api={{ updateChatGoal } as unknown as ApiClient} sessionId="session" goal={current} onChange={onChange} /></DialogProvider>);
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit goal" }));
+  fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Revised objective" } });
+  fireEvent.change(screen.getByLabelText("Completion criteria"), { target: { value: "Revised criterion\nVisible after refresh" } });
+  fireEvent.change(screen.getByLabelText("Plan"), { target: { value: "Continue" } });
+  fireEvent.click(screen.getByText("Limits", { exact: true }));
+  fireEvent.change(screen.getByLabelText("Step budget"), { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+  await waitFor(() => expect(updateChatGoal).toHaveBeenCalledWith("session", {
+    expectedRevision: current.revision,
+    objective: "Revised objective",
+    completionCriteria: ["Revised criterion", "Visible after refresh"],
+    plan: ["Continue"],
+    stepBudget: 5,
+  }));
+  expect(onChange).toHaveBeenCalledWith(updated);
+  expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+});
+
+it("keeps an edit draft when Core reports a newer goal revision", async () => {
+  const conflict = new ApiError("goal changed", 409);
+  const latest = { ...draft, objective: "Changed elsewhere", revision: 3 };
+  const updateChatGoal = vi.fn().mockRejectedValue(conflict);
+  const onChange = vi.fn();
+  render(<DialogProvider><ProviderGoalPanel api={{ updateChatGoal, getChatGoal: vi.fn().mockResolvedValue(latest) } as unknown as ApiClient} sessionId="session" goal={draft} onChange={onChange} /></DialogProvider>);
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit goal" }));
+  fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Keep my draft" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Your draft is still here");
+  expect(screen.getByLabelText("Objective")).toHaveValue("Keep my draft");
+  expect(onChange).toHaveBeenCalledWith(latest);
+});
+
+it("retries a running edit when only goal progress advanced", async () => {
+  const running = { ...draft, status: "running" as const, revision: 2 };
+  const advanced = { ...running, currentStep: 2, revision: 5 };
+  const saved = { ...advanced, objective: "Refined while active", revision: 6 };
+  const updateChatGoal = vi.fn()
+    .mockRejectedValueOnce(new ApiError("goal changed", 409))
+    .mockResolvedValueOnce(saved);
+  const onChange = vi.fn();
+  render(<DialogProvider><ProviderGoalPanel api={{ updateChatGoal, getChatGoal: vi.fn().mockResolvedValue(advanced) } as unknown as ApiClient} sessionId="session" goal={running} onChange={onChange} /></DialogProvider>);
+
+  fireEvent.click(screen.getByRole("button", { name: "Edit goal" }));
+  fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Refined while active" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+  await waitFor(() => expect(updateChatGoal).toHaveBeenCalledTimes(2));
+  expect(updateChatGoal.mock.calls[1][1]).toMatchObject({ expectedRevision: 5, objective: "Refined while active" });
+  expect(onChange).toHaveBeenLastCalledWith(saved);
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it("records explicit blocked and completed outcomes", async () => {
   const running: ChatGoal = { ...draft, status: "running", revision: 2 };
   const blocked: ChatGoal = { ...running, status: "blocked", blockedReason: "No new evidence", revision: 3 };
