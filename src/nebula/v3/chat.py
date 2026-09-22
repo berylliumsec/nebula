@@ -61,6 +61,8 @@ from .domain import (
     ChatRole,
     ChatSchedule,
     ChatSession,
+    ChatSubagent,
+    ChatSubagentStatus,
     ChatGoal,
     ChatGoalStatus,
     ChatTurn,
@@ -198,6 +200,7 @@ from .chat_subagents import (
     SubagentService,
     SubagentWaitPending,
     is_subagent_session,
+    safely_stopped_by_core,
     subagent_child_components,
     subagent_components,
     subagent_limit,
@@ -1485,7 +1488,7 @@ class ChatService:
                         expected_revision=goal.revision,
                     )
             offset += len(goal_page)
-        await self.subagents.reconcile_after_restart()
+        await self.subagents.reconcile_after_restart(preserve_graceful=True)
 
     def resume_turns_stopped_by_core(self) -> list[str]:
         """Resume safe turns from a graceful Core stop after services start.
@@ -1509,22 +1512,19 @@ class ChatService:
                     or saved.status != ChatTurnStatus.INTERRUPTED
                 ):
                     continue
-                recovery = saved.request_snapshot.get("recovery")
-                if not isinstance(recovery, dict) or recovery.get(
-                    "auto_resume_attempted_at"
-                ):
+                if not safely_stopped_by_core(saved):
                     continue
-                if recovery.get("cause") != "core_shutdown" and not (
-                    recovery.get("cause") is None
-                    and (saved.error or "").startswith("Core stopped ")
-                ):
-                    continue
-                if (
-                    recovery.get("unknown_tool_call_ids")
-                    or recovery.get("unknown_hook_execution_ids")
-                    or saved.request_snapshot.get("subagent_child")
-                ):
-                    continue
+                recovery = saved.request_snapshot["recovery"]
+                if saved.request_snapshot.get("subagent_child"):
+                    records = self.store.find_entities(
+                        ChatSubagent, {"child_session_id": saved.session_id}
+                    )
+                    if not any(
+                        record.child_turn_id == saved.id
+                        and record.status == ChatSubagentStatus.RUNNING
+                        for record in records
+                    ):
+                        continue
                 pending = self.pending_turn(saved.session_id)
                 if pending is None or pending.id != saved.id:
                     continue
