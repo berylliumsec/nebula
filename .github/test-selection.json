@@ -1,25 +1,19 @@
 {
-  "change_digest": "89751e3fafff2f8d420e16ac6650ba4986143b563485bb0f2ddeaaa51e2c4833",
-  "reviewed_by": "Codex adjustable conversation panel review",
-  "reason": "The Conversations sidebar and Conversation details inspector now share bounded, device-local desktop resizing while preserving a 420 px chat surface and unchanged mobile drawers. Three focused hook tests cover both panel directions, bounds, persistence, keyboard operation, and reset. Eight catalogued browser entries cover pointer and keyboard resizing, persistence after reload, accessibility, the 1024 px overlay boundary, and 320, 390, and 430 px Chromium and WebKit drawer behavior.",
-  "exclusions": "No Python, Rust, backend, provider, harness, streaming, or unrelated browser tests: the changed state is a localStorage presentation preference and does not cross the Core API boundary. Real-Core testing is not selected because Core owns none of this state. The production UI build is checked separately. Physical-device coverage is unavailable and is not inferred from emulation.",
-  "expected_tests": {"python": 0, "frontend": 3, "native": 0, "playwright": 8},
+  "change_digest": "f5d214ae63471fa58af6469f8ac7a90fcbb9262777ebf20b92289daf729b3e15",
+  "reviewed_by": "Codex automation command snapshot removal review",
+  "reason": "Automation run_command no longer recursively scans the linked workspace before and after every command. Four focused runtime tests cover the no-walk regression, normal durable output, generic timeout termination, and the real host subprocess timeout and approval boundary.",
+  "exclusions": "No frontend, native, Playwright, Docker, VPN, proxy, network-scope, or unrelated backend tests are selected. The API shape and UI are unchanged; workspace_changes remains an empty compatibility field. A real production Core host command is exercised after deployment.",
+  "expected_tests": {"python": 4, "frontend": 0, "native": 0, "playwright": 0},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/components/useResizableSidePanel.test.tsx"
+  "python": [
+    "tests/v3/test_automation_runtime.py::test_general_command_reuses_session_and_persists_artifacts",
+    "tests/v3/test_automation_runtime.py::test_command_execution_does_not_walk_workspace",
+    "tests/v3/test_automation_runtime.py::test_command_timeout_terminates_the_process_group",
+    "tests/v3/test_automation_runtime.py::test_host_command_timeout_and_exact_approval_are_enforced"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:conversation-panel-sizing/desktop",
-    "entry:conversation-panel-sizing/compact",
-    "entry:conversation-panel-sizing/mobile-chromium-small",
-    "entry:conversation-panel-sizing/mobile-chromium-ledger-390",
-    "entry:conversation-panel-sizing/mobile-chromium-wide",
-    "entry:conversation-panel-sizing/mobile-webkit-small",
-    "entry:conversation-panel-sizing/mobile-webkit",
-    "entry:conversation-panel-sizing/mobile-webkit-wide"
-  ]
+  "playwright": []
 }

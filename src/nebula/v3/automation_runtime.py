@@ -753,8 +753,6 @@ class _ManagedProcess:
     backend: RuntimeBackendProcess
     stdout: _Capture
     stderr: _Capture
-    workspace: Path
-    workspace_before: dict[str, tuple[str, int, int]]
     capture_directory: Path | None = None
     stdout_offset: int = 0
     stderr_offset: int = 0
@@ -1449,9 +1447,6 @@ class AutomationRuntimeManager:
             },
         )
         execution = self.store.create(execution)
-        workspace_before = await asyncio.to_thread(
-            _workspace_snapshot, managed.workspace
-        )
         extra_env = (
             {
                 "NEBULA_RESULTS_URL": results_url,
@@ -1486,8 +1481,6 @@ class AutomationRuntimeManager:
             backend=backend,
             stdout=_Capture(directory / "stdout"),
             stderr=_Capture(directory / "stderr"),
-            workspace=managed.workspace,
-            workspace_before=workspace_before,
             capture_directory=directory,
         )
         process.drain_tasks = (
@@ -2158,12 +2151,6 @@ class AutomationRuntimeManager:
                 kind="stderr",
                 metadata=metadata,
             )
-            workspace_after = await asyncio.to_thread(
-                _workspace_snapshot, process.workspace
-            )
-            workspace_changes = _workspace_changes(
-                process.workspace_before, workspace_after
-            )
             current = self.store.get(CommandExecution, process.execution.id)
             if current.metadata.get("results_received"):
                 process.execution = current
@@ -2183,7 +2170,6 @@ class AutomationRuntimeManager:
                     "observed_stderr_bytes": process.stderr.observed,
                     "stdout_truncated": process.stdout.truncated,
                     "stderr_truncated": process.stderr.truncated,
-                    "workspace_changes": workspace_changes,
                     "error": (
                         "command timed out"
                         if status == CommandExecutionStatus.TIMED_OUT
@@ -2352,51 +2338,6 @@ def _read_increment(path: Path, offset: int, maximum: int) -> tuple[bytes, int]:
         stream.seek(offset)
         data = stream.read(maximum)
         return data, offset + len(data)
-
-
-def _workspace_snapshot(workspace: Path) -> dict[str, tuple[str, int, int]]:
-    snapshot: dict[str, tuple[str, int, int]] = {}
-    for root, directories, files in os.walk(workspace, followlinks=False):
-        base = Path(root)
-        directories[:] = sorted(
-            name for name in directories if not (base / name).is_symlink()
-        )
-        for name in sorted([*directories, *files]):
-            path = base / name
-            try:
-                metadata = path.lstat()
-            except FileNotFoundError:
-                # diagnostic-expected: workspace files may disappear during a concurrent command.
-                continue
-            relative = path.relative_to(workspace).as_posix()
-            kind = (
-                "symlink"
-                if path.is_symlink()
-                else "directory"
-                if path.is_dir()
-                else "file"
-            )
-            snapshot[relative] = (kind, metadata.st_size, metadata.st_mtime_ns)
-    return snapshot
-
-
-def _workspace_changes(
-    before: dict[str, tuple[str, int, int]],
-    after: dict[str, tuple[str, int, int]],
-) -> list[WorkspaceChange]:
-    changes: list[WorkspaceChange] = []
-    for path in sorted(set(before) | set(after)):
-        if path not in before:
-            changes.append(
-                WorkspaceChange(path=path, change="added", size=after[path][1])
-            )
-        elif path not in after:
-            changes.append(WorkspaceChange(path=path, change="deleted"))
-        elif before[path] != after[path]:
-            changes.append(
-                WorkspaceChange(path=path, change="modified", size=after[path][1])
-            )
-    return changes[:1_000]
 
 
 __all__ = [
