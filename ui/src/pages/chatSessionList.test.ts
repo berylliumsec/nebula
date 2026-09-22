@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatSessionSummary } from "../api/types";
-import { reconcileListedSessions } from "./chatSessionList";
+import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionList";
 
 function session(id: string, revision: number, overrides: Partial<ChatSessionSummary> = {}): ChatSessionSummary {
   return {
@@ -45,5 +45,20 @@ describe("reconcileListedSessions", () => {
     ];
 
     expect(reconcileListedSessions(current, listed).map((item) => item.id)).toEqual(["created", "kept"]);
+  });
+});
+
+describe("hasRecentPendingTitle", () => {
+  const now = Date.parse("2026-09-22T11:30:00Z");
+
+  it("follows a completed provider reply until optional naming settles", () => {
+    const pending = session("chat", 2, { messageCount: 2, initialTitleState: "pending", updatedAt: "2026-09-22T11:29:30Z" });
+    expect(hasRecentPendingTitle([pending], now)).toBe(true);
+    expect(hasRecentPendingTitle([{ ...pending, title: "A useful name", initialTitleState: "generated" }], now)).toBe(false);
+  });
+
+  it("does not poll an active first message or an abandoned naming task", () => {
+    expect(hasRecentPendingTitle([session("chat", 1, { messageCount: 1 })], now)).toBe(false);
+    expect(hasRecentPendingTitle([session("chat", 2, { messageCount: 2, initialTitleState: "pending", updatedAt: "2026-09-22T11:20:00Z" })], now)).toBe(false);
   });
 });

@@ -18,3 +18,12 @@ export function reconcileListedSessions(current: ChatSessionSummary[], listed: C
     })
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
+
+/** A completed first exchange may still be waiting on Core's optional naming task. */
+export function hasRecentPendingTitle(sessions: ChatSessionSummary[], now = Date.now()): boolean {
+  return sessions.some((session) =>
+    (session.initialTitleState === "pending" || session.initialTitleState === undefined)
+    && (session.messageCount ?? 0) >= 2
+    && now - Date.parse(session.updatedAt) < 120_000,
+  );
+}
