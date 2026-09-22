@@ -970,6 +970,13 @@ class ChatHookReconciliationRequest(NebulaModel):
     detail: str = Field(min_length=1, max_length=2_000)
 
 
+class MissionEffectReconciliationRequest(NebulaModel):
+    expected_revision: int = Field(ge=1)
+    tool_call_id: str = Field(min_length=1, max_length=200)
+    outcome: Literal["complete", "failed"]
+    detail: str = Field(min_length=1, max_length=2_000)
+
+
 class ApprovalDecisionRequest(NebulaModel):
     decision: str = Field(pattern=r"^(approve|reject|stop)$")
     reason: str | None = None
@@ -7937,6 +7944,14 @@ def create_app(
             RunStatus.INTERRUPTED,
         }:
             raise ConflictError("only terminal missions can be retried")
+        restart_recovery = prior.metadata.get("restart_recovery")
+        if (
+            isinstance(restart_recovery, dict)
+            and restart_recovery.get("required") is True
+        ):
+            raise ConflictError(
+                "reconcile the interrupted mission's unknown tool effects before retrying"
+            )
         remote_mcp = prior.runtime_snapshot.get("remote_mcp_confirmed") is True
         if remote_mcp and not request.allow_cloud_tool_results:
             raise HTTPException(
@@ -7995,6 +8010,24 @@ def create_app(
                 actor_id=operator_id,
             )
         return created
+
+    @app.post(
+        f"{API_PREFIX}/runs/{{run_id}}/reconcile-effect",
+        response_model=AgentRun,
+        tags=["runs"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def reconcile_mission_effect(
+        run_id: str, request: MissionEffectReconciliationRequest
+    ) -> AgentRun:
+        return missions.reconcile_restart_effect(
+            run_id,
+            request.tool_call_id,
+            outcome=request.outcome,
+            detail=request.detail,
+            expected_revision=request.expected_revision,
+            actor_id=active_operator_id(),
+        )
 
     @app.delete(
         f"{API_PREFIX}/runs/{{run_id}}",

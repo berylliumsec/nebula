@@ -122,7 +122,7 @@ export function ChatSubagentPane({
 
     <ol className="chat-subagent-list">
       {subagents.map((subagent) => {
-        const open = expanded.includes(subagent.id) || subagent.status === "waiting_approval";
+        const open = expanded.includes(subagent.id) || ["waiting_approval", "recovery_required"].includes(subagent.status);
         const finished = !ACTIVE_STATUSES.has(subagent.status);
         return <li key={subagent.id} className="chat-subagent-card" data-status={subagent.status}>
           <div className="chat-subagent-card-head">

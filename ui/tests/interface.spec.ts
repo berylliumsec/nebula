@@ -1712,6 +1712,77 @@ test("Missions explains missing runtime setup and provides a working next action
   expect(widths.missions).toBeGreaterThanOrEqual(widths.workspace - 26);
 });
 
+test("mission workflow restart recovery refreshes authority before enabling retry", async ({ page }) => {
+  let run = {
+    ...entity,
+    id: "mission-recovery",
+    engagement_id: "scratch-project",
+    objective: "Apply the reviewed change",
+    status: "interrupted",
+    backend: "native",
+    metadata: {
+      name: "Interrupted change",
+      restart_recovery: {
+        required: true,
+        reason: "Core restarted while this API mission was active",
+        unresolved_tool_call_ids: ["call-1"],
+        effects: [{
+          tool_call_id: "call-1",
+          tool_name: "write_file",
+          risk_class: "workspace_write",
+          status_at_restart: "running",
+        }],
+      },
+    },
+  };
+  let submitted: Record<string, unknown> | undefined;
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/runs") && request.method() === "GET") {
+      await route.fulfill({ status: 200, json: [run] });
+      return;
+    }
+    if (path.endsWith("/runs/mission-recovery/reconcile-effect") && request.method() === "POST") {
+      submitted = request.postDataJSON() as Record<string, unknown>;
+      run = {
+        ...run,
+        revision: 2,
+        metadata: {
+          ...run.metadata,
+          restart_recovery: {
+            ...run.metadata.restart_recovery,
+            required: false,
+            unresolved_tool_call_ids: [],
+          },
+        },
+      };
+      await route.fulfill({ status: 200, json: run });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=missions&mission=mission-recovery", "Workbench");
+  const recovery = page.getByRole("alert", { name: "Mission effect needs review" });
+  await expect(recovery).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry mission" })).toHaveCount(0);
+  await expect(recovery.getByRole("button", { name: "Confirm completed" })).toBeDisabled();
+  await recovery.getByLabel("Recovery note").fill("Verified the saved file contents.");
+  await recovery.getByRole("button", { name: "Confirm completed" }).click();
+
+  await expect.poll(() => submitted).toEqual({
+    expected_revision: 1,
+    tool_call_id: "call-1",
+    outcome: "complete",
+    detail: "Verified the saved file contents.",
+  });
+  await expect(recovery).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Retry mission" })).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).include(".agents-page").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 test("mission workflow freezes harness options, stages, and URL identity", async ({ page }) => {
   const harness = {
     ...entity,
@@ -9737,6 +9808,26 @@ const delegated = [
     error: null,
     result_message_id: null,
   },
+  {
+    id: "sub-3",
+    name: "Verify interrupted workspace update",
+    task: "Recover the interrupted child turn before reporting to its parent.",
+    status: "recovery_required",
+    parent_session_id: "subagent-chat",
+    parent_turn_id: "turn-1",
+    child_session_id: "child-3",
+    child_turn_id: "child-turn-3",
+    step_count: 2,
+    recent_steps: [{ tool: "write_file", detail: "recovery-proof.txt", status: "running" }],
+    approval: null,
+    usage: { input_tokens: 800, output_tokens: 100, total_tokens: 900 },
+    started_at: "2026-09-20T10:00:00Z",
+    finished_at: null,
+    elapsed_seconds: 66,
+    result: "",
+    error: "Core restarted while the child effect outcome was unknown.",
+    result_message_id: null,
+  },
 ];
 
 reloadTest("stabilization an operator allows delegation and acts on a waiting subagent", async ({ page }) => {
@@ -9791,12 +9882,15 @@ reloadTest("stabilization an operator allows delegation and acts on a waiting su
   const rail = page.getByRole("status", { name: "Subagents" });
   await expect(rail).toContainText("1 running");
   await expect(rail).toContainText("1 needs approval");
+  await expect(rail).toContainText("1 needs recovery");
   await expect(page.locator(".chat-composer textarea").first()).toBeEditable();
 
   await rail.getByRole("button", { name: "Show subagents" }).click();
   const pane = page.getByRole("region", { name: "Subagents" }).last();
-  await expect(pane).toContainText("2 of 3 running · limit 3");
+  await expect(pane).toContainText("3 of 3 running · limit 3");
   await expect(pane).toContainText("Map documented API routes");
+  await expect(pane).toContainText("Recovery required");
+  await expect(pane).toContainText("Core restarted while the child effect outcome was unknown.");
 
   // The child waiting on a person shows exactly what it wants to run.
   await expect(pane).toContainText("Wants to run a command in the workspace");
@@ -9921,7 +10015,7 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
   await expect(rail).toContainText("1 running");
   await rail.getByRole("button", { name: "Show subagents" }).click();
   const pane = page.getByRole("region", { name: "Subagents" }).last();
-  await expect(pane).toContainText("2 running · no limit · deepseek/deepseek-v3.2");
+  await expect(pane).toContainText("3 running · no limit · deepseek/deepseek-v3.2");
   await expect(pane).toContainText("Their tool outputs go to Local subagents");
 
   const composer = page.locator(".chat-composer textarea").first();

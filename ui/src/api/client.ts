@@ -2193,8 +2193,27 @@ function mapRun(value: WireAgentRun): AgentRunSummary {
           : [];
       })
     : [];
+  const rawRecovery = value.metadata?.restart_recovery;
+  const recovery = rawRecovery && typeof rawRecovery === "object" && !Array.isArray(rawRecovery)
+    ? rawRecovery as JsonObject
+    : undefined;
+  const effects = Array.isArray(recovery?.effects)
+    ? recovery.effects.flatMap((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const effect = item as JsonObject;
+        return typeof effect.tool_call_id === "string" && typeof effect.tool_name === "string"
+          ? [{
+              toolCallId: effect.tool_call_id,
+              toolName: effect.tool_name,
+              riskClass: typeof effect.risk_class === "string" ? effect.risk_class : "unknown",
+              statusAtRestart: typeof effect.status_at_restart === "string" ? effect.status_at_restart : "unknown",
+            }]
+          : [];
+      })
+    : [];
   return {
     id: value.id,
+    revision: value.revision,
     engagementId: value.engagement_id,
     title: typeof value.metadata?.name === "string" && value.metadata.name.trim() ? value.metadata.name : value.objective,
     status: value.status,
@@ -2219,6 +2238,16 @@ function mapRun(value: WireAgentRun): AgentRunSummary {
     scheduledFor: typeof value.metadata?.scheduled_for === "string" ? value.metadata.scheduled_for : undefined,
     repeatIntervalSeconds: typeof value.metadata?.repeat_interval_seconds === "number" ? value.metadata.repeat_interval_seconds : undefined,
     stages,
+    restartRecovery: recovery
+      ? {
+          required: recovery.required === true,
+          reason: typeof recovery.reason === "string" ? recovery.reason : undefined,
+          unresolvedToolCallIds: Array.isArray(recovery.unresolved_tool_call_ids)
+            ? recovery.unresolved_tool_call_ids.filter((item): item is string => typeof item === "string")
+            : [],
+          effects,
+        }
+      : undefined,
   };
 }
 
@@ -3866,7 +3895,7 @@ interface WireChatSubagent {
 }
 
 const SUBAGENT_STATUSES: ChatSubagentStatus[] = [
-  "running", "waiting_approval", "completed", "failed", "stopped", "interrupted",
+  "running", "waiting_approval", "recovery_required", "completed", "failed", "stopped", "interrupted",
 ];
 
 function mapChatSubagent(value: WireChatSubagent): ChatSubagentView {
@@ -5803,6 +5832,21 @@ export class ApiClient {
     return this.request<WireAgentRun>(`runs/${encodeURIComponent(id)}/retry`, {
       method: "POST",
       body: JSON.stringify({ allow_cloud_tool_results: allowCloudToolResults }),
+    }).then(mapRun);
+  }
+
+  reconcileMissionEffect(
+    id: string,
+    body: { expectedRevision: number; toolCallId: string; outcome: "complete" | "failed"; detail: string },
+  ): Promise<AgentRunSummary> {
+    return this.request<WireAgentRun>(`runs/${encodeURIComponent(id)}/reconcile-effect`, {
+      method: "POST",
+      body: JSON.stringify({
+        expected_revision: body.expectedRevision,
+        tool_call_id: body.toolCallId,
+        outcome: body.outcome,
+        detail: body.detail,
+      }),
     }).then(mapRun);
   }
 

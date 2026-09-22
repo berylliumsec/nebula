@@ -1,13 +1,13 @@
 {
-  "change_digest": "0a28f67c4fc1d15e776639b6a4ae9e6f97170928d555cb7957b922574a19ec17",
+  "change_digest": "73db6b0367dbeb68e05bd9c2ba006a81b14497eca95a5b341a35bfc2e40fb48f",
   "reviewed_by": "Codex focused execution recovery lifecycle review",
-  "reason": "The changed journey is a provider turn interrupted by Core restart while a tool or hook result commits late, followed by recovery and goal resume. Sixteen collected Python cases cover uncertain and recorded tool outcomes, malformed receipts, idempotent provider intent, real hook subprocess completion after shutdown, API read repair, hook outcome visibility, and goal guards, and graceful Core auto resume after late receipt read repair. The 78 collected frontend cases are limited to the changed API client file. Five catalogued browser cases: three mocked UI cases and two real-Core LAN-origin restart journeys on desktop Chromium and 390 px WebKit. The mocked cases cover the recovery card and stale revision refresh on desktop Chromium and emulated mobile Chromium/WebKit.",
-  "exclusions": "No full suites, unrelated chat, Mission, harness, or native tests. The actual late tool receipt race remains covered by durable API/store fault injection rather than a production browser journey; physical-device coverage remains unavailable and is not inferred from emulation.",
+  "reason": "The changed production journey spans provider turns, hooks, subagent rounds, goal charging, and API Mission effects across a Core restart. Thirty collected Python cases cover late and malformed receipts, idempotent provider intent, hook completion, API read repair, goal guards, recoverable child rounds, exactly-once child usage charging, Mission effect classification, optimistic races, ledger-over-operator authority, terminal-without-receipt classification, and full-batch cancellation, read-only hook rerun disclosure, callback lease retention, and worker claim fencing. The 79 collected frontend cases are limited to the changed API client file. Twelve catalogued browser cases cover the provider recovery card, child recovery visibility, and Mission reconciliation on desktop Chromium and emulated mobile Chromium/WebKit, plus real-Core LAN restart journeys for provider hooks and Mission effects.",
+  "exclusions": "No full suites, unrelated chat, Mission, harness, packaging, or native tests. The late provider tool receipt race is covered by durable API/store fault injection; Core process restart is exercised for provider hooks and Mission effects through production-bundle LAN browser journeys. Physical-device coverage remains unavailable and is not inferred from emulation.",
   "expected_tests": {
-    "python": 16,
-    "frontend": 78,
+    "python": 30,
+    "frontend": 79,
     "native": 0,
-    "playwright": 5
+    "playwright": 12
   },
   "python_versions": [
     "3.11"
@@ -27,7 +27,21 @@
     "tests/v3/test_chat.py::test_core_update_auto_resume_keeps_uncertain_and_crashed_turns_parked",
     "tests/v3/test_api.py::test_pending_turn_api_recovers_recorded_result_after_restart",
     "tests/v3/test_api.py::test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api",
-    "tests/v3/test_native_hook_turn_ends.py::test_a_hook_running_when_the_turn_ends_never_stays_running"
+    "tests/v3/test_native_hook_turn_ends.py::test_a_hook_running_when_the_turn_ends_never_stays_running",
+    "tests/v3/test_chat_subagents.py::test_restart_keeps_recoverable_subagent_round_live",
+    "tests/v3/test_chat_subagents.py::test_restart_resumes_a_parent_waiting_on_an_interrupted_subagent",
+    "tests/v3/test_chat_subagents.py::test_core_shutdown_interrupts_an_inflight_parent_tool_turn",
+    "tests/v3/test_chat_subagents.py::test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level",
+    "tests/v3/test_missions.py::test_startup_interrupts_api_runs_and_keeps_effect_recovery_separate",
+    "tests/v3/test_missions.py::test_startup_retries_an_optimistic_reconciliation_race",
+    "tests/v3/test_missions.py::test_restart_keeps_running_mission_effect_blocked_until_reconciled",
+    "tests/v3/test_missions.py::test_mission_recovery_prefers_late_ledger_outcome_over_operator_guess",
+    "tests/v3/test_missions.py::test_mission_restart_classifies_every_effect_without_trusting_status",
+    "tests/v3/test_chat.py::test_restart_keeps_terminal_tool_status_without_a_receipt_unknown",
+    "tests/v3/test_chat.py::test_cancel_turn_cancels_every_open_call_in_a_provider_batch",
+    "tests/v3/test_chat.py::test_restart_discloses_read_only_hook_attempt_before_rerun",
+    "tests/v3/test_chat.py::test_provider_turn_and_goal_have_one_durable_worker_owner",
+    "tests/v3/test_process_results_webhook.py::test_approved_background_command_waits_for_its_callback"
   ],
   "frontend": [
     "ui/src/api/client.test.ts"
@@ -38,6 +52,13 @@
     "entry:provider-native-hooks/mobile-chromium",
     "entry:provider-native-hooks/mobile-webkit",
     "entry:provider-native-hooks-core/assistant-real-desktop",
-    "entry:provider-native-hooks-core/assistant-real-webkit-390"
+    "entry:provider-native-hooks-core/assistant-real-webkit-390",
+    "entry:chat-subagents/desktop",
+    "entry:chat-subagents/mobile-chromium",
+    "entry:chat-subagents/mobile-webkit",
+    "entry:mission-restart-recovery/desktop",
+    "entry:mission-restart-recovery/mobile-chromium",
+    "entry:mission-restart-recovery/mobile-webkit",
+    "entry:mission-restart-recovery-core/real-core"
   ]
 }

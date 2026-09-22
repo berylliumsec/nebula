@@ -1660,7 +1660,7 @@ class ChatService:
         unknown = [
             call.id
             for call in calls
-            if call.chat_turn_id == turn.id and call.status == ToolCallStatus.RUNNING
+            if call.chat_turn_id == turn.id and self._tool_effect_unknown(call)
         ]
         unknown_hooks = [
             execution.id
@@ -1668,6 +1668,13 @@ class ChatService:
             if execution.chat_turn_id == turn.id
             and execution.status == "running"
             and execution.side_effects != "none"
+        ]
+        rerunnable_hooks = [
+            execution.id
+            for execution in hook_executions
+            if execution.chat_turn_id == turn.id
+            and execution.status == "running"
+            and execution.side_effects == "none"
         ]
         for execution in hook_executions:
             if execution.chat_turn_id == turn.id and execution.status == "running":
@@ -1690,7 +1697,12 @@ class ChatService:
             f"{cause} while an effect outcome was unknown. Reconcile the "
             "listed tool or hook execution before resuming."
             if unknown or unknown_hooks
-            else f"{cause} before this response completed. Review and resume it."
+            else (
+                f"{cause} before this response completed. Interrupted read-only "
+                "hook attempts will rerun as new attempts when you resume."
+                if rerunnable_hooks
+                else f"{cause} before this response completed. Review and resume it."
+            )
         )
         snapshot = {
             **turn.request_snapshot,
@@ -1701,6 +1713,7 @@ class ChatService:
                 ),
                 "unknown_tool_call_ids": unknown,
                 "unknown_hook_execution_ids": unknown_hooks,
+                "rerunnable_hook_execution_ids": rerunnable_hooks,
                 "interrupted_at": utc_now().isoformat(),
             },
         }
@@ -1737,6 +1750,21 @@ class ChatService:
                     expected_revision=goal.revision,
                 )
         return interrupted
+
+    @staticmethod
+    def _tool_effect_unknown(call: ToolCall) -> bool:
+        """Whether a started provider tool lacks a durable effect receipt."""
+
+        if call.status == ToolCallStatus.RUNNING:
+            return True
+        if call.status in {ToolCallStatus.COMPLETE, ToolCallStatus.FAILED}:
+            # The recovery snapshot admits the call first; read repair removes
+            # it only after validating the exact bounded receipt and provider
+            # continuation identity. A terminal status by itself is not proof.
+            return True
+        if call.status == ToolCallStatus.CANCELLED:
+            return call.started_at is not None
+        return False
 
     def _interrupt_turn_for_shutdown(self, prepared: PreparedChat) -> ChatTurn | None:
         """Leave an in-flight turn recoverable when Core itself is stopping.
@@ -7930,9 +7958,9 @@ class ChatService:
                     },
                     expected_revision=approval.revision,
                 )
-        if turn.tool_call_ids:
+        for call_id in turn.tool_call_ids:
             try:
-                call = self.store.get(ToolCall, turn.tool_call_ids[-1])
+                call = self.store.get(ToolCall, call_id)
             except NotFoundError as caught_error:
                 record_caught_exception(
                     "chat",
@@ -7941,8 +7969,8 @@ class ChatService:
                     caught_error,
                     stage="chat",
                 )
-                call = None
-            if call is not None and call.status not in {
+                continue
+            if call.status not in {
                 ToolCallStatus.COMPLETE,
                 ToolCallStatus.FAILED,
                 ToolCallStatus.DENIED,

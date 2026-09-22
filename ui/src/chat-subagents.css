@@ -14,6 +14,7 @@
 .chat-subagent-dot { display: inline-block; width: 6px; height: 6px; border-radius: 999px; background: var(--muted); }
 [data-tone="running"] .chat-subagent-dot, .chat-subagent-dot[data-tone="running"] { background: var(--blue); }
 [data-tone="waiting_approval"] .chat-subagent-dot, .chat-subagent-dot[data-tone="waiting_approval"] { background: var(--status-warning); }
+[data-tone="recovery_required"] .chat-subagent-dot, .chat-subagent-dot[data-tone="recovery_required"] { background: var(--status-warning); }
 
 /* Pane: one card per child, expanded while it needs something. */
 .chat-subagent-pane { display: grid; gap: 10px; min-width: 0; }

@@ -131,6 +131,7 @@ export interface EngagementCreateRequest {
 
 export interface AgentRunSummary {
   id: Identifier;
+  revision?: number;
   engagementId: Identifier;
   title: string;
   status:
@@ -162,6 +163,17 @@ export interface AgentRunSummary {
   scheduledFor?: string;
   repeatIntervalSeconds?: number;
   stages?: Array<{ title: string; objective: string }>;
+  restartRecovery?: {
+    required: boolean;
+    reason?: string;
+    unresolvedToolCallIds: Identifier[];
+    effects: Array<{
+      toolCallId: Identifier;
+      toolName: string;
+      riskClass: string;
+      statusAtRestart: string;
+    }>;
+  };
 }
 
 export interface MissionCreateRequest {
@@ -3322,6 +3334,7 @@ export interface StructuredResultRecord extends StructuredResultSummary {
 export type ChatSubagentStatus =
   | "running"
   | "waiting_approval"
+  | "recovery_required"
   | "completed"
   | "failed"
   | "stopped"

@@ -67,6 +67,7 @@ _TERMINAL_RUN_STATUSES = {
     RunStatus.COMPLETE,
     RunStatus.FAILED,
     RunStatus.CANCELLED,
+    RunStatus.INTERRUPTED,
 }
 _TERMINAL_TASK_STATUSES = {
     TaskStatus.COMPLETE,
@@ -1319,7 +1320,55 @@ class MissionService:
             if current.metadata.get("origin") != "api":
                 return current
             try:
-                return self._finalize_failed(run_id, error)
+                self._revoke_browser_control(current.id, error, "system")
+                self._fail_open_work(current, error)
+                current = self.store.get(AgentRun, run_id)
+                unresolved = [
+                    call
+                    for call in self._run_tool_calls(current)
+                    if self._mission_effect_unknown(call)
+                ]
+                recovery = {
+                    "required": bool(unresolved),
+                    "reason": error,
+                    "interrupted_at": utc_now().isoformat(),
+                    "unresolved_tool_call_ids": [call.id for call in unresolved],
+                    "effects": [
+                        {
+                            "tool_call_id": call.id,
+                            "tool_name": call.tool_name,
+                            "risk_class": call.risk_class.value,
+                            "status_at_restart": call.status.value,
+                        }
+                        for call in unresolved
+                    ],
+                    "decisions": [],
+                }
+                interrupted, _ = self.store.update_with_event(
+                    AgentRun,
+                    current.id,
+                    {
+                        "status": RunStatus.INTERRUPTED,
+                        "completed_at": utc_now(),
+                        "metadata": {
+                            **current.metadata,
+                            "error": error,
+                            "restart_recovery": recovery,
+                        },
+                    },
+                    expected_revision=current.revision,
+                    run_id=current.id,
+                    event_type="run.interrupted",
+                    event_payload={
+                        "summary": "mission interrupted by Core restart",
+                        "unresolved_tool_call_ids": recovery[
+                            "unresolved_tool_call_ids"
+                        ],
+                    },
+                    actor_id="system",
+                    idempotency_key="run:service_interrupted",
+                )
+                return interrupted
             except ConflictError as caught_error:
                 record_caught_exception(
                     "missions",
@@ -1332,6 +1381,125 @@ class MissionService:
         raise MissionServiceUnavailable(
             f"could not reconcile interrupted API mission {run_id!r}"
         )
+
+    def reconcile_restart_effect(
+        self,
+        run_id: str,
+        tool_call_id: str,
+        *,
+        outcome: str,
+        detail: str,
+        expected_revision: int,
+        actor_id: str,
+    ) -> AgentRun:
+        """Resolve one interrupted Mission effect without replaying it."""
+
+        if outcome not in {"complete", "failed"}:
+            raise MissionStateError("reconciled outcome must be complete or failed")
+        note = detail.strip()
+        if not note:
+            raise MissionStateError("reconciliation requires an operator note")
+        run = self.store.get(AgentRun, run_id)
+        if run.revision != expected_revision:
+            raise ConflictError("mission changed; reload before reconciling")
+        recovery = run.metadata.get("restart_recovery")
+        recovery = dict(recovery) if isinstance(recovery, dict) else {}
+        unresolved = list(recovery.get("unresolved_tool_call_ids") or [])
+        if (
+            run.status != RunStatus.INTERRUPTED
+            or recovery.get("required") is not True
+            or tool_call_id not in unresolved
+        ):
+            raise ConflictError(
+                "tool call is not an unresolved outcome for this interrupted mission"
+            )
+        call = self.store.get(ToolCall, tool_call_id)
+        if call.run_id != run.id:
+            raise ConflictError("tool call does not belong to this mission")
+        terminal = not self._mission_effect_unknown(call)
+        observed_outcome = (
+            "complete" if call.status == ToolCallStatus.COMPLETE else "failed"
+        )
+        source = "ledger" if terminal else "operator"
+        if not terminal:
+            call_status = (
+                ToolCallStatus.COMPLETE
+                if outcome == "complete"
+                else ToolCallStatus.FAILED
+            )
+            assertion = {
+                "schema": "nebula.operator-reconciliation/v1",
+                "status": outcome,
+                "detail": note,
+                "verified": False,
+            }
+            call = self.store.update(
+                ToolCall,
+                call.id,
+                {
+                    "status": call_status,
+                    "completed_at": utc_now(),
+                    "result": assertion,
+                    "error": note if outcome == "failed" else None,
+                    "metadata": {
+                        **call.metadata,
+                        "reconciled_after_restart": True,
+                        "reconciled_by": actor_id,
+                        "operator_reconciliation": assertion,
+                    },
+                },
+                expected_revision=call.revision,
+            )
+            observed_outcome = outcome
+        remaining = [item for item in unresolved if item != tool_call_id]
+        decisions = list(recovery.get("decisions") or [])
+        decisions.append(
+            {
+                "tool_call_id": tool_call_id,
+                "outcome": observed_outcome,
+                "source": source,
+                "detail": note,
+                "actor_id": actor_id,
+                "recorded_at": utc_now().isoformat(),
+            }
+        )
+        next_recovery = {
+            **recovery,
+            "required": bool(remaining),
+            "unresolved_tool_call_ids": remaining,
+            "decisions": decisions,
+        }
+        updated, _ = self.store.update_with_event(
+            AgentRun,
+            run.id,
+            {"metadata": {**run.metadata, "restart_recovery": next_recovery}},
+            expected_revision=run.revision,
+            run_id=run.id,
+            event_type="run.effect_reconciled",
+            event_payload={
+                "tool_call_id": tool_call_id,
+                "outcome": observed_outcome,
+                "source": source,
+                "remaining": len(remaining),
+            },
+            actor_id=actor_id,
+            idempotency_key=f"run:effect_reconciled:{tool_call_id}",
+        )
+        return updated
+
+    @staticmethod
+    def _mission_effect_unknown(call: ToolCall) -> bool:
+        """Whether the ledger lacks evidence for an effect that may have started."""
+
+        if call.status == ToolCallStatus.RUNNING:
+            return True
+        if call.status in {
+            ToolCallStatus.COMPLETE,
+            ToolCallStatus.FAILED,
+            ToolCallStatus.CANCELLED,
+        }:
+            return call.started_at is not None and call.result is None
+        return False
 
     def _cancel_open_work(self, run: AgentRun, reason: str) -> None:
         for task in self._run_tasks(run):

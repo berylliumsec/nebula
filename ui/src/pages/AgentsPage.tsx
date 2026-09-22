@@ -26,6 +26,7 @@ import { MissionPromotionDialog } from "../components/MissionPromotionDialog";
 import { ActivityLedger } from "../components/ActivityLedger";
 import { activityLedgerFromMission, type ActivityLedgerEntry } from "../components/activityLedgerModel";
 import { copySelectionText } from "../components/selection/selectionActions";
+import { ApiError } from "../api/client";
 
 const agents = [
   { name: "Scope planner", detail: "Policy and mission decomposition", state: "complete", icon: ShieldCheck, tools: "No executable tools" },
@@ -64,7 +65,7 @@ function MissionLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) {
 
 export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const { setActivityOpen } = useChrome();
-  const { api, approvals, events, previewMode, run, runs = [], selectMission = () => undefined, streamState = "closed" } = useWorkspace();
+  const { api, approvals, events, previewMode, retryResource, run, runs = [], selectMission = () => undefined, streamState = "closed" } = useWorkspace();
   const [steeringText, setSteeringText] = useState("");
   const [steering, setSteering] = useState(false);
   const [steeringError, setSteeringError] = useState<string>();
@@ -74,6 +75,38 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
   const [copiedResultId, setCopiedResultId] = useState<string>();
   const [resultActionError, setResultActionError] = useState<{ runId: string; message: string }>();
   const [discussingRunId, setDiscussingRunId] = useState<string>();
+  const [recoveryNote, setRecoveryNote] = useState("");
+  const [recoveryBusy, setRecoveryBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string>();
+  const unresolvedEffect = run?.restartRecovery?.effects.find((effect) =>
+    run.restartRecovery?.unresolvedToolCallIds.includes(effect.toolCallId));
+  const reconcileEffect = async (outcome: "complete" | "failed") => {
+    if (!api || !run || !unresolvedEffect || !recoveryNote.trim() || recoveryBusy) return;
+    if (run.revision === undefined) {
+      setRecoveryError("Reload this Mission before recording the effect outcome.");
+      return;
+    }
+    setRecoveryBusy(true);
+    setRecoveryError(undefined);
+    try {
+      await api.reconcileMissionEffect(run.id, {
+        expectedRevision: run.revision,
+        toolCallId: unresolvedEffect.toolCallId,
+        outcome,
+        detail: recoveryNote.trim(),
+      });
+      setRecoveryNote("");
+      await retryResource("activity");
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        await retryResource("activity");
+      }
+      void logCaughtDiagnostic("interface.agents_page.mission_recovery", "An interrupted Mission effect could not be reconciled.", error, "agents_page");
+      setRecoveryError(error instanceof Error ? error.message : "The effect outcome could not be recorded.");
+    } finally {
+      setRecoveryBusy(false);
+    }
+  };
   const discuss = async () => {
     if (!api || !run || discussingRunId) return;
     setDiscussingRunId(run.id);
@@ -155,7 +188,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
         />}
         <section className="mission-commandbar" aria-label="Mission controls">
           <div><Radio size={15} /><span><strong>{run ? "Mission control" : "No mission selected"}</strong><small>{run ? `Core status: ${run.status.replaceAll("_", " ")} · live feed ${streamState}` : "Start a mission to see its plan and live execution here."}</small></span></div>
-          <div>{run?.backend === "harness" && <button className="button secondary" type="button" disabled={Boolean(discussingRunId)} onClick={() => void discuss()}><MessageSquare size={15} /> {discussingRunId === run.id ? "Opening chat…" : "Discuss in chat"}</button>}{terminal && <RetryMissionButton />}<StopMissionButton /><DeleteMissionButton /><NewMissionButton /></div>
+          <div>{run?.backend === "harness" && <button className="button secondary" type="button" disabled={Boolean(discussingRunId)} onClick={() => void discuss()}><MessageSquare size={15} /> {discussingRunId === run.id ? "Opening chat…" : "Discuss in chat"}</button>}{terminal && !run?.restartRecovery?.required && <RetryMissionButton />}<StopMissionButton /><DeleteMissionButton /><NewMissionButton /></div>
         </section>
         <section className="panel mission-picker" aria-label="Missions">
           <header><div><strong>Mission history</strong><small>Select a named mission to inspect its result</small></div><span>{runs.length}</span></header>
@@ -165,6 +198,19 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
           {!runs.length ? <p>No missions yet.</p> : !filteredRuns.length && <p>No missions match this search.</p>}
         </section>
         {run?.status === "failed" && <div className="callout mission-failure-callout" role="alert"><CircleAlert size={19} /><div><strong>This mission failed</strong><p>Open Diagnostics to review the recorded cause, correlation details, and recovery guidance.</p></div><a className="button secondary" href="/settings#diagnostics-settings">View diagnostics</a></div>}
+        {run?.restartRecovery?.required && unresolvedEffect && <section className="callout mission-recovery-callout" role="alert" aria-labelledby="mission-recovery-title">
+          <CircleAlert size={19} />
+          <div>
+            <strong id="mission-recovery-title">Mission effect needs review</strong>
+            <p>Core restarted while <code>{unresolvedEffect.toolName}</code> was {unresolvedEffect.statusAtRestart.replaceAll("_", " ")}. Confirm what happened before retrying this Mission.</p>
+            <label>Recovery note<input value={recoveryNote} maxLength={2_000} placeholder="How did you verify the outcome?" onChange={(event) => setRecoveryNote(event.target.value)} /></label>
+            {recoveryError && <DiagnosticErrorNotice error={recoveryError} fallback="The effect outcome could not be recorded." compact />}
+          </div>
+          <div className="mission-recovery-actions">
+            <button className="button secondary" type="button" disabled={recoveryBusy || !recoveryNote.trim()} onClick={() => void reconcileEffect("failed")}>Mark failed</button>
+            <button className="button primary" type="button" disabled={recoveryBusy || !recoveryNote.trim()} onClick={() => void reconcileEffect("complete")}>Confirm completed</button>
+          </div>
+        </section>}
         {selectedApprovals.length > 0 && <div className="callout approval-callout" role="status"><Clock3 size={19} /><div><strong>Mission paused for review</strong><p>{selectedApprovals.length} request{selectedApprovals.length === 1 ? "" : "s"} waiting.</p></div><button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button></div>}
         {run && <details className="mission-overview-disclosure" open={!terminal}><summary>Mission overview <span>{run.status.replaceAll("_", " ")}</span></summary><section className="mission-hero panel">
           <div><span className="section-kicker"><span className="pulse-dot" /> {run?.status.replaceAll("_", " ") ?? "No run"}</span><h2>{run?.title ?? "No mission selected"}</h2><p>{run?.status === "queued" && run.scheduledFor ? `Scheduled for ${new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "short" }).format(new Date(run.scheduledFor))}${run.repeatIntervalSeconds ? run.repeatIntervalSeconds === 86_400 ? "; repeats daily" : run.repeatIntervalSeconds === 604_800 ? "; repeats weekly" : "; repeats on its saved interval" : ""}.` : run ? missionStatusCopy[run.status] : "Start a mission to begin recording work."}</p>{latestEvent && <div className="mission-now" aria-live="polite"><small>Latest update</small><AssistantMarkdown content={latestEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /><span>{formatEventKind(latestEvent.kind)} · {new Intl.DateTimeFormat(undefined, { timeStyle: "medium" }).format(new Date(latestEvent.occurredAt))}</span></div>}</div>

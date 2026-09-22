@@ -1,9 +1,9 @@
 # Execution and restart recovery lifecycle
 
-Status: design inventory, September 22, 2026. The current-state sections describe
-the `origin/main` baseline at `a30aa79`. The failure matrix distinguishes
-observed defects from scenarios that still require fault-injection tests. The
-target lifecycle is a staged design; see the implementation status below.
+Status: implemented recovery contract, September 22, 2026. The current-state
+sections preserve the `origin/main` baseline at `a30aa79`; the target contract,
+defect closure table, and proof matrix describe this branch. The failure matrix
+distinguishes the observed incident from defects reproduced with fault injection.
 
 [Editable FigJam lifecycle board](https://www.figma.com/board/aoQcmstUOUo3n11Cg8YKXf)
 contains the current state machines, the observed restart race, a failure map,
@@ -40,10 +40,10 @@ API-owned run whereas provider-chat restart parks a turn for possible resume.
 | --- | --- | --- | --- |
 | Conversation goal | `ChatGoal` | draft, running, paused, blocked, completed, cancelled | Running goal with a claim becomes paused; claim cleared. |
 | Provider turn | `ChatTurn` | routing, waiting_approval, waiting_callback, finalizing, complete, failed, cancelled, interrupted | Routing/finalizing turn becomes interrupted; a snapshot lists running tool calls and effectful hooks as unknown. |
-| Subagent round | `ChatSubagent` plus its child `ChatTurn` | running, completed, failed, stopped, interrupted | Child waiting on approval/callback is retained; a terminal child is reported; other running children become interrupted and report to parent. |
+| Subagent round | `ChatSubagent` plus its child `ChatTurn` | running, recovery_required, completed, failed, stopped, interrupted | Child waiting on approval/callback or recoverable effect review is retained; terminal settlement, parent delivery, and goal charging are repaired idempotently. |
 | Tool call | `ToolCall` ledger | proposed, waiting_approval, approved, running, denied, cancelled, failed, complete | Running calls named in an interrupted provider turn's snapshot require operator reconciliation. The ledger can still receive a terminal result after the snapshot. |
 | Native hook | `NativeHookExecution` | running, complete, failed, timed_out, interrupted, reconciled | Running hook is marked interrupted; effectful hooks block turn resume. A late hook result does not replace that interrupted state. |
-| Mission run | `AgentRun` plus tasks/attempts/tools | queued, planning, running, waiting_approval, paused, cancelling, cancelled, failed, interrupted, complete | Stale API-owned nonterminal runs are finalized failed and open work is failed. |
+| Mission run | `AgentRun` plus tasks/attempts/tools | queued, planning, running, waiting_approval, paused, cancelling, cancelled, failed, interrupted, complete | Stale API-owned work becomes interrupted; the run records every uncertain started effect and retry remains blocked until each is reconciled. |
 
 The browser's interrupted-response card is a projection of Core's pending turn.
 It offers manual tool/hook reconciliation while `recovery_blocked` is true and
@@ -57,7 +57,7 @@ and fails while the interrupted turn still needs recovery.
 | Graceful Core stop | The provider task is cancelled; `_interrupt_turn_for_shutdown` parks an owned routing/finalizing turn. A cancelled native hook's process continues in a worker thread and may report later. | Cancellation of the producer does not undo an already-started external effect. |
 | Process crash or forced kill | On startup, Core scans routing/finalizing provider turns and running calls/hooks, then marks the turn interrupted and pauses claimed goals. | The scan is a snapshot; a prior worker or external process may commit a result around that boundary. |
 | Subagent startup reconciliation | Running children with waiting approval/callback are retained; terminal child turns are reported; other running children are marked interrupted and reported. | This is a child-record policy, separate from whether the child turn itself has a recoverable effect. |
-| Mission startup reconciliation | Stale API-owned nonterminal runs are finalized failed; scheduled queued runs are restored. | Run failure is not evidence that a tool's external effect failed. |
+| Mission startup reconciliation | Stale API-owned nonterminal runs become interrupted; scheduled queued runs are restored. | Run state and effect outcome remain separate; the tool ledger or an operator decision settles each effect. |
 
 ## Current transitions
 
@@ -115,6 +115,25 @@ Core restart.
 The matrix is a set of hypotheses to test, not a claim that every possible
 failure has been enumerated.
 
+## Defect closure in this branch
+
+| ID | Failure boundary | Production disposition | Regression proof |
+| --- | --- | --- | --- |
+| D1 | Tool receipt commits after the restart snapshot | Core validates and projects the bounded receipt into provider history exactly once. | `test_restart_projects_late_recorded_tool_result_once` |
+| D2 | Failed receipt commits in the same window | The recorded failure is projected with its original provider call identity and is never replayed. | The parameterized failed-receipt case in D1 |
+| D3 | Failed, cancelled, or complete status has no trustworthy receipt | Any started terminal call enters unknown-effect review; status alone cannot clear it. | `test_restart_keeps_terminal_tool_status_without_a_receipt_unknown` and malformed-receipt coverage |
+| D4 | Old worker writes after losing the turn claim | Every provider continuation checks the durable turn and goal claim; late external results can only attach to their existing invocation. | `test_provider_turn_and_goal_have_one_durable_worker_owner` and idempotent intent coverage |
+| D5 | Several provider calls are open at stop or restart | Restart classifies every call by stable ID; Stop cancels every nonterminal call in the batch. | `test_cancel_turn_cancels_every_open_call_in_a_provider_batch` and Mission multi-effect coverage |
+| D6 | Background command has an accepted receipt and callback lease | The turn remains `waiting_callback`; the accepted receipt is never treated as final output. | `test_approved_background_command_waits_for_its_callback` |
+| D7 | Effectful hook exits after the turn is parked | The original hook attempt stores a late observation; successful exits read-repair and uncertain exits stay reviewable. | native-hook late-outcome and real-Core restart cases |
+| D8 | Read-only hook is interrupted | The exact attempt remains durable, recovery records it as rerunnable, and the operator is told resume creates a new attempt. | `test_restart_discloses_read_only_hook_attempt_before_rerun` |
+| D9 | Child settles between parent wait and delivery | Terminal children are revisited at startup; deterministic message IDs and transactional posting make delivery repeatable. | parent-wait and late-report restart cases |
+| D10 | Child turn needs its own effect recovery | The `ChatSubagent` stays live with `recovery_required`; the parent remains parked until child recovery settles. | `test_restart_keeps_recoverable_subagent_round_live` plus desktop/mobile UI cases |
+| D11 | Competing child settle paths charge usage twice | A durable charge key derived from goal and child turn is committed atomically with usage and the pending marker. | repeated startup reconciliation in `test_goal_picking_up_late_reports_keeps_the_conversation_reasoning_level` |
+| D12 | Goal claim clears while old work is still returning | Turn and goal claim generations fence continuation writes; result ledgers remain append-only evidence for the original invocation. | worker-owner and Core auto-resume gate cases |
+| D13 | Mission supervisor stops with effects in flight | The run becomes `interrupted`; every uncertain effect stays in `restart_recovery`, blocks Retry, and resolves from ledger authority or an unverified operator decision. | Mission classifier/API tests and production LAN Core-restart browser case |
+| D14 | Browser submits a stale revision | A 409 forces an authoritative refresh; completed work disappears from review and the next valid action renders in place. | desktop/mobile recovery card cases |
+
 ## Target production contract
 
 1. **One invocation, one durable identity.** Before any side effect, persist an
@@ -144,39 +163,25 @@ failure has been enumerated.
    observed outcome and remaining uncertainty; a conflict refreshes state. The
    goal resumes only after its turn and dependent effects are ready.
 
-## Implementation and proof sequence
+## Implemented recovery sequence
 
-1. Add a single recovery classifier and receipt projection for provider tool
-   calls and hooks. Read latest records after worker quiescence and at resume.
-2. Add a transaction or guarded compare-and-set that projects known results
-   into turn history. Preserve provider replay metadata and reject malformed
-   receipts rather than guessing.
-3. Add durable parent/child delivery and idempotent goal charging; separately
-   reconcile Mission effect records before calling a run failed.
-4. Update the recovery API/UI to return the classified state and refresh after
-   revision conflicts. Do not offer completed/failed buttons when the ledger
-   already has an outcome.
-5. Fault-inject each boundary: before broker execute, during external effect,
-   after ledger commit, before turn-history commit, during hook execution, during
-   child report, during goal charge, and while a second worker reads state.
-   Assert no duplicate side effect, no lost result, and a reachable operator
-   action for every unresolved case.
-
-Only the first incident is observed on this host. The remaining entries need
-tests and a staged migration before production lifecycle claims can be made.
+1. Persist provider intent and execution identity before the effect starts.
+2. On shutdown or startup, fence the old worker and classify every tool, hook,
+   child, and Mission effect from the latest durable ledger.
+3. Project valid terminal receipts into provider history exactly once. Preserve
+   callback leases and keep missing or malformed evidence unresolved.
+4. Repair child delivery and goal charging from deterministic durable keys.
+5. Render unresolved effects as explicit operator actions. A stale browser
+   revision reloads Core authority before another decision is accepted.
+6. Resume or retry only when every dependent effect is settled.
 
 ## Implementation status in this branch
 
-The first recovery stage is implemented in Core and the operator UI: provider
-tool intent retains replay identity before execution; read repair validates
-terminal v2 receipts, projects them into turn history once, and leaves missing
-or malformed results blocked; late native-hook exits are durable observations,
-with successful exits projected and failed exits left for review; the recovery
-card polls current Core state and refreshes after a revision conflict. Graceful
-Core auto resume now classifies late receipts before using the turn revision.
-Focused Core/API, hook-process, browser, real-Core LAN restart, and production
-build checks are recorded in the test selection receipt. The real-Core restart
-journey covers an uncertain hook, while the late tool receipt is exercised at
-the durable store/API boundary. Mission effects, durable parent/child delivery
-and goal charging, and multi-worker fencing remain subsequent production stages.
-Do not call the whole lifecycle complete on the basis of the first stage.
+The target recovery contract is implemented across provider turns, hooks,
+subagent rounds, goal accounting, Mission runs, and the operator UI. Focused
+Core/API fault injection proves the non-replay and idempotency boundaries.
+Mocked desktop Chromium, mobile Chromium, and mobile WebKit journeys prove the
+visible actions and responsive states. Real-Core production-bundle journeys on
+a non-loopback LAN origin restart Core with an uncertain provider hook and with
+an uncertain Mission effect. Physical-device input remains outside this proof;
+the mobile evidence is browser emulation and is labelled as such.

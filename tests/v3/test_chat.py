@@ -1253,6 +1253,63 @@ def test_restart_interrupts_turns_and_blocks_unknown_tool_replay(tmp_path, monke
     assert reconciled.tool_history[0]["trusted_result"] is False
 
 
+def test_restart_keeps_terminal_tool_status_without_a_receipt_unknown(tmp_path):
+    store = NebulaStore(tmp_path / "chat-terminal-without-receipt.db")
+    engagement = store.create(Engagement(id="eng-terminal", name="Terminal status"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-terminal",
+            engagement_id=engagement.id,
+            title="Terminal status",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-terminal",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            tool_call_ids=["failed-without-receipt", "cancelled-after-start"],
+        )
+    )
+    for call_id, status in (
+        ("failed-without-receipt", ToolCallStatus.FAILED),
+        ("cancelled-after-start", ToolCallStatus.CANCELLED),
+    ):
+        store.create(
+            ToolCall(
+                id=call_id,
+                engagement_id=engagement.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=session.id,
+                chat_turn_id=turn.id,
+                tool_name="write_file",
+                status=status,
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                started_at=utc_now(),
+                completed_at=utc_now(),
+            )
+        )
+
+    service = ChatService(store)
+    asyncio.run(service.startup())
+
+    interrupted = store.get(ChatTurn, turn.id)
+    assert interrupted.status == ChatTurnStatus.INTERRUPTED
+    assert interrupted.request_snapshot["recovery"]["unknown_tool_call_ids"] == [
+        "failed-without-receipt",
+        "cancelled-after-start",
+    ]
+    with pytest.raises(ChatHistoryConflict, match="unknown tool outcome"):
+        service.prepare_resume(turn.id)
+
+
 @pytest.mark.parametrize(
     ("call_status", "receipt_status"),
     [
@@ -1657,6 +1714,62 @@ def test_restart_requires_reconciliation_for_uncertain_native_hook_effect(tmp_pa
     assert store.get(NativeHookExecution, execution.id).status == "reconciled"
 
 
+def test_restart_discloses_read_only_hook_attempt_before_rerun(tmp_path):
+    store = NebulaStore(tmp_path / "chat-read-only-hook-recovery.db")
+    engagement = store.create(Engagement(id="eng-read-hook", name="Read hook"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-read-hook",
+            engagement_id=engagement.id,
+            title="Read hook",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-read-hook",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            request_snapshot={
+                "model_request": ModelRequest(
+                    model="model-a",
+                    messages=[{"role": "user", "content": "continue"}],
+                ).model_dump(mode="json"),
+                "context_usage": {},
+            },
+        )
+    )
+    execution = store.create(
+        NativeHookExecution(
+            id="read-hook-attempt-1",
+            engagement_id=engagement.id,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+            hook_id="inspect",
+            hook_snapshot={"id": "inspect"},
+            event_name="chat.turn.started",
+            side_effects="none",
+            started_at=utc_now(),
+        )
+    )
+
+    service = ChatService(store)
+    asyncio.run(service.startup())
+
+    interrupted = store.get(ChatTurn, turn.id)
+    recovery = interrupted.request_snapshot["recovery"]
+    assert recovery["unknown_hook_execution_ids"] == []
+    assert recovery["rerunnable_hook_execution_ids"] == [execution.id]
+    assert "read-only hook attempts will rerun as new attempts" in interrupted.error
+    assert store.get(NativeHookExecution, execution.id).status == "interrupted"
+    assert service.prepare_resume(turn.id).turn.id == turn.id
+
+
 def _write_native_hook(
     workspace,
     hook_id,
@@ -1863,6 +1976,62 @@ def test_cancelled_turn_pauses_the_session_goal_even_when_created_late(
     assert paused.blocked_reason == (
         "Response stopped by the operator. Resume the goal when ready."
     )
+
+
+def test_cancel_turn_cancels_every_open_call_in_a_provider_batch(tmp_path):
+    store = NebulaStore(tmp_path / "cancel-provider-batch.db")
+    engagement = store.create(Engagement(id="eng-cancel-batch", name="Batch stop"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-cancel-batch",
+            engagement_id=engagement.id,
+            title="Batch stop",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-cancel-batch",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            tool_call_ids=["batch-proposed", "batch-running", "batch-complete"],
+        )
+    )
+    for call_id, status in (
+        ("batch-proposed", ToolCallStatus.PROPOSED),
+        ("batch-running", ToolCallStatus.RUNNING),
+        ("batch-complete", ToolCallStatus.COMPLETE),
+    ):
+        store.create(
+            ToolCall(
+                id=call_id,
+                engagement_id=engagement.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=session.id,
+                chat_turn_id=turn.id,
+                tool_name="run_command",
+                status=status,
+                risk_class=RiskClass.LOCAL_READ,
+                started_at=utc_now() if status != ToolCallStatus.PROPOSED else None,
+                completed_at=utc_now() if status == ToolCallStatus.COMPLETE else None,
+                result={"status": "complete"}
+                if status == ToolCallStatus.COMPLETE
+                else None,
+            )
+        )
+
+    cancelled = ChatService(store).cancel_turn(turn.id)
+
+    assert cancelled.status == ChatTurnStatus.CANCELLED
+    assert store.get(ToolCall, "batch-proposed").status == ToolCallStatus.CANCELLED
+    assert store.get(ToolCall, "batch-running").status == ToolCallStatus.CANCELLED
+    assert store.get(ToolCall, "batch-complete").status == ToolCallStatus.COMPLETE
 
 
 def test_provider_turn_and_goal_have_one_durable_worker_owner(tmp_path):

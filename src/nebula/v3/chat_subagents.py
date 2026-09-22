@@ -48,6 +48,7 @@ from .domain import (
     ChatBackend,
     ChatGoal,
     ChatGoalStatus,
+    ChatGoalUsageCharge,
     ChatMessage,
     ChatRole,
     ChatSession,
@@ -515,6 +516,8 @@ class SubagentService:
         approval: dict[str, Any] | None = None
         question: dict[str, Any] | None = None
         if record.status == ChatSubagentStatus.RUNNING and turn is not None:
+            if turn.status == ChatTurnStatus.INTERRUPTED:
+                state = "recovery_required"
             if turn.status == ChatTurnStatus.WAITING_APPROVAL and turn.approval_id:
                 state = "waiting_approval"
                 try:
@@ -572,7 +575,11 @@ class SubagentService:
             else None,
             "elapsed_seconds": max(0.0, (finished - record.started_at).total_seconds()),
             "result": record.result,
-            "error": record.error,
+            "error": (
+                turn.error
+                if state == "recovery_required" and turn is not None
+                else record.error
+            ),
             "result_message_id": record.result_message_id,
         }
 
@@ -1871,6 +1878,9 @@ class SubagentService:
             # to the parent as a message and the next round takes the unread
             # messages, so neither side loses anything.
             finished_round = record.rounds
+            # Debit the completed turn before advancing the record to its next
+            # round, so restart cannot lose the old child identity.
+            self._charge_parent_goal(record, turn)
             try:
                 record = await self._start_round(
                     record, parent_turn_id=None, usage=usage
@@ -1889,7 +1899,6 @@ class SubagentService:
                     1_000,
                 )
             else:
-                self._charge_parent_goal(record, turn)
                 self._add_message(
                     record,
                     ChatSubagentMessageDirection.TO_PARENT,
@@ -1900,6 +1909,14 @@ class SubagentService:
                 await self._deliver(record)
                 return
         self._close_child_messages(record, unread_note)
+        parent_turn = self._parent_turn(record)
+        pending_charge = (
+            turn.id
+            if parent_turn is not None
+            and parent_turn.goal_id
+            and turn.usage.total_tokens
+            else None
+        )
         try:
             record = self.store.update(
                 ChatSubagent,
@@ -1910,6 +1927,7 @@ class SubagentService:
                     "usage": usage,
                     "result": _bounded(result),
                     "error": _bounded(error, 1_000) if error else None,
+                    "pending_goal_charge_turn_id": pending_charge,
                 },
                 expected_revision=record.revision,
             )
@@ -1927,16 +1945,82 @@ class SubagentService:
             or not turn.usage.total_tokens
         ):
             return
-        try:
-            self.chat._charge_goal(
-                parent_turn.goal_id,
-                turn.usage,
-                exhausted_reason="Token budget exhausted by subagent work.",
+        charge_id = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"nebula:chat-goal-charge:{parent_turn.goal_id}:{turn.id}",
             )
-        except (
-            NotFoundError
-        ):  # diagnostic-expected: parent goal removed; there is no budget to charge
+        )
+        try:
+            self.store.get(ChatGoalUsageCharge, charge_id)
+            latest_record = self.get(record.id)
+            if latest_record.pending_goal_charge_turn_id == turn.id:
+                self.store.update(
+                    ChatSubagent,
+                    latest_record.id,
+                    {"pending_goal_charge_turn_id": None},
+                    expected_revision=latest_record.revision,
+                )
+            return
+        except NotFoundError:
             pass
+        for _ in range(3):
+            try:
+                goal = self.store.get(ChatGoal, parent_turn.goal_id)
+            except NotFoundError:  # diagnostic-expected: the parent goal was removed
+                return
+            combined = _add_usage(goal.usage, turn.usage)
+            changes: dict[str, Any] = {"usage": combined}
+            if (
+                goal.status == ChatGoalStatus.RUNNING
+                and goal.token_budget is not None
+                and combined.total_tokens >= goal.token_budget
+            ):
+                paused_at = utc_now()
+                changes.update(
+                    {
+                        "status": ChatGoalStatus.PAUSED,
+                        "paused_at": paused_at,
+                        "active_since": None,
+                        "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
+                        "blocked_reason": "Token budget exhausted by subagent work.",
+                    }
+                )
+            charge = ChatGoalUsageCharge(
+                id=charge_id,
+                engagement_id=record.engagement_id,
+                goal_id=goal.id,
+                subagent_id=record.id,
+                child_turn_id=turn.id,
+                usage=turn.usage,
+            )
+            try:
+                latest_record = self.get(record.id)
+                with self.store.transaction() as transaction:
+                    transaction.add(charge)
+                    transaction.update(
+                        ChatGoal,
+                        goal.id,
+                        changes,
+                        expected_revision=goal.revision,
+                    )
+                    if latest_record.pending_goal_charge_turn_id == turn.id:
+                        transaction.update(
+                            ChatSubagent,
+                            latest_record.id,
+                            {"pending_goal_charge_turn_id": None},
+                            expected_revision=latest_record.revision,
+                        )
+                return
+            except ConflictError:
+                try:
+                    self.store.get(ChatGoalUsageCharge, charge_id)
+                    return
+                except NotFoundError:
+                    continue
+        raise ConflictError(
+            "subagent usage could not be charged after concurrent updates"
+        )
 
     async def _child_paused(self, record: ChatSubagent, turn: ChatTurn) -> None:
         """A subagent paused on its question: resume it if the answer is
@@ -2370,7 +2454,23 @@ class SubagentService:
             )
 
     async def reconcile_after_restart(self, *, preserve_graceful: bool = False) -> None:
-        """Finish children that cannot continue after Core restarts."""
+        """Reconcile child turns before deciding whether their rounds finished."""
+
+        # Settlement, delivery, and goal charging are separate durable writes.
+        # Re-run them for terminal children so a crash between those writes is
+        # repaired without duplicating a message or usage debit.
+        offset = 0
+        while page := self.store.list_entities(
+            ChatSubagent, offset=offset, limit=1_000
+        ):
+            offset += len(page)
+            for record in page:
+                if record.status not in CHAT_SUBAGENT_TERMINAL_STATUSES:
+                    continue
+                turn = self._child_turn(record)
+                if turn is not None and turn.id == record.pending_goal_charge_turn_id:
+                    self._charge_parent_goal(record, turn)
+                await self._deliver(record)
 
         for record in self.store.find_entities(
             ChatSubagent, {"status": ChatSubagentStatus.RUNNING.value}
@@ -2395,6 +2495,16 @@ class SubagentService:
                 and turn.status != ChatTurnStatus.INTERRUPTED
             ):
                 await self._child_settled(record, turn)
+                continue
+            if (
+                turn is not None
+                and turn.status == ChatTurnStatus.INTERRUPTED
+                and turn.request_snapshot.get("recovery", {}).get("required") is True
+            ):
+                # The child remains a live round. Its own interrupted-response
+                # card owns recovery; reporting a terminal interruption to the
+                # parent here would contradict that resumable turn.
+                self._notify()
                 continue
             self._close_child_messages(
                 record, "Core restarted before the subagent read it."

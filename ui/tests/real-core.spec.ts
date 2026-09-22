@@ -1373,12 +1373,12 @@ test("production assistant work survives a project switch through real Core", as
   }
 });
 
-test("production LAN mission ledger survives failure, retry, and relaunch through real Core", async ({ page }) => {
+test("production LAN mission ledger survives failure, retry, restart recovery, and relaunch through real Core", async ({ page }) => {
   test.setTimeout(90_000);
   const lanAddress = localNetworkIpv4();
-  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  let core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
   const modelStub = await startLocalModelStub({ fail: true });
-  const api = await playwrightRequest.newContext({
+  let api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
@@ -1439,9 +1439,55 @@ test("production LAN mission ledger survives failure, retry, and relaunch throug
       return runs.find((run) => run.id === retriedMission.id)?.status;
     }, { timeout: 30_000 }).toBe("complete");
 
+    // Seed the exact crash boundary after shutting Core down: a Mission owns a
+    // running workspace effect whose durable ledger has no terminal receipt.
+    const dataDir = core.dataDir;
+    const token = core.token;
+    await api.dispose();
+    await stopRealCore(core, { keepData: true });
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const seeded = spawnSync(python, ["-c", [
+      "import sys",
+      "from pathlib import Path",
+      "from nebula.v3.domain import AgentRun, RiskClass, RunStatus, ToolCall, ToolCallStatus, utc_now",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
+      "run = store.get(AgentRun, sys.argv[2])",
+      "metadata = {key: value for key, value in run.metadata.items() if key not in {'error', 'restart_recovery'}}",
+      "store.update(AgentRun, run.id, {'status': RunStatus.RUNNING, 'completed_at': None, 'metadata': metadata}, expected_revision=run.revision)",
+      "store.create(ToolCall(id='playwright-mission-restart-effect', engagement_id=run.engagement_id, run_id=run.id, tool_name='write_file', status=ToolCallStatus.RUNNING, risk_class=RiskClass.WORKSPACE_WRITE, arguments={'path': 'recovery-proof.txt'}, started_at=utc_now()))",
+    ].join("\n"), dataDir, failedMission.id], {
+      cwd: repository,
+      env: { ...process.env, PYTHONPATH: path.join(repository, "src") },
+      encoding: "utf8",
+    });
+    expect(seeded.status, seeded.stderr || seeded.stdout).toBe(0);
+
+    core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress, dataDir, token });
+    api = await playwrightRequest.newContext({
+      baseURL: `${core.origin}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const recoveryUrl = `${core.origin}/?view=missions&mission=${failedMission.id}#token=${encodeURIComponent(core.token)}`;
+    await page.goto(recoveryUrl);
+    const recovery = page.getByRole("alert", { name: "Mission effect needs review" });
+    await expect(recovery).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "Retry mission" })).toHaveCount(0);
+    await recovery.getByLabel("Recovery note").fill("Verified the workspace effect after Core restart.");
+    await recovery.getByRole("button", { name: "Confirm completed" }).click();
+    await expect(recovery).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Retry mission" })).toBeVisible();
+    await expect.poll(async () => {
+      const response = await api.get(`runs/${failedMission.id}`);
+      const run = await response.json() as { metadata?: { restart_recovery?: { required?: boolean } } };
+      return run.metadata?.restart_recovery?.required;
+    }).toBe(false);
+
     // Core intentionally keeps bearer credentials in memory; use the same
     // authorized launch URL to exercise a fresh production document.
-    await page.goto(missionUrl);
+    await page.goto(`${core.origin}/?view=missions#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByText("Durable ledger recovery", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
     const ledger = page.getByRole("region", { name: "Mission activity" });
     await expect(ledger).toBeVisible();

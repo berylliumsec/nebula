@@ -318,7 +318,7 @@ def test_api_rejects_conflicting_mission_service_configuration(tmp_path):
         )
 
 
-def test_startup_fails_interrupted_api_runs_but_leaves_external_runs_untouched(
+def test_startup_interrupts_api_runs_and_keeps_effect_recovery_separate(
     tmp_path,
 ):
     store = NebulaStore(tmp_path / "restart.db")
@@ -371,13 +371,14 @@ def test_startup_fails_interrupted_api_runs_but_leaves_external_runs_untouched(
             == 200
         )
 
-    failed = store.get(AgentRun, interrupted.id)
-    assert failed.status == RunStatus.FAILED
-    assert failed.completed_at is not None
-    assert "restarted" in str(failed.metadata["error"])
+    recovered = store.get(AgentRun, interrupted.id)
+    assert recovered.status == RunStatus.INTERRUPTED
+    assert recovered.completed_at is not None
+    assert "restarted" in str(recovered.metadata["error"])
+    assert recovered.metadata["restart_recovery"]["required"] is False
     assert store.get(Task, task.id).status == TaskStatus.FAILED
     assert store.get(AgentAttempt, attempt.id).status == TaskStatus.FAILED
-    assert store.replay_events(interrupted.id)[-1].event_type == "run.failed"
+    assert store.replay_events(interrupted.id)[-1].event_type == "run.interrupted"
     assert store.get(AgentRun, external.id).status == RunStatus.RUNNING
     assert store.replay_events(external.id) == []
 
@@ -397,22 +398,200 @@ def test_startup_retries_an_optimistic_reconciliation_race(tmp_path, monkeypatch
         store,
         checkpoint_path=tmp_path / "mission-checkpoints.db",
     )
-    original = service._finalize_failed
+    original = store.update_with_event
     calls = 0
 
-    def race_once(run_id, error):
+    def race_once(*args, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 1:
             raise ConflictError("simulated optimistic race")
-        return original(run_id, error)
+        return original(*args, **kwargs)
 
-    monkeypatch.setattr(service, "_finalize_failed", race_once)
+    monkeypatch.setattr(store, "update_with_event", race_once)
 
     asyncio.run(service.startup())
 
     assert calls == 2
-    assert store.get(AgentRun, interrupted.id).status == RunStatus.FAILED
+    assert store.get(AgentRun, interrupted.id).status == RunStatus.INTERRUPTED
+
+
+def test_restart_keeps_running_mission_effect_blocked_until_reconciled(tmp_path):
+    store = NebulaStore(tmp_path / "restart-effect.db")
+    engagement = store.create(Engagement(name="Restart effect"))
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Apply one bounded change",
+            status=RunStatus.RUNNING,
+            metadata={"origin": "api"},
+        )
+    )
+    call = store.create(
+        ToolCall(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            tool_name="write_file",
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            arguments={"path": "result.txt"},
+        )
+    )
+    service = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
+
+    asyncio.run(service.startup())
+
+    interrupted = store.get(AgentRun, run.id)
+    recovery = interrupted.metadata["restart_recovery"]
+    assert interrupted.status == RunStatus.INTERRUPTED
+    assert recovery["required"] is True
+    assert recovery["unresolved_tool_call_ids"] == [call.id]
+    # Restart classification must not overwrite a late worker's ledger slot.
+    assert store.get(ToolCall, call.id).status == ToolCallStatus.RUNNING
+
+    with TestClient(
+        create_app(store, auth_token="test-token", mission_service=service)
+    ) as client:
+        blocked_retry = client.post(
+            f"/api/v1/runs/{run.id}/retry", headers=_auth(), json={}
+        )
+        assert blocked_retry.status_code == 409
+        assert "unknown tool effects" in blocked_retry.json()["detail"]
+        response = client.post(
+            f"/api/v1/runs/{run.id}/reconcile-effect",
+            headers=_auth(),
+            json={
+                "expected_revision": interrupted.revision,
+                "tool_call_id": call.id,
+                "outcome": "complete",
+                "detail": "Verified result.txt contains the expected bytes.",
+            },
+        )
+        assert response.status_code == 200, response.text
+        reconciled = AgentRun.model_validate(response.json())
+    assert reconciled.metadata["restart_recovery"]["required"] is False
+    saved_call = store.get(ToolCall, call.id)
+    assert saved_call.status == ToolCallStatus.COMPLETE
+    assert saved_call.result["verified"] is False
+    assert store.replay_events(run.id)[-1].event_type == "run.effect_reconciled"
+
+
+def test_mission_recovery_prefers_late_ledger_outcome_over_operator_guess(tmp_path):
+    store = NebulaStore(tmp_path / "late-effect.db")
+    engagement = store.create(Engagement(name="Late effect"))
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Apply one bounded change",
+            status=RunStatus.RUNNING,
+            metadata={"origin": "api"},
+        )
+    )
+    call = store.create(
+        ToolCall(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            tool_name="write_file",
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            arguments={"path": "result.txt"},
+        )
+    )
+    service = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
+    asyncio.run(service.startup())
+    interrupted = store.get(AgentRun, run.id)
+
+    # The old worker commits its bounded result after the restart snapshot.
+    late = store.get(ToolCall, call.id)
+    store.update(
+        ToolCall,
+        late.id,
+        {
+            "status": ToolCallStatus.COMPLETE,
+            "completed_at": utc_now(),
+            "result": {"schema": "nebula.tool-result/v2", "status": "completed"},
+        },
+        expected_revision=late.revision,
+    )
+
+    reconciled = service.reconcile_restart_effect(
+        run.id,
+        call.id,
+        outcome="failed",
+        detail="The operator had stale state.",
+        expected_revision=interrupted.revision,
+        actor_id="operator",
+    )
+    decision = reconciled.metadata["restart_recovery"]["decisions"][-1]
+    assert decision["source"] == "ledger"
+    assert decision["outcome"] == "complete"
+    assert store.get(ToolCall, call.id).status == ToolCallStatus.COMPLETE
+
+
+def test_mission_restart_classifies_every_effect_without_trusting_status(tmp_path):
+    store = NebulaStore(tmp_path / "effect-classifier.db")
+    engagement = store.create(Engagement(name="Effect classifier"))
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Classify every effect",
+            status=RunStatus.RUNNING,
+            metadata={"origin": "api"},
+        )
+    )
+    running = store.create(
+        ToolCall(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            tool_name="first_write",
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            started_at=utc_now(),
+        )
+    )
+    failed_without_receipt = store.create(
+        ToolCall(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            tool_name="second_write",
+            status=ToolCallStatus.FAILED,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            started_at=utc_now(),
+            completed_at=utc_now(),
+            error="worker disappeared",
+        )
+    )
+    store.create(
+        ToolCall(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            tool_name="recorded_failure",
+            status=ToolCallStatus.FAILED,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+            started_at=utc_now(),
+            completed_at=utc_now(),
+            result={"schema": "nebula.tool-result/v2", "status": "failed"},
+            error="command failed",
+        )
+    )
+    store.create(
+        ToolCall(
+            engagement_id=engagement.id,
+            run_id=run.id,
+            tool_name="not_started",
+            status=ToolCallStatus.WAITING_APPROVAL,
+            risk_class=RiskClass.WORKSPACE_WRITE,
+        )
+    )
+    service = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
+
+    asyncio.run(service.startup())
+
+    recovery = store.get(AgentRun, run.id).metadata["restart_recovery"]
+    assert recovery["unresolved_tool_call_ids"] == [
+        running.id,
+        failed_without_receipt.id,
+    ]
 
 
 def test_api_rejects_cloud_mission_for_local_only_engagement(tmp_path):
