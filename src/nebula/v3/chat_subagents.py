@@ -270,6 +270,24 @@ def _step_error(entry: dict[str, Any]) -> str:
     return _bounded(str(summary), 300) if summary else ""
 
 
+def safely_stopped_by_core(turn: ChatTurn) -> bool:
+    """A graceful Core stop can replay this turn without an uncertain effect."""
+
+    if turn.status != ChatTurnStatus.INTERRUPTED:
+        return False
+    recovery = turn.request_snapshot.get("recovery")
+    if not isinstance(recovery, dict) or recovery.get("auto_resume_attempted_at"):
+        return False
+    if recovery.get("cause") != "core_shutdown" and not (
+        recovery.get("cause") is None and (turn.error or "").startswith("Core stopped ")
+    ):
+        return False
+    return not (
+        recovery.get("unknown_tool_call_ids")
+        or recovery.get("unknown_hook_execution_ids")
+    )
+
+
 def _step_view(entry: dict[str, Any]) -> dict[str, Any]:
     view: dict[str, Any] = {
         "step": entry.get("step"),
@@ -1811,6 +1829,10 @@ class SubagentService:
     async def _child_settled(self, record: ChatSubagent, turn: ChatTurn) -> None:
         if record.status in CHAT_SUBAGENT_TERMINAL_STATUSES:
             return
+        if self.chat.shutting_down and safely_stopped_by_core(turn):
+            # The next Core will reclaim this safe turn. Reporting an
+            # interruption now would let the parent move on without its child.
+            return
         if turn.status == ChatTurnStatus.WAITING_CALLBACK:
             await self._child_paused(record, turn)
             return
@@ -2347,8 +2369,8 @@ class SubagentService:
                 ),
             )
 
-    async def reconcile_after_restart(self) -> None:
-        """Finish records whose child turn cannot continue; never auto-resume."""
+    async def reconcile_after_restart(self, *, preserve_graceful: bool = False) -> None:
+        """Finish children that cannot continue after Core restarts."""
 
         for record in self.store.find_entities(
             ChatSubagent, {"status": ChatSubagentStatus.RUNNING.value}
@@ -2359,6 +2381,13 @@ class SubagentService:
             if turn is not None and turn.status == ChatTurnStatus.WAITING_CALLBACK:
                 # A question outlives the restart; its parent may not have.
                 await self._child_paused(record, turn)
+                continue
+            if turn is not None and self.chat.has_active_provider_turn(turn.id):
+                # The startup recovery pass already reclaimed this child.
+                continue
+            if preserve_graceful and turn is not None and safely_stopped_by_core(turn):
+                # Keep the parent wait and the child record intact until the
+                # post-startup recovery pass has had a chance to reclaim it.
                 continue
             if (
                 turn is not None

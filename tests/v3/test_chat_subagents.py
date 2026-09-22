@@ -25,16 +25,115 @@ from nebula.v3.providers import (
     ModelProvider,
     ModelRequest,
     ModelResponse,
+    ModelStreamEvent,
     ModelUsage,
     ProviderConfig,
     ProviderHealth,
     ProviderKind,
     ToolCall,
     ToolChoice,
+    StreamEventType,
 )
 from nebula.v3.storage import ConflictError, NebulaStore
 
 CHILD_MARKER = "You are a subagent."
+
+
+def test_graceful_core_update_resumes_safe_child_before_reporting_to_parent(tmp_path):
+    class WaitingProvider(RoutedProvider):
+        async def stream(self, request: ModelRequest):
+            del request
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            await asyncio.Event().wait()
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "child-core-update.db")
+        engagement = store.create(Engagement(name="Child recovery"))
+        profile = store.create(
+            ProviderProfile(
+                name="Local provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                metadata={"default_model": "model-a"},
+            )
+        )
+        parent_session = store.create(
+            ChatSession(
+                engagement_id=engagement.id,
+                title="Supervisor",
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        parent = store.create(
+            ChatTurn(
+                engagement_id=engagement.id,
+                session_id=parent_session.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                status=ChatTurnStatus.WAITING_CALLBACK,
+            )
+        )
+        child_session = store.create(
+            ChatSession(
+                engagement_id=engagement.id,
+                title="Subagent",
+                provider_profile_id=profile.id,
+                model="model-a",
+                parent_session_id=parent_session.id,
+            )
+        )
+        reason = "Core stopped before this response completed. Review and resume it."
+        child = store.create(
+            ChatTurn(
+                engagement_id=engagement.id,
+                session_id=child_session.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                status=ChatTurnStatus.INTERRUPTED,
+                error=reason,
+                reasoning="I should check the assigned item.",
+                request_snapshot={
+                    "subagent_child": True,
+                    "model_request": ModelRequest(
+                        model="model-a",
+                        messages=[{"role": "user", "content": "Investigate."}],
+                    ).model_dump(mode="json"),
+                    "context_usage": {},
+                    "recovery": {
+                        "required": True,
+                        "unknown_tool_call_ids": [],
+                        "unknown_hook_execution_ids": [],
+                    },
+                },
+            )
+        )
+        record = store.create(
+            ChatSubagent(
+                engagement_id=engagement.id,
+                parent_session_id=parent_session.id,
+                parent_turn_id=parent.id,
+                child_session_id=child_session.id,
+                child_turn_id=child.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                name="Investigator",
+                task="Investigate the assigned item.",
+            )
+        )
+        provider = WaitingProvider([], [])
+        service = ChatService(store, provider_factory=lambda _: provider)
+        await service.startup()
+        assert store.get(ChatSubagent, record.id).status == ChatSubagentStatus.RUNNING
+        assert service.resume_turns_stopped_by_core() == [child.id]
+        await service.subagents.reconcile_after_restart()
+        assert store.get(ChatSubagent, record.id).status == ChatSubagentStatus.RUNNING
+        assert store.get(ChatTurn, parent.id).status == ChatTurnStatus.WAITING_CALLBACK
+        assert service.has_active_provider_turn(child.id)
+        await service.shutdown()
+
+    asyncio.run(scenario())
 
 
 def _response(*, calls: list[ToolCall] | None = None, text: str = "") -> ModelResponse:
@@ -574,7 +673,9 @@ def test_parent_with_running_subagent_cannot_be_deleted(tmp_path: Path) -> None:
         raise AssertionError("deleting a parent with a running subagent must fail")
 
 
-def test_core_shutdown_interrupts_rather_than_stops_subagents(tmp_path: Path) -> None:
+def test_core_shutdown_preserves_safely_interrupted_subagents_for_restart(
+    tmp_path: Path,
+) -> None:
     async def scenario() -> None:
         provider = RoutedProvider(
             parent=[
@@ -597,8 +698,11 @@ def test_core_shutdown_interrupts_rather_than_stops_subagents(tmp_path: Path) ->
         await chat.shutdown()
 
         (record,) = store.list_entities(ChatSubagent)
-        assert record.status == ChatSubagentStatus.INTERRUPTED
-        assert record.error == "Core shut down while this subagent was running."
+        assert record.status == ChatSubagentStatus.RUNNING
+        assert (
+            store.get(ChatTurn, record.child_turn_id).status
+            == ChatTurnStatus.INTERRUPTED
+        )
 
     asyncio.run(scenario())
 

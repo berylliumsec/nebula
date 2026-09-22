@@ -2069,6 +2069,7 @@ def create_app(
                 "chat", "follow-ups", chat_queue.startup, chat_queue.shutdown
             )
             provider_chat.resume_turns_stopped_by_core()
+            await provider_chat.subagents.reconcile_after_restart()
         except BaseException:
             await stop_components()
             raise
