@@ -25,16 +25,22 @@ from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import InvalidToolArguments, ToolInvocation
 
 
-def _session(store: NebulaStore, engagement_id: str, title: str, **metadata) -> ChatSession:
+def _session(
+    store: NebulaStore, engagement_id: str, title: str, **metadata
+) -> ChatSession:
     profiles = store.list_entities(ProviderProfile, limit=1)
-    profile = profiles[0] if profiles else store.create(
-        ProviderProfile(
-            id="agent-message-provider",
-            name="Agent message provider",
-            provider_type="vllm",
-            is_local=True,
-            model_allowlist=["model-a"],
-            metadata={"default_model": "model-a"},
+    profile = (
+        profiles[0]
+        if profiles
+        else store.create(
+            ProviderProfile(
+                id="agent-message-provider",
+                name="Agent message provider",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                metadata={"default_model": "model-a"},
+            )
         )
     )
     return store.create(
@@ -48,7 +54,9 @@ def _session(store: NebulaStore, engagement_id: str, title: str, **metadata) -> 
     )
 
 
-def _invocation(session: ChatSession, tmp_path, *, key: str = "call-1") -> ToolInvocation:
+def _invocation(
+    session: ChatSession, tmp_path, *, key: str = "call-1"
+) -> ToolInvocation:
     return ToolInvocation(
         engagement_id=session.engagement_id,
         run_id="turn-1",
@@ -117,7 +125,9 @@ def test_send_is_durable_visible_idempotent_and_rejects_invalid_targets(tmp_path
     invocation = _invocation(sender, tmp_path)
 
     first = asyncio.run(service.send(invocation, recipient.id, "Check the retry path."))
-    second = asyncio.run(service.send(invocation, recipient.id, "Check the retry path."))
+    second = asyncio.run(
+        service.send(invocation, recipient.id, "Check the retry path.")
+    )
 
     assert first["message_id"] == second["message_id"]
     messages = store.list_entities(ChatAgentMessage, engagement_id=project.id)
@@ -165,7 +175,9 @@ def test_delivery_marks_only_the_exact_provider_or_harness_snapshot(tmp_path):
         service.send(_invocation(sender, tmp_path, key="first"), recipient.id, "First")
     )
     second = asyncio.run(
-        service.send(_invocation(sender, tmp_path, key="second"), recipient.id, "Second")
+        service.send(
+            _invocation(sender, tmp_path, key="second"), recipient.id, "Second"
+        )
     )
     records = {item.id: item for item in store.list_entities(ChatAgentMessage)}
 
@@ -173,10 +185,19 @@ def test_delivery_marks_only_the_exact_provider_or_harness_snapshot(tmp_path):
         recipient.id, {records[first["message_id"]].transcript_message_id}
     )
 
-    assert store.get(ChatAgentMessage, first["message_id"]).status == ChatAgentMessageStatus.DELIVERED
-    assert store.get(ChatAgentMessage, second["message_id"]).status == ChatAgentMessageStatus.PENDING
+    assert (
+        store.get(ChatAgentMessage, first["message_id"]).status
+        == ChatAgentMessageStatus.DELIVERED
+    )
+    assert (
+        store.get(ChatAgentMessage, second["message_id"]).status
+        == ChatAgentMessageStatus.PENDING
+    )
     service.mark_message_ids_delivered([second["message_id"]])
-    assert store.get(ChatAgentMessage, second["message_id"]).status == ChatAgentMessageStatus.DELIVERED
+    assert (
+        store.get(ChatAgentMessage, second["message_id"]).status
+        == ChatAgentMessageStatus.DELIVERED
+    )
 
 
 def test_sender_must_still_be_an_opted_in_main_agent(tmp_path):
@@ -232,7 +253,10 @@ def test_harness_catalog_send_and_next_turn_delivery(tmp_path):
             {"session_id": peer.id, "message": "Please verify the retry boundary."},
         )
         assert sent["isError"] is False
-        assert store.list_session_entities(ChatMessage, peer.id)[0].metadata["kind"] == "agent_message"
+        assert (
+            store.list_session_entities(ChatMessage, peer.id)[0].metadata["kind"]
+            == "agent_message"
+        )
 
         incoming = await service.send(
             _invocation(peer, tmp_path, key="peer-reply"),
@@ -249,7 +273,12 @@ def test_harness_catalog_send_and_next_turn_delivery(tmp_path):
             mcp_server_ids=[],
             allow_agent_messaging=True,
         )
-        assert next_turn.metadata["agent_messages_delivered"] == [incoming["message_id"]]
-        assert store.get(ChatAgentMessage, incoming["message_id"]).status == ChatAgentMessageStatus.DELIVERED
+        assert next_turn.metadata["agent_messages_delivered"] == [
+            incoming["message_id"]
+        ]
+        assert (
+            store.get(ChatAgentMessage, incoming["message_id"]).status
+            == ChatAgentMessageStatus.DELIVERED
+        )
 
     asyncio.run(scenario())

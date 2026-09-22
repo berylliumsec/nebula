@@ -9598,9 +9598,7 @@ class HarnessRuntimeService:
             session_rollover_reason = "command_runtime_changed"
             oci_components = self._ensure_oci_components(session)
         session = self._bind_session_provider_subagent(session, subagent_setting)
-        session = self._bind_session_agent_messaging(
-            session, allow_agent_messaging
-        )
+        session = self._bind_session_agent_messaging(session, allow_agent_messaging)
         # A choice this turn cannot use yet is remembered, never bound: the
         # vendor session only offers subagent tools on a validated setting.
         chat = self._remember_chat_provider_subagent(

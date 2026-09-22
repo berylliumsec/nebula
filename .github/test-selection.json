@@ -1,5 +1,5 @@
 {
-  "change_digest": "a68d53645f7441ffb415a2f627e5fedad41aaed9d227fff247870d3bf7540cac",
+  "change_digest": "bac4556885409025bdb7a0ec9ff9599701ea22e8a37f8c5b8bce4094e098b612",
   "reviewed_by": "Codex main-agent messaging lifecycle review",
   "reason": "Independent top-level agents can explicitly opt into same-project discovery, send durable idempotent peer messages, consume them through provider or harness runtimes, and see sender-attributed system callouts in chat. Five focused Python tests cover eligibility, project isolation, idempotency, provider injection, and harness steering/inbox fallback. Forty-six selected Vitest cases include four settings serialization tests and the existing App render matrix with a peer-message assertion. Three catalogued Assistant-settings entries match six browser checks across desktop and mobile Chromium/WebKit.",
   "exclusions": "No full suite, native tests, unrelated provider tests, or unrelated browser journeys. The selected Playwright journey uses a mocked Core and validates the adjacent Assistant settings surface; there is not yet a catalogued real-Core two-agent browser journey. Production build is checked separately. LAN-origin and physical-device evidence are unavailable, so those completion gates will be reported as unverified rather than inferred from emulation.",

@@ -76,9 +76,10 @@ class AgentMessageService:
 
     @classmethod
     def _addressable(cls, session: ChatSession) -> bool:
-        return cls._eligible(session) and session.metadata.get(
-            "allow_agent_messaging"
-        ) is True
+        return (
+            cls._eligible(session)
+            and session.metadata.get("allow_agent_messaging") is True
+        )
 
     def _invoking_session(self, invocation: ToolInvocation) -> ChatSession:
         if not invocation.chat_session_id:
@@ -120,7 +121,9 @@ class AgentMessageService:
                         "state": active.get(candidate.id, "idle"),
                     }
                 )
-        return sorted(peers, key=lambda item: (item["title"].casefold(), item["session_id"]))
+        return sorted(
+            peers, key=lambda item: (item["title"].casefold(), item["session_id"])
+        )
 
     def pending(self, recipient_session_id: str) -> list[ChatAgentMessage]:
         return sorted(
@@ -274,13 +277,16 @@ class AgentMessageService:
         ):
             raise InvalidToolArguments("unknown peer agent session_id")
 
-        key = invocation.idempotency_key or hashlib.sha256(
-            json.dumps(
-                [sender.id, recipient.id, content],
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
+        key = (
+            invocation.idempotency_key
+            or hashlib.sha256(
+                json.dumps(
+                    [sender.id, recipient.id, content],
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
+        )
         existing = self._existing(sender.id, key)
         if existing is not None:
             return self._send_view(existing)
@@ -311,10 +317,13 @@ class AgentMessageService:
                 raise InvalidToolArguments("unknown peer agent session_id")
             stored = self.store.list_session_entities(ChatMessage, recipient.id)
             recorded = current.metadata.get("last_sequence")
-            sequence = max(
-                [item.sequence for item in stored]
-                + [recorded if isinstance(recorded, int) else 0]
-            ) + 1
+            sequence = (
+                max(
+                    [item.sequence for item in stored]
+                    + [recorded if isinstance(recorded, int) else 0]
+                )
+                + 1
+            )
             transcript = ChatMessage(
                 id=transcript_id,
                 engagement_id=sender.engagement_id,
