@@ -277,6 +277,18 @@ class ChatContextAttachment(NebulaModel):
         return self
 
 
+class PendingProviderSubagent(NebulaModel):
+    """A harness chat's Subagents choice that this turn cannot use yet.
+
+    The same shape the conversation saves as ``provider_subagent``; the
+    provider and model may still be blank while the operator picks them.
+    """
+
+    provider_profile_id: str = Field(default="", max_length=200)
+    model: str = Field(default="", max_length=500)
+    max_active: int | None = Field(default=None, ge=1, le=SUBAGENT_LIMIT_CEILING)
+
+
 def _omitted_image_text(content: str, images: list[ChatContentBlock]) -> str:
     """A message's text with each image named, for a model that takes no images."""
 
@@ -400,6 +412,11 @@ class ChatCompletionRequest(NebulaModel):
     # ignore these; their children share the chat's own model.
     subagent_provider_id: str | None = Field(default=None, max_length=200)
     subagent_model: str | None = Field(default=None, max_length=500)
+    # Harness chats: the operator checked Subagents on a model still being
+    # verified, so this turn runs without them. Core remembers the choice on
+    # the conversation, as checking the box on a saved one does; it is how a
+    # new chat keeps it before there is anything to save it on.
+    pending_provider_subagent: PendingProviderSubagent | None = None
     max_artifact_queries: int | None = Field(default=None, ge=0)
     allow_cloud_tool_results: bool = False
     # Optional vendor-native turn controls.  They are validated again against
@@ -431,6 +448,13 @@ class ChatCompletionRequest(NebulaModel):
                 else {}
             ),
         }
+
+    def harness_pending_provider_subagent(self) -> dict[str, Any] | None:
+        """The choice to save on a harness chat whose turn cannot use it yet."""
+
+        if self.pending_provider_subagent is None:
+            return None
+        return self.pending_provider_subagent.model_dump(exclude_none=True)
 
     @model_validator(mode="after")
     def conversation_is_bounded_and_actionable(self) -> "ChatCompletionRequest":

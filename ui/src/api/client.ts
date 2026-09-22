@@ -3301,6 +3301,13 @@ export function chatRequestBody(
       ? { subagent_provider_id: body.subagentProviderId, subagent_model: body.subagentModel }
       : {}),
     ...(body.allowSubagents && body.maxActiveSubagents ? { max_active_subagents: body.maxActiveSubagents } : {}),
+    ...(body.pendingProviderSubagent ? {
+      pending_provider_subagent: {
+        provider_profile_id: body.pendingProviderSubagent.providerId,
+        model: body.pendingProviderSubagent.model,
+        ...(body.pendingProviderSubagent.maxActive ? { max_active: body.pendingProviderSubagent.maxActive } : {}),
+      },
+    } : {}),
     ...(body.sshEnvironmentIds !== undefined ? { ssh_environment_ids: body.sshEnvironmentIds } : {}),
     engagement_id: body.engagementId,
     session_id: body.sessionId,
@@ -8996,6 +9003,10 @@ export class ApiClient {
     toolsEnabled: boolean;
     mcpServerIds: string[];
     hookIds: string[];
+    /** The composer's other choices, saved on the new conversation. */
+    reasoningEffort?: ReasoningEffort;
+    allowSubagents?: boolean;
+    maxActiveSubagents?: number;
     objective: string;
     completionCriteria: string[];
     plan?: string[];
@@ -9014,6 +9025,9 @@ export class ApiClient {
           tools_enabled: body.toolsEnabled,
           mcp_server_ids: body.mcpServerIds,
           hook_ids: body.hookIds,
+          ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
+          ...(body.allowSubagents ? { allow_subagents: true } : {}),
+          ...(body.allowSubagents && body.maxActiveSubagents ? { max_active_subagents: body.maxActiveSubagents } : {}),
           objective: body.objective,
           completion_criteria: body.completionCriteria,
           plan: body.plan ?? [],

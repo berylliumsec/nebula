@@ -8900,6 +8900,7 @@ def create_app(
                     else None
                 ),
                 provider_subagent=request.harness_provider_subagent(),
+                pending_provider_subagent=request.harness_pending_provider_subagent(),
             )
             if companion_ids:
                 browser_companion.bind(next(iter(companion_ids)), chat.id)

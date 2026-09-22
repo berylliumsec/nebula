@@ -1794,7 +1794,20 @@ export interface ChatCompletionRequest {
   subagentModel?: string;
   /** How many subagents may run at once; absent means no limit. */
   maxActiveSubagents?: number;
+  /**
+   * Harness chats: the Subagents choice this turn cannot use yet because its
+   * model is still being verified. Core remembers it on the conversation, so
+   * a new chat keeps the box checked.
+   */
+  pendingProviderSubagent?: PendingProviderSubagent;
   runtimeSwitchConfirmation?: string;
+}
+
+export interface PendingProviderSubagent {
+  providerId: Identifier;
+  model: string;
+  /** How many subagents may run at once; absent means no limit. */
+  maxActive?: number;
 }
 
 export interface ChatRuntimeSwitchPreflight {

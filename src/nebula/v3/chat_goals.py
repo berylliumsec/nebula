@@ -9,6 +9,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
+from .chat_subagents import SUBAGENT_LIMIT_CEILING
 from .domain import (
     CHAT_GOAL_CHILD_LIMIT,
     ChatBackend,
@@ -20,6 +21,7 @@ from .domain import (
     ProviderProfile,
     utc_now,
 )
+from .providers import ReasoningEffort
 from .storage import ConflictError, NebulaStore, NotFoundError, StoreTransaction
 from .skill_catalog import SkillSelection, SkillSnapshot
 
@@ -56,6 +58,14 @@ class GoalConversationCreate(GoalCreate):
     tools_enabled: bool = False
     mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
     hook_ids: list[str] = Field(default_factory=list, max_length=32)
+    # The rest of the composer's choices, saved as a send or the assistant
+    # settings PATCH would save them: the goal's first turn is one Core
+    # starts, and it reads them from the conversation.
+    reasoning_effort: ReasoningEffort | None = None
+    allow_subagents: bool = False
+    max_active_subagents: int | None = Field(
+        default=None, ge=1, le=SUBAGENT_LIMIT_CEILING
+    )
 
     @model_validator(mode="after")
     def selections_are_unique(self) -> "GoalConversationCreate":
@@ -151,6 +161,9 @@ class ChatGoalService:
                 "tools_enabled": body.tools_enabled,
                 "mcp_server_ids": body.mcp_server_ids,
                 "hook_ids": body.hook_ids,
+                "reasoning_effort": body.reasoning_effort,
+                "allow_subagents": body.allow_subagents,
+                "max_active_subagents": body.max_active_subagents,
                 "message_count": 0,
                 "last_sequence": 0,
                 "initial_title_state": "pending",
