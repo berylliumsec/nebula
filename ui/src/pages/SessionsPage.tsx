@@ -4491,6 +4491,26 @@ export function SessionsPage() {
     minWidth: 360,
     storageKey: "nebula.chat-side-terminal.width",
   });
+  const [conversationPanelWidth, setConversationPanelWidth] = useState<number>();
+  const [sessionInspectorWidth, setSessionInspectorWidth] = useState<number>();
+  useEffect(() => {
+    if (!sessionInspectorOpen) setSessionInspectorWidth(undefined);
+  }, [sessionInspectorOpen]);
+  const conversationPanelSize = useResizableSidePanel({
+    defaultWidth: 280,
+    enabled: view === "chat" && conversationPanelOpen && !compact,
+    label: "Resize conversations",
+    maxWidth: 520,
+    minPrimaryWidth: 420 + (sessionInspectorWidth ?? 0),
+    minWidth: 240,
+    onWidthChange: setConversationPanelWidth,
+    side: "left",
+    storageKey: "nebula.conversations.width",
+  });
+  const sessionLayoutStyle = {
+    "--conversation-panel-width": `${conversationPanelWidth ?? 280}px`,
+    "--session-inspector-width": `${sessionInspectorWidth ?? 280}px`,
+  } as CSSProperties;
   const collapseBrowserAssistant = () => {
     setBrowserAssistantOpen(false);
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('button[aria-controls="browser-assistant-panel"]')?.focus({ preventScroll: true }));
@@ -4870,9 +4890,10 @@ export function SessionsPage() {
       />
       {fullScreen && workbenchToolbar}
 
-      <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen ? " conversation-panel-open" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`}>
+      <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen ? " conversation-panel-open" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`} style={sessionLayoutStyle}>
         {compact && view === "chat" && mobileListOpen && <button className="mobile-drawer-scrim" type="button" aria-label="Close conversations" onClick={() => setMobileListOpen(false)} />}
-        {view === "chat" && (conversationPanelOpen || mobileListOpen) && <aside className="session-list" id="workbench-conversations" aria-label="Conversations">
+        {view === "chat" && (conversationPanelOpen || mobileListOpen) && <aside ref={(element) => { conversationPanelSize.panelRef.current = element; }} className="session-list" id="workbench-conversations" aria-label="Conversations" style={conversationPanelSize.panelStyle}>
+          {conversationPanelSize.resizeHandle}
           {compact && mobileListOpen && <MobileDrawerProject onNavigate={() => setMobileListOpen(false)} />}
           <header><div><span>Conversations</span><strong>{sessionQuery ? `${sidebarConversations.matchCount} of ${sessions.length}` : `${sessions.length} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!sessions.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" title="Hide conversations" aria-expanded="true" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
           <button className={conversationOpen && !sessionId ? "session-new-chat active" : "session-new-chat"} type="button" onClick={newConversation}><Plus size={16} /><span><strong>New chat</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
@@ -5060,7 +5081,7 @@ export function SessionsPage() {
           onRestore={() => setAgentView("floating")}
           onClose={() => { setAgentView("closed"); requestAnimationFrame(() => agentViewButtonRef.current?.focus()); }}
         />}
-        {(view === "chat" || view === "browser") && sessionInspectorOpen && <ChatWorkspaceDrawer overlay={view === "browser"} tab={drawerTab} onTab={tab => updateSearchParams(next => {next.set("drawer", tab);})} onClose={() => setSessionInspectorOpen(false)}>
+        {(view === "chat" || view === "browser") && sessionInspectorOpen && <ChatWorkspaceDrawer overlay={view === "browser"} minPrimaryWidth={420 + (conversationPanelWidth ?? 0)} onWidthChange={setSessionInspectorWidth} tab={drawerTab} onTab={tab => updateSearchParams(next => {next.set("drawer", tab);})} onClose={() => setSessionInspectorOpen(false)}>
           {drawerTab === "subagents" ? api && sessionId ? <ChatSubagentPane
             key={`subagents:${sessionId}`}
             api={api}

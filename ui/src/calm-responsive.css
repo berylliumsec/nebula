@@ -2,6 +2,11 @@
   :root { --side-width: 72px; }
 }
 
+@media (max-width: 1100px) {
+  .session-layout.chat.inspector-open { grid-template-columns: minmax(0, 1fr); }
+  .session-layout.chat.conversation-panel-open.inspector-open { grid-template-columns: var(--conversation-panel-width, 280px) minmax(0, 1fr); }
+}
+
 @media (max-width: 1000px) {
   :root { --activity-width: 320px; }
   .page { padding-inline: 20px; }
@@ -12,7 +17,7 @@
   .session-layout.chat,
   .session-layout.chat.inspector-open { grid-template-columns: minmax(0, 1fr); }
   .session-layout.chat.conversation-panel-open,
-  .session-layout.chat.conversation-panel-open.inspector-open { grid-template-columns: 280px minmax(0, 1fr); }
+  .session-layout.chat.conversation-panel-open.inspector-open { grid-template-columns: var(--conversation-panel-width, 280px) minmax(0, 1fr); }
   .session-scope > span { display: none; }
 }
 

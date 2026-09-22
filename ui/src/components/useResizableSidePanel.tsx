@@ -8,6 +8,7 @@ interface ResizableSidePanelOptions {
   minPrimaryWidth: number;
   minWidth: number;
   onWidthChange?: (width: number | undefined) => void;
+  side?: "left" | "right";
   storageKey: string;
 }
 
@@ -21,7 +22,7 @@ function storedWidth(key: string, fallback: number): number {
   }
 }
 
-/** Shared, keyboard-accessible sizing behavior for right-hand operator panels. */
+/** Shared pointer- and keyboard-accessible sizing behavior for operator side panels. */
 export function useResizableSidePanel({
   defaultWidth,
   enabled = true,
@@ -30,6 +31,7 @@ export function useResizableSidePanel({
   minPrimaryWidth,
   minWidth,
   onWidthChange,
+  side = "right",
   storageKey,
 }: ResizableSidePanelOptions) {
   const panelRef = useRef<HTMLElement | null>(null);
@@ -67,15 +69,17 @@ export function useResizableSidePanel({
   }, [enabled, storageKey, width]);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (!enabled) return;
+    if (!enabled || event.button !== 0) return;
     drag.current = { pointerId: event.pointerId, startWidth: width, startX: event.clientX };
+    event.currentTarget.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
     event.preventDefault();
   };
 
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!drag.current || drag.current.pointerId !== event.pointerId) return;
-    resizeTo(drag.current.startWidth + drag.current.startX - event.clientX);
+    const delta = event.clientX - drag.current.startX;
+    resizeTo(drag.current.startWidth + (side === "left" ? delta : -delta));
   };
 
   const endPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -96,12 +100,12 @@ export function useResizableSidePanel({
     aria-valuemax={max}
     aria-valuemin={min}
     aria-valuenow={effectiveWidth}
-    className="side-panel-resize-handle"
+    className={`side-panel-resize-handle panel-${side}`}
     onDoubleClick={() => resizeTo(defaultWidth)}
     onKeyDown={(event) => {
       const step = event.shiftKey ? 80 : 24;
-      if (event.key === "ArrowLeft") resizeTo(effectiveWidth + step);
-      else if (event.key === "ArrowRight") resizeTo(effectiveWidth - step);
+      if (event.key === "ArrowLeft") resizeTo(effectiveWidth + (side === "right" ? step : -step));
+      else if (event.key === "ArrowRight") resizeTo(effectiveWidth + (side === "left" ? step : -step));
       else if (event.key === "Home") resizeTo(min);
       else if (event.key === "End") resizeTo(max);
       else return;
@@ -109,6 +113,7 @@ export function useResizableSidePanel({
     }}
     onPointerCancel={endPointer}
     onPointerDown={onPointerDown}
+    onLostPointerCapture={() => { drag.current = undefined; }}
     onPointerMove={onPointerMove}
     onPointerUp={endPointer}
     role="separator"
@@ -116,5 +121,5 @@ export function useResizableSidePanel({
     title="Drag to resize. Use Left and Right arrow keys when focused; double-click to reset."
   /> : null;
 
-  return { panelRef, panelStyle, resizeHandle };
+  return { panelRef, panelStyle, resizeHandle, width: effectiveWidth };
 }
