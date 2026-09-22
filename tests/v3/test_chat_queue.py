@@ -360,6 +360,78 @@ def test_restart_after_durable_turn_creation_reconciles_without_replay(
     assert store.count(ChatTurn) == 1
 
 
+def test_core_update_reclaimed_provider_turn_keeps_linked_follow_up_running(tmp_path):
+    from nebula.v3.providers import ModelRequest, ModelStreamEvent, StreamEventType
+
+    class WaitingProvider(FakeProvider):
+        async def stream(self, request):
+            del request
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            await asyncio.Event().wait()
+
+    async def scenario():
+        store, service, request = setup_queue(tmp_path)
+        profile = store.get(ProviderProfile, request.provider_id)
+        service.chat.provider_factory = lambda _: WaitingProvider(
+            profile.id, local=True
+        )
+        queue = enqueue(service, request)
+        reason = "Core stopped before this response completed. Review and resume it."
+        turn = store.create(
+            ChatTurn(
+                engagement_id="p",
+                session_id="s",
+                provider_profile_id=profile.id,
+                model="model-a",
+                status="interrupted",
+                error=reason,
+                request_snapshot={
+                    "model_request": ModelRequest(
+                        model="model-a",
+                        messages=[{"role": "user", "content": "Continue."}],
+                    ).model_dump(mode="json"),
+                    "context_usage": {},
+                    "recovery": {
+                        "required": True,
+                        "cause": "core_shutdown",
+                        "unknown_tool_call_ids": [],
+                        "unknown_hook_execution_ids": [],
+                    },
+                },
+            )
+        )
+        items = queue.items
+        items[0].update(status="sending", turn_id=turn.id)
+        store.update(
+            ChatQueue, queue.id, {"items": items}, expected_revision=queue.revision
+        )
+
+        await service.chat.startup()
+        assert service.chat.resume_turns_stopped_by_core() == [turn.id]
+        await service.startup()
+        linked = service.get("s")
+        assert linked.items[0]["status"] == "sending"
+        assert not linked.paused
+        assert service.chat.has_active_provider_turn(turn.id)
+
+        current = store.get(ChatTurn, turn.id)
+        store.update(
+            ChatTurn,
+            turn.id,
+            {"status": "complete"},
+            expected_revision=current.revision,
+        )
+        await service.step(service.get("s"))
+        settled = service.get("s")
+        assert settled.items[0]["status"] == "complete"
+        assert not settled.paused
+        assert store.count(ChatTurn) == 1
+        await service.shutdown()
+        await service.chat.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_harness_queue_uses_durable_turn_and_selected_context(tmp_path):
     import hashlib
     from tests.v3.test_harnesses import _runtime

@@ -4286,6 +4286,55 @@ reloadTest("assistant upgrade restores paused provider supervisor thinking and p
   await expect(reply.getByLabel("Thinking")).toContainText("Check the returned evidence before continuing.");
 });
 
+reloadTest("assistant upgrade replaces a callback wait when its turn finishes between polls", async ({ page }) => {
+  let callbackComplete = false;
+  await installTruthfulCore(page);
+  await page.context().route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{
+        ...entity,
+        id: "callback-finished",
+        engagement_id: "scratch-project",
+        title: "Callback recovery",
+        backend: "provider",
+        provider_profile_id: "provider-thinking",
+        model: "deepseek/deepseek-v4.1-flash",
+      }] });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/callback-finished/messages")) {
+      await route.fulfill({ json: [
+        { ...entity, id: "callback-prompt", engagement_id: "scratch-project", session_id: "callback-finished", sequence: 1, role: "user", content: "Continue after the command.", citations: [], metadata: {} },
+        ...(callbackComplete ? [{ ...entity, id: "callback-answer", engagement_id: "scratch-project", session_id: "callback-finished", sequence: 2, role: "assistant", content: "The command completed and I checked its result.", reasoning: "The returned evidence supports this answer.", citations: [], metadata: {} }] : []),
+      ] });
+      return;
+    }
+    if (path.endsWith("/chat/sessions/callback-finished/pending-turn")) {
+      await route.fulfill({ json: callbackComplete ? null : {
+        ...entity,
+        id: "callback-turn",
+        session_id: "callback-finished",
+        started_at: entity.created_at,
+        status: "waiting_callback",
+        tool_call_ids: ["command-call"],
+        content: "Waiting for the command output.",
+        reasoning: "I will inspect the result before answering.",
+      } });
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=callback-finished", "Workbench");
+  await expect(page.locator(".chat-message.assistant").last()).toContainText("Waiting for the command output.");
+  callbackComplete = true;
+  const reply = page.locator(".chat-message.assistant").last();
+  await expect(reply).toContainText("The command completed and I checked its result.", { timeout: 10_000 });
+  await expect(reply.getByLabel("Thinking")).toContainText("The returned evidence supports this answer.");
+  await expect(page.getByText("Waiting for command results")).toHaveCount(0);
+});
+
 test("assistant upgrade provider thinking stays collapsed and out of the reply", async ({ page }) => {
   const provider = {
     ...entity,

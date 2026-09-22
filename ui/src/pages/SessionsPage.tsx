@@ -774,9 +774,17 @@ export function SessionsPage() {
     const request: ChatCompletionRequest = { backend: "provider", sessionId, messages: [], toolsEnabled: true };
     const timer = window.setInterval(() => {
       void api.getPendingChatTurn(sessionId, pollController.signal).then((pending) => {
-        if (pollController.signal.aborted || !pending || pending.status === "waiting_callback") return;
+        if (pollController.signal.aborted || pending?.status === "waiting_callback") return;
         window.clearInterval(timer);
         if (sessionSelectionGenerationRef.current !== selectionGeneration) return;
+        // A callback may finish before the next poll, so no pending turn remains.
+        // Terminal or newly blocked turns also need their durable transcript and
+        // recovery controls restored instead of following an inactive stream.
+        if (!pending || pending.id !== waitingCallback.turnId
+          || !["routing", "finalizing"].includes(pending.status)) {
+          void selectSession(sessionId, false);
+          return;
+        }
         // The follow owns the viewer transport (not the poll controller, which
         // this effect aborts as soon as the callback resolves), so switching
         // conversations detaches it and its replayed events stay out of the

@@ -1,13 +1,13 @@
 {
-  "change_digest": "d1622d3c1688b6d28c10a6272402c973062f4c7445e70cc01cbdced961281d9f",
-  "reviewed_by": "Codex focused review for Core-stopped subagent recovery",
-  "reason": "Graceful Core shutdown previously settled safe child turns as interrupted before the next worker could reclaim them. Exact Python cases cover preserved child/parent linkage, crash reconciliation, supervisor auto recovery and uncertain effects. The existing paused-supervisor browser journey remains the selected UI regression.",
-  "exclusions": "No unrelated provider, native, or full suites. Backend lifecycle change is checked with focused Python and the existing desktop/mobile browser journey. Physical devices unavailable; production real-Core verification follows deployment.",
+  "change_digest": "a835c04a45e5c4d0795750af5a8c81fa89cfd9f159e56d4d7c7239f0059050f6",
+  "reviewed_by": "Codex focused review for callback and queue restart recovery",
+  "reason": "Callback completion can race the UI pending-turn poll, while safe Core-update auto-resume can race queue startup reconciliation. Exact Python cases cover queue restart states, the claimed safe turn, and supervisor auto-resume. The paused-supervisor browser area covers callback completion across desktop and mobile engines. The provider real-Core area checks saved conversation restart through the production UI on LAN, with its resumed answer assertion bound to the durable outcome rather than obsolete streaming wording.",
+  "exclusions": "No unrelated native, frontend unit, or full suites. Callback timing is modeled at the UI boundary and queue behavior is checked against a durable Core store. Physical devices are unavailable.",
   "expected_tests": {
-    "python": 6,
+    "python": 7,
     "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 19
   },
   "python_versions": [
     "3.11"
@@ -15,16 +15,14 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_subagents.py::test_graceful_core_update_resumes_safe_child_before_reporting_to_parent",
-    "tests/v3/test_chat_subagents.py::test_core_shutdown_preserves_safely_interrupted_subagents_for_restart",
-    "tests/v3/test_chat_subagents.py::test_restart_interrupts_running_subagents_and_reports_it",
-    "tests/v3/test_chat_subagents.py::test_restart_resumes_a_parent_waiting_on_an_interrupted_subagent",
-    "tests/v3/test_chat.py::test_core_update_auto_resumes_safe_supervisor_with_saved_thinking",
-    "tests/v3/test_chat.py::test_core_update_auto_resume_keeps_uncertain_and_crashed_turns_parked"
+    "tests/v3/test_chat_queue.py::test_restart_after_durable_turn_creation_reconciles_without_replay",
+    "tests/v3/test_chat_queue.py::test_core_update_reclaimed_provider_turn_keeps_linked_follow_up_running",
+    "tests/v3/test_chat.py::test_core_update_auto_resumes_safe_supervisor_with_saved_thinking"
   ],
   "frontend": [],
   "native": [],
   "playwright": [
-    "area:paused-supervisor-recovery"
+    "area:paused-supervisor-recovery",
+    "area:provider-native-hooks-core"
   ]
 }
