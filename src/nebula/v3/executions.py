@@ -1002,7 +1002,6 @@ class ExecutionService:
                 raise ExecutionServiceError(
                     "preview_stale", "target DNS resolution changed while queued"
                 )
-        before = await asyncio.to_thread(_workspace_snapshot, resolution.workspace)
         execution = self.store.update(
             OperatorExecution,
             execution.id,
@@ -1160,8 +1159,6 @@ class ExecutionService:
                         )
 
         async def finalize() -> None:
-            after = await asyncio.to_thread(_workspace_snapshot, resolution.workspace)
-            changes = _workspace_changes(before, after)
             error_code: str | None
             error_detail: str | None
             exit_code: int | None
@@ -1210,7 +1207,7 @@ class ExecutionService:
                 error_detail=error_detail,
                 exit_code=exit_code,
                 output_truncated=truncated,
-                workspace_changes=changes,
+                workspace_changes=[],
             )
             try:
                 shutil.rmtree(spool_dir)
@@ -1232,9 +1229,9 @@ class ExecutionService:
                     stage="spool-cleanup",
                 )
 
-        # The captured output lives only in the spool until it is persisted,
-        # so the workspace walk and persistence run as one shielded unit that
-        # a cancel or Core shutdown after the runner finished cannot discard.
+        # The captured output lives only in the spool until it is persisted, so
+        # persistence runs as a shielded unit that a cancel or Core shutdown
+        # after the runner finished cannot discard.
         # diagnostic-expected: shielded and awaited to completion just below.
         finalize_task = asyncio.create_task(finalize())
         try:
@@ -1631,50 +1628,6 @@ def _resolve_target(value: str) -> list[str]:
     return sorted(
         addresses, key=lambda item: (ipaddress.ip_address(item).version, item)
     )
-
-
-def _workspace_snapshot(workspace: Path) -> dict[str, tuple[str, int, int]]:
-    result: dict[str, tuple[str, int, int]] = {}
-    for root, directories, files in os.walk(workspace, followlinks=False):
-        directories[:] = sorted(
-            name for name in directories if not (Path(root) / name).is_symlink()
-        )
-        for name in sorted([*directories, *files]):
-            path = Path(root) / name
-            relative = path.relative_to(workspace).as_posix()
-            try:
-                metadata = path.lstat()
-            except OSError:
-                # diagnostic-expected: a concurrent terminal removed the entry mid-walk.
-                continue
-            kind = (
-                "symlink"
-                if path.is_symlink()
-                else "directory"
-                if path.is_dir()
-                else "file"
-            )
-            result[relative] = (kind, metadata.st_size, metadata.st_mtime_ns)
-    return result
-
-
-def _workspace_changes(
-    before: dict[str, tuple[str, int, int]],
-    after: dict[str, tuple[str, int, int]],
-) -> list[WorkspaceChange]:
-    changes: list[WorkspaceChange] = []
-    for path in sorted(set(before) | set(after)):
-        if path not in before:
-            changes.append(
-                WorkspaceChange(path=path, change="added", size=after[path][1])
-            )
-        elif path not in after:
-            changes.append(WorkspaceChange(path=path, change="deleted"))
-        elif before[path] != after[path]:
-            changes.append(
-                WorkspaceChange(path=path, change="modified", size=after[path][1])
-            )
-    return changes[:1000]
 
 
 def _artifact_descriptor(artifact: Artifact) -> dict[str, Any]:

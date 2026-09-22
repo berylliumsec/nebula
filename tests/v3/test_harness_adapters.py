@@ -2106,6 +2106,40 @@ class FakeClaudeClient:
         self.disconnected = True
 
 
+def test_claude_turn_does_not_scan_workspace(tmp_path, monkeypatch):
+    class WriteClient(FakeClaudeClient):
+        async def receive_response(self) -> AsyncIterator[Any]:
+            yield AssistantMessage(
+                [ToolUseBlock("tool-write", "Write", {"file_path": "out.txt"})]
+            )
+            yield UserMessage([ToolResultBlock("tool-write", "written")])
+            yield ResultMessage()
+
+    def no_recursive_walk(*_args, **_kwargs):
+        raise AssertionError("Claude turns must not scan the project")
+
+    monkeypatch.setattr(Path, "rglob", no_recursive_walk)
+
+    async def scenario() -> None:
+        async def no_permission(_request):
+            raise AssertionError("permission was not expected")
+
+        connection = ClaudeAgentSdkConnection(
+            WriteClient(options=FakeClaudeOptions()),
+            permission_handler=no_permission,
+            sdk=SimpleNamespace(),
+            external_session_id=None,
+            workspace=tmp_path,
+        )
+        events = [event async for event in connection.run_turn("read", model="test")]
+        assert events[-1].type == "completed"
+        file_change = next(event for event in events if event.type == "tool_started")
+        assert file_change.item_kind == "file_change"
+        assert not any(event.item_id == "workspace-changes" for event in events)
+
+    asyncio.run(scenario())
+
+
 def test_claude_reasoning_text_is_discarded_and_future_messages_are_notices(tmp_path):
     class ReasoningClient:
         def __init__(self) -> None:
