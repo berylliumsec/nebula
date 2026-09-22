@@ -333,7 +333,7 @@ function HostDetailsDialog({ api, host, busy, onTest, onClose, onSaved, onForgot
         <section className={styles.card} aria-labelledby="ssh-nebula-heading">
           <h3 id="ssh-nebula-heading">Nebula settings</h3>
           <label>Display name<input value={displayName} placeholder={host.alias} maxLength={200} onChange={(event) => setDisplayName(event.target.value)} /></label>
-          <label>Notes for agents<textarea rows={3} maxLength={4000} value={notes} placeholder="What this machine is for, and anything an agent should check first." onChange={(event) => setNotes(event.target.value)} /><small className={styles.muted}>Given to the model whenever this host is available in a chat.</small></label>
+          <label>Notes for agents<textarea rows={3} maxLength={4000} value={notes} placeholder="What this machine is for, and anything an agent should check first." onChange={(event) => setNotes(event.target.value)} /><small className={styles.muted}>Given to the model whenever this host is available. Comments directly below its <code>Host</code> line are included automatically.</small></label>
           <label>Working directory<input value={workingDirectory} placeholder="Home directory" maxLength={1024} className={styles.mono} onChange={(event) => setWorkingDirectory(event.target.value)} /></label>
         </section>
       </div>

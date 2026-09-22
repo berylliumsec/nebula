@@ -218,16 +218,19 @@ class SshEnvironmentService:
         )
 
     def resolve_for_chat(self, ids: list[str] | None) -> tuple[SshEnvironment, ...]:
-        return resolve_ssh_environments(self.store, ids)
+        return resolve_ssh_environments(self.store, ids, config_path=self.config_path)
 
 
 def resolve_ssh_environments(
-    store: NebulaStore, ids: list[str] | None
+    store: NebulaStore,
+    ids: list[str] | None,
+    *,
+    config_path: Path | str | None = None,
 ) -> tuple[SshEnvironment, ...]:
-    """Enabled hosts for a turn: all of them by default, or an explicit subset."""
+    """Enabled hosts for a turn, enriched with optional SSH-config metadata."""
 
     if ids is None:
-        return tuple(
+        selected = tuple(
             sorted(
                 (
                     item
@@ -237,13 +240,37 @@ def resolve_ssh_environments(
                 key=lambda item: item.alias,
             )
         )
-    selected: list[SshEnvironment] = []
-    for item_id in dict.fromkeys(ids):
-        environment = store.get(SshEnvironment, item_id)
-        if not environment.enabled:
-            raise ValueError(f"SSH environment {environment.label!r} is not enabled")
-        selected.append(environment)
-    return tuple(selected)
+    else:
+        explicit: list[SshEnvironment] = []
+        for item_id in dict.fromkeys(ids):
+            environment = store.get(SshEnvironment, item_id)
+            if not environment.enabled:
+                raise ValueError(
+                    f"SSH environment {environment.label!r} is not enabled"
+                )
+            explicit.append(environment)
+        selected = tuple(explicit)
+
+    # Comments immediately below a concrete ``Host`` line are portable,
+    # behavior-free metadata. Read them at turn preparation so edits to
+    # ~/.ssh/config reach the model without silently rewriting Core settings.
+    comments = {
+        host.alias: host.comment.strip()
+        for host in ssh.discover_hosts(config_path).hosts
+        if host.comment.strip()
+    }
+    enriched: list[SshEnvironment] = []
+    for environment in selected:
+        config_metadata = comments.get(environment.alias, "")[:4_000]
+        saved_notes = environment.notes.strip()
+        if config_metadata:
+            guidance = f"SSH config metadata: {config_metadata}"
+            if saved_notes and saved_notes != config_metadata:
+                guidance += f"\nNebula notes: {saved_notes}"
+            enriched.append(environment.model_copy(update={"notes": guidance}))
+        else:
+            enriched.append(environment)
+    return tuple(enriched)
 
 
 def ssh_tool_name(alias: str) -> str:
@@ -281,7 +308,7 @@ def _describe(environment: SshEnvironment) -> str:
     if environment.working_directory:
         lines.append(f"Default directory: {environment.working_directory}.")
     if environment.notes.strip():
-        lines.append("Operator notes: " + environment.notes.strip())
+        lines.append("Host guidance: " + environment.notes.strip())
     lines.append(
         "Commands are non-interactive (no stdin, no password prompts). Returns exit "
         "code, stdout and stderr."

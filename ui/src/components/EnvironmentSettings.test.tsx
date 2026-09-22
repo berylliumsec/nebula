@@ -93,6 +93,7 @@ describe("environment settings", () => {
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("research3.local")).toBeVisible();
     expect(within(dialog).getByRole("textbox", {name: /Notes for agents/})).toHaveValue("Apple Silicon research Mac");
+    expect(within(dialog).getByText(/Comments directly below its/)).toHaveTextContent("Host line are included automatically");
     await user.type(within(dialog).getByRole("textbox", {name: "Display name"}), "Research Mac");
     await user.selectOptions(within(dialog).getByRole("combobox", {name: "Command approval"}), "allow");
     await user.click(within(dialog).getByRole("button", {name: "Save"}));
