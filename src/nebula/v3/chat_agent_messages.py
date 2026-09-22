@@ -154,7 +154,7 @@ class AgentMessageService:
                         expected_revision=latest.revision,
                     )
                     break
-                except ConflictError:
+                except ConflictError:  # diagnostic-expected: optimistic delivery retry
                     continue
 
     def inbox(self, recipient_session_id: str, *, mark: bool = True) -> dict[str, Any]:
@@ -165,7 +165,9 @@ class AgentMessageService:
             try:
                 sender = self.store.get(ChatSession, message.sender_session_id)
                 sender_title = sender.title
-            except NotFoundError:
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: sender conversation was deleted
                 sender_title = "Deleted conversation"
             views.append(
                 {
@@ -208,7 +210,7 @@ class AgentMessageService:
         for message_id in dict.fromkeys(message_ids):
             try:
                 messages.append(self.store.get(ChatAgentMessage, message_id))
-            except NotFoundError:
+            except NotFoundError:  # diagnostic-expected: stale inbox reference
                 continue
         if messages:
             self._mark_delivered(messages)

@@ -1518,7 +1518,7 @@ class ChatService:
                     self._interrupt_orphaned_turn(
                         latest, calls, hook_executions, cause="Core restarted"
                     )
-                except ConflictError:
+                except ConflictError:  # diagnostic-expected: optimistic recovery retry
                     # A prior worker can finish a ledger or turn write during
                     # this scan. Reclassify its latest state before retrying.
                     continue
@@ -1732,7 +1732,7 @@ class ChatService:
             for call_id in unknown_tools:
                 try:
                     call = self.store.get(ToolCall, call_id)
-                except NotFoundError:
+                except NotFoundError:  # diagnostic-expected: stale recovery reference
                     continue
                 if call.chat_turn_id != turn.id:
                     continue
@@ -1827,7 +1827,7 @@ class ChatService:
                     expected_revision=turn.revision,
                 )
                 return turn
-            except ConflictError:
+            except ConflictError:  # diagnostic-expected: optimistic recovery retry
                 turn = self.reconcile_recorded_effects(turn.id)
         raise ChatHistoryConflict(
             "interrupted response changed repeatedly during automatic recovery"
@@ -1880,7 +1880,7 @@ class ChatService:
                         },
                         expected_revision=execution.revision,
                     )
-                except ConflictError:
+                except ConflictError:  # diagnostic-expected: late hook outcome won
                     # The hook may have committed its result after the scan.
                     # Keep the old unknown ID; read repair uses its new state.
                     pass
@@ -4833,7 +4833,9 @@ class ChatService:
                                 prepared, turn, response
                             ):
                                 yield item
-                        except CompletionHookBlocked as blocked:
+                        except (
+                            CompletionHookBlocked
+                        ) as blocked:  # diagnostic-expected: route hook feedback
                             turn = self._route_after_completion_hook(
                                 prepared, blocked, response
                             )
@@ -4852,7 +4854,9 @@ class ChatService:
                                 prepared, turn, answer
                             ):
                                 yield item
-                        except CompletionHookBlocked as blocked:
+                        except (
+                            CompletionHookBlocked
+                        ) as blocked:  # diagnostic-expected: route hook feedback
                             turn = self._route_after_completion_hook(
                                 prepared, blocked, answer
                             )
@@ -5450,7 +5454,9 @@ class ChatService:
                             synthesis = await self._completion_hook_feedback(
                                 prepared, final_request, synthesis
                             )
-                        except CompletionHookBlocked as blocked:
+                        except (
+                            CompletionHookBlocked
+                        ) as blocked:  # diagnostic-expected: route hook feedback
                             turn = self._route_after_completion_hook(
                                 prepared, blocked, synthesis
                             )
@@ -7704,7 +7710,7 @@ class ChatService:
                     continue
                 try:
                     call = self.store.get(ToolCall, call_id)
-                except NotFoundError:
+                except NotFoundError:  # diagnostic-expected: stale tool reference
                     continue
                 if (
                     call.chat_turn_id != turn.id
@@ -7716,7 +7722,9 @@ class ChatService:
                     continue
                 try:
                     receipt = ToolResultReceipt.model_validate(call.result)
-                except ValidationError:
+                except (
+                    ValidationError
+                ):  # diagnostic-expected: legacy result is not adoptable
                     continue
                 if (
                     receipt.tool_call_id != call.id
@@ -7819,7 +7827,7 @@ class ChatService:
                     },
                     expected_revision=turn.revision,
                 )
-            except ConflictError:
+            except ConflictError:  # diagnostic-expected: optimistic recovery retry
                 continue
         raise ChatHistoryConflict(
             "interrupted response changed while recovering recorded effects; reload"
@@ -7849,7 +7857,7 @@ class ChatService:
                     continue
                 try:
                     execution = self.store.get(NativeHookExecution, execution_id)
-                except NotFoundError:
+                except NotFoundError:  # diagnostic-expected: stale hook reference
                     continue
                 if execution.chat_turn_id != turn.id:
                     continue
@@ -7910,7 +7918,7 @@ class ChatService:
                         expected_revision=turn.revision,
                     )
                 return repaired
-            except ConflictError:
+            except ConflictError:  # diagnostic-expected: optimistic recovery retry
                 continue
         raise ChatHistoryConflict(
             "interrupted hook state changed while recovering recorded effects; reload"

@@ -7810,7 +7810,7 @@ class HarnessRuntimeService:
         for active in list(self._active.values()):
             try:
                 turn = self.store.get(HarnessTurn, active.turn_id)
-            except NotFoundError:
+            except NotFoundError:  # diagnostic-expected: active turn was deleted
                 continue
             if turn.chat_session_id != chat_session_id:
                 continue
@@ -7822,7 +7822,9 @@ class HarnessRuntimeService:
                     title="Agent message",
                     summary="Nebula added a peer-agent message to the turn.",
                 )
-            except HarnessStateError:
+            except (
+                HarnessStateError
+            ):  # diagnostic-expected: harness cannot accept steering
                 return False
             return True
         return False
@@ -12608,7 +12610,10 @@ class HarnessRuntimeService:
                 if update:
                     result["updates"] = update.views
                     service.mark_delivered(update)
-        except (InvalidToolArguments, ChatError) as exc:
+        except (
+            InvalidToolArguments,
+            ChatError,
+        ) as exc:  # diagnostic-expected: return typed gateway denial
             record_caught_exception(
                 "harnesses",
                 "harnesses.gateway.subagent_refused",
@@ -12705,7 +12710,10 @@ class HarnessRuntimeService:
                     str(arguments.get("session_id") or ""),
                     str(arguments.get("message") or ""),
                 )
-        except (InvalidToolArguments, ChatError) as exc:
+        except (
+            InvalidToolArguments,
+            ChatError,
+        ) as exc:  # diagnostic-expected: return typed gateway denial
             self._finish_gateway_call(call.id, error=exc)
             return self._gateway_denial(str(exc))
         except Exception as exc:
