@@ -27,6 +27,8 @@ import { ChatResults } from "../components/ChatResults";
 import { AgentViewPanel, useStructuredResults, useUnseenCount } from "../components/structured-result";
 import { ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
 import { useChatNavigation } from "./useChatNavigation";
+import { reconcileListedSessions } from "./chatSessionList";
+import { subagentRequestFields } from "./chatSubagentChoice";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
 import { AssistantApprovalDetails } from "../components/AssistantApprovalDetails";
 import { AssistantSetupLinks } from "../components/AssistantSetupLinks";
@@ -1830,7 +1832,8 @@ export function SessionsPage() {
     const selectionGeneration = sessionSelectionGenerationRef.current;
     const page = await api.listChatSessions(requestedEngagementId);
     if (activeEngagementIdRef.current !== requestedEngagementId) return;
-    setSessions(page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)));
+    // A read that started before a save may answer after it; keep the newer copy.
+    setSessions((current) => reconcileListedSessions(current, page.items));
     if (selectedId && sessionSelectionGenerationRef.current === selectionGeneration) {
       setSessionId(selectedId);
       openSessionChatView(selectedId, true);
@@ -1847,6 +1850,11 @@ export function SessionsPage() {
       toolsEnabled: canUseTools,
       mcpServerIds: selectedMcpIds,
       hookIds: selectedHookIds,
+      // The goal's first turn is one Core starts, and it reads these from
+      // the conversation; without them the new chat unchecks Subagents.
+      reasoningEffort: reasoningEffort || undefined,
+      allowSubagents,
+      maxActiveSubagents: allowSubagents ? subagentLimit : undefined,
       ...draft,
     });
     setProviderGoal(created.goal);
@@ -3562,12 +3570,13 @@ export function SessionsPage() {
       reasoningEffort: runtimeKind === "provider" && reasoningEffort
         ? reasoningEffort
         : undefined,
-      allowSubagents: runtimeKind === "provider"
-        ? allowSubagents
-        : harnessSubagentsReady,
-      subagentProviderId: runtimeKind === "harness" && harnessSubagentsReady ? subagentProviderId : undefined,
-      subagentModel: runtimeKind === "harness" && harnessSubagentsReady ? subagentModel : undefined,
-      maxActiveSubagents: (runtimeKind === "provider" ? allowSubagents : harnessSubagentsReady) ? subagentLimit : undefined,
+      ...subagentRequestFields(runtimeKind, {
+        enabled: allowSubagents,
+        ready: harnessSubagentsReady,
+        providerId: subagentProviderId,
+        model: subagentModel,
+        limit: subagentLimit,
+      }),
       harnessServiceTier: runtimeKind === "harness"
         ? harnessServiceTier
         : undefined,

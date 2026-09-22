@@ -9111,6 +9111,7 @@ class HarnessRuntimeService:
         harness_service_tier: str | None = None,
         content_blocks: list[ChatContentBlock] | None = None,
         provider_subagent: dict[str, Any] | None = None,
+        pending_provider_subagent: dict[str, Any] | None = None,
     ) -> tuple[ChatSession, ChatTurn, HarnessTurn]:
         clean_prompt = prompt.strip()
         if not clean_prompt:
@@ -9482,7 +9483,11 @@ class HarnessRuntimeService:
             session_rollover_reason = "command_runtime_changed"
             oci_components = self._ensure_oci_components(session)
         session = self._bind_session_provider_subagent(session, subagent_setting)
-        chat = self._remember_chat_provider_subagent(chat, subagent_setting)
+        # A choice this turn cannot use yet is remembered, never bound: the
+        # vendor session only offers subagent tools on a validated setting.
+        chat = self._remember_chat_provider_subagent(
+            chat, subagent_setting or pending_provider_subagent
+        )
         subagent_update = (
             self.provider_subagents.harness_update(chat.id)
             if self.provider_subagents is not None
@@ -9662,7 +9667,9 @@ class HarnessRuntimeService:
         at once. A send records a setting it carries, which is how a new chat
         keeps one, but a send without one never erases the saved choice: the
         composer leaves the setting out while the subagent model is still
-        being verified, and that turn simply runs without subagents.
+        being verified, and that turn simply runs without subagents. Such a
+        send carries the choice separately to be remembered here, so a new
+        chat keeps it too.
         """
 
         chat = self.store.get(ChatSession, chat.id)
