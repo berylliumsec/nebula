@@ -1506,7 +1506,9 @@ class ToolBroker:
             if (
                 plugin.spec.name == "tool_output.read"
                 and isinstance(invocation.arguments.get("artifact_id"), str)
-                and re.fullmatch(r"[0-9a-fA-F]{64}", invocation.arguments["artifact_id"])
+                and re.fullmatch(
+                    r"[0-9a-fA-F]{64}", invocation.arguments["artifact_id"]
+                )
             ):
                 raise InvalidToolArguments(
                     "artifact_id is a SHA-256 digest; use the artifact ID from an authorized receipt"

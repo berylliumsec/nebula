@@ -1958,11 +1958,16 @@ def test_harness_gateway_digest_in_artifact_id_is_terminal_and_actionable(tmp_pa
         assert failure["schema"] == "nebula.tool-failure/v1"
         assert failure["invalid_input"] == "artifact_id"
         assert "sha256" in failure["next_action"]
-        assert failure["effective_input_schema"]["properties"]["artifact_id"]["type"] == "string"
+        assert (
+            failure["effective_input_schema"]["properties"]["artifact_id"]["type"]
+            == "string"
+        )
         assert failure["side_effects"] == "none"
         latest = store.get(ChatTurn, chat_turn.id)
         assert len(latest.tool_call_ids) == 1
-        assert store.get(ToolCall, latest.tool_call_ids[0]).status == ToolCallStatus.FAILED
+        assert (
+            store.get(ToolCall, latest.tool_call_ids[0]).status == ToolCallStatus.FAILED
+        )
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 

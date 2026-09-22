@@ -12184,25 +12184,30 @@ class HarnessRuntimeService:
                 seen_cursors.add(cursor)
         except Exception as exc:
             fallback = ToolSpec.model_construct(
-                name=name, description=name,
+                name=name,
+                description=name,
                 input_schema={"type": "object", "additionalProperties": True},
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=RiskClass.LOCAL_READ,
             )
-            failure = tool_failure(
-                fallback, arguments, exc, phase="before_execution"
-            )
+            failure = tool_failure(fallback, arguments, exc, phase="before_execution")
             return {
-                "content": [{"type": "text", "text": json.dumps(failure, sort_keys=True)}],
-                "structuredContent": failure, "isError": True,
+                "content": [
+                    {"type": "text", "text": json.dumps(failure, sort_keys=True)}
+                ],
+                "structuredContent": failure,
+                "isError": True,
             }
         if offered is None:
             failure = unavailable_tool_failure(
                 name, "gateway tool is absent from this session's offered catalog"
             )
             return {
-                "content": [{"type": "text", "text": json.dumps(failure, sort_keys=True)}],
-                "structuredContent": failure, "isError": True,
+                "content": [
+                    {"type": "text", "text": json.dumps(failure, sort_keys=True)}
+                ],
+                "structuredContent": failure,
+                "isError": True,
             }
         schema = offered.get("inputSchema") if offered else None
         if not isinstance(schema, dict):
@@ -12213,7 +12218,8 @@ class HarnessRuntimeService:
         # names can contain uppercase letters, while broker ToolSpec names are
         # intentionally restricted; Draft7 validates the arguments below.
         spec = ToolSpec.model_construct(
-            name=name, description=str(offered.get("description") or name) if offered else name,
+            name=name,
+            description=str(offered.get("description") or name) if offered else name,
             input_schema=schema,
             output_schema={"type": "object", "additionalProperties": True},
             risk_class=RiskClass.LOCAL_READ,
@@ -12223,14 +12229,27 @@ class HarnessRuntimeService:
                 Draft7Validator(schema).validate(arguments)
             result = await self._gateway_call_unwrapped(session, name, arguments)
         except Exception as exc:
-            phase = "before_execution" if name in _GATEWAY_RETRIEVAL_SCHEMAS or isinstance(exc, (InvalidToolArguments, PolicyDenied, ValidationError)) or isinstance(exc.__cause__, ValidationError) else "after_execution"
+            phase = (
+                "before_execution"
+                if name in _GATEWAY_RETRIEVAL_SCHEMAS
+                or isinstance(
+                    exc, (InvalidToolArguments, PolicyDenied, ValidationError)
+                )
+                or isinstance(exc.__cause__, ValidationError)
+                else "after_execution"
+            )
             failure = tool_failure(spec, arguments, exc, phase=phase)
             return {
-                "content": [{"type": "text", "text": json.dumps(failure, sort_keys=True)}],
-                "structuredContent": failure, "isError": True,
+                "content": [
+                    {"type": "text", "text": json.dumps(failure, sort_keys=True)}
+                ],
+                "structuredContent": failure,
+                "isError": True,
             }
         structured = result.get("structuredContent")
-        if result.get("isError") is True and not (isinstance(structured, dict) and structured.get("schema") == FAILURE_SCHEMA):
+        if result.get("isError") is True and not (
+            isinstance(structured, dict) and structured.get("schema") == FAILURE_SCHEMA
+        ):
             original = structured or result
             status = structured.get("status") if isinstance(structured, dict) else None
             if status == "denied":
@@ -12246,17 +12265,28 @@ class HarnessRuntimeService:
                 error = RuntimeError(repr(original))
                 phase = "after_execution"
             failure = tool_failure(
-                spec, arguments, error, phase=phase,
+                spec,
+                arguments,
+                error,
+                phase=phase,
             )
             receipt = structured
-            if isinstance(receipt, dict) and receipt.get("schema") == "nebula.tool-result/v2":
+            if (
+                isinstance(receipt, dict)
+                and receipt.get("schema") == "nebula.tool-result/v2"
+            ):
                 failure["result_receipt"] = {
-                    "artifact_id": receipt.get("artifacts", [{}])[0].get("artifact_id") if receipt.get("artifacts") else None,
+                    "artifact_id": receipt.get("artifacts", [{}])[0].get("artifact_id")
+                    if receipt.get("artifacts")
+                    else None,
                     "status": receipt.get("status"),
                 }
             return {
-                "content": [{"type": "text", "text": json.dumps(failure, sort_keys=True)}],
-                "structuredContent": failure, "isError": True,
+                "content": [
+                    {"type": "text", "text": json.dumps(failure, sort_keys=True)}
+                ],
+                "structuredContent": failure,
+                "isError": True,
             }
         return result
 
@@ -12898,7 +12928,11 @@ class HarnessRuntimeService:
         try:
             schema = _GATEWAY_RETRIEVAL_SCHEMAS[name]
             Draft7Validator(schema).validate(arguments)
-            if name == "tool_output.read" and isinstance(arguments.get("artifact_id"), str) and re.fullmatch(r"[0-9a-fA-F]{64}", arguments["artifact_id"]):
+            if (
+                name == "tool_output.read"
+                and isinstance(arguments.get("artifact_id"), str)
+                and re.fullmatch(r"[0-9a-fA-F]{64}", arguments["artifact_id"])
+            ):
                 raise InvalidToolArguments("artifact_id is a SHA-256 digest")
             if name == "tool_output.search":
                 output_service = ToolOutputService(self.store, self.artifact_store)

@@ -298,13 +298,16 @@ class AutomationBroker:
         ):
             error = InvalidToolArguments(
                 "artifact_id is a SHA-256 digest; use the artifact ID from an authorized receipt"
-                if not errors else errors[0].message
+                if not errors
+                else errors[0].message
             )
             if errors:
                 error.__cause__ = errors[0]
             setattr(error, "_nebula_before_execution", True)
             if call.status == ToolCallStatus.PROPOSED:
-                await self.ledger.transition(call, ToolCallStatus.FAILED, error=str(error))
+                await self.ledger.transition(
+                    call, ToolCallStatus.FAILED, error=str(error)
+                )
             raise error
         retrieval = invocation.tool_name in {
             "tool_output.search",

@@ -39,7 +39,14 @@ from .providers import (
     _GEMINI_SYNTHETIC_CALL_ID,
 )
 from .redaction import redact_text
-from .tools import ApprovalRequired, InvalidToolArguments, PolicyDenied, ToolBroker, ToolInvocation, ToolSpec
+from .tools import (
+    ApprovalRequired,
+    InvalidToolArguments,
+    PolicyDenied,
+    ToolBroker,
+    ToolInvocation,
+    ToolSpec,
+)
 from .tool_failures import tool_failure, unavailable_tool_failure
 from .tool_results import (
     ToolResultStatus,
@@ -458,8 +465,11 @@ class BrokeredToolSpecialist:
             )
             status = "denied"
             provider_result: dict[str, Any] | str = tool_failure(
-                self.specs[invocation.tool_name], invocation.arguments, denial,
-                phase="before_execution", call_id=invocation.id,
+                self.specs[invocation.tool_name],
+                invocation.arguments,
+                denial,
+                phase="before_execution",
+                call_id=invocation.id,
             )
             summary = str(provider_result["problem"])
             evidence_ids: list[str] = []
@@ -486,7 +496,9 @@ class BrokeredToolSpecialist:
             )
             status = "failed"
             provider_result = tool_failure(
-                self.specs[invocation.tool_name], invocation.arguments, exc,
+                self.specs[invocation.tool_name],
+                invocation.arguments,
+                exc,
                 phase="before_execution"
                 if getattr(exc, "_nebula_before_execution", False)
                 else "after_execution",
@@ -502,20 +514,31 @@ class BrokeredToolSpecialist:
             failed = self._tool_result_failed(result)
             provider_result = (
                 tool_failure(
-                    self.specs[invocation.tool_name], invocation.arguments,
+                    self.specs[invocation.tool_name],
+                    invocation.arguments,
                     TimeoutError("tool execution timed out")
                     if result.execution.get("timed_out") is True
-                    or (result.receipt and result.receipt.status == ToolResultStatus.TIMED_OUT)
+                    or (
+                        result.receipt
+                        and result.receipt.status == ToolResultStatus.TIMED_OUT
+                    )
                     else asyncio.CancelledError("tool execution was cancelled")
-                    if result.receipt and result.receipt.status == ToolResultStatus.CANCELLED
-                    else RuntimeError(f"tool returned failure receipt: {result.model_result()!r}"),
-                    phase="after_execution", call_id=invocation.id,
+                    if result.receipt
+                    and result.receipt.status == ToolResultStatus.CANCELLED
+                    else RuntimeError(
+                        f"tool returned failure receipt: {result.model_result()!r}"
+                    ),
+                    phase="after_execution",
+                    call_id=invocation.id,
                 )
-                if failed else serialize_model_result(result.model_result())
+                if failed
+                else serialize_model_result(result.model_result())
             )
             if failed and isinstance(provider_result, dict):
                 provider_result["result_receipt"] = {
-                    "status": result.receipt.status.value if result.receipt else "failed",
+                    "status": result.receipt.status.value
+                    if result.receipt
+                    else "failed",
                     "artifact_id": result.result_artifact_id,
                 }
             try:
@@ -943,8 +966,11 @@ class BrokeredToolSpecialist:
         spec = self.specs.get(call.name)
         failure = (
             tool_failure(
-                spec, dict(call.arguments), InvalidToolArguments(action.detail),
-                phase="before_execution", call_id=call.id,
+                spec,
+                dict(call.arguments),
+                InvalidToolArguments(action.detail),
+                phase="before_execution",
+                call_id=call.id,
             )
             if spec is not None
             else unavailable_tool_failure(call.name, action.detail, call_id=call.id)

@@ -261,7 +261,10 @@ def test_malformed_routing_never_reaches_the_tool_broker(tmp_path, routing, deta
     assert detail in str(refused.output)
     assert refused.output["schema"] == "nebula.tool-failure/v1"
     if routing.tool_calls[0].name == "safe_read":
-        assert refused.output["effective_input_schema"] == prepared.tool_components.specs["safe_read"].input_schema
+        assert (
+            refused.output["effective_input_schema"]
+            == prepared.tool_components.specs["safe_read"].input_schema
+        )
     else:
         assert refused.output["effective_input_schema"] is None
 

@@ -4549,13 +4549,19 @@ class ChatService:
                         stage="chat",
                     )
                     failure = tool_failure(
-                        spec, call.arguments, exc, phase="before_execution",
+                        spec,
+                        call.arguments,
+                        exc,
+                        phase="before_execution",
                         call_id=durable_call_id,
                     )
                     provider_result = serialize_model_result(failure)
                     entry.update(
-                        {"status": "denied", "provider_result": provider_result,
-                         "result_summary": failure["problem"]}
+                        {
+                            "status": "denied",
+                            "provider_result": provider_result,
+                            "result_summary": failure["problem"],
+                        }
                     )
                 except Exception as exc:
                     record_caught_exception(
@@ -4566,7 +4572,9 @@ class ChatService:
                         stage="chat",
                     )
                     failure = tool_failure(
-                        spec, call.arguments, exc,
+                        spec,
+                        call.arguments,
+                        exc,
                         phase="before_execution"
                         if getattr(exc, "_nebula_before_execution", False)
                         else "after_execution",
@@ -4574,12 +4582,17 @@ class ChatService:
                     )
                     provider_result = serialize_model_result(failure)
                     entry.update(
-                        {"status": "failed", "provider_result": provider_result,
-                         "result_summary": failure["problem"]}
+                        {
+                            "status": "failed",
+                            "provider_result": provider_result,
+                            "result_summary": failure["problem"],
+                        }
                     )
                 else:
                     fields, waiting_callback = self._tool_result_entry(
-                        result, spec=spec, arguments=call.arguments,
+                        result,
+                        spec=spec,
+                        arguments=call.arguments,
                         call_id=durable_call_id,
                     )
                     entry.update(fields)
@@ -5682,11 +5695,16 @@ class ChatService:
         durable_call_id = str(
             uuid5(NAMESPACE_URL, f"nebula:{turn.id}:chat:{turn.id}:step:{step}")
         )
-        safe_detail = str(json.loads(self._bounded_tool_error("failed", detail))["detail"])
+        safe_detail = str(
+            json.loads(self._bounded_tool_error("failed", detail))["detail"]
+        )
         failure = (
             tool_failure(
-                spec, call.arguments, InvalidToolArguments(detail),
-                phase="before_execution", call_id=durable_call_id,
+                spec,
+                call.arguments,
+                InvalidToolArguments(detail),
+                phase="before_execution",
+                call_id=durable_call_id,
             )
             if spec is not None
             else unavailable_tool_failure(call.name, detail, call_id=durable_call_id)
@@ -6044,8 +6062,12 @@ class ChatService:
         return result.output.get("timed_out") is True
 
     def _tool_result_entry(
-        self, result: Any, *, spec: Any = None,
-        arguments: dict[str, Any] | None = None, call_id: str | None = None,
+        self,
+        result: Any,
+        *,
+        spec: Any = None,
+        arguments: dict[str, Any] | None = None,
+        call_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Classify one broker result into its durable tool-history fields.
 
@@ -6058,7 +6080,8 @@ class ChatService:
         receipt = result.receipt
         if self._tool_result_failed(result) and spec is not None:
             failure = tool_failure(
-                spec, arguments or {},
+                spec,
+                arguments or {},
                 TimeoutError("tool execution timed out")
                 if result.execution.get("timed_out") is True
                 or (receipt and receipt.status == ToolResultStatus.TIMED_OUT)
@@ -6068,7 +6091,8 @@ class ChatService:
                     f"tool execution returned {receipt.status.value if receipt else result.exit_code}; "
                     f"receipt={model_result!r}"
                 ),
-                phase="after_execution", call_id=call_id,
+                phase="after_execution",
+                call_id=call_id,
             )
             failure["result_receipt"] = {
                 "artifact_id": result.result_artifact_id,
@@ -6165,10 +6189,15 @@ class ChatService:
             entry.update(
                 {
                     "status": "denied",
-                    "provider_result": serialize_model_result(tool_failure(
-                        components.specs[invocation.tool_name], invocation.arguments,
-                        exc, phase="before_execution", call_id=str(entry["tool_call_id"]),
-                    )),
+                    "provider_result": serialize_model_result(
+                        tool_failure(
+                            components.specs[invocation.tool_name],
+                            invocation.arguments,
+                            exc,
+                            phase="before_execution",
+                            call_id=str(entry["tool_call_id"]),
+                        )
+                    ),
                 }
             )
         except Exception as exc:
@@ -6182,19 +6211,25 @@ class ChatService:
             entry.update(
                 {
                     "status": "failed",
-                    "provider_result": serialize_model_result(tool_failure(
-                        components.specs[invocation.tool_name], invocation.arguments,
-                        exc, phase="before_execution"
-                        if getattr(exc, "_nebula_before_execution", False)
-                        else "after_execution",
-                        call_id=str(entry["tool_call_id"]),
-                    )),
+                    "provider_result": serialize_model_result(
+                        tool_failure(
+                            components.specs[invocation.tool_name],
+                            invocation.arguments,
+                            exc,
+                            phase="before_execution"
+                            if getattr(exc, "_nebula_before_execution", False)
+                            else "after_execution",
+                            call_id=str(entry["tool_call_id"]),
+                        )
+                    ),
                 }
             )
         else:
             fields, waiting_callback = self._tool_result_entry(
-                result, spec=components.specs[invocation.tool_name],
-                arguments=invocation.arguments, call_id=str(entry["tool_call_id"]),
+                result,
+                spec=components.specs[invocation.tool_name],
+                arguments=invocation.arguments,
+                call_id=str(entry["tool_call_id"]),
             )
             entry.update(fields)
             receipt = result.receipt
