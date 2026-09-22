@@ -4360,6 +4360,10 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         # (--replay-user-messages), which tells absorbed guidance from queued.
         # The echo of a prompt only comes with the turn's first message.
         self._cli_acknowledges = acknowledges_user_messages
+        # The CLI's running session cost (``total_cost_usd``) at the last result
+        # read. A new CLI session starts from zero; a resumed one may carry the
+        # spend of earlier CLI processes, so it is unknown until a result.
+        self._session_cost_usd: float | None = None if external_session_id else 0.0
         self._consumer_idle = asyncio.Event()
         self._consumer_idle.set()
         self._settle_lock = asyncio.Lock()
@@ -4422,6 +4426,10 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         # Answers of earlier CLI turns this Nebula turn followed for guidance.
         answers: list[str] = []
         earlier_usage: HarnessDetailedUsage | None = None
+        # How much the session cost grew across this turn's results; None once
+        # any part of it is unknown.
+        turn_cost: float | None = 0.0
+        session_cost: float | None = None
         guidance_deadline: float | None = None
         loop = asyncio.get_running_loop()
 
@@ -4842,10 +4850,18 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                     )
                     self._vendor_turn_open = guidance_pending
                     self._learn_session(message)
+                    growth = self._session_cost_growth(message)
+                    turn_cost = (
+                        turn_cost + growth
+                        if turn_cost is not None and growth is not None
+                        else None
+                    )
+                    session_cost = self._session_cost_usd
                     raw_usage = getattr(message, "usage", None) or {}
                     detailed_usage = _claude_detailed_usage(
                         raw_usage,
                         result=message,
+                        cost_usd=turn_cost,
                     )
                     if earlier_usage is not None:
                         detailed_usage = _claude_combined_usage(
@@ -4958,6 +4974,11 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                 vendor=HarnessKind.CLAUDE_AGENT_SDK,
                 usage=usage,
                 detailed_usage=detailed_usage,
+                payload=(
+                    {"session_cost": {"amount": session_cost, "currency": "USD"}}
+                    if session_cost is not None
+                    else {}
+                ),
             )
             yield HarnessEvent(
                 type="completed",
@@ -5088,6 +5109,24 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         if isinstance(session_id, str) and session_id:
             self.external_session_id = session_id
 
+    def _session_cost_growth(self, message: Any) -> float | None:
+        """How much the CLI's running session cost grew by this ResultMessage.
+
+        ``total_cost_usd`` covers the CLI's whole session, not one turn: Claude
+        Code keeps one process-wide cost counter, restores it from its config
+        when it resumes a session and zeroes it when the conversation is reset.
+        Every result moves the baseline, so a turn is not billed for a stopped
+        turn or a turn the CLI ran on its own. The growth is unknown without an
+        earlier total; a total below it means the counter restarted from zero.
+        """
+
+        total = _acp_amount(getattr(message, "total_cost_usd", None))
+        previous = self._session_cost_usd
+        self._session_cost_usd = total
+        if total is None or previous is None:
+            return None
+        return total - previous if total >= previous else total
+
     async def _prepare_for_query(self) -> list[HarnessEvent]:
         """Settle the stream so the next ResultMessage answers this prompt."""
 
@@ -5136,6 +5175,7 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                 replayed = _claude_replayed_text(message)
                 if type(message).__name__ == "ResultMessage":
                     self._learn_session(message)
+                    self._session_cost_growth(message)
                     if self._unacknowledged_steers and self._cli_acknowledges:
                         # Queued guidance survives an interrupt and runs as a
                         # turn of its own next; that turn is stopped as well.
@@ -5200,6 +5240,7 @@ class ClaudeAgentSdkConnection(HarnessConnection):
             if class_name == "ResultMessage":
                 deadline = None
                 self._learn_session(message)
+                self._session_cost_growth(message)
                 events.append(_claude_background_result_event(message))
             elif class_name in CLAUDE_TASK_MESSAGES:
                 events.append(_claude_task_event(message, class_name))
@@ -5232,8 +5273,8 @@ def _claude_combined_usage(
 ) -> HarnessDetailedUsage:
     """Usage of consecutive CLI turns that answered one Nebula turn.
 
-    Token counts and durations are reported per CLI turn and add up; the CLI's
-    ``total_cost_usd`` covers its whole session, so the later value stands.
+    Token counts and durations are reported per CLI turn and add up; the later
+    ``cost_usd`` already covers the whole Nebula turn, so it stands.
     """
 
     def added(first: int | None, second: int | None) -> int | None:
@@ -5467,8 +5508,14 @@ def _object_values(value: Any) -> dict[str, Any]:
 
 
 def _claude_detailed_usage(
-    usage: Any, *, result: Any | None = None
+    usage: Any, *, result: Any | None = None, cost_usd: float | None = None
 ) -> HarnessDetailedUsage:
+    """Usage of one CLI turn; ``cost_usd`` is the turn's share of the session.
+
+    The result's own ``total_cost_usd`` is the session's running total, so the
+    connection works out the turn's cost and passes it in.
+    """
+
     values = usage if isinstance(usage, dict) else {}
 
     def count(*names: str) -> int:
@@ -5489,12 +5536,7 @@ def _claude_detailed_usage(
         cached_input_tokens=cache_read,
         cache_creation_input_tokens=cache_creation,
         cache_read_input_tokens=cache_read,
-        cost_usd=(
-            float(getattr(result, "total_cost_usd"))
-            if result is not None
-            and isinstance(getattr(result, "total_cost_usd", None), (int, float))
-            else None
-        ),
+        cost_usd=cost_usd,
         duration_ms=(
             int(getattr(result, "duration_ms"))
             if result is not None
