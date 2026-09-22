@@ -4663,6 +4663,11 @@ test("assistant settings expose provider metadata and harness model options", as
     privacy: { local_only: false, permits_sensitive_data: false, residency: [] },
     metadata: {},
   };
+  const providerModels = [
+    "anthropic/claude-sonnet-4.5", "openai/gpt-5", "x-ai/grok-4.7",
+    "deepseek/deepseek-flash", "google/gemini-pro", "meta/llama-4",
+    "qwen/qwen3", "mistral/medium", "cohere/command-r",
+  ];
   let providerProfileReads = 0;
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -4706,7 +4711,7 @@ test("assistant settings expose provider metadata and harness model options", as
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
         provider_id: openRouterProvider.id,
         healthy: true,
-        models: ["anthropic/claude-sonnet-4.5"],
+        models: providerModels,
         model_descriptors: [{
           id: "anthropic/claude-sonnet-4.5",
           name: "Claude Sonnet 4.5",
@@ -4791,17 +4796,40 @@ test("assistant settings expose provider metadata and harness model options", as
   // Settings use the viewport rather than the remaining space above the composer.
   await expect(page.getByRole("dialog", { name: "Assistant settings" })).toBeInViewport({ ratio: 1 });
   expect((await new AxeBuilder({ page }).include("#assistant-settings-popover").analyze()).violations).toEqual([]);
-  const providerModel = page.getByRole("combobox", { name: "Chat model" });
-  await expect(providerModel).toHaveValue("anthropic/claude-sonnet-4.5");
-  await expect(providerModel.locator("option")).toContainText([
-    "Select model",
-    "Claude Sonnet 4.5 (anthropic/claude-sonnet-4.5) · 200,000 context",
-  ]);
+  const providerModel = settingsDialog.getByRole("button", { name: /^Chat model:/ });
+  await expect(providerModel).toContainText("Claude Sonnet 4.5");
   // Capability verification re-reads the profile; discovered models must survive it.
   await expect.poll(() => providerProfileReads).toBeGreaterThan(0);
   await expect(providerModel).toBeEnabled();
-  await expect(providerModel).toHaveValue("anthropic/claude-sonnet-4.5");
-  await expect(providerModel.locator("option")).toHaveCount(2);
+  await providerModel.click();
+  const modelSearch = settingsDialog.getByRole("combobox", { name: "Search models" });
+  await expect(modelSearch).toBeFocused();
+  await modelSearch.fill("deepseek/deepseek-flash");
+  await expect(settingsDialog.getByRole("listbox", { name: "Models" }).getByRole("option")).toHaveCount(1);
+  const deepseekOption = settingsDialog.getByRole("option", { name: /deepseek\/deepseek-flash/ });
+  await expect(deepseekOption).toBeVisible();
+  const pickerGeometry = await deepseekOption.evaluate((element) => {
+    const option = element.getBoundingClientRect();
+    const dialog = element.closest<HTMLElement>("#assistant-settings-popover")!;
+    const bounds = dialog.getBoundingClientRect();
+    return { height: option.height, left: option.left, right: option.right, dialogLeft: bounds.left, dialogRight: bounds.right, scrollWidth: dialog.scrollWidth, clientWidth: dialog.clientWidth };
+  });
+  expect(pickerGeometry.height).toBeGreaterThanOrEqual(44);
+  expect(pickerGeometry.left).toBeGreaterThanOrEqual(pickerGeometry.dialogLeft);
+  expect(pickerGeometry.right).toBeLessThanOrEqual(pickerGeometry.dialogRight);
+  expect(pickerGeometry.scrollWidth).toBeLessThanOrEqual(pickerGeometry.clientWidth + 1);
+  await page.screenshot({ path: testInfo.outputPath("searchable-model-picker.png") });
+  if (testInfo.project.name.startsWith("mobile")) {
+    for (const width of [320, 430]) {
+      await page.setViewportSize({ width, height: 844 });
+      await expect(settingsDialog).toBeInViewport({ ratio: 1 });
+      await expect(modelSearch).toBeVisible();
+      expect(await settingsDialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    }
+  }
+  await modelSearch.press("Escape");
+  await expect(settingsDialog.getByRole("listbox", { name: "Models" })).toHaveCount(0);
+  await expect(providerModel).toContainText("Claude Sonnet 4.5");
   await expect(settingsDialog.getByText("text + image · tools advertised · 32,000 max output")).toBeVisible();
   await page.getByRole("combobox", { name: "Chat runtime" }).selectOption("harness");
   expect(harnessSessionsCompleted).toBe(false);
