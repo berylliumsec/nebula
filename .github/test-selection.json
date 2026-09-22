@@ -1,23 +1,25 @@
 {
-  "change_digest": "bac4556885409025bdb7a0ec9ff9599701ea22e8a37f8c5b8bce4094e098b612",
-  "reviewed_by": "Codex main-agent messaging lifecycle review",
-  "reason": "Independent top-level agents can explicitly opt into same-project discovery, send durable idempotent peer messages, consume them through provider or harness runtimes, and see sender-attributed system callouts in chat. Five focused Python tests cover eligibility, project isolation, idempotency, provider injection, and harness steering/inbox fallback. Forty-six selected Vitest cases include four settings serialization tests and the existing App render matrix with a peer-message assertion. Three catalogued Assistant-settings entries match six browser checks across desktop and mobile Chromium/WebKit.",
-  "exclusions": "No full suite, native tests, unrelated provider tests, or unrelated browser journeys. The selected Playwright journey uses a mocked Core and validates the adjacent Assistant settings surface; there is not yet a catalogued real-Core two-agent browser journey. Production build is checked separately. LAN-origin and physical-device evidence are unavailable, so those completion gates will be reported as unverified rather than inferred from emulation.",
-  "expected_tests": {"python": 5, "frontend": 46, "native": 0, "playwright": 6},
-  "python_versions": ["3.11"],
+  "change_digest": "89751e3fafff2f8d420e16ac6650ba4986143b563485bb0f2ddeaaa51e2c4833",
+  "reviewed_by": "Codex adjustable conversation panel review",
+  "reason": "The Conversations sidebar and Conversation details inspector now share bounded, device-local desktop resizing while preserving a 420 px chat surface and unchanged mobile drawers. Three focused hook tests cover both panel directions, bounds, persistence, keyboard operation, and reset. Eight catalogued browser entries cover pointer and keyboard resizing, persistence after reload, accessibility, the 1024 px overlay boundary, and 320, 390, and 430 px Chromium and WebKit drawer behavior.",
+  "exclusions": "No Python, Rust, backend, provider, harness, streaming, or unrelated browser tests: the changed state is a localStorage presentation preference and does not cross the Core API boundary. Real-Core testing is not selected because Core owns none of this state. The production UI build is checked separately. Physical-device coverage is unavailable and is not inferred from emulation.",
+  "expected_tests": {"python": 0, "frontend": 3, "native": 0, "playwright": 8},
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_chat_agent_messages.py"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/api/chatSubagentsSettings.test.ts",
-    "ui/src/App.test.tsx"
+    "ui/src/components/useResizableSidePanel.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:assistant-settings-navigation/desktop",
-    "entry:assistant-settings-navigation/mobile-chromium",
-    "entry:assistant-settings-navigation/mobile-webkit"
+    "entry:conversation-panel-sizing/desktop",
+    "entry:conversation-panel-sizing/compact",
+    "entry:conversation-panel-sizing/mobile-chromium-small",
+    "entry:conversation-panel-sizing/mobile-chromium-ledger-390",
+    "entry:conversation-panel-sizing/mobile-chromium-wide",
+    "entry:conversation-panel-sizing/mobile-webkit-small",
+    "entry:conversation-panel-sizing/mobile-webkit",
+    "entry:conversation-panel-sizing/mobile-webkit-wide"
   ]
 }

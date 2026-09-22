@@ -7771,6 +7771,72 @@ test("browser research tools expose durable workflows on paired clients", async 
   expect(axe.violations).toEqual([]);
 });
 
+test("conversation switching keeps side panels adjustable and mobile drawers intact", async ({ page }) => {
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const viewportWidth = page.viewportSize()?.width ?? 1440;
+
+  if (viewportWidth <= 760) {
+    await expect(page.getByRole("separator", { name: /Resize (conversations|conversation details)/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "Open conversations", exact: true }).click();
+    const conversations = page.getByRole("complementary", { name: "Conversations" });
+    await expect(conversations).toBeVisible();
+    await expect(conversations.getByRole("separator")).toHaveCount(0);
+    await conversations.getByRole("button", { name: "Hide conversations" }).click();
+    await page.getByRole("button", { name: "Conversation actions" }).click();
+    await page.getByRole("menu", { name: "Conversation actions" }).getByRole("menuitem", { name: /Session details/ }).click();
+    const drawer = page.getByRole("dialog", { name: "Conversation details" });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByRole("separator")).toHaveCount(0);
+    expect((await new AxeBuilder({ page }).include(".session-inspector").analyze()).violations).toEqual([]);
+    return;
+  }
+
+  const showConversations = page.getByRole("button", { name: "Show conversations", exact: true });
+  if (await showConversations.isVisible()) await showConversations.click();
+  const conversations = page.getByRole("complementary", { name: "Conversations" });
+  const conversationResize = conversations.getByRole("separator", { name: "Resize conversations" });
+  await expect(conversationResize).toBeVisible();
+  const conversationWidth = await conversations.evaluate((element) => element.getBoundingClientRect().width);
+  const conversationHandleBox = await conversationResize.boundingBox();
+  expect(conversationHandleBox).not.toBeNull();
+  await page.mouse.move(conversationHandleBox!.x + 10, conversationHandleBox!.y + conversationHandleBox!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(conversationHandleBox!.x + 42, conversationHandleBox!.y + conversationHandleBox!.height / 2);
+  await page.mouse.up();
+  await expect.poll(() => conversations.evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(Math.round(conversationWidth + 32));
+  await conversationResize.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect.poll(() => conversations.evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(Math.round(conversationWidth + 56));
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.conversations.width"))).toBe(String(Math.round(conversationWidth + 56)));
+
+  await page.getByRole("button", { name: "Show session details" }).click();
+  if (viewportWidth <= 1100) {
+    const drawer = page.getByRole("dialog", { name: "Conversation details" });
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByRole("separator")).toHaveCount(0);
+    const columns = await page.locator(".session-layout.chat").evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(" ").length);
+    expect(columns).toBe(2);
+    return;
+  }
+
+  const details = page.getByRole("complementary", { name: "Session inspector" });
+  const detailsResize = details.getByRole("separator", { name: "Resize conversation details" });
+  await expect(detailsResize).toBeVisible();
+  const detailsWidth = await details.evaluate((element) => element.getBoundingClientRect().width);
+  await detailsResize.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect.poll(() => details.evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(Math.round(detailsWidth + 24));
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.session-inspector.width"))).toBe(String(Math.round(detailsWidth + 24)));
+  expect(Math.round((await page.locator(".session-workspace").boundingBox())?.width ?? 0)).toBeGreaterThanOrEqual(420);
+  expect((await new AxeBuilder({ page }).include(".session-layout.chat").analyze()).violations).toEqual([]);
+
+  await page.reload();
+  const restoreConversations = page.getByRole("button", { name: "Show conversations", exact: true });
+  if (await restoreConversations.isVisible()) await restoreConversations.click();
+  await expect(page.getByRole("complementary", { name: "Conversations" }).getByRole("separator", { name: "Resize conversations" })).toHaveAttribute("aria-valuenow", String(Math.round(conversationWidth + 56)));
+  await expect(page.getByRole("complementary", { name: "Session inspector" }).getByRole("separator", { name: "Resize conversation details" })).toHaveAttribute("aria-valuenow", String(Math.round(detailsWidth + 24)));
+});
+
 test("Assistant session details use reloadable drawer navigation", async ({ page }) => {
   await openWorkspace(page, "/?view=chat", "Workbench");
   if ((page.viewportSize()?.width ?? 1440) <= 760) {
