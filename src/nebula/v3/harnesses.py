@@ -31,7 +31,6 @@ from .harness_commands import (
 )
 
 import asyncio
-import difflib
 import inspect
 import json
 import os
@@ -4490,7 +4489,6 @@ class ClaudeAgentSdkConnection(HarnessConnection):
         usage = ChatTokenUsage()
         detailed_usage = HarnessDetailedUsage()
         checkpoint_id: str | None = None
-        before = _workspace_snapshot(self.workspace)
         prompt_acknowledged = False
         # Answers of earlier CLI turns this Nebula turn followed for guidance.
         answers: list[str] = []
@@ -5020,23 +5018,6 @@ class ClaudeAgentSdkConnection(HarnessConnection):
                     type="message_delta",
                     vendor=HarnessKind.CLAUDE_AGENT_SDK,
                     delta=fallback,
-                )
-            after = _workspace_snapshot(self.workspace)
-            changes, unified = _workspace_changes(before, after)
-            if changes:
-                yield HarnessEvent(
-                    type="item_upsert",
-                    vendor=HarnessKind.CLAUDE_AGENT_SDK,
-                    item_id="workspace-changes",
-                    item_kind="file_change",
-                    item_status="completed",
-                    title="Workspace changes",
-                    summary=f"{len(changes)} file change{'s' if len(changes) != 1 else ''} observed.",
-                    payload={
-                        "files": changes,
-                        "diff": _bounded(unified, limit=MAX_TOOL_RESULT_TEXT),
-                        "attribution": "turn_observed",
-                    },
                 )
             yield HarnessEvent(
                 type="usage",
@@ -5628,66 +5609,6 @@ def _claude_detailed_usage(
             getattr(result, "model_usage", None) or {}, limit=MAX_TOOL_RESULT_TEXT
         ),
     )
-
-
-def _workspace_snapshot(root: Path) -> dict[str, dict[str, Any]]:
-    snapshot: dict[str, dict[str, Any]] = {}
-    if not root.is_dir():
-        return snapshot
-    for path in sorted(root.rglob("*")):
-        if len(snapshot) >= 2_048 or not path.is_file() or path.is_symlink():
-            continue
-        relative = path.relative_to(root).as_posix()
-        if relative.startswith(".git/"):
-            continue
-        try:
-            data = path.read_bytes()
-        except OSError:  # diagnostic-expected: inaccessible workspace files are omitted
-            continue
-        text: str | None = None
-        if len(data) <= 2_000_000 and b"\x00" not in data[:8_192]:
-            text = data.decode("utf-8", errors="replace")
-        snapshot[relative] = {
-            "sha256": hashlib.sha256(data).hexdigest(),
-            "size": len(data),
-            "text": text,
-        }
-    return snapshot
-
-
-def _workspace_changes(
-    before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]
-) -> tuple[list[dict[str, Any]], str]:
-    changes: list[dict[str, Any]] = []
-    diffs: list[str] = []
-    for path in sorted(set(before) | set(after)):
-        old = before.get(path)
-        new = after.get(path)
-        if old is not None and new is not None and old["sha256"] == new["sha256"]:
-            continue
-        kind = "added" if old is None else "deleted" if new is None else "modified"
-        changes.append(
-            {
-                "path": path,
-                "kind": kind,
-                "before_sha256": old.get("sha256") if old else None,
-                "after_sha256": new.get("sha256") if new else None,
-                "binary": (old is not None and old.get("text") is None)
-                or (new is not None and new.get("text") is None),
-            }
-        )
-        old_text = old.get("text") if old else ""
-        new_text = new.get("text") if new else ""
-        if isinstance(old_text, str) and isinstance(new_text, str):
-            diffs.extend(
-                difflib.unified_diff(
-                    old_text.splitlines(keepends=True),
-                    new_text.splitlines(keepends=True),
-                    fromfile=f"a/{path}",
-                    tofile=f"b/{path}",
-                )
-            )
-    return changes, "".join(diffs)
 
 
 def _claude_native_tools(

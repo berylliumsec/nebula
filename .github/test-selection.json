@@ -1,17 +1,17 @@
 {
-  "change_digest": "f5d214ae63471fa58af6469f8ac7a90fcbb9262777ebf20b92289daf729b3e15",
-  "reviewed_by": "Codex automation command snapshot removal review",
-  "reason": "Automation run_command no longer recursively scans the linked workspace before and after every command. Four focused runtime tests cover the no-walk regression, normal durable output, generic timeout termination, and the real host subprocess timeout and approval boundary.",
-  "exclusions": "No frontend, native, Playwright, Docker, VPN, proxy, network-scope, or unrelated backend tests are selected. The API shape and UI are unchanged; workspace_changes remains an empty compatibility field. A real production Core host command is exercised after deployment.",
+  "change_digest": "2e13001528a1c1c450117912d2886ed96e787f1d1151dd560227714a972c7b42",
+  "reviewed_by": "Codex remaining workspace snapshot removal review",
+  "reason": "Reviewed Operator Executions and Claude Agent SDK turns no longer recursively snapshot linked workspaces. Four focused tests cover no-walk execution, durable reviewed-execution output, no-walk Claude streaming with native Write activity preserved, and the normal Claude adapter lifecycle.",
+  "exclusions": "No frontend, native, Playwright, browser, mobile, LAN-origin, Docker integration, network-scope, or unrelated backend tests are selected. The API and UI shapes are unchanged; reviewed executions retain an empty workspace_changes compatibility field, and Claude native file-change tool events remain available.",
   "expected_tests": {"python": 4, "frontend": 0, "native": 0, "playwright": 0},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_automation_runtime.py::test_general_command_reuses_session_and_persists_artifacts",
-    "tests/v3/test_automation_runtime.py::test_command_execution_does_not_walk_workspace",
-    "tests/v3/test_automation_runtime.py::test_command_timeout_terminates_the_process_group",
-    "tests/v3/test_automation_runtime.py::test_host_command_timeout_and_exact_approval_are_enforced"
+    "tests/v3/test_executions.py::test_large_workspace_execution_does_not_walk_tree",
+    "tests/v3/test_executions.py::test_reviewed_execution_is_exact_isolated_redacted_and_idempotent",
+    "tests/v3/test_harness_adapters.py::test_claude_turn_does_not_scan_workspace",
+    "tests/v3/test_harness_adapters.py::test_claude_sdk_strict_mcp_resume_permissions_and_partial_messages"
   ],
   "frontend": [],
   "native": [],

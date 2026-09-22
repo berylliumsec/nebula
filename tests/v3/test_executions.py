@@ -47,8 +47,9 @@ def async_test(function):
 
 
 @async_test
-async def test_large_workspace_preflight_does_not_walk_tree(tmp_path, monkeypatch):
+async def test_large_workspace_execution_does_not_walk_tree(tmp_path, monkeypatch):
     _, _, engagement, _, _, service, request = _fixture(tmp_path)
+    await service.startup()
     workspace = service.tool_platform.workspace_for(engagement.id)
     with (workspace / "large.bin").open("wb") as stream:
         stream.truncate(6 * 1024**3)
@@ -59,6 +60,18 @@ async def test_large_workspace_preflight_does_not_walk_tree(tmp_path, monkeypatc
     monkeypatch.setattr("os.walk", no_walk)
     preview = await service.preflight(request)
     assert preview.allowed
+    execution = await service.start(
+        ExecutionStartRequest(
+            **request.model_dump(),
+            preview_token=preview.preview_token,
+            preview_fingerprint=preview.preview_fingerprint,
+            client_idempotency_key="large-workspace-no-walk",
+        )
+    )
+    terminal = await _await_terminal(service, execution.id)
+    assert terminal.status == OperatorExecutionStatus.COMPLETED
+    assert terminal.workspace_changes == []
+    await service.shutdown()
 
 
 class RecordingRunner:
@@ -427,77 +440,3 @@ async def test_idempotency_key_conflict_fails_closed(tmp_path):
     assert exc.value.code == "idempotency_conflict"
     await _await_terminal(service, execution.id)
     await service.shutdown()
-
-
-@async_test
-async def test_cancel_during_workspace_snapshot_keeps_captured_output(
-    tmp_path, monkeypatch
-):
-    import threading
-    import time
-
-    from nebula.v3 import executions as executions_module
-
-    store, _artifacts, _engagement, _policy, _runner, service, request = _fixture(
-        tmp_path
-    )
-    await service.startup()
-    real_snapshot = executions_module._workspace_snapshot
-    calls = 0
-    after_walk_started = threading.Event()
-
-    def slow_snapshot(workspace):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            # The runner has finished; the "after" walk of a large project
-            # is in flight when the operator cancels.
-            after_walk_started.set()
-            time.sleep(0.3)
-        return real_snapshot(workspace)
-
-    monkeypatch.setattr(executions_module, "_workspace_snapshot", slow_snapshot)
-    preview = await service.preflight(request)
-    execution = await service.start(
-        ExecutionStartRequest(
-            **request.model_dump(),
-            preview_token=preview.preview_token,
-            preview_fingerprint=preview.preview_fingerprint,
-            client_idempotency_key="cancel-during-snapshot",
-        )
-    )
-    task = service._tasks[execution.id]
-    assert await asyncio.to_thread(after_walk_started.wait, 5)
-    await service.cancel(execution.id)
-    await asyncio.wait({task})
-
-    terminal = store.get(OperatorExecution, execution.id)
-    assert terminal.status == OperatorExecutionStatus.COMPLETED, terminal.error_detail
-    assert terminal.exit_code == 7
-    raw_stdout, _ = service.output_bytes(execution.id, "stdout", raw=True)
-    assert raw_stdout == b"before sk-test-token-12345678901234567890 after\n"
-    assert not (service.spool_root / execution.id).exists()
-    await service.shutdown()
-
-
-def test_workspace_snapshot_skips_entries_removed_during_walk(tmp_path, monkeypatch):
-    from pathlib import Path
-
-    from nebula.v3.executions import _workspace_snapshot
-
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "keep.txt").write_text("keep", encoding="utf-8")
-    (workspace / "gone.txt").write_text("gone", encoding="utf-8")
-    real_lstat = Path.lstat
-
-    def racing_lstat(self):
-        if self.name == "gone.txt":
-            # A concurrent terminal removed the entry between listing and stat.
-            raise FileNotFoundError(2, "No such file or directory", str(self))
-        return real_lstat(self)
-
-    monkeypatch.setattr(Path, "lstat", racing_lstat)
-    snapshot = _workspace_snapshot(workspace)
-    assert "keep.txt" in snapshot
-    assert "gone.txt" not in snapshot
