@@ -741,7 +741,11 @@ test("assistant upgrade real Core provider selections survive reload and restart
     await page.getByRole("button", { name: "Confirm completed" }).click();
     await expect(page.getByRole("button", { name: "Resume response" })).toBeVisible();
     await page.getByRole("button", { name: "Resume response" }).click();
-    await expect(page.getByText("Core is continuing in Project A").first()).toBeVisible({ timeout: 30_000 });
+    const resumedReply = page.locator(".chat-message.assistant .assistant-markdown").last();
+    await expect(resumedReply).toContainText("Real Core retained the exact research context.", { timeout: 30_000 });
+    await expect.poll(async () => (await api.get(`chat/sessions/${sessionId}/pending-turn`)).json()).toBeNull();
+    await page.reload();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Real Core retained the exact research context.");
     await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
     const restoredSettings = page.getByRole("dialog", { name: "Assistant settings" });
     await expect(restoredSettings.getByRole("checkbox", { name: /Persist workspace/ })).toBeChecked();

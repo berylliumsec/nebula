@@ -474,6 +474,13 @@ class ChatQueueService:
                 # Pending input or a background result blocks dispatch; resolving
                 # it allows this same turn to finish.
                 return
+            elif (
+                turn.backend == ChatBackend.PROVIDER
+                and self.chat.has_active_provider_turn(turn.id)
+            ):
+                # Startup already reclaimed this safe turn. Keep its linked
+                # follow-up sending until the same turn reaches a durable end.
+                return
             elif recovering:
                 self.review(
                     queue,

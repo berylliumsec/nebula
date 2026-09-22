@@ -2065,11 +2065,11 @@ def create_app(
             await start_component(
                 "missions", "service", missions.startup, missions.shutdown
             )
+            provider_chat.resume_turns_stopped_by_core()
+            await provider_chat.subagents.reconcile_after_restart()
             await start_component(
                 "chat", "follow-ups", chat_queue.startup, chat_queue.shutdown
             )
-            provider_chat.resume_turns_stopped_by_core()
-            await provider_chat.subagents.reconcile_after_restart()
         except BaseException:
             await stop_components()
             raise
