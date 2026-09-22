@@ -71,10 +71,12 @@ def _diagnostic(
                 os.fsync(stream.fileno())
             os.replace(temporary, target)
             captured = True
-        except OSError:
+        except OSError:  # diagnostic-expected: the diagnostic event below records private-sink degradation.
             # The model still receives bounded recovery advice when the private
             # diagnostic sink is unavailable. The reference then names the log.
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(
+                OSError
+            ):  # diagnostic-expected: cleanup failure cannot replace the tool failure.
                 temporary.unlink()
         record_diagnostic(
             "warning",

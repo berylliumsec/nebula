@@ -1,5 +1,5 @@
 {
-  "change_digest": "c42283e2f9188234ef0461297135b1b30fd986a6bcf0dddb8a0599313535fbb4",
+  "change_digest": "d52314eb464ebfd3140a332a0428b6147746f71142aa191cc4fba44b7cd3f6a5",
   "reviewed_by": "Codex focused tool-failure review",
   "reason": "The changed journeys are Core chat and mission tool failures, fixed runtime retrieval, harness gateway calls, and pre-execution refusals. Eighteen focused contract cases and nine exact integration cases cover terminal status, effective-schema delivery to the next model request, correction, MCP capture, authorization indistinguishability, and denied or unroutable calls. The catalogued assistant reliability journey covers visible chat activity in desktop and mobile production Core profiles.",
   "exclusions": "No frontend unit tests because no ui/src code changed; no native tests because no Rust code changed. Other backend and browser areas do not execute the changed failure path. No full suites.",

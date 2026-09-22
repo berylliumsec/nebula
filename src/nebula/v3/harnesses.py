@@ -12182,7 +12182,7 @@ class HarnessRuntimeService:
                 if not isinstance(cursor, str) or cursor in seen_cursors:
                     break
                 seen_cursors.add(cursor)
-        except Exception as exc:
+        except Exception as exc:  # diagnostic-expected: tool_failure records the original exception and effective schema below.
             fallback = ToolSpec.model_construct(
                 name=name,
                 description=name,
@@ -12228,7 +12228,7 @@ class HarnessRuntimeService:
             if name not in _GATEWAY_RETRIEVAL_SCHEMAS:
                 Draft7Validator(schema).validate(arguments)
             result = await self._gateway_call_unwrapped(session, name, arguments)
-        except Exception as exc:
+        except Exception as exc:  # diagnostic-expected: tool_failure records the original exception and effective schema below.
             phase = (
                 "before_execution"
                 if name in _GATEWAY_RETRIEVAL_SCHEMAS
