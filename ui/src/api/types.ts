@@ -2110,6 +2110,8 @@ export interface ChatSessionSummary {
   harnessProfileId?: Identifier;
   harnessSessionId?: Identifier;
   parentSessionId?: Identifier;
+  /** Core marks delegated subagent sessions separately from ordinary branches. */
+  isSubagent?: boolean;
   forkedFromMessageId?: Identifier;
   model?: string;
   toolsEnabled: boolean;

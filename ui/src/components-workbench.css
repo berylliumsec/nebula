@@ -600,6 +600,15 @@ kbd { font-size: 11px; }
 .session-list nav > button.active { color: var(--text); background: var(--blue-muted); }
 .session-list nav > button > span { display: flex; min-width: 0; flex-direction: column; }
 .session-list-item { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 36px; min-height: 46px; align-items: center; border-radius: 8px; color: var(--muted); }
+.session-list-item.has-subagents { grid-template-columns: minmax(0, 1fr) 34px 36px; }
+.session-list-item.nested-subagent { margin-left: 16px; }
+.session-list-item.nested-subagent::before { position: absolute; top: 0; bottom: 0; left: -8px; width: 1px; background: var(--border); content: ""; }
+.session-list-item.waiting .session-select small { color: var(--status-warning); }
+.session-subagents-toggle { width: 34px; min-height: 34px; color: var(--muted); }
+.session-subagents-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.session-subagents-toggle svg { transition: transform var(--motion-fast) var(--motion-ease); }
+.session-subagents-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.session-subagents-toggle:disabled { opacity: .6; cursor: default; }
 .session-list-item:hover { background: var(--surface-hover); }
 .session-list-item.active { color: var(--text); background: var(--blue-muted); }
 .session-list-item.renaming { display: block; }
@@ -627,9 +636,12 @@ kbd { font-size: 11px; }
 @media (hover: none), (pointer: coarse) {
   .session-new-chat { min-height: 48px; }
   .session-list-item { grid-template-columns: minmax(0, 1fr) 44px; }
+  .session-list-item.has-subagents { grid-template-columns: minmax(0, 1fr) 44px 44px; }
+  .session-subagents-toggle { width: 44px; min-height: 44px; }
   .session-actions-trigger { width: 44px; height: 44px; opacity: 1; pointer-events: auto; }
   .session-actions-menu > button { min-height: 44px; }
 }
+@media (prefers-reduced-motion: reduce) { .session-subagents-toggle svg { transition: none; } }
 .session-list nav strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .session-list nav small { overflow: hidden; margin-top: 3px; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .session-rename-form { display: grid; grid-template-columns: minmax(0, 1fr) 30px 30px; gap: 2px; align-items: center; min-height: 54px; padding: 7px; }

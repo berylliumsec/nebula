@@ -17,11 +17,13 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     Approval,
+    ChatSession,
     HarnessCapabilities,
     HarnessKind,
     HarnessProfile,
     HarnessModelOptions,
     HarnessRuntimeOption,
+    ProviderProfile,
     ToolCall,
 )
 from nebula.v3.environments import SshEnvironmentService
@@ -281,12 +283,31 @@ if __name__ == "__main__":
             "crash_after_receipt",
             "crash_after_progress",
             "environments",
+            "sidebar",
         ],
         default="single",
     )
     args = parser.parse_args()
     store = NebulaStore(args.root / "nebula.db")
-    bootstrap_scratch_project(store)
+    scratch_id = bootstrap_scratch_project(store)
+    if args.scenario == "sidebar" and scratch_id:
+        if not any(profile.id == "sidebar-provider" for profile in store.list_entities(ProviderProfile)):
+            store.create(ProviderProfile(id="sidebar-provider", name="Sidebar fixture", provider_type="vllm", is_local=True, model_allowlist=["fixture"]))
+        if not any(session.id == "sidebar-parent" for session in store.list_entities(ChatSession)):
+            for session_id, title, parent_id, metadata in (
+                ("sidebar-parent", "Main investigation", None, {}),
+                ("sidebar-child", "Subagent · API mapping", "sidebar-parent", {"subagent_id": "fixture-subagent"}),
+                ("sidebar-branch", "Ordinary branch", "sidebar-parent", {}),
+            ):
+                store.create(ChatSession(
+                    id=session_id,
+                    engagement_id=scratch_id,
+                    title=title,
+                    provider_profile_id="sidebar-provider",
+                    parent_session_id=parent_id,
+                    model="fixture",
+                    metadata=metadata,
+                ))
     artifacts = ArtifactStore(args.root / "artifacts")
     adapter = InertAdapter()
     runtime = FailureInjectionRuntime(

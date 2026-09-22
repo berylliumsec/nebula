@@ -28,6 +28,7 @@ import { AgentViewPanel, useStructuredResults, useUnseenCount } from "../compone
 import { ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
 import { useChatNavigation } from "./useChatNavigation";
 import { reconcileListedSessions } from "./chatSessionList";
+import { groupSidebarConversations } from "./conversationSidebar";
 import { subagentRequestFields } from "./chatSubagentChoice";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
 import { AssistantApprovalDetails } from "../components/AssistantApprovalDetails";
@@ -646,6 +647,7 @@ export function SessionsPage() {
   const activeEngagementIdRef = useRef(engagement?.id);
   activeEngagementIdRef.current = engagement?.id;
   const [sessionQuery, setSessionQuery] = useState("");
+  const [expandedSubagentParents, setExpandedSubagentParents] = useState<ReadonlySet<string>>(() => new Set());
   const [exportingSessionId, setExportingSessionId] = useState<string>();
   const [deletingSessionId, setDeletingSessionId] = useState<string>();
   const [deletingAllSessions, setDeletingAllSessions] = useState(false);
@@ -658,6 +660,14 @@ export function SessionsPage() {
   const [archivingSessionId, setArchivingSessionId] = useState<string>();
   const [archivedGroupOpen, setArchivedGroupOpen] = useState(false);
   const [sessionId, setSessionId] = useState("");
+  useEffect(() => {
+    const selected = sessions.find(session => session.id === sessionId);
+    const parent = selected?.isSubagent ? sessions.find(session => session.id === selected.parentSessionId) : undefined;
+    if (selected?.archivedAt || parent?.archivedAt) setArchivedGroupOpen(true);
+    if (!selected?.isSubagent || !selected.parentSessionId) return;
+    setExpandedSubagentParents(current => current.has(selected.parentSessionId!)
+      ? current : new Set([...current, selected.parentSessionId!]));
+  }, [sessionId, sessions]);
   const [conversationOpen, setConversationOpen] = useState(Boolean(requestedSessionId));
   // Snapshots the assistant published for this conversation. The badge counts
   // what arrived while the operator was not looking; it never steals focus.
@@ -1075,33 +1085,9 @@ export function SessionsPage() {
       followUpDrainIdRef.current = undefined;
     }
   }, [activeFollowUpStorageKey]);
-  const visibleSessions = useMemo(() => {
-    const query = sessionQuery.trim().toLocaleLowerCase();
-    if (!query) return sessions;
-    return sessions.filter((session) => [
-      session.title,
-      session.model,
-      session.backend === "harness" ? "agent harness" : "provider",
-    ].some((value) => value?.toLocaleLowerCase().includes(query)));
-  }, [sessionQuery, sessions]);
-  const groupedSessions = useMemo(() => {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-    const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1_000;
-    const groups = new Map<string, ChatSessionSummary[]>();
-    for (const session of visibleSessions) {
-      const activity = sessionActivity[session.id] ?? "idle";
-      const updated = Date.parse(session.updatedAt);
-      const label = session.archivedAt ? "Archived"
-        : activity === "waiting" ? "Needs you"
-        : activity === "working" ? "Working"
-          : updated >= startOfToday.getTime() ? "Today"
-            : updated >= weekAgo ? "Previous 7 days" : "Older";
-      groups.set(label, [...(groups.get(label) ?? []), session]);
-    }
-    return ["Needs you", "Working", "Today", "Previous 7 days", "Older", "Archived"]
-      .flatMap(label => groups.has(label) ? [{label, sessions: groups.get(label)!}] : []);
-  }, [sessionActivity, visibleSessions]);
+  const sidebarConversations = useMemo(() => groupSidebarConversations(
+    sessions, sessionActivity, sessionQuery, expandedSubagentParents,
+  ), [sessions, sessionActivity, sessionQuery, expandedSubagentParents]);
   const activeArchivedSession = sessionId ? sessions.find((item) => item.id === sessionId && item.archivedAt) : undefined;
   const activeChatSession = sessionId ? sessions.find((item) => item.id === sessionId) : undefined;
   useEffect(() => {
@@ -2986,7 +2972,11 @@ export function SessionsPage() {
 
   useEffect(() => {
     if (!api || !engagement || requestedSessionId || sessionId || conversationOpen || !sessions.length) return;
-    void selectSession(sessions[0].id);
+    const newest = sessions[0];
+    const initial = newest.isSubagent && newest.parentSessionId
+      ? sessions.find(session => session.id === newest.parentSessionId && !session.isSubagent) ?? newest
+      : newest;
+    void selectSession(initial.id);
   }, [api, conversationOpen, engagement, requestedSessionId, sessionId, sessions]);
 
   const openAttachedChat = async (id: string) => {
@@ -4519,7 +4509,7 @@ export function SessionsPage() {
               <ChatSearchPanel open={transcriptSearchOpen} onClose={closeTranscriptSearch} key={`search:${sessionId || "new"}`} search={chatNavigation.search} onSelect={(hit) => {
                 updateSearchParams(next => {next.set("session", hit.session_id); next.set("message", hit.message_id); next.set("view", view === "browser" ? "browser" : "chat");});
               }} />
-              {sessions.find(item => item.id === sessionId)?.parentSessionId && <div className="chat-action-status">Branched conversation · files remain shared. <button className="button quiet" onClick={() => void selectSession(sessions.find(item => item.id === sessionId)!.parentSessionId!)}>Open parent</button></div>}
+              {activeChatSession?.parentSessionId && <div className="chat-action-status">{activeChatSession.isSubagent ? "Subagent conversation · files remain shared." : "Branched conversation · files remain shared."} <button className="button quiet" onClick={() => void selectSession(activeChatSession.parentSessionId!)}>Open parent</button></div>}
               {chatNavigation.error && <div role="alert">{chatNavigation.error}<button className="button quiet" onClick={chatNavigation.reload}>Reload bookmarks</button></div>}
               {assistantSettingsOpen && createPortal(<section ref={assistantSettingsPanelRef} className="chat-settings-popover chat-settings-floating" id="assistant-settings-popover" role="dialog" aria-modal="false" aria-labelledby="assistant-settings-title" tabIndex={-1}>
                 <header role="presentation"><strong id="assistant-settings-title">Assistant settings</strong><button className="icon-button subtle" type="button" aria-label="Close assistant settings" onClick={() => { setAssistantSettingsOpen(false); assistantSettingsButtonRef.current?.focus(); }}><X size={16} aria-hidden="true" /></button></header>
@@ -4847,16 +4837,22 @@ export function SessionsPage() {
         {compact && view === "chat" && mobileListOpen && <button className="mobile-drawer-scrim" type="button" aria-label="Close conversations" onClick={() => setMobileListOpen(false)} />}
         {view === "chat" && (conversationPanelOpen || mobileListOpen) && <aside className="session-list" id="workbench-conversations" aria-label="Conversations">
           {compact && mobileListOpen && <MobileDrawerProject onNavigate={() => setMobileListOpen(false)} />}
-          <header><div><span>Conversations</span><strong>{sessionQuery ? `${visibleSessions.length} of ${sessions.length}` : `${sessions.length} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!sessions.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" title="Hide conversations" aria-expanded="true" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
+          <header><div><span>Conversations</span><strong>{sessionQuery ? `${sidebarConversations.matchCount} of ${sessions.length}` : `${sessions.length} saved`}</strong></div><div className="session-list-header-actions"><details ref={conversationMenuRef} className="conversation-list-menu"><summary className="icon-button subtle" role="button" aria-label="More conversation actions" aria-haspopup="menu" title="More conversation actions"><MoreHorizontal size={17} /></summary><div role="menu"><button className="danger" type="button" role="menuitem" title={sending || pendingResponse ? "Wait for the active response to finish" : "Delete all conversations"} disabled={!sessions.length || Boolean(deletingSessionId) || deletingAllSessions || sending || Boolean(pendingResponse)} onClick={() => { if (conversationMenuRef.current) conversationMenuRef.current.open = false; void deleteAllConversations(); }}>{deletingAllSessions ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Delete all conversations</button></div></details><button className="icon-button subtle conversation-pane-close" type="button" aria-label="Hide conversations" title="Hide conversations" aria-expanded="true" onClick={closeConversationPanel}><PanelLeftClose size={16} /></button></div></header>
           <button className={conversationOpen && !sessionId ? "session-new-chat active" : "session-new-chat"} type="button" onClick={newConversation}><Plus size={16} /><span><strong>New chat</strong><small>{runtimeKind === "harness" ? selectedHarness?.name ?? "Choose a harness" : selectedProvider?.name ?? "Choose a provider"}</small></span></button>
           <label className="session-list-search"><Search size={14} aria-hidden="true" /><span className="sr-only">Search conversations</span><input type="search" aria-label="Search conversations" value={sessionQuery} placeholder="Search conversations" onChange={(event) => setSessionQuery(event.target.value)} />{sessionQuery && <button className="icon-button subtle" type="button" aria-label="Clear conversation search" onClick={() => setSessionQuery("")}><X size={13} /></button>}</label>
           <nav>
-            {groupedSessions.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label === "Archived" ? <button className="session-list-group-toggle" type="button" aria-expanded={archivedGroupOpen || Boolean(sessionQuery)} onClick={() => setArchivedGroupOpen((current) => !current)}><ChevronDown size={12} aria-hidden="true" className={archivedGroupOpen || sessionQuery ? undefined : "collapsed"} /> Archived <span>{group.sessions.length}</span></button> : group.label}</h3>{(group.label !== "Archived" || archivedGroupOpen || sessionQuery) && group.sessions.map((session) => {
+            {sidebarConversations.groups.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label === "Archived" ? <button className="session-list-group-toggle" type="button" aria-expanded={archivedGroupOpen || Boolean(sessionQuery)} onClick={() => setArchivedGroupOpen((current) => !current)}><ChevronDown size={12} aria-hidden="true" className={archivedGroupOpen || sessionQuery ? undefined : "collapsed"} /> Archived <span>{group.rootCount}</span></button> : group.label}</h3>{(group.label !== "Archived" || archivedGroupOpen || sessionQuery) && group.rows.map(({ session, depth, childCount, waitingChildren, workingChildren, expanded, searchRevealed }) => {
               const actionsOpen = sessionActionsId === session.id;
-              const activityState = sessionActivity[session.id] ?? "idle";
+              const activityState = sessionActivity[session.id] === "waiting" || waitingChildren ? "waiting" : sessionActivity[session.id] === "working" || workingChildren ? "working" : "idle";
+              const subtitle = childCount
+                ? `${childCount} subagent${childCount === 1 ? "" : "s"}${waitingChildren ? ` · ${waitingChildren} needs you` : workingChildren ? ` · ${workingChildren} working` : ""}`
+                : depth && activityState === "waiting" ? "Needs your input"
+                  : depth && activityState === "working" ? `Working${session.model ? ` · ${session.model}` : ""}`
+                    : session.model || "Saved conversation";
+              const displayTitle = depth ? session.title.replace(/^Subagent\s*·\s*/, "") : session.title;
               const actionsDisabled = deletingAllSessions || deletingSessionId === session.id || exportingSessionId === session.id || archivingSessionId === session.id || (session.id === sessionId && (sending || Boolean(pendingResponse)));
               const actionsDisabledReason = session.id === sessionId && (sending || pendingResponse) ? "Wait for the active response to finish" : undefined;
-              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={renamingBusy || !renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}>{session.title}</strong><small title={session.model || undefined}>{session.model || "Saved conversation"}</small></span></button><div className="session-item-actions"><button
+              return <div className={`session-list-item${session.id === sessionId ? " active" : ""}${renamingSessionId === session.id ? " renaming" : ""}${actionsOpen ? " actions-open" : ""}${childCount ? " has-subagents" : ""}${depth ? " nested-subagent" : ""}${activityState === "waiting" ? " waiting" : ""}`} key={session.id}>{renamingSessionId === session.id ? <form className="session-rename-form" onSubmit={(event) => void renameConversation(event, session)}><label className="sr-only" htmlFor={`conversation-name-${session.id}`}>Conversation name</label><input id={`conversation-name-${session.id}`} aria-label={`Rename conversation ${session.title}`} autoFocus maxLength={300} value={renameDraft} onKeyDown={(event) => { if (event.key === "Escape") cancelRenamingConversation(); }} onChange={(event) => setRenameDraft(event.target.value)} /><button className="icon-button subtle" type="submit" aria-label="Save conversation name" disabled={renamingBusy || !renameDraft.trim()}><Check size={14} /></button><button className="icon-button subtle" type="button" aria-label={`Cancel renaming ${session.title}`} onClick={cancelRenamingConversation}><X size={14} /></button></form> : <><button className="session-select" data-session-id={session.id} type="button" onClick={() => { setSessionActionsId(undefined); void selectSession(session.id); }}><span className={`conversation-activity-marker ${activityState}`} role="img" aria-label={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} title={activityState === "working" ? "Working" : activityState === "waiting" ? "Waiting for you" : "Idle"} /><span><strong title={session.title}>{displayTitle}</strong><small title={subtitle}>{subtitle}</small></span></button>{childCount > 0 && <button className="icon-button subtle session-subagents-toggle" type="button" aria-label={`${expanded ? "Collapse" : "Expand"} ${childCount} subagent${childCount === 1 ? "" : "s"} for ${session.title}`} title={searchRevealed ? "Matching subagents stay visible while searching" : `${expanded ? "Collapse" : "Expand"} subagents`} aria-expanded={expanded} disabled={searchRevealed} onClick={() => setExpandedSubagentParents(current => { const next = new Set(current); if (next.has(session.id)) next.delete(session.id); else next.add(session.id); return next; })}><ChevronDown size={16} aria-hidden="true" /></button>}<div className="session-item-actions"><button
                 ref={actionsOpen ? sessionActionsButtonRef : undefined}
                 id={`conversation-actions-trigger-${session.id}`}
                 className="icon-button subtle session-actions-trigger"
@@ -4902,7 +4898,7 @@ export function SessionsPage() {
                 }}
               ><button type="button" role="menuitem" onClick={() => void copyConversationLink(session)}><Copy size={15} /> Copy link</button><button type="button" role="menuitem" disabled={Boolean(exportingSessionId)} onClick={() => void exportConversation(session)}>{exportingSessionId === session.id ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Export transcript</button>{session.backend === "harness" && <button type="button" role="menuitem" disabled={sending || session.id !== sessionId} title={session.id !== sessionId ? "Open this conversation to continue it as a mission" : undefined} onClick={() => { setSessionActionsId(undefined); void continueAsMission(); }} data-guide="continue-mission"><Bot size={15} /> Continue as mission</button>}<button type="button" role="menuitem" onClick={() => startRenamingConversation(session)}><Pencil size={15} /> Rename</button><button type="button" role="menuitem" onClick={() => void setConversationArchived(session, !session.archivedAt)}>{session.archivedAt ? <><ArchiveRestore size={15} /> Unarchive</> : <><Archive size={15} /> Archive</>}</button><button className="danger" type="button" role="menuitem" onClick={() => { setSessionActionsId(undefined); void deleteConversation(session); }}><Trash2 size={15} /> Delete</button></div>, document.body)}</div></>}</div>;
             })}</section>)}
-            {sessionQuery && !visibleSessions.length && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
+            {sessionQuery && !sidebarConversations.matchCount && <div className="empty-state mini"><Search size={18} /><p>No conversations match “{sessionQuery}”.</p></div>}
             {renameError && <DiagnosticErrorNotice error={renameError} fallback="The session could not be renamed." compact />}
           </nav>
           {compact && mobileListOpen && <MobileDrawerFooter onNavigate={() => setMobileListOpen(false)} />}
