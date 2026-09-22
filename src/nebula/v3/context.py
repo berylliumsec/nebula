@@ -46,12 +46,9 @@ from .storage import ConflictError, NebulaStore, NotFoundError
 DEFAULT_CONTEXT_WINDOW = 8_192
 # Output allowance when the model's own output limit is unknown.
 DEFAULT_MAX_OUTPUT_TOKENS = 2_048
-# When the model's output limit is known, the default allowance is that limit,
-# held to opencode's 32,000-token OUTPUT_TOKEN_MAX and to a quarter of the
-# window, so input keeps at least the three quarters the 2,048-of-8,192
-# fallback has always left it. An explicit request may still ask for more.
-KNOWN_MODEL_OUTPUT_CEILING = 32_000
-DEFAULT_OUTPUT_WINDOW_DIVISOR = 4
+# When the model's output limit is known, use that limit by default. Unknown
+# models retain the conservative fallback until a catalog or operator supplies
+# a bound. A configured output limit remains an explicit cap.
 CONTEXT_TARGET_FRACTION = 0.75
 COMPACTOR_INPUT_FRACTION = 0.60
 COMPACTOR_OUTPUT_FRACTION = 0.05
@@ -226,13 +223,16 @@ def resolve_context_limits(
         else 0
     )
     known_model = False
-    if not model_window and not profile.is_local:
+    if not profile.is_local and (not model_window or not model_output):
         # Local runtimes serve their own configured window (e.g. Ollama num_ctx),
         # not the model's published maximum.
         known = known_model_limits(model)
         if known is not None:
-            model_window, model_output = known[0], model_output or known[1] or 0
-            known_model = True
+            if not model_window:
+                model_window = known[0]
+                known_model = True
+            if not model_output:
+                model_output = known[1] or 0
     route_limits_verified = model is not None and descriptor_routes_verified(
         descriptor, model
     )
@@ -331,19 +331,11 @@ def resolve_context_limits(
         output_caps.append(model_output)
     if configured_output:
         output_caps.append(configured_output)
-    default_output = min(DEFAULT_MAX_OUTPUT_TOKENS, *output_caps)
-    if model_output or configured_output:
-        # Reasoning models spend their thinking from this same allowance, so
-        # a flat 2,048 cuts them off mid-thought. Size it from the known
-        # limit instead, never below what the fallback already allowed.
-        default_output = max(
-            default_output,
-            min(
-                KNOWN_MODEL_OUTPUT_CEILING,
-                context_window // DEFAULT_OUTPUT_WINDOW_DIVISOR,
-                *output_caps,
-            ),
-        )
+    default_output = (
+        min(*output_caps)
+        if model_output or configured_output
+        else min(DEFAULT_MAX_OUTPUT_TOKENS, *output_caps)
+    )
     output = min(requested_output_tokens or default_output, *output_caps)
     input_capacity = context_window - output
     if input_limit:

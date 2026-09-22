@@ -2,7 +2,7 @@
 
 Every mature harness (opencode, the AI SDK, Codex, Cline, pi-mono) answers a
 deviating tool call with a result the model can act on, and keeps going. These
-tests pin the same tolerance for Nebula's required-tool routing step, without
+tests pin the same tolerance for Nebula's automatic tool routing step, without
 ever running a call Core could not validate.
 """
 
@@ -62,7 +62,7 @@ def _probe_spec() -> ToolSpec:
     )
 
 
-# ROUTE-1: prose in a routing response is commentary, never a failure.
+# ROUTE-1: prose beside a tool call stays visible and separate from reasoning.
 
 
 def test_routing_prose_beside_tool_calls_runs_the_calls(tmp_path):
@@ -85,13 +85,12 @@ def test_routing_prose_beside_tool_calls_runs_the_calls(tmp_path):
     ]
     turn = store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
-    # The answer is the synthesis; the prose narrated the call as thinking.
     answer = "".join(payload["delta"] for name, payload in events if name == "delta")
-    assert answer == "Value is a."
+    assert answer == "I'll read the value first.\n\nValue is a."
     thinking = "".join(
         payload["delta"] for name, payload in events if name == "reasoning_delta"
     )
-    assert thinking == "The read is bounded.\n\nI'll read the value first."
+    assert thinking == "The read is bounded."
     # What the transcript shows live is what a reload reads back.
     assert turn.reasoning == thinking
     stored = [
@@ -99,7 +98,7 @@ def test_routing_prose_beside_tool_calls_runs_the_calls(tmp_path):
         for item in service.session_messages("session")
         if item.role == ChatRole.ASSISTANT
     ]
-    assert stored[-1].content == "Value is a."
+    assert stored[-1].content == answer
     assert stored[-1].reasoning == thinking
 
 
@@ -122,7 +121,7 @@ def test_routing_prose_without_a_call_is_the_answer(tmp_path):
     broker = RecordingBroker()
     responses = [
         _response(calls=[_call("call-1", "safe_read", value="a")]),
-        # The route ignored the required tool choice and answered in prose.
+        # Automatic routing lets the model answer in prose.
         _response(text="The value is a."),
     ]
     store, service, prepared, provider = _prepared(tmp_path, responses, broker)
@@ -247,7 +246,7 @@ def test_unknown_tool_is_answered_with_an_error_result(tmp_path):
     ]
     assert "'web_fetch' is not available" in str(replayed[1].output)
     assert "safe_read" in str(replayed[1].output)
-    assert "finish_response" in str(replayed[1].output)
+    assert "answer directly" in str(replayed[1].output)
     completed = [payload for name, payload in events if name == "tool_completed"]
     assert [item["status"] for item in completed] == ["complete", "failed"]
 
@@ -277,7 +276,7 @@ def test_spent_budget_tool_call_finishes_instead_of_failing(tmp_path):
     replayed = _turn_requests(provider)[2].tool_results[1]
     assert replayed.is_error is True
     assert "budget" in str(replayed.output)
-    assert "finish_response" in str(replayed.output)
+    assert "Answer from the results above" in str(replayed.output)
 
 
 def test_repeated_deviations_finish_through_synthesis(tmp_path):
@@ -439,7 +438,7 @@ def test_identical_repeat_of_a_reissued_call_is_not_run_again(tmp_path):
     assert "already ran" in str(_turn_requests(provider)[3].tool_results[2].output)
 
 
-# ROUTE-15: a route that rejects tool_choice=required still routes.
+# ROUTE-15: routing uses automatic tool choice from its first request.
 
 
 class _RequiredChoiceRejectingProvider(ScriptedProvider):
@@ -464,7 +463,7 @@ class _RequiredChoiceRejectingProvider(ScriptedProvider):
         return await super().complete(request)
 
 
-def test_routing_retries_with_auto_when_required_is_rejected(tmp_path):
+def test_routing_uses_auto_without_required_choice_retry(tmp_path):
     broker = RecordingBroker()
     store, service, prepared, _ = _prepared(tmp_path, [], broker)
     provider = _RequiredChoiceRejectingProvider(
@@ -487,9 +486,8 @@ def test_routing_retries_with_auto_when_required_is_rejected(tmp_path):
         for request in _turn_requests(provider)
         if request.tool_choice != ToolChoice.NONE
     ]
-    # One rejected attempt, then the rest of the turn routes with auto.
+    # The provider never sees a required tool choice.
     assert [request.tool_choice for request in routing] == [
-        ToolChoice.REQUIRED,
         ToolChoice.AUTO,
         ToolChoice.AUTO,
     ]
@@ -498,7 +496,21 @@ def test_routing_retries_with_auto_when_required_is_rejected(tmp_path):
 def test_an_unrelated_routing_rejection_still_fails_the_turn(tmp_path):
     broker = RecordingBroker()
     store, service, prepared, _ = _prepared(tmp_path, [], broker)
-    provider = _RequiredChoiceRejectingProvider([], "model is not available")
+
+    class RejectingProvider(_RequiredChoiceRejectingProvider):
+        async def complete(self, request):
+            self.requests.append(request)
+            raise _safe_error(
+                httpx.Response(
+                    400,
+                    json={
+                        "message": "model is not available",
+                        "type": "BadRequestError",
+                    },
+                )
+            )
+
+    provider = RejectingProvider([], "model is not available")
     prepared.provider = provider
 
     with pytest.raises(ProviderError, match="HTTP 400"):

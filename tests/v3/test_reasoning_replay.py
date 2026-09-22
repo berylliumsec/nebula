@@ -325,7 +325,7 @@ def test_openrouter_replays_reasoning_details_on_one_message_per_batch(tmp_path)
         _completion(
             {
                 "role": "assistant",
-                "content": None,
+                "content": "Reading both values.",
                 "reasoning": "I need both values.",
                 "reasoning_details": OPENROUTER_DETAILS,
                 "tool_calls": [
@@ -352,7 +352,7 @@ def test_openrouter_replays_reasoning_details_on_one_message_per_batch(tmp_path)
     )
     _, service, prepared, broker = _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == ANSWER
+    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
     assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
     for payload in wire.payloads[1:]:  # routing step 2, then the synthesis
@@ -370,6 +370,7 @@ def test_openrouter_replays_reasoning_details_on_one_message_per_batch(tmp_path)
         # OpenRouter's SDK sends beside non-empty details.
         assert replay[0]["reasoning_details"] == OPENROUTER_DETAILS
         assert replay[0]["reasoning"] == "I need both values."
+        assert replay[0]["content"] == "Reading both values."
         # Not a DeepSeek V4 route: earlier plain answers are left alone.
         assert "reasoning_details" not in _prior_answer(payload["messages"])
 
@@ -422,7 +423,7 @@ def test_deepseek_v4_sends_reasoning_content_on_every_assistant_message(tmp_path
         _completion(
             {
                 "role": "assistant",
-                "content": None,
+                "content": "Reading both values.",
                 "reasoning_content": "I need both values.",
                 "tool_calls": [
                     _call("call_00_a", "safe_read", {"value": "a"}),
@@ -448,7 +449,7 @@ def test_deepseek_v4_sends_reasoning_content_on_every_assistant_message(tmp_path
     )
     _, service, prepared, _ = _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == ANSWER
+    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
     for payload in wire.payloads[1:]:
         replay = _after_question(payload["messages"])
@@ -458,6 +459,7 @@ def test_deepseek_v4_sends_reasoning_content_on_every_assistant_message(tmp_path
             ("tool", []),
         ]
         assert replay[0]["reasoning_content"] == "I need both values."
+        assert replay[0]["content"] == "Reading both values."
         # The earlier answer carries no captured reasoning: back-filled empty.
         assert _prior_answer(payload["messages"])["reasoning_content"] == ""
         assert all(
@@ -524,6 +526,7 @@ def test_gemini_replays_thought_signatures_with_the_whole_batch(tmp_path):
     wire = Wire(
         _gemini(
             [
+                {"text": "Reading both values."},
                 {
                     "functionCall": {"name": "safe_read", "args": {"value": "a"}},
                     "thoughtSignature": "SIG-A",
@@ -550,7 +553,7 @@ def test_gemini_replays_thought_signatures_with_the_whole_batch(tmp_path):
     )
     _, service, prepared, broker = _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == ANSWER
+    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
     assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
     for payload in wire.payloads[1:]:
@@ -564,6 +567,7 @@ def test_gemini_replays_thought_signatures_with_the_whole_batch(tmp_path):
         ]
         calls, results = contents[3]["parts"], contents[4]["parts"]
         assert calls == [
+            {"text": "Reading both values."},
             {
                 "functionCall": {"name": "safe_read", "args": {"value": "a"}},
                 "thoughtSignature": "SIG-A",
@@ -652,7 +656,10 @@ def test_anthropic_replays_thinking_blocks_unchanged_before_the_batch(tmp_path):
         },
     ]
     wire = Wire(
-        message([*thinking, *uses], "tool_use"),
+        message(
+            [*thinking, {"type": "text", "text": "Reading both values."}, *uses],
+            "tool_use",
+        ),
         message(
             [
                 {
@@ -672,7 +679,7 @@ def test_anthropic_replays_thinking_blocks_unchanged_before_the_batch(tmp_path):
     )
     _, service, prepared, _ = _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == ANSWER
+    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
     for payload in wire.payloads[1:]:
         messages = payload["messages"]
@@ -683,7 +690,11 @@ def test_anthropic_replays_thinking_blocks_unchanged_before_the_batch(tmp_path):
             "assistant",
             "user",
         ]
-        assert messages[3]["content"] == [*thinking, *uses]
+        assert messages[3]["content"] == [
+            *thinking,
+            {"type": "text", "text": "Reading both values."},
+            *uses,
+        ]
         # All results in one user message, in call order.
         assert [
             (block["type"], block["tool_use_id"]) for block in messages[4]["content"]
@@ -704,6 +715,7 @@ def test_bedrock_replays_a_batch_as_one_exchange(tmp_path, monkeypatch):
     replies = [
         reply(
             [
+                {"text": "Reading both values."},
                 {
                     "toolUse": {
                         "toolUseId": "tu-a",
@@ -747,7 +759,7 @@ def test_bedrock_replays_a_batch_as_one_exchange(tmp_path, monkeypatch):
     )
     _, service, prepared, _ = _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == ANSWER
+    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
     for kwargs in seen[1:]:
         messages = kwargs["messages"]
@@ -758,7 +770,10 @@ def test_bedrock_replays_a_batch_as_one_exchange(tmp_path, monkeypatch):
             "assistant",
             "user",
         ]
-        assert [block["toolUse"]["toolUseId"] for block in messages[3]["content"]] == [
+        assert messages[3]["content"][0] == {"text": "Reading both values."}
+        assert [
+            block["toolUse"]["toolUseId"] for block in messages[3]["content"][1:]
+        ] == [
             "tu-a",
             "tu-b",
         ]
@@ -798,6 +813,14 @@ def test_responses_replays_encrypted_reasoning_items_before_their_calls(tmp_path
         response(
             [
                 reasoning_item,
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "phase": "commentary",
+                    "content": [
+                        {"type": "output_text", "text": "Reading both values."}
+                    ],
+                },
                 function_call("call-a", "safe_read", {"value": "a"}),
                 function_call("call-b", "safe_read", {"value": "b"}),
             ]
@@ -819,14 +842,15 @@ def test_responses_replays_encrypted_reasoning_items_before_their_calls(tmp_path
     )
     _, service, prepared, _ = _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == ANSWER
+    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
 
     # Nothing is stored server-side, so the reasoning comes back encrypted.
     assert wire.payloads[0]["include"] == ["reasoning.encrypted_content"]
     for payload in wire.payloads[1:]:
         replay = payload["input"][3:]
         assert replay[0] == reasoning_item
-        assert [(item["type"], item["call_id"]) for item in replay[1:]] == [
+        assert replay[1] == {"role": "assistant", "content": "Reading both values."}
+        assert [(item["type"], item["call_id"]) for item in replay[2:]] == [
             ("function_call", "call-a"),
             ("function_call", "call-b"),
             ("function_call_output", "call-a"),

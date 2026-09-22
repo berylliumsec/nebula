@@ -1,35 +1,30 @@
 {
-  "change_digest": "a5ef2486053fc193d448973f2c7a90ac0bdfbb40a4c60e9d53df770141ff8fe8",
-  "reviewed_by": "Codex focused tool-failure review",
-  "reason": "The changed journeys are Core chat and mission tool failures, fixed runtime retrieval, harness gateway calls, and pre-execution refusals. Nineteen focused contract cases and nine exact integration cases cover terminal status, effective-schema delivery to the next model request, correction, MCP capture, authorization and missing-resource indistinguishability, and denied or unroutable calls. The catalogued assistant reliability journey covers visible chat activity in desktop and mobile production Core profiles.",
-  "exclusions": "No frontend unit tests because no ui/src code changed; no native tests because no Rust code changed. Other backend and browser areas do not execute the changed failure path. No full suites.",
+  "change_digest": "b9aa06b41030511b8c4ea97cc2a0da586310215ee9bf0cdb0faad477df84f525",
+  "reviewed_by": "Codex focused review for provider response channels",
+  "reason": "The changed journeys are provider chat response channels and model output sizing. Forty-five collected context cases cover model, catalog, OpenRouter route, configured and unknown limits; seventy-two chat/provider cases cover routing, durable turns and replay; nineteen tool-failure contract cases check the adjacent routing behavior merged on main. All use local stores or mocked providers.",
+  "exclusions": "No frontend or Playwright selection: UI source did not change and these tests exercise Core sizing, events and persisted transcript boundaries. No native selection: no Rust or Tauri change. Unrelated Python tests and all full suites are excluded. Real provider and production browser journeys remain separate verification gates.",
   "expected_tests": {
-    "python": 28,
+    "python": 136,
     "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
+  "python_versions": [
+    "3.12"
+  ],
+  "python_browser": false,
+  "python_node": false,
   "python": [
-    "tests/v3/test_tool_failures.py",
-    "tests/v3/test_harnesses.py::test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt",
-    "tests/v3/test_harnesses.py::test_harness_gateway_digest_in_artifact_id_is_terminal_and_actionable",
-    "tests/v3/test_harnesses.py::test_harness_gateway_queries_scoped_knowledge_with_citations",
-    "tests/v3/test_chat_tool_loop.py::test_denied_tool_is_returned_as_error_context_without_reexecution",
-    "tests/v3/test_chat_tool_loop.py::test_repeated_provider_call_id_cannot_duplicate_a_tool_effect",
-    "tests/v3/test_chat_tool_loop.py::test_malformed_routing_never_reaches_the_tool_broker",
-    "tests/v3/test_specialist_routing_tolerance.py::test_unavailable_tool_is_answered_with_a_failed_observation",
-    "tests/v3/test_specialist_routing_tolerance.py::test_a_routing_deviation_does_not_push_an_older_tool_failure_out_of_view"
+    "tests/v3/test_context.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_routing_prose_answer.py",
+    "tests/v3/test_reasoning_replay.py",
+    "tests/v3/test_providers.py::test_openai_responses_translates_flattened_tools_and_parses_calls",
+    "tests/v3/test_providers.py::test_openai_compatible_uses_chat_completions_shape",
+    "tests/v3/test_chat_routing_tolerance.py",
+    "tests/v3/test_tool_failures.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant-reliability/assistant-real-desktop",
-    "entry:assistant-reliability/assistant-real-compact",
-    "entry:assistant-reliability/assistant-real-chromium-320",
-    "entry:assistant-reliability/assistant-real-chromium-390",
-    "entry:assistant-reliability/assistant-real-chromium-430",
-    "entry:assistant-reliability/assistant-real-webkit-320",
-    "entry:assistant-reliability/assistant-real-webkit-390",
-    "entry:assistant-reliability/assistant-real-webkit-430"
-  ]
+  "playwright": []
 }

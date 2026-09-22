@@ -3764,6 +3764,9 @@ class ChatTurn(Entity):
     # Every thought the turn produced, in order: a reasoning model thinks once
     # per routing step, so the final response carries only the last of them.
     reasoning: str = Field(default="", max_length=200_000)
+    # Visible assistant prose produced before tool results arrive. It survives
+    # approval pauses and is included in the final transcript on completion.
+    content: str = Field(default="", max_length=200_000)
     final_message_id: str | None = None
     error: str | None = Field(default=None, max_length=1_000)
     execution_owner_id: str | None = Field(default=None, max_length=200)

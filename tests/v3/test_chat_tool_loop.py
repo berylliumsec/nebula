@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 from pathlib import Path
 
@@ -269,9 +268,7 @@ def test_malformed_routing_never_reaches_the_tool_broker(tmp_path, routing, deta
         assert refused.output["effective_input_schema"] is None
 
 
-def test_routing_prose_captures_exact_provider_response_only_in_protected_detail(
-    tmp_path, monkeypatch
-):
+def test_routing_prose_stays_visible_and_separate_from_reasoning(tmp_path, monkeypatch):
     monkeypatch.setattr(diagnostic_sensitive.keyring, "get_keyring", lambda: None)
     diagnostic_dir = tmp_path / "diagnostics"
     diagnostic_dir.mkdir()
@@ -308,6 +305,7 @@ def test_routing_prose_captures_exact_provider_response_only_in_protected_detail
     raw_body = b'{ "id" : "gen-routing-1", "choices":[] }'
     routing = _response(
         text="private routing text",
+        reasoning="private model thought",
         calls=[ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})],
     ).model_copy(
         update={
@@ -319,42 +317,58 @@ def test_routing_prose_captures_exact_provider_response_only_in_protected_detail
     broker = RecordingBroker()
     responses = [
         routing,
-        _response(
-            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
-        ),
-        _response(text="The safe tool returned a."),
+        _response(text="The safe tool returned a.", reasoning="The read succeeded."),
     ]
     store, service, prepared, _ = _prepared(tmp_path, responses, broker)
     try:
-        # Prose beside a call is commentary: the call runs and the turn
-        # completes, while the exact response stays in protected detail.
-        completion = asyncio.run(service.complete(prepared))
-        assert completion.message.content == "The safe tool returned a."
-        assert manager.flush()
-        records = [
-            json.loads(line)
-            for line in (manager.log_dir / "chat.log").read_text().splitlines()
-        ]
-        record = next(
-            item
-            for item in records
-            if item["event_code"] == "chat.routing.prose_with_required_tool"
+
+        async def scenario():
+            return [event async for event in service.stream(prepared)]
+
+        events = asyncio.run(scenario())
+        completion = next(payload for name, payload in events if name == "done")
+        visible = "private routing text\n\nThe safe tool returned a."
+        assert completion["message"]["content"] == visible
+        assert (
+            "".join(payload["delta"] for name, payload in events if name == "delta")
+            == visible
         )
-        assert record["level"] == "WARNING"
-        assert record["outcome"] == "fallback"
-        assert record["sensitive_detail_available"] is True
-        assert record["metadata"]["status"] == "text_with_tool_calls"
-        assert "private routing text" not in json.dumps(records)
-        detail = json.loads(
-            manager.reveal_sensitive_detail(
-                record["error_id"], operator_id="operator", action="reveal"
+        assert (
+            "".join(
+                payload["delta"]
+                for name, payload in events
+                if name == "reasoning_delta"
             )
+            == "private model thought\n\nThe read succeeded."
         )
-        assert detail["provider_response"] == raw
-        assert base64.b64decode(detail["provider_response_body_base64"]) == raw_body
-        assert detail["normalized"]["text"] == "private routing text"
+        assert all(
+            request.tool_choice == ToolChoice.AUTO
+            for request in prepared.provider.requests
+        )
+        assert all(
+            "finish_response" not in [tool.name for tool in request.tools]
+            for request in prepared.provider.requests
+        )
+        assert manager.flush()
+        log = manager.log_dir / "chat.log"
+        records = (
+            [json.loads(line) for line in log.read_text().splitlines()]
+            if log.exists()
+            else []
+        )
+        assert not any(
+            item["event_code"] == "chat.routing.prose_with_required_tool"
+            for item in records
+        )
         assert [call.arguments for call in broker.calls] == [{"value": "a"}]
         assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+        [stored] = [
+            item
+            for item in service.session_messages("session")
+            if item.role == ChatRole.ASSISTANT
+        ]
+        assert stored.content == visible
+        assert stored.reasoning == "private model thought\n\nThe read succeeded."
     finally:
         manager.close()
 
@@ -618,7 +632,6 @@ def test_batch_beyond_the_execution_budget_routes_again_instead_of_overspending(
     assert [entry["model_call_id"] for entry in turn.tool_history] == ["call-1"]
     assert [tool.name for tool in provider.requests[1].tools] == [
         "artifact_probe",
-        "finish_response",
     ]
 
 

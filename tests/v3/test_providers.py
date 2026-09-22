@@ -70,7 +70,12 @@ def test_openai_responses_translates_flattened_tools_and_parses_calls():
                 "status": "completed",
                 "output": [
                     {
+                        "type": "reasoning",
+                        "summary": [{"type": "summary_text", "text": "Need a lookup."}],
+                    },
+                    {
                         "type": "message",
+                        "phase": "commentary",
                         "content": [{"type": "output_text", "text": "Ready."}],
                     },
                     {
@@ -125,6 +130,7 @@ def test_openai_responses_translates_flattened_tools_and_parses_calls():
     assert payload["text"]["format"]["schema"]["additionalProperties"] is False
     assert payload["parallel_tool_calls"] is True
     assert response.text == "Ready."
+    assert response.reasoning == "Need a lookup."
     assert response.tool_calls[0].model_dump() == {
         "id": "call_1",
         "name": "lookup_asset",
@@ -147,7 +153,8 @@ def test_openai_compatible_uses_chat_completions_shape():
                     {
                         "finish_reason": "tool_calls",
                         "message": {
-                            "content": None,
+                            "content": "Reading the asset.",
+                            "reasoning_content": "The lookup is needed.",
                             "tool_calls": [
                                 {
                                     "id": "tool_1",
@@ -202,6 +209,8 @@ def test_openai_compatible_uses_chat_completions_shape():
     # sent it (pi-mono: compatibility does not imply strict support).
     assert "strict" not in function
     assert result.tool_calls[0].arguments == {"address": "10.0.0.9"}
+    assert result.text == "Reading the asset."
+    assert result.reasoning == "The lookup is needed."
 
 
 def test_openai_compatible_reads_reasoning_when_content_is_empty():
