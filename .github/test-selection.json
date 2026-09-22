@@ -3,9 +3,16 @@
   "reviewed_by": "Claude review of app-test-red-on-main",
   "reason": "Two vitest tests in ui/src/App.test.tsx, 'keeps chat drafts durable while saved memory stays behind explicit disclosure' and 'edits a sent message in place instead of branching the conversation', fail on origin/main (683479f and a924636), alone under -t and with the whole file. git bisect over the ui/ commits since 337630e names 710b785 (#507, Record failed and stopped turns) as the first bad commit; f0294ac passes 42/42. Cause: the file's catch-all fixture unmatchedCoreResponse answers every unmatched path, including GET /chat/sessions/{id}/pending-turn, with []. Core answers that route with a ChatTurnSummary or null, never a list, but getPendingChatTurn maps any truthy body, so [] became a pending turn with no id or status. Before #507 that phantom turn only appended a 'Waiting for provider' placeholder after the loaded history. #507 filters the history through withoutTurnOutcome(current, pendingTurn.id), which keeps messages whose outcomeTurnId differs from the turn id; with an undefined id every ordinary message (outcomeTurnId undefined) matched and the whole transcript disappeared, so 'Port retained' and 'Any update on the certificate?' never rendered. The product path is correct for anything Core can send: a real pending turn always has an id. The fix is test-only: unmatchedCoreResponse answers /pending-turn with null, as Core does when a chat has no pending turn, which also removes the phantom running turn (and its GET /chat/turns/undefined/events stream) from every other test in the file that relied on the fallback. App.test.tsx: 2 failed / 40 passed before, 42 passed after.",
   "exclusions": "No Python tests: no src/ or tests/ change. No native tests: no Tauri or Rust change. No Playwright: no product code changed, only a vitest fixture. Run locally but not selected: App.subagentChoice.test.tsx with App.test.tsx (45 passed), App.projectBoundary.test.tsx, WorkbenchBrowser.test.tsx, chatMessageReconciliation.test.ts and turnOutcomeNotes.test.ts (37 passed); npm run build and npm run audit:diagnostics clean. No full suites.",
-  "expected_tests": {"python": 0, "frontend": 42, "native": 0, "playwright": 0},
+  "expected_tests": {
+    "python": 0,
+    "frontend": 42,
+    "native": 0,
+    "playwright": 0
+  },
   "python": [],
-  "frontend": ["ui/src/App.test.tsx"],
+  "frontend": [
+    "ui/src/App.test.tsx"
+  ],
   "native": [],
   "playwright": []
 }
