@@ -768,6 +768,46 @@ export function SessionsPage() {
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   useEffect(() => setRecoveryNote(""), [interruptedRecovery?.turn.id]);
   useEffect(() => {
+    if (!api || !sessionId || !interruptedRecovery?.turn.recoveryBlocked) return;
+    const controller = new AbortController();
+    const turnId = interruptedRecovery.turn.id;
+    const generation = sessionSelectionGenerationRef.current;
+    const timer = window.setInterval(() => {
+      void api.listChatHookExecutions(turnId, controller.signal).then((items) => {
+        if (!controller.signal.aborted && sessionSelectionGenerationRef.current === generation) {
+          setHookExecutions(items);
+        }
+      }).catch((error) => {
+        if (!controller.signal.aborted) void logCaughtDiagnostic(
+          "interface.sessions_page.recovery_hook_refresh_failed",
+          "Interrupted hook outcomes could not be refreshed.",
+          error,
+          "sessions_page",
+        );
+      });
+      void api.getPendingChatTurn(sessionId, controller.signal).then((pending) => {
+        if (controller.signal.aborted || sessionSelectionGenerationRef.current !== generation) return;
+        if (!pending || pending.id !== turnId || pending.status !== "interrupted") {
+          void selectSession(sessionId, false);
+          return;
+        }
+        setInterruptedRecovery((current) => current?.turn.id === pending.id
+          && current.turn.revision !== pending.revision
+          ? { ...current, turn: pending }
+          : current);
+        if (!pending.recoveryBlocked) setRecoveryNote("");
+      }).catch((error) => {
+        if (!controller.signal.aborted) void logCaughtDiagnostic(
+          "interface.sessions_page.recovery_refresh_failed",
+          "An interrupted response could not refresh its recovery state.",
+          error,
+          "sessions_page",
+        );
+      });
+    }, 5_000);
+    return () => { controller.abort(); window.clearInterval(timer); };
+  }, [api, sessionId, interruptedRecovery?.turn.id, interruptedRecovery?.turn.recoveryBlocked]);
+  useEffect(() => {
     if (!api || !sessionId || !waitingCallback) return;
     const pollController = new AbortController();
     const selectionGeneration = sessionSelectionGenerationRef.current;
@@ -3977,7 +4017,14 @@ export function SessionsPage() {
       setRecoveryNote("");
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions_page.recovery_reconcile_failed", "An interrupted effect outcome could not be reconciled.", error, "sessions_page");
-      setChatError(error instanceof Error ? error.message : "Could not reconcile the interrupted effect outcome.");
+      if (error instanceof ApiError && error.status === 409) {
+        // Another worker may have saved the tool result after this card was
+        // loaded. Read Core's current recovery state before offering a choice.
+        await reloadActiveConversation();
+        setRecoveryNote("");
+      } else {
+        setChatError(error instanceof Error ? error.message : "Could not reconcile the interrupted effect outcome.");
+      }
     } finally {
       setRecoveryBusy(false);
     }
@@ -4757,7 +4804,7 @@ export function SessionsPage() {
               <div className="chat-operator-updates">
               {stateSyncError && <div className="chat-recovery-notice" role="status"><p>{stateSyncError}</p><button className="icon-button subtle" type="button" aria-label="Retry response status" title="Retry response status" onClick={refreshSessionState}><RefreshCw size={16} aria-hidden="true" /></button></div>}
               {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} pendingActions={authoritativeState?.pending} ready={!loadingHistory} atLatest={!hasNewerMessages} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => updateSearchParams(next => {next.set("turn", id); next.set("drawer", "context");})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
-              {runtimeKind === "provider" && hookExecutions.length > 0 && <details className="chat-action-status" data-guide="hook-outcomes" open={Boolean(interruptedRecovery)}><summary>Lifecycle hooks · {hookExecutions.filter(item => item.status === "complete" || item.status === "reconciled").length}/{hookExecutions.length} completed</summary><div role="list" aria-label="Lifecycle hook outcomes">{hookExecutions.map(execution => { const hookName = nativeHooks.find(hook => hook.id === execution.hookId)?.manifest.name ?? execution.hookId; return <div role="listitem" key={execution.id}><strong>{hookName}</strong><small>{execution.eventName.replaceAll(".", " ")} · {execution.status.replaceAll("_", " ")}{execution.sideEffects !== "none" ? ` · ${execution.sideEffects} effects` : ""}</small>{execution.error && <span role="alert">{execution.error}</span>}{execution.reconciliation && typeof execution.reconciliation.detail === "string" && <small>{execution.reconciliation.detail}</small>}</div>; })}</div></details>}
+              {runtimeKind === "provider" && hookExecutions.length > 0 && <details className="chat-action-status" data-guide="hook-outcomes" open={Boolean(interruptedRecovery)}><summary>Lifecycle hooks · {hookExecutions.filter(item => item.status === "complete" || item.status === "reconciled").length}/{hookExecutions.length} completed</summary><div role="list" aria-label="Lifecycle hook outcomes">{hookExecutions.map(execution => { const hookName = nativeHooks.find(hook => hook.id === execution.hookId)?.manifest.name ?? execution.hookId; return <div role="listitem" key={execution.id}><strong>{hookName}</strong><small>{execution.eventName.replaceAll(".", " ")} · {execution.status.replaceAll("_", " ")}{execution.sideEffects !== "none" ? ` · ${execution.sideEffects} effects` : ""}</small>{execution.error && <span role="alert">{execution.error}</span>}{execution.status === "interrupted" && execution.lateOutcomeStatus && <small>Later process exit: {execution.lateOutcomeStatus}{execution.lateOutcomeExitCode !== undefined ? ` (code ${execution.lateOutcomeExitCode})` : ""}. {execution.lateOutcomeStatus === "complete" ? "Checking the saved result." : "Effects may be partial; verify before continuing."}</small>}{execution.reconciliation && typeof execution.reconciliation.detail === "string" && <small>{execution.reconciliation.detail}</small>}</div>; })}</div></details>}
               {waitingCallback && <div className="chat-action-status" role="status">
                 <span>{waitingCallback.summary}</span>
                 {waitingCallback.resultsUrl && <div className="chat-inline-approval-actions">

@@ -4018,6 +4018,8 @@ function mapNativeHookExecutions(items: Array<{
   started_at: string;
   completed_at?: string | null;
   error?: string | null;
+  late_outcome_status?: NativeHookExecution["lateOutcomeStatus"] | null;
+  late_outcome_exit_code?: number | null;
   reconciliation?: Record<string, unknown> | null;
 }>): NativeHookExecution[] {
   return items.map(item => ({
@@ -4029,6 +4031,8 @@ function mapNativeHookExecutions(items: Array<{
     startedAt: item.started_at,
     completedAt: item.completed_at ?? undefined,
     error: item.error ?? undefined,
+    lateOutcomeStatus: item.late_outcome_status ?? undefined,
+    lateOutcomeExitCode: item.late_outcome_exit_code ?? undefined,
     reconciliation: item.reconciliation ?? undefined,
   }));
 }
@@ -9504,6 +9508,8 @@ export class ApiClient {
       started_at: string;
       completed_at?: string | null;
       error?: string | null;
+      late_outcome_status?: NativeHookExecution["lateOutcomeStatus"] | null;
+      late_outcome_exit_code?: number | null;
       reconciliation?: Record<string, unknown> | null;
     }>>(`chat/turns/${encodeURIComponent(turnId)}/hooks`, { signal }).then(mapNativeHookExecutions);
   }
@@ -9521,6 +9527,8 @@ export class ApiClient {
       started_at: string;
       completed_at?: string | null;
       error?: string | null;
+      late_outcome_status?: NativeHookExecution["lateOutcomeStatus"] | null;
+      late_outcome_exit_code?: number | null;
       reconciliation?: Record<string, unknown> | null;
     }>>(`chat/sessions/${encodeURIComponent(sessionId)}/hooks`, { signal }).then(mapNativeHookExecutions);
   }

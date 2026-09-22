@@ -1,13 +1,13 @@
 {
-  "change_digest": "67881ed898b7bd7aae685cad2e62a0d233dffd038a94d1e51335cadd1bcdf18d",
-  "reviewed_by": "Codex focused restart-recovery review",
-  "reason": "Goal resume must remain paused while an interrupted turn needs recovery, and Core startup must repair a running goal stranded behind that turn. The selected cases cover those paths plus safe and uncertain automatic resume.",
-  "exclusions": "No frontend, native, or Playwright tests are selected because this diff changes Core goal and provider-turn state only. No full suites, live provider calls, or production UI journey were run.",
+  "change_digest": "958a28eab4547a317e4e251da75cad13de4597a1916b55adbc061bb34361ea62",
+  "reviewed_by": "Codex focused execution recovery lifecycle review",
+  "reason": "The changed journey is a provider turn interrupted by Core restart while a tool or hook result commits late, followed by recovery and goal resume. Sixteen collected Python cases cover uncertain and recorded tool outcomes, malformed receipts, idempotent provider intent, real hook subprocess completion after shutdown, API read repair, hook outcome visibility, and goal guards and graceful Core auto resume after late receipt read repair. The 78 collected frontend cases are limited to the changed API client file. Five catalogued browser cases: three mocked UI cases and two real-Core LAN-origin restart journeys on desktop Chromium and 390 px WebKit. The mocked cases cover the recovery card and stale revision refresh on desktop Chromium and emulated mobile Chromium/WebKit.",
+  "exclusions": "No full suites, unrelated chat, Mission, harness, or native tests. The actual late tool receipt race remains covered by durable API/store fault injection rather than a production browser journey; physical-device coverage remains unavailable and is not inferred from emulation.",
   "expected_tests": {
-    "python": 4,
-    "frontend": 0,
+    "python": 16,
+    "frontend": 78,
     "native": 0,
-    "playwright": 0
+    "playwright": 5
   },
   "python_versions": [
     "3.11"
@@ -16,11 +16,28 @@
   "python_node": false,
   "python": [
     "tests/v3/test_chat_goals.py::test_goal_resume_requires_interrupted_turn_recovery",
-    "tests/v3/test_chat.py::test_core_startup_pauses_running_goal_with_parked_recovery",
+    "tests/v3/test_chat.py::test_restart_interrupts_turns_and_blocks_unknown_tool_replay",
+    "tests/v3/test_chat.py::test_restart_projects_late_recorded_tool_result_once",
+    "tests/v3/test_chat.py::test_restart_keeps_untrusted_terminal_result_for_operator_review",
+    "tests/v3/test_chat.py::test_tool_ledger_binds_provider_replay_intent_to_idempotent_call",
+    "tests/v3/test_chat.py::test_restart_allows_explicit_resume_when_no_tool_effect_is_unknown",
+    "tests/v3/test_chat.py::test_restart_requires_reconciliation_for_uncertain_native_hook_effect",
     "tests/v3/test_chat.py::test_core_update_auto_resumes_safe_supervisor_with_saved_thinking",
-    "tests/v3/test_chat.py::test_core_update_auto_resume_keeps_uncertain_and_crashed_turns_parked"
+    "tests/v3/test_chat.py::test_core_startup_pauses_running_goal_with_parked_recovery",
+    "tests/v3/test_chat.py::test_core_update_auto_resume_keeps_uncertain_and_crashed_turns_parked",
+    "tests/v3/test_api.py::test_pending_turn_api_recovers_recorded_result_after_restart",
+    "tests/v3/test_api.py::test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api",
+    "tests/v3/test_native_hook_turn_ends.py::test_a_hook_running_when_the_turn_ends_never_stays_running"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/client.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "provider-native-hooks/desktop",
+    "provider-native-hooks/mobile-chromium",
+    "provider-native-hooks/mobile-webkit",
+    "provider-native-hooks-core/assistant-real-desktop",
+    "provider-native-hooks-core/assistant-real-webkit-390"
+  ]
 }

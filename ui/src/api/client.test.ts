@@ -462,6 +462,7 @@ describe("ApiClient", () => {
         id: "hook-run-1", hook_id: "audit", event_name: "chat.turn.started",
         status: "interrupted", side_effects: "external",
         started_at: "2026-09-18T12:00:00Z", completed_at: "2026-09-18T12:01:00Z",
+        late_outcome_status: "failed", late_outcome_exit_code: 2,
       }]), { status: 200 }),
       new Response(JSON.stringify({
         id: "turn-recovery", session_id: "session-1", revision: 4,
@@ -477,6 +478,7 @@ describe("ApiClient", () => {
     });
     await expect(client.listChatHookExecutions("turn-recovery")).resolves.toMatchObject([{
       hookId: "audit", eventName: "chat.turn.started", sideEffects: "external",
+      lateOutcomeStatus: "failed", lateOutcomeExitCode: 2,
     }]);
     await expect(client.reconcileChatHook("turn-recovery", {
       expectedRevision: 3,

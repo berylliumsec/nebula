@@ -2101,6 +2101,8 @@ export interface NativeHookExecution {
   startedAt: string;
   completedAt?: string;
   error?: string;
+  lateOutcomeStatus?: "complete" | "failed" | "timed_out";
+  lateOutcomeExitCode?: number;
   reconciliation?: Record<string, unknown>;
 }
 

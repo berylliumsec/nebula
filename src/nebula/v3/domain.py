@@ -3945,6 +3945,17 @@ class ChatSchedule(Entity):
         return value.astimezone(timezone.utc)
 
 
+class NativeHookLateOutcome(NebulaModel):
+    """A hook's process result observed after its turn was interrupted."""
+
+    status: Literal["complete", "failed", "timed_out"]
+    exit_code: int | None = None
+    stdout: str = Field(default="", max_length=64 * 1024)
+    stderr: str = Field(default="", max_length=64 * 1024)
+    error: str | None = Field(default=None, max_length=1_000)
+    observed_at: datetime = Field(default_factory=utc_now)
+
+
 class NativeHookExecution(Entity):
     """A durable provider-native lifecycle-hook attempt and recovery boundary."""
 
@@ -3966,6 +3977,7 @@ class NativeHookExecution(Entity):
     stdout: str = Field(default="", max_length=64 * 1024)
     stderr: str = Field(default="", max_length=64 * 1024)
     error: str | None = Field(default=None, max_length=1_000)
+    late_outcome: NativeHookLateOutcome | None = None
     reconciliation: dict[str, Any] | None = None
 
     @model_validator(mode="after")

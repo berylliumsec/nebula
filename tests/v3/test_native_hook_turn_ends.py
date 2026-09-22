@@ -513,9 +513,8 @@ def test_stream_holds_answer_until_required_completion_hook_accepts(tmp_path, bl
 def test_a_hook_running_when_the_turn_ends_never_stays_running(tmp_path, ended_by):
     """A stopped turn records the hook's real outcome once its process exits.
 
-    Core shutdown keeps its restart contract instead: the outcome is unknown,
-    the effectful hook waits for reconciliation, and a late exit never
-    overwrites that.
+    Core shutdown parks the turn; a late successful exit is recorded and can
+    be adopted on the next recovery read without running the hook again.
     """
 
     async def scenario():
@@ -551,10 +550,13 @@ def test_a_hook_running_when_the_turn_ends_never_stays_running(tmp_path, ended_b
         else:
             await service.shutdown()
         (hook_dir / "release").touch()
-        await _poll(lambda: [item for item in started_hook() if item.exit_code == 0])
+        await _poll(lambda: [item for item in started_hook() if item.exit_code == 0 or item.late_outcome is not None])
         await asyncio.sleep(0.2)
         await service.shutdown()
-        return store.get(ChatTurn, turn_id), service.list_turn_hook_executions(turn_id)
+        turn = store.get(ChatTurn, turn_id)
+        if ended_by == "core_shutdown":
+            turn = service.pending_turn(turn.session_id)
+        return turn, service.list_turn_hook_executions(turn_id)
 
     turn, executions = asyncio.run(scenario())
 
@@ -570,8 +572,9 @@ def test_a_hook_running_when_the_turn_ends_never_stays_running(tmp_path, ended_b
         ]
     else:
         assert turn.status == ChatTurnStatus.INTERRUPTED
-        assert started.status == "interrupted"
-        assert started.exit_code is None
-        assert turn.request_snapshot["recovery"]["unknown_hook_execution_ids"] == [
-            started.id
-        ]
+        assert started.status == "complete"
+        assert started.exit_code == 0
+        assert started.late_outcome is not None
+        assert started.late_outcome.status == "complete"
+        assert turn.request_snapshot["recovery"]["unknown_hook_execution_ids"] == []
+        assert turn.request_snapshot["recovery"]["recorded_hook_outcome_ids"] == [started.id]

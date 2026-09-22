@@ -4566,6 +4566,7 @@ test("assistant upgrade provider lifecycle hooks require restart reconciliation 
   let recoveryBlocked = true;
   let turnRevision = 3;
   let hookStatus = "interrupted";
+  let reconcileAttempts = 0;
   await installTruthfulCore(page);
   await page.route("**/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
@@ -4616,6 +4617,8 @@ test("assistant upgrade provider lifecycle hooks require restart reconciliation 
         side_effects: "external",
         started_at: entity.created_at,
         completed_at: entity.updated_at,
+        late_outcome_status: hookStatus === "interrupted" ? "failed" : null,
+        late_outcome_exit_code: hookStatus === "interrupted" ? 2 : null,
         reconciliation: recoveryBlocked ? null : { outcome: "complete", detail: "Verified the external audit write." },
       }] });
       return;
@@ -4641,6 +4644,12 @@ test("assistant upgrade provider lifecycle hooks require restart reconciliation 
       return;
     }
     if (path.endsWith("/chat/turns/turn-hook/reconcile-hook") && method === "POST") {
+      reconcileAttempts += 1;
+      if (reconcileAttempts === 1) {
+        turnRevision += 1;
+        await route.fulfill({ status: 409, json: { detail: "interrupted response changed; reload before reconciling" } });
+        return;
+      }
       recoveryBlocked = false;
       turnRevision += 1;
       hookStatus = "reconciled";
@@ -4670,9 +4679,15 @@ test("assistant upgrade provider lifecycle hooks require restart reconciliation 
 
   await openWorkspace(page, "/?view=chat&session=session-hook", "Workbench");
   await expect(page.getByText("What happened to Audit lifecycle?")).toBeVisible();
+  await expect(page.getByText("Later process exit: failed (code 2). Effects may be partial; verify before continuing.")).toBeVisible();
+  await page.getByPlaceholder("Operator verification note").fill("Verified the external audit write.");
+  await page.getByRole("button", { name: "Confirm completed" }).click();
+  await expect(page.getByRole("button", { name: "Confirm completed" })).toBeVisible();
+  await expect(page.getByText("interrupted response changed; reload before reconciling")).toHaveCount(0);
   await page.getByPlaceholder("Operator verification note").fill("Verified the external audit write.");
   await page.getByRole("button", { name: "Confirm completed" }).click();
   await expect(page.getByRole("button", { name: "Resume response" })).toBeVisible();
+  expect(reconcileAttempts).toBe(2);
   await page.getByRole("button", { name: "Resume response" }).click();
   await expect(page.getByText("Resumed after hook confirmation")).toBeVisible();
 });

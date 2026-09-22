@@ -207,6 +207,8 @@ from .chat_subagents import (
     subagent_routing_instructions,
 )
 from .tool_results import (
+    TOOL_RESULT_SCHEMA,
+    ToolResultReceipt,
     ToolResultStatus,
     sanitize_model_history_result,
     serialize_model_result,
@@ -1472,9 +1474,23 @@ class ChatService:
             hook_executions.extend(hook_page)
             offset += len(hook_page)
         for turn in turns:
-            self._interrupt_orphaned_turn(
-                turn, calls, hook_executions, cause="Core restarted"
-            )
+            for _ in range(3):
+                latest = self.store.get(ChatTurn, turn.id)
+                if latest.status not in active_statuses:
+                    break
+                try:
+                    self._interrupt_orphaned_turn(
+                        latest, calls, hook_executions, cause="Core restarted"
+                    )
+                except ConflictError:
+                    # A prior worker can finish a ledger or turn write during
+                    # this scan. Reclassify its latest state before retrying.
+                    continue
+                break
+            else:
+                raise ChatHistoryConflict(
+                    "provider turn changed repeatedly during restart recovery"
+                )
         offset = 0
         while goal_page := self.store.list_entities(
             ChatGoal, offset=offset, limit=1_000
@@ -1542,9 +1558,6 @@ class ChatService:
                     or saved.status != ChatTurnStatus.INTERRUPTED
                 ):
                     continue
-                if not safely_stopped_by_core(saved):
-                    continue
-                recovery = saved.request_snapshot["recovery"]
                 if saved.request_snapshot.get("subagent_child"):
                     records = self.store.find_entities(
                         ChatSubagent, {"child_session_id": saved.session_id}
@@ -1558,6 +1571,12 @@ class ChatService:
                 pending = self.pending_turn(saved.session_id)
                 if pending is None or pending.id != saved.id:
                     continue
+                # A result may have reached the ledger after shutdown parked
+                # this turn. Read repair above has the latest effect facts;
+                # the page snapshot may still list them as unknown.
+                if not safely_stopped_by_core(pending):
+                    continue
+                recovery = pending.request_snapshot["recovery"]
                 goal = (
                     self.store.get(ChatGoal, saved.goal_id) if saved.goal_id else None
                 )
@@ -1572,17 +1591,17 @@ class ChatService:
                     continue
                 latest = self.store.update(
                     ChatTurn,
-                    saved.id,
+                    pending.id,
                     {
                         "request_snapshot": {
-                            **saved.request_snapshot,
+                            **pending.request_snapshot,
                             "recovery": {
                                 **recovery,
                                 "auto_resume_attempted_at": utc_now().isoformat(),
                             },
                         }
                     },
-                    expected_revision=saved.revision,
+                    expected_revision=pending.revision,
                 )
                 try:
                     prepared = self.prepare_resume(latest.id)
@@ -1652,16 +1671,21 @@ class ChatService:
         ]
         for execution in hook_executions:
             if execution.chat_turn_id == turn.id and execution.status == "running":
-                self.store.update(
-                    NativeHookExecution,
-                    execution.id,
-                    {
-                        "status": "interrupted",
-                        "completed_at": utc_now(),
-                        "error": f"{cause} before the hook outcome was known.",
-                    },
-                    expected_revision=execution.revision,
-                )
+                try:
+                    self.store.update(
+                        NativeHookExecution,
+                        execution.id,
+                        {
+                            "status": "interrupted",
+                            "completed_at": utc_now(),
+                            "error": f"{cause} before the hook outcome was known.",
+                        },
+                        expected_revision=execution.revision,
+                    )
+                except ConflictError:
+                    # The hook may have committed its result after the scan.
+                    # Keep the old unknown ID; read repair uses its new state.
+                    pass
         detail = (
             f"{cause} while an effect outcome was unknown. Reconcile the "
             "listed tool or hook execution before resuming."
@@ -4736,20 +4760,6 @@ class ChatService:
                         "step": step,
                     },
                 )
-                invocation = ToolInvocation(
-                    engagement_id=prepared.engagement_id,
-                    run_id=turn.id,
-                    origin=ToolCallOrigin.CHAT,
-                    chat_session_id=turn.session_id,
-                    chat_turn_id=turn.id,
-                    tool_name=call.name,
-                    arguments=call.arguments,
-                    workspace=components.workspace,
-                    idempotency_key=idempotency_key,
-                    requested_by="chat-assistant",
-                    provider_call_id=call.id,
-                    provider_step=step,
-                )
                 entry = {
                     "step": step,
                     "model_call_id": call.id,
@@ -4766,6 +4776,21 @@ class ChatService:
                 if issued_call_id is not None:
                     entry["issued_call_id"] = issued_call_id
                 entry.update(routed.replay)
+                invocation = ToolInvocation(
+                    engagement_id=prepared.engagement_id,
+                    run_id=turn.id,
+                    origin=ToolCallOrigin.CHAT,
+                    chat_session_id=turn.session_id,
+                    chat_turn_id=turn.id,
+                    tool_name=call.name,
+                    arguments=call.arguments,
+                    workspace=components.workspace,
+                    idempotency_key=idempotency_key,
+                    requested_by="chat-assistant",
+                    provider_call_id=call.id,
+                    provider_step=step,
+                    provider_history_intent=entry,
+                )
                 try:
                     if (
                         call.name in CATALOG_DISCOVERY_NAMES
@@ -6785,7 +6810,7 @@ class ChatService:
         return self.start_provider_turn(prepared)
 
     def prepare_resume(self, turn_id: str) -> PreparedChat:
-        turn = self.store.get(ChatTurn, turn_id)
+        turn = self.reconcile_recorded_effects(turn_id)
         final_answer_recovery_value = turn.request_snapshot.get("final_answer_recovery")
         final_answer_recovery: dict[str, Any] | None = (
             dict(final_answer_recovery_value)
@@ -7337,7 +7362,244 @@ class ChatService:
         ]
         if len(active) > 1:
             raise ChatHistoryConflict("chat session has multiple active turns")
-        return active[0] if active else None
+        return self.reconcile_recorded_effects(active[0].id) if active else None
+
+    def reconcile_recorded_effects(self, turn_id: str) -> ChatTurn:
+        """Repair interrupted turn projections from durable tool and hook facts."""
+
+        self._reconcile_recorded_tool_results(turn_id)
+        return self._reconcile_recorded_hook_outcomes(turn_id)
+
+    def _reconcile_recorded_tool_results(self, turn_id: str) -> ChatTurn:
+        """Project terminal tool receipts into an interrupted turn, exactly once.
+
+        The broker and turn history commit separately. A result may be saved
+        after restart recorded a RUNNING call as unknown. The ledger is the
+        authority for that invocation; a valid terminal receipt supersedes the
+        earlier snapshot without running the effect again. Missing, malformed,
+        or background-command receipts remain unresolved.
+        """
+
+        for _ in range(3):
+            turn = self.store.get(ChatTurn, turn_id)
+            recovery = turn.request_snapshot.get("recovery")
+            if turn.status != ChatTurnStatus.INTERRUPTED or not isinstance(recovery, dict):
+                return turn
+            unknown = recovery.get("unknown_tool_call_ids")
+            if not isinstance(unknown, list) or not unknown:
+                return turn
+            history = list(turn.tool_history)
+            settled: list[str] = []
+            next_step = turn.next_step
+            execution_count = turn.execution_tool_calls
+            artifact_count = turn.artifact_queries
+            for call_id in unknown:
+                if not isinstance(call_id, str):
+                    continue
+                try:
+                    call = self.store.get(ToolCall, call_id)
+                except NotFoundError:
+                    continue
+                if (
+                    call.chat_turn_id != turn.id
+                    or call.status not in {ToolCallStatus.COMPLETE, ToolCallStatus.FAILED}
+                    or not isinstance(call.result, dict)
+                    or call.result.get("schema") != TOOL_RESULT_SCHEMA
+                ):
+                    continue
+                try:
+                    receipt = ToolResultReceipt.model_validate(call.result)
+                except ValidationError:
+                    continue
+                if (
+                    receipt.tool_call_id != call.id
+                    or receipt.tool_name != call.tool_name
+                    or receipt.results_url
+                    or (call.status == ToolCallStatus.COMPLETE)
+                    != (receipt.status == ToolResultStatus.COMPLETED)
+                ):
+                    continue
+                step = call.metadata.get("provider_step")
+                model_call_id = call.metadata.get("provider_call_id")
+                if (
+                    not isinstance(step, int)
+                    or isinstance(step, bool)
+                    or step < 0
+                    or not isinstance(model_call_id, str)
+                    or not model_call_id
+                ):
+                    continue
+                intent = call.metadata.get("provider_history_intent")
+                if not (
+                    isinstance(intent, dict)
+                    and intent.get("tool_call_id") == call.id
+                    and intent.get("model_call_id") == model_call_id
+                    and intent.get("step") == step
+                    and intent.get("name") == call.tool_name
+                    and intent.get("arguments") == call.arguments
+                ):
+                    intent = {
+                        "step": step,
+                        "model_call_id": model_call_id,
+                        "tool_call_id": call.id,
+                        "name": call.tool_name,
+                        "arguments": call.arguments,
+                        "budget_class": call.metadata.get("budget_class", "execution"),
+                    }
+                existing = next(
+                    (item for item in history if item.get("tool_call_id") == call.id),
+                    None,
+                )
+                output = receipt.as_model_result()
+                entry = {
+                    **intent,
+                    **(existing or {}),
+                    "status": "complete" if call.status == ToolCallStatus.COMPLETE else "failed",
+                    "provider_result": serialize_model_result(output),
+                    "trusted_result": False,
+                    "result_artifact_id": call.result_artifact_id,
+                    "artifacts": output.get("artifacts", []),
+                    "result_summary": self._result_summary(output),
+                    "recovered_from_recorded_result": True,
+                }
+                history = [
+                    item for item in history if item.get("tool_call_id") != call.id
+                ]
+                history.append(entry)
+                if existing is None:
+                    if entry.get("budget_class") == "artifact_query":
+                        artifact_count += 1
+                    elif entry.get("budget_class") == "execution":
+                        execution_count += 1
+                next_step = max(next_step, step + 1)
+                settled.append(call.id)
+            if not settled:
+                return turn
+            remaining = [item for item in unknown if item not in settled]
+            history.sort(key=lambda item: int(item.get("step", 0)))
+            recorded = recovery.get("recorded_tool_result_ids")
+            prior_recorded = recorded if isinstance(recorded, list) else []
+            try:
+                return self.store.update(
+                    ChatTurn,
+                    turn.id,
+                    {
+                        "tool_call_ids": list(dict.fromkeys([*turn.tool_call_ids, *settled])),
+                        "tool_history": history,
+                        "next_step": next_step,
+                        "execution_tool_calls": execution_count,
+                        "artifact_queries": artifact_count,
+                        "error": (
+                            "Core recovered the recorded tool result. Review and resume this response."
+                            if not remaining and not recovery.get("unknown_hook_execution_ids")
+                            else turn.error
+                        ),
+                        "request_snapshot": {
+                            **turn.request_snapshot,
+                            "recovery": {
+                                **recovery,
+                                "unknown_tool_call_ids": remaining,
+                                "recorded_tool_result_ids": list(
+                                    dict.fromkeys([*prior_recorded, *settled])
+                                ),
+                            },
+                        },
+                    },
+                    expected_revision=turn.revision,
+                )
+            except ConflictError:
+                continue
+        raise ChatHistoryConflict(
+            "interrupted response changed while recovering recorded effects; reload"
+        )
+
+    def _reconcile_recorded_hook_outcomes(self, turn_id: str) -> ChatTurn:
+        """Adopt a successful hook exit observed after its turn was parked.
+
+        A failed or timed-out hook can have partial workspace or external
+        effects, so those observations remain visible but need review.
+        """
+
+        for _ in range(3):
+            turn = self.store.get(ChatTurn, turn_id)
+            recovery = turn.request_snapshot.get("recovery")
+            if turn.status != ChatTurnStatus.INTERRUPTED or not isinstance(recovery, dict):
+                return turn
+            unknown = recovery.get("unknown_hook_execution_ids")
+            if not isinstance(unknown, list) or not unknown:
+                return turn
+            settled: list[str] = []
+            late_executions: list[NativeHookExecution] = []
+            for execution_id in unknown:
+                if not isinstance(execution_id, str):
+                    continue
+                try:
+                    execution = self.store.get(NativeHookExecution, execution_id)
+                except NotFoundError:
+                    continue
+                if execution.chat_turn_id != turn.id:
+                    continue
+                if execution.status == "complete" and execution.exit_code == 0:
+                    settled.append(execution.id)
+                elif (
+                    execution.status == "interrupted"
+                    and execution.late_outcome is not None
+                    and execution.late_outcome.status == "complete"
+                    and execution.late_outcome.exit_code == 0
+                ):
+                    settled.append(execution.id)
+                    late_executions.append(execution)
+            if not settled:
+                return turn
+            remaining = [item for item in unknown if item not in settled]
+            recorded = recovery.get("recorded_hook_outcome_ids")
+            prior_recorded = recorded if isinstance(recorded, list) else []
+            try:
+                with self.store.transaction() as transaction:
+                    for execution in late_executions:
+                        outcome = execution.late_outcome
+                        assert outcome is not None
+                        transaction.update(
+                            NativeHookExecution,
+                            execution.id,
+                            {
+                                "status": "complete",
+                                "completed_at": outcome.observed_at,
+                                "exit_code": outcome.exit_code,
+                                "stdout": outcome.stdout,
+                                "stderr": outcome.stderr,
+                                "error": None,
+                            },
+                            expected_revision=execution.revision,
+                        )
+                    repaired = transaction.update(
+                        ChatTurn,
+                        turn.id,
+                        {
+                            "error": (
+                                "Core recovered the recorded hook outcome. Review and resume this response."
+                                if not remaining and not recovery.get("unknown_tool_call_ids")
+                                else turn.error
+                            ),
+                            "request_snapshot": {
+                                **turn.request_snapshot,
+                                "recovery": {
+                                    **recovery,
+                                    "unknown_hook_execution_ids": remaining,
+                                    "recorded_hook_outcome_ids": list(
+                                        dict.fromkeys([*prior_recorded, *settled])
+                                    ),
+                                },
+                            },
+                        },
+                        expected_revision=turn.revision,
+                    )
+                return repaired
+            except ConflictError:
+                continue
+        raise ChatHistoryConflict(
+            "interrupted hook state changed while recovering recorded effects; reload"
+        )
 
     def pending_turns(self, engagement_id: str) -> dict[str, ChatTurn]:
         """Return the pending turn of every conversation in a project, by session.
@@ -7415,7 +7677,12 @@ class ChatService:
         if not note:
             raise ChatConfigurationError("reconciliation requires an operator note")
         call = self.store.get(ToolCall, tool_call_id)
-        if call.chat_turn_id != turn.id or call.status != ToolCallStatus.RUNNING:
+        if call.chat_turn_id != turn.id or call.status not in {
+            ToolCallStatus.RUNNING,
+            ToolCallStatus.COMPLETE,
+            ToolCallStatus.FAILED,
+            ToolCallStatus.CANCELLED,
+        }:
             raise ChatHistoryConflict(
                 "tool call state no longer matches restart recovery"
             )
@@ -7434,20 +7701,27 @@ class ChatService:
             "detail": note,
             "verified": False,
         }
+        changes: dict[str, Any] = {
+            "metadata": {
+                **call.metadata,
+                "reconciled_after_restart": True,
+                "reconciled_by": self.operator_id(),
+                "operator_reconciliation": result,
+            },
+        }
+        if call.status == ToolCallStatus.RUNNING:
+            changes.update(
+                {
+                    "status": call_status,
+                    "completed_at": utc_now(),
+                    "result": result,
+                    "error": note if outcome == "failed" else None,
+                }
+            )
         self.store.update(
             ToolCall,
             call.id,
-            {
-                "status": call_status,
-                "completed_at": utc_now(),
-                "result": result,
-                "error": note if outcome == "failed" else None,
-                "metadata": {
-                    **call.metadata,
-                    "reconciled_after_restart": True,
-                    "reconciled_by": self.operator_id(),
-                },
-            },
+            changes,
             expected_revision=call.revision,
         )
         entry = {

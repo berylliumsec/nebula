@@ -951,6 +951,8 @@ class NativeHookExecutionSummary(NebulaModel):
     started_at: datetime
     completed_at: datetime | None = None
     error: str | None = None
+    late_outcome_status: Literal["complete", "failed", "timed_out"] | None = None
+    late_outcome_exit_code: int | None = None
     reconciliation: dict[str, Any] | None = None
 
 
@@ -9599,6 +9601,12 @@ def create_app(
                 started_at=item.started_at,
                 completed_at=item.completed_at,
                 error=item.error,
+                late_outcome_status=(
+                    item.late_outcome.status if item.late_outcome else None
+                ),
+                late_outcome_exit_code=(
+                    item.late_outcome.exit_code if item.late_outcome else None
+                ),
                 reconciliation=item.reconciliation,
             )
             for item in chat_service().list_turn_hook_executions(turn_id)
@@ -9623,6 +9631,12 @@ def create_app(
                 started_at=item.started_at,
                 completed_at=item.completed_at,
                 error=item.error,
+                late_outcome_status=(
+                    item.late_outcome.status if item.late_outcome else None
+                ),
+                late_outcome_exit_code=(
+                    item.late_outcome.exit_code if item.late_outcome else None
+                ),
                 reconciliation=item.reconciliation,
             )
             for item in chat_service().list_session_hook_executions(session_id)

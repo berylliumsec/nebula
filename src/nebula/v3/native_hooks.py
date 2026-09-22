@@ -15,7 +15,7 @@ from uuid import uuid4
 from pydantic import Field, field_validator
 
 from .diagnostics import record_caught_exception
-from .domain import NativeHookExecution, NebulaModel, utc_now
+from .domain import NativeHookExecution, NativeHookLateOutcome, NebulaModel, utc_now
 from .storage import NebulaStore
 
 
@@ -321,10 +321,30 @@ class NativeHookRunner:
         try:
             outcome = work.result()
             latest = self.store.get(NativeHookExecution, execution_id)
-            # Core stopping marks a running hook interrupted so an effectful
-            # one is reconciled by the operator; a late exit keeps that.
+            # An interrupted turn keeps its fence, but the process can still
+            # finish in the old worker. Save that observation separately so
+            # recovery can adopt a successful outcome without re-running it.
             if latest.status == "running":
                 self._persist_outcome(latest, outcome)
+            elif latest.status == "interrupted":
+                self.store.update(
+                    NativeHookExecution,
+                    latest.id,
+                    {
+                        "late_outcome": NativeHookLateOutcome(
+                            status=outcome["status"],
+                            exit_code=outcome["exit_code"],
+                            stdout=outcome["stdout"][:MAX_HOOK_OUTPUT_BYTES].decode(
+                                "utf-8", "replace"
+                            ),
+                            stderr=outcome["stderr"][:MAX_HOOK_OUTPUT_BYTES].decode(
+                                "utf-8", "replace"
+                            ),
+                            error=outcome["error"],
+                        )
+                    },
+                    expected_revision=latest.revision,
+                )
         except Exception as exc:
             record_caught_exception(
                 "chat",
