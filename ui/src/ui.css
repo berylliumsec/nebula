@@ -242,8 +242,15 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 .chat-goal-form textarea { min-height: 64px; resize: vertical; }
 .chat-goal-limits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 8px; }
 .chat-goal-form > div, .chat-goal-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.chat-goal-actions { align-items: center; gap: 12px; }
+.chat-goal-actions .button { min-height: 36px; padding: 6px 10px; }
+.chat-goal-pause { margin-right: auto; }
+.chat-goal-outcomes, .chat-goal-utilities { display: flex; align-items: center; gap: 4px; }
+.chat-goal-outcomes { padding-right: 12px; border-right: 1px solid var(--border-soft); }
+.chat-goal-outcomes .button, .chat-goal-utilities .button { color: var(--text-muted); }
+.chat-goal-outcomes .button:hover:not(:disabled), .chat-goal-utilities .button:hover:not(:disabled) { color: var(--text-strong); }
 @media (max-width: 1100px) { .chat-goal-panel:not(.empty) > header { flex-wrap: wrap; } .chat-goal-panel > header small { width: 100%; padding-left: 42px; flex-wrap: wrap; white-space: normal; } }
-@media (max-width: 430px) { .chat-goal-limits { grid-template-columns: 1fr; } .chat-goal-actions .button { min-height: 44px; } .chat-goal-toggle { width: 44px; height: 44px; } .chat-goal-panel > header small { padding-left: 54px; } }
+@media (max-width: 430px) { .chat-goal-limits { grid-template-columns: 1fr; } .chat-goal-actions { justify-content: flex-start; gap: 8px; } .chat-goal-actions .button { min-height: 44px; } .chat-goal-outcomes { border: 0; padding-right: 0; } .chat-goal-utilities { width: 100%; } .chat-goal-toggle { width: 44px; height: 44px; } .chat-goal-panel > header small { padding-left: 54px; } }
 
 /* A goal is optional: without one, the panel is a compact chip, not a full row. */
 .chat-goal-panel.empty:not(:has(.chat-goal-form)) { display: flex; padding: 0; border: 0; background: transparent; }

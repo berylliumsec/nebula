@@ -40,6 +40,7 @@ it("collapses goal controls while keeping the objective and progress visible", (
   expect(screen.getByText("Inspect safely")).toBeVisible();
   expect(screen.getByText("step 0")).toBeVisible();
   expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
+  expect(within(screen.getByRole("group", { name: "Set goal outcome" })).getByRole("button", { name: "Complete" })).toHaveClass("quiet");
   fireEvent.click(collapse);
   expect(screen.getByRole("button", { name: "Expand goal controls" })).toHaveAttribute("aria-expanded", "false");
   expect(screen.getByText("Inspect safely")).toBeVisible();

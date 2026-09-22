@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, CirclePause, CirclePlay, Flag, LoaderCircle, OctagonX } from "lucide-react";
+import { Check, ChevronDown, CirclePause, CirclePlay, Flag, LoaderCircle, OctagonX } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
 import type { ChatGoal, HarnessSkillSummary } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
@@ -249,12 +249,9 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
     <div id="chat-goal-details" hidden={!detailsOpen} className="chat-goal-details">
     {!terminal && <div className="chat-goal-actions">
       {goal.status === "draft" && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("start")}><CirclePlay size={14} /> Start</button>}
-      {goal.status === "running" && <button className="button secondary" type="button" disabled={busy || settingsBusy} onClick={() => void act("pause")}><CirclePause size={14} /> Pause</button>}
-      {goal.status === "running" && <button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("block")}>Block</button>}
-      {goal.status === "running" && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("complete")}>Complete</button>}
+      {goal.status === "running" && <><button className="button secondary chat-goal-pause" type="button" disabled={busy || settingsBusy} onClick={() => void act("pause")}><CirclePause size={14} /> Pause</button><div className="chat-goal-outcomes" role="group" aria-label="Set goal outcome"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("block")}>Block</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("complete")}><Check size={14} aria-hidden="true" /> Complete</button></div></>}
       {(goal.status === "paused" || goal.status === "blocked") && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("resume")}><CirclePlay size={14} /> Resume</button>}
-      <button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginSkillEdit}>Edit skills</button>
-      <button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => void cancelGoal()}><OctagonX size={14} /> Cancel goal</button>
+      <div className="chat-goal-utilities"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={beginSkillEdit}>Edit skills</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => void cancelGoal()}><OctagonX size={14} /> Cancel goal</button></div>
     </div>}
     {editingSkills && !terminal && <div className="chat-goal-form">
       <fieldset><legend>Goal skills</legend>{skillOptions.length ? skillOptions.map(skill => <label key={skill.path}><input type="checkbox" checked={selectedSkillPaths.includes(skill.path)} onChange={event => setSelectedSkillPaths(current => event.target.checked ? [...current, skill.path] : current.filter(path => path !== skill.path))} /> <span><strong>{skill.name}</strong> <small>{skill.source} · {skill.path}{goal.skillSnapshots.some(item => item.path === skill.path) && !(skills ?? []).some(item => item.path === skill.path) ? " · retained snapshot; source unavailable" : ""}</small></span></label>) : <p>No skills are currently available.</p>}</fieldset>

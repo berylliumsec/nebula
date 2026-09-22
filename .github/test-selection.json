@@ -1,7 +1,7 @@
 {
-  "change_digest": "973fc9fc813a1591f4e816f13aecba68023596862aa7f97da026ea870c502c46",
+  "change_digest": "c17f201f220525bfc0804fce3818d04dc23d5f4cf003f52937f8a08379247778",
   "reviewed_by": "Codex focused review for collapsible goal banner",
-  "reason": "The diff changes presentation of the goal banner and adds a collapse control. Twelve collected ProviderGoalPanel component cases cover its local display and goal actions.",
+  "reason": "The branch changes goal banner presentation, collapse behavior, and action hierarchy. Twelve collected ProviderGoalPanel component cases cover local display, disclosure, and goal actions.",
   "exclusions": "No Python or native change. Unrelated UI tests and full suites are excluded. Browser responsive, real Core, LAN origin, and production journey checks are pending and are not claimed by this focused component run.",
   "expected_tests": {
     "python": 0,
