@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 import nebula.v3.chat as chat_module
 from nebula.v3 import providers
 from nebula.v3.api import create_app
-from nebula.v3.chat import ChatError, ChatService, PreparedChat
+from nebula.v3.chat import ChatService, PreparedChat
 from nebula.v3.domain import (
     ChatMessage,
     ChatRole,
@@ -843,7 +843,8 @@ def test_refused_synthesis_reaches_the_operator_without_recovery(tmp_path):
     )
     store, service, prepared, broker = _chat(tmp_path, provider)
 
-    with pytest.raises(ChatError, match="provider blocked the response"):
+    # The refusal is raised as itself, as a non-streamed call raises it.
+    with pytest.raises(ProviderRefusalError, match="provider blocked the response"):
         asyncio.run(service.complete(prepared))
 
     # Asking a refusing safeguard again gets the same refusal; the synthesis

@@ -126,7 +126,6 @@ from .providers import (
     ProviderContextLengthError,
     ProviderError,
     ProviderMalformedToolCallError,
-    ProviderOverloadedError,
     ProviderResponseError,
     StreamEventType,
     ToolCall as ModelToolCall,
@@ -3914,14 +3913,13 @@ class ChatService:
                             "".join(streamed_reasoning),
                         ),
                     )
-                elif event.retryable:
-                    # A transient upstream failure is the provider's, and the
-                    # operator may simply retry; a ChatError would blame chat.
-                    raise ProviderOverloadedError(
+                else:
+                    # A typed provider failure (an overload the operator may
+                    # retry, a refusal, spent quota) is raised as itself, as
+                    # complete() raises it; a ChatError would blame chat.
+                    raise event.provider_error() or ChatError(
                         event.error or "provider stream failed"
                     )
-                else:
-                    raise ChatError(event.error or "provider stream failed")
             if event.type == StreamEventType.COMPLETED:
                 if prepared.turn is not None:
                     self._assert_execution_owner(prepared)
@@ -4673,12 +4671,8 @@ class ChatService:
                                     "".join(streamed_reasoning),
                                 ),
                             )
-                        elif event.retryable:
-                            raise ProviderOverloadedError(
-                                event.error or "provider final synthesis failed"
-                            )
                         else:
-                            raise ChatError(
+                            raise event.provider_error() or ChatError(
                                 event.error or "provider final synthesis failed"
                             )
                     if event.type == StreamEventType.COMPLETED:
