@@ -124,7 +124,6 @@ from .providers import (
     ModelToolResult,
     ModelUsage,
     ProviderContextLengthError,
-    ProviderError,
     ProviderMalformedToolCallError,
     ProviderResponseError,
     StreamEventType,
@@ -800,12 +799,12 @@ _NO_TOOL_PREFIX = "No tools are available in this turn. "
 _CHAT_INSTRUCTIONS = _NO_TOOL_PREFIX + _CHAT_BASE_INSTRUCTIONS
 
 _CHAT_TOOL_INSTRUCTIONS = (
-    """Call one or more supplied functions and return no prose. Request several
-functions in the same response when they do not depend on each other; keep a
-call that needs an earlier result for a later response. Nebula runs a batch one
-call at a time, in the order you asked for, and replays every result. Use
-finish_response when no tool is needed. Tool results can be inspected with
-tool_output.search and tool_output.read."""
+    """Answer the operator's request. Call supplied functions when their results
+are needed, and include helpful prose when appropriate. Request several
+independent functions in the same response; keep a call that needs an earlier
+result for a later response. Nebula runs a batch one call at a time and replays
+every result. A response without tool calls ends the turn. Tool results can be
+inspected with tool_output.search and tool_output.read."""
     + BROWSER_MODEL_WORKFLOW
 )
 
@@ -1154,13 +1153,12 @@ _ROUTING_DEVIATION_LIMIT = 3
 _REFUSED_BUDGET_CLASS = "refused"
 _REPLAYED_CALL_REFUSAL = (
     "This call already ran; its result is above. Use that result instead of "
-    "calling it again, or use finish_response."
+    "calling it again, or answer directly."
 )
 _TRUNCATED_CALL_REFUSAL = (
     "Your response was cut off by the output limit before this call was "
     "complete, so it did not run. Re-issue the call with complete arguments."
 )
-_TOOL_CHOICE_REJECTION = re.compile(r"tool[_ ]?choice", re.IGNORECASE)
 
 
 def _unreadable_call_refusal(
@@ -1180,7 +1178,7 @@ def _unreadable_call_refusal(
     )
     if offered_names is not None:
         refusal += (
-            " Call one of the offered tools, or finish_response when no tool is "
+            " Call one of the offered tools, or answer directly when no tool is "
             f"needed. Offered tools: {', '.join(offered_names)}."
         )
     return refusal
@@ -1203,7 +1201,12 @@ class _RoutedCall:
 
 
 # Tool-history fields a replay reads; a rewritten entry keeps them.
-_REPLAY_FIELDS = ("response_group", "reasoning_state", "provider_metadata")
+_REPLAY_FIELDS = (
+    "response_group",
+    "response_text",
+    "reasoning_state",
+    "provider_metadata",
+)
 
 
 def _with_replay_state(
@@ -1221,28 +1224,14 @@ def _with_replay_state(
     tagged: list[_RoutedCall] = []
     for index, routed in enumerate(batch):
         replay: dict[str, Any] = {"response_group": group}
+        if index == 0 and response.text and tool_frame_start(response.text) is None:
+            replay["response_text"] = response.text[:200_000]
         if index == 0 and response.reasoning_state:
             replay["reasoning_state"] = response.reasoning_state
         if routed.call.provider_metadata:
             replay["provider_metadata"] = routed.call.provider_metadata
         tagged.append(dataclass_replace(routed, replay=replay))
     return tagged
-
-
-def _routing_thoughts(response: ModelResponse) -> str:
-    """A routing step's thinking, with any prose beside its calls.
-
-    Text next to a tool call narrates the call ("I'll read the value first").
-    The synthesis writes the operator's answer, so the text is commentary: it
-    joins the step's thinking instead of failing the turn. A control frame
-    Core could not read is never shown, wherever it starts: the commentary
-    ends where the frame begins.
-    """
-
-    commentary = _operator_answer_text(response.text)
-    if not response.tool_calls or not commentary:
-        return response.reasoning
-    return _joined_reasoning(response.reasoning, commentary)
 
 
 # How a reply ends when nothing stopped it: Chat Completions and Gemini "stop",
@@ -1255,9 +1244,8 @@ _ANSWER_FINISH_REASONS = frozenset(
 def _is_routing_answer(response: ModelResponse) -> bool:
     """Whether a routing reply without a tool call answered the operator.
 
-    A route that treats tool_choice=required as auto (Z.ai serves GLM that
-    way) answers in plain text when no tool is needed, without calling
-    finish_response. opencode, Codex, the AI SDK, Cline and pi-mono all end
+    A route with automatic tool choice answers in plain text when no tool is
+    needed. opencode, Codex, the AI SDK, Cline and pi-mono all end
     the loop on a reply with no tool calls and use its text as the answer.
     The text must have ended normally and pass the checks a synthesis answer
     gets: text cut off by the output limit, stopped for another reason, or
@@ -1274,20 +1262,6 @@ def _is_routing_answer(response: ModelResponse) -> bool:
         # synthesis rather than ending the turn.
         and tool_frame_start(response.text) is None
         and _final_answer_problem(response) is None
-    )
-
-
-def _rejects_required_tool_choice(exc: ProviderError) -> bool:
-    """A route that refuses tool_choice=required, such as an older vLLM."""
-
-    message = str(exc)
-    return (
-        type(exc) is ProviderError
-        and (
-            re.search(r"\bHTTP 400\b", message) is not None
-            or "ValidationException" in message
-        )
-        and _TOOL_CHOICE_REJECTION.search(message) is not None
     )
 
 
@@ -4066,8 +4040,6 @@ class ChatService:
             # Routing responses in a row whose calls Core answered itself.
             deviations = 0
             route_deviated = False
-            # Set once the route refuses tool_choice=required.
-            auto_routing = False
             while turn.status != ChatTurnStatus.FINALIZING:
                 budgeted_specs = [
                     spec
@@ -4156,9 +4128,7 @@ class ChatService:
                             + (prepared.model_request.instructions or "")
                             + catalog_instructions(catalog_receipt, components.specs),
                             "tools": self._routing_tools(available_specs),
-                            "tool_choice": ToolChoice.AUTO
-                            if auto_routing
-                            else ToolChoice.REQUIRED,
+                            "tool_choice": ToolChoice.AUTO,
                             # A model may batch independent calls into one
                             # routing response. Core still executes them one
                             # at a time, in the requested order, so every
@@ -4195,45 +4165,11 @@ class ChatService:
                         break
                     routing = self._fit_turn_goal_request(prepared, routing)
                     self._ensure_request_capacity(prepared.provider_profile, routing)
-                    try:
-                        response = await self._complete_routing_step(prepared, routing)
-                    except ProviderError as exc:
-                        if auto_routing or not _rejects_required_tool_choice(exc):
-                            raise
-                        record_diagnostic(
-                            "warning",
-                            "chat",
-                            "chat.routing.required_tool_choice_rejected",
-                            "The provider rejected a required tool choice; "
-                            "routing continued with an automatic tool choice.",
-                            outcome="fallback",
-                            stage="routing",
-                            retryable=True,
-                            safe_failure_cause=(
-                                "The route does not support tool_choice=required."
-                            ),
-                            exception=exc,
-                            metadata={
-                                "provider": prepared.provider_profile.id,
-                                "model_id": prepared.resolved_model,
-                            },
-                        )
-                        # A reply without a call is safe now: it ends routing,
-                        # as the answer or through synthesis. The rest of the
-                        # turn routes the same way instead of being refused at
-                        # every step.
-                        auto_routing = True
-                        routing = routing.model_copy(
-                            update={"tool_choice": ToolChoice.AUTO}
-                        )
-                        response = await self._complete_routing_step(prepared, routing)
+                    response = await self._complete_routing_step(prepared, routing)
                     self._assert_execution_owner(prepared)
                     turn = self._refresh_turn(turn)
-                    thoughts = _routing_thoughts(response)
-                    thought = _reasoning_step_delta(turn.reasoning, thoughts)
-                    turn = self._add_usage(
-                        turn, response.model_copy(update={"reasoning": thoughts})
-                    )
+                    thought = _reasoning_step_delta(turn.reasoning, response.reasoning)
+                    turn = self._add_usage(turn, response)
                     if thought:
                         # The model explains each tool it reaches for. Without
                         # this the transcript shows thinking only for the
@@ -4275,6 +4211,20 @@ class ChatService:
                             yield item
                         return
                     if (
+                        len(response.tool_calls) == 1
+                        and response.tool_calls[0].name == "finish_response"
+                        and _operator_answer_text(response.text)
+                    ):
+                        # Older routes may still return the former finish signal
+                        # beside a complete answer. Use its prose once.
+                        async for item in self._answer_from_routing(
+                            prepared,
+                            turn,
+                            response.model_copy(update={"tool_calls": []}),
+                        ):
+                            yield item
+                        return
+                    if (
                         turn.goal_id is not None
                         and self.store.get(ChatGoal, turn.goal_id).status
                         != ChatGoalStatus.RUNNING
@@ -4282,26 +4232,34 @@ class ChatService:
                         raise ChatError(
                             "goal token budget was exhausted before tool execution"
                         )
-                    if response.text.strip():
-                        # Text beside a call narrates it and joined the step's
-                        # thinking above. Text instead of a call that is not an
-                        # answer (cut off, or a frame Core could not read) ends
-                        # routing like an empty reply. Neither fails the turn;
-                        # the exact response stays available as protected
-                        # detail.
+                    if response.tool_calls:
+                        visible = _operator_answer_text(response.text)
+                        if visible:
+                            turn, delta = self._add_routing_content(turn, visible)
+                            if delta:
+                                yield (
+                                    "delta",
+                                    {
+                                        "type": "delta",
+                                        "turn_id": turn.id,
+                                        "provider_id": prepared.provider_profile.id,
+                                        "model": prepared.resolved_model,
+                                        "delta": delta,
+                                    },
+                                )
+                    elif response.text.strip():
+                        # A cut-off answer or unreadable control frame cannot
+                        # complete the turn; retain its wire response for review.
                         record_diagnostic(
                             "warning",
                             "chat",
                             "chat.routing.prose_with_required_tool",
-                            "A provider returned text during a required tool-routing step.",
+                            "A provider returned incomplete or unreadable text during routing.",
                             error_id=new_error_id(),
                             outcome="fallback",
                             stage="routing",
                             retryable=False,
-                            safe_failure_cause=(
-                                "The model wrote text beside or instead of the "
-                                "required tool call."
-                            ),
+                            safe_failure_cause="The routing text was incomplete or unreadable.",
                             metadata={
                                 "provider": prepared.provider_profile.id,
                                 "model_id": prepared.resolved_model,
@@ -4336,26 +4294,19 @@ class ChatService:
                                 default=str,
                             ),
                         )
-                        if not response.tool_calls:
-                            break
+                        break
                     if not response.tool_calls:
-                        # A required tool choice the provider ignored. The
-                        # results already gathered are a better answer than a
-                        # failed turn, so finish on what the turn has.
+                        # Empty reply: answer from results already gathered.
                         record_diagnostic(
                             "warning",
                             "chat",
                             "chat.routing.empty_tool_batch",
-                            "The provider returned no tool call for a required "
-                            "routing step; the turn answered from the results "
-                            "it already had.",
+                            "The provider returned no content or tool call; the "
+                            "turn answered from results it already had.",
                             outcome="fallback",
                             stage="chat",
                             retryable=True,
-                            safe_failure_cause=(
-                                "The provider returned neither a tool call nor "
-                                "prose for a required tool choice."
-                            ),
+                            safe_failure_cause="The provider returned an empty routing reply.",
                         )
                         break
                     # Every call is sorted before any of them executes, so a
@@ -4479,7 +4430,7 @@ class ChatService:
                         # which would change the cached request prefix.
                         raise InvalidToolArguments(
                             "the catalog search limit for this turn is reached; "
-                            "use a tool already loaded or finish_response"
+                            "use a tool already loaded or answer directly"
                         )
                     result = await components.broker.execute(
                         invocation, components.scope
@@ -4865,7 +4816,10 @@ class ChatService:
                                 completion.message.content,
                             ),
                         )
-                        if completion.message.content:
+                        final_delta = _reasoning_step_delta(
+                            turn.content, _operator_answer_text(synthesis.text)
+                        )
+                        if final_delta:
                             yield (
                                 "delta",
                                 {
@@ -4873,7 +4827,7 @@ class ChatService:
                                     "turn_id": turn.id,
                                     "provider_id": prepared.provider_profile.id,
                                     "model": prepared.resolved_model,
-                                    "delta": completion.message.content,
+                                    "delta": final_delta,
                                 },
                             )
                         self._persist(prepared, completion)
@@ -5014,24 +4968,7 @@ class ChatService:
                 strict=spec.name != CATALOG_CALL,
             )
             for spec in sorted(specs, key=lambda item: item.name)
-        ] + [cls._finish_tool()]
-
-    @staticmethod
-    def _finish_tool() -> ToolDefinition:
-        return ToolDefinition(
-            name="finish_response",
-            description=(
-                "Finish tool routing and produce the final analyst response. Use "
-                "this immediately for greetings, conversation, or questions about "
-                "the supplied capability list that require no execution."
-            ),
-            input_schema={
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False,
-            },
-            strict=True,
-        )
+        ]
 
     async def _answer_from_routing(
         self, prepared: PreparedChat, turn: ChatTurn, response: ModelResponse
@@ -5059,7 +4996,9 @@ class ChatService:
                 "turn_id": turn.id,
                 "provider_id": prepared.provider_profile.id,
                 "model": prepared.resolved_model,
-                "delta": completion.message.content,
+                "delta": _reasoning_step_delta(
+                    turn.content, _operator_answer_text(response.text)
+                ),
             },
         )
         self._persist(prepared, completion)
@@ -5664,10 +5603,10 @@ class ChatService:
             elif call.name not in budgeted_names:
                 refusal = (
                     f"{call.name!r} cannot run: its budget for this turn is "
-                    "spent. Use finish_response to answer from the results above."
+                    "spent. Answer from the results above."
                     if call.name in known_names
                     else f"{call.name!r} is not available in this step. Call one "
-                    "of the offered tools, or finish_response when no tool is "
+                    "of the offered tools, or answer directly when no tool is "
                     f"needed. Offered tools: {', '.join(offered_names)}."
                 )
             batch.append(_RoutedCall(call, provider_call, refusal, repeated_id))
@@ -5780,6 +5719,7 @@ class ChatService:
             provider_call = entry.get("provider_call")
             issued = provider_call if isinstance(provider_call, dict) else entry
             group = entry.get("response_group")
+            response_text = entry.get("response_text")
             state = entry.get("reasoning_state")
             metadata = entry.get("provider_metadata")
             history.append(
@@ -5792,6 +5732,9 @@ class ChatService:
                     # Entries recorded before these existed replay one call
                     # per message, as they always did.
                     response_group=group if isinstance(group, str) else None,
+                    response_text=(
+                        response_text if isinstance(response_text, str) else None
+                    ),
                     reasoning_state=state if isinstance(state, dict) else None,
                     provider_metadata=metadata if isinstance(metadata, dict) else None,
                 )
@@ -5869,6 +5812,23 @@ class ChatService:
                 ChatTokenUsage.model_validate(response.usage.model_dump()),
             )
         return updated
+
+    def _add_routing_content(
+        self, turn: ChatTurn, content: str
+    ) -> tuple[ChatTurn, str]:
+        """Persist prose emitted before the tool batch finishes."""
+
+        separator = "\n\n" if turn.content else ""
+        delta = (separator + content)[: max(0, 200_000 - len(turn.content))]
+        if not delta:
+            return turn, ""
+        updated = self.store.update(
+            ChatTurn,
+            turn.id,
+            {"content": turn.content + delta},
+            expected_revision=turn.revision,
+        )
+        return updated, delta
 
     def _charge_goal(
         self,
@@ -8886,6 +8846,8 @@ class ChatService:
         # The turn collected all of it; the final response holds only the last.
         if prepared.turn is not None and prepared.turn.reasoning:
             reasoning = prepared.turn.reasoning
+        if prepared.turn is not None and prepared.turn.content:
+            content = (prepared.turn.content + "\n\n" + content)[:200_000]
         return ChatCompletionResponse(
             turn_id=prepared.turn.id if prepared.turn is not None else None,
             session_id=ChatService._session_id(prepared),

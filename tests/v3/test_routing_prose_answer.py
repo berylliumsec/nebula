@@ -1,9 +1,7 @@
 """A routing reply without a tool call is the turn's answer.
 
-Z.ai serves GLM with automatic tool selection only, so a routing step's
-``tool_choice: "required"`` is advisory there: a question that needs no tool
-(or no more tools) is answered in plain text, with no call and no
-``finish_response``. Every loop harness (opencode ``session/prompt.ts``,
+Automatic tool selection lets a model answer in plain text when no tool is
+needed. Every loop harness (opencode ``session/prompt.ts``,
 Codex, the Vercel AI SDK, Cline, pi-mono) ends its loop on a response with no
 tool calls and uses that text as the answer. Core does the same instead of
 discarding the answer and paying for a second full-context synthesis, while a
@@ -183,7 +181,7 @@ def test_glm_prose_reply_on_the_first_routing_step_is_the_answer(tmp_path, monke
     assert done["finish_reason"] == "stop"
     # The routing reply was the answer: no synthesis request followed it.
     assert len(seen) == 1
-    assert seen[0]["tool_choice"] == "required"
+    assert seen[0].get("tool_choice", "auto") == "auto"
     assert broker.calls == []
     turn = store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE

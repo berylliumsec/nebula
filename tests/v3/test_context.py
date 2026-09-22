@@ -262,11 +262,46 @@ def test_hosted_provider_uses_published_limits_without_a_catalog():
     limits = resolve_context_limits(profile, model="glm-4.6")
 
     assert limits.context_window == 202_752
-    # min(published 131,072, 32,000 ceiling, window // 4)
-    assert limits.max_output_tokens == 32_000
+    assert limits.max_output_tokens == 131_072
     assert limits.source == "known_model"
     assert limits.estimated is False
     assert limits.metadata_revision.startswith("known-models:")
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_output"),
+    [
+        ("deepseek-flash", 384_000),
+        ("deepseek-v4-flash", 384_000),
+        ("claude-opus-5", 128_000),
+        ("gpt-4o-mini", 16_384),
+    ],
+)
+def test_hosted_model_defaults_to_its_published_maximum_output(
+    model: str, expected_output: int
+):
+    profile = _profile()
+    profile.provider_type = "openai_compatible"
+    profile.is_local = False
+
+    limits = resolve_context_limits(profile, model=model)
+
+    assert limits.max_output_tokens == expected_output
+    assert limits.input_capacity == limits.context_window - expected_output
+
+
+def test_catalog_window_uses_known_model_output_when_catalog_omits_it():
+    profile = _profile()
+    profile.provider_type = "openai_compatible"
+    profile.is_local = False
+    profile.metadata["model_descriptors"] = [
+        {"id": "deepseek-flash", "context_window": 1_048_576}
+    ]
+
+    limits = resolve_context_limits(profile, model="deepseek-flash")
+
+    assert limits.source == "model_catalog"
+    assert limits.max_output_tokens == 384_000
 
 
 def test_published_limits_respect_configured_caps_and_catalogs():

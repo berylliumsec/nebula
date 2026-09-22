@@ -524,6 +524,9 @@ class ModelToolResult(BaseModel):
     # back as the single assistant message that issued them. ``None`` (history
     # recorded before groups were) replays the call as a message of its own.
     response_group: str | None = None
+    # Assistant prose alongside this group's tool calls. Present only on its
+    # first result, so adapters replay it once with the issuing message.
+    response_text: str | None = Field(default=None, max_length=200_000)
     # The issuing response's ``ModelResponse.reasoning_state``, on the first
     # result of its group.
     reasoning_state: dict[str, Any] | None = None
@@ -2907,6 +2910,10 @@ class OpenAIResponsesProvider(ModelProvider):
             # nothing stored server-side it is the only copy (Codex, Vercel).
             items = state.get("reasoning_items") if state else None
             payload["input"].extend(items if isinstance(items, list) else [])
+            if batch[0].response_text:
+                payload["input"].append(
+                    {"role": "assistant", "content": batch[0].response_text}
+                )
             payload["input"].extend(
                 {
                     "type": "function_call",
@@ -3026,7 +3033,6 @@ class OpenAIResponsesProvider(ModelProvider):
         _raise_responses_outcome(data)
         text_parts: list[str] = []
         summaries: list[str] = []
-        commentary: list[str] = []
         refused = False
         calls: list[ToolCall] = []
         reasoning_items: list[dict[str, Any]] = []
@@ -3077,15 +3083,15 @@ class OpenAIResponsesProvider(ModelProvider):
                     )
                 )
             elif item.get("type") == "message":
-                # Commentary is mid-turn preamble beside tool calls, not the
-                # answer.
-                parts = commentary if item.get("phase") == "commentary" else text_parts
+                message_text: list[str] = []
                 for content in item.get("content", []):
                     if content.get("type") in {"output_text", "text"}:
-                        parts.append(content.get("text", ""))
+                        message_text.append(content.get("text", ""))
                     elif content.get("type") == "refusal":
                         refused = True
-                        text_parts.append(content.get("refusal") or "")
+                        message_text.append(content.get("refusal") or "")
+                if message_text:
+                    text_parts.append("".join(message_text))
         if refused and not "".join(text_parts).strip():
             raise ProviderRefusalError("refusal")
         incomplete = data.get("incomplete_details")
@@ -3094,10 +3100,8 @@ class OpenAIResponsesProvider(ModelProvider):
             request,
             provider_id=self.config.id,
             model=data.get("model", model),
-            text="".join(text_parts),
-            reasoning="\n\n".join(
-                part for part in [*summaries, *commentary] if part.strip()
-            ),
+            text="\n\n".join(text_parts),
+            reasoning="\n\n".join(part for part in summaries if part.strip()),
             tool_calls=calls,
             usage=ModelUsage(
                 input_tokens=usage.get("input_tokens", 0),
@@ -3567,7 +3571,7 @@ class OpenAICompatibleProvider(ModelProvider):
         for batch, state in _replayed_batches(request, self.config.id, model):
             assistant: dict[str, Any] = {
                 "role": "assistant",
-                "content": None,
+                "content": batch[0].response_text,
                 "tool_calls": [],
             }
             for result in batch:
@@ -4628,6 +4632,11 @@ class AnthropicProvider(ModelProvider):
                         "content": [
                             *(thinking if isinstance(thinking, list) else []),
                             *(
+                                [{"type": "text", "text": batch[0].response_text}]
+                                if batch[0].response_text
+                                else []
+                            ),
+                            *(
                                 {
                                     "type": "tool_use",
                                     "id": result.call_id,
@@ -5063,7 +5072,14 @@ class GeminiProvider(ModelProvider):
                 [
                     {
                         "role": "model",
-                        "parts": _gemini_call_parts(batch, state, model),
+                        "parts": [
+                            *(
+                                [{"text": batch[0].response_text}]
+                                if batch[0].response_text
+                                else []
+                            ),
+                            *_gemini_call_parts(batch, state, model),
+                        ],
                     },
                     {"role": "user", "parts": responses},
                 ]
@@ -5347,14 +5363,23 @@ class BedrockProvider(ModelProvider):
                     {
                         "role": "assistant",
                         "content": [
-                            {
-                                "toolUse": {
-                                    "toolUseId": result.call_id,
-                                    "name": wire_names.get(result.name, result.name),
-                                    "input": result.arguments,
+                            *(
+                                [{"text": batch[0].response_text}]
+                                if batch[0].response_text
+                                else []
+                            ),
+                            *(
+                                {
+                                    "toolUse": {
+                                        "toolUseId": result.call_id,
+                                        "name": wire_names.get(
+                                            result.name, result.name
+                                        ),
+                                        "input": result.arguments,
+                                    }
                                 }
-                            }
-                            for result in batch
+                                for result in batch
+                            ),
                         ],
                     },
                     {
