@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import NamedTuple
+from typing import Any, NamedTuple, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from .chat_subagents import subagent_limit
+from .providers import REASONING_EFFORTS, ReasoningEffort
 from .domain import (
     ChatSchedule,
     ChatSession,
@@ -24,11 +25,13 @@ ARCHIVED_SKIP_REASON = "Conversation is archived; unarchive it to resume the sch
 
 
 class ScheduledTurnSettings(NamedTuple):
-    """The tool settings a scheduled occurrence sends, mirroring a manual send."""
+    """The settings a turn Core starts on its own sends, mirroring a manual send."""
 
     tools_enabled: bool
     mcp_server_ids: list[str]
     ssh_environment_ids: list[str] | None
+    hook_ids: list[str]
+    reasoning_effort: ReasoningEffort | None
     allow_subagents: bool
     max_active_subagents: int | None
     allow_cloud_tool_results: bool
@@ -152,37 +155,39 @@ class ChatScheduleService:
         )
 
     def turn_settings(self, session_id: str) -> ScheduledTurnSettings:
-        """Tool settings for an occurrence: what the operator last sent.
+        """Settings for a turn Core starts: what the operator last chose.
 
-        A scheduled occurrence has no composer to read the toggles from, so it
-        reuses the newest turn's request snapshot: tools, MCP servers, SSH hosts
-        and subagents. Servers and hosts removed or disabled since that turn are
-        dropped rather than failing every occurrence until the next manual send.
-        Before any turn ran, the conversation's saved tools toggle applies.
+        Goal dispatch, goal continuation and scheduled occurrences have no
+        composer to read. The conversation holds the operator's current MCP
+        servers, hooks, reasoning effort and subagents, saved as they change
+        and by every send. A turn writes its settings back there, so copying
+        an older turn would undo a later choice. The newest turn's snapshot
+        supplies the tools toggle and SSH hosts, which only a send records,
+        and any setting an older conversation never saved; before any turn,
+        the conversation's saved tools toggle applies. Servers and hosts
+        removed or disabled since are dropped rather than failing every turn.
         """
 
+        session = self.store.get(ChatSession, session_id)
+        saved = session.metadata
         turns = self.store.list_session_entities(ChatTurn, session_id)
         latest = next((item for item in reversed(turns) if item.request_snapshot), None)
+        snapshot = latest.request_snapshot if latest is not None else {}
         if latest is None:
-            session = self.store.get(ChatSession, session_id)
-            tools_enabled = bool(session.metadata.get("tools_enabled", False))
-            return ScheduledTurnSettings(
-                tools_enabled=tools_enabled,
-                mcp_server_ids=[],
-                ssh_environment_ids=None,
-                allow_subagents=False,
-                max_active_subagents=None,
-                allow_cloud_tool_results=tools_enabled,
-            )
-        snapshot = latest.request_snapshot
-        tools_enabled = bool(snapshot.get("include_oci_tools", False))
+            tools_enabled = bool(saved.get("tools_enabled", False))
+        else:
+            tools_enabled = bool(snapshot.get("include_oci_tools", False))
+
+        def chosen(key: str) -> Any:
+            return saved[key] if key in saved else snapshot.get(key)
+
         mcp_server_ids: list[str] = []
-        for server_id in snapshot.get("mcp_server_ids") or []:
+        for server_id in chosen("mcp_server_ids") or []:
             if not isinstance(server_id, str):
                 continue
             try:
                 server = self.store.get(McpServerProfile, server_id)
-            except NotFoundError:  # diagnostic-expected: the server was removed since the last turn; the occurrence runs without it
+            except NotFoundError:  # diagnostic-expected: the server was removed since it was chosen; the turn runs without it
                 continue
             if server.enabled:
                 mcp_server_ids.append(server_id)
@@ -200,12 +205,19 @@ class ChatScheduleService:
                     continue
                 if environment.enabled:
                     ssh_environment_ids.append(host_id)
+        effort = saved.get("reasoning_effort")
         return ScheduledTurnSettings(
             tools_enabled=tools_enabled,
             mcp_server_ids=mcp_server_ids,
             ssh_environment_ids=ssh_environment_ids,
-            allow_subagents=bool(snapshot.get("allow_subagents", False)),
-            max_active_subagents=subagent_limit(snapshot.get("max_active_subagents")),
+            hook_ids=[
+                item for item in saved.get("hook_ids") or [] if isinstance(item, str)
+            ],
+            reasoning_effort=(
+                cast(ReasoningEffort, effort) if effort in REASONING_EFFORTS else None
+            ),
+            allow_subagents=bool(chosen("allow_subagents")),
+            max_active_subagents=subagent_limit(chosen("max_active_subagents")),
             # The operator already confirmed tool-result transfer for the turn
             # this occurrence continues, as subagent goal continuation does.
             allow_cloud_tool_results=tools_enabled,

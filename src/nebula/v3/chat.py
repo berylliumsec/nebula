@@ -1895,8 +1895,9 @@ class ChatService:
                 f"Goal is {goal.status.value}; scheduled work waits for {action}.",
             )
             return
-        # An occurrence runs with the tools, MCP servers, SSH hosts and
-        # subagents the operator last sent, exactly as a manual send would.
+        # An occurrence runs with the tools, MCP servers, SSH hosts, hooks,
+        # reasoning effort and subagents the operator last chose, exactly as a
+        # manual send would.
         settings = schedules.turn_settings(schedule.session_id)
         try:
             # prepare() wraps prepare_async() in asyncio.run(), which cannot be
@@ -1918,9 +1919,11 @@ class ChatService:
                     tools_enabled=settings.tools_enabled,
                     mcp_server_ids=settings.mcp_server_ids,
                     ssh_environment_ids=settings.ssh_environment_ids,
+                    hook_ids=settings.hook_ids,
                     allow_subagents=settings.allow_subagents,
                     max_active_subagents=settings.max_active_subagents,
                     allow_cloud_tool_results=settings.allow_cloud_tool_results,
+                    reasoning_effort=settings.reasoning_effort,
                 )
             )
             completion = await self.complete(prepared)
@@ -2112,6 +2115,8 @@ class ChatService:
         is created.
         """
 
+        from .chat_schedules import ChatScheduleService
+
         turn = prepared.turn
         source = prepared.source_request
         if turn is None or not turn.goal_id or source is None:
@@ -2126,10 +2131,12 @@ class ChatService:
             or self.pending_turn(turn.session_id) is not None
         ):
             return None
-        # The operator may have picked another model or effort while the turn
-        # ran; the conversation holds that choice, the settled turn does not.
+        # The operator may have picked another model, effort or subagent
+        # choice while the turn ran; the conversation holds that choice, the
+        # settled turn does not.
         session = self.store.get(ChatSession, turn.session_id)
         try:
+            settings = ChatScheduleService(self.store).turn_settings(turn.session_id)
             continued = await self.prepare_async(
                 ChatCompletionRequest(
                     provider_id=session.provider_profile_id or turn.provider_profile_id,
@@ -2151,22 +2158,20 @@ class ChatService:
                     ],
                     include_knowledge=False,
                     tools_enabled=source.tools_enabled,
-                    mcp_server_ids=list(source.mcp_server_ids),
+                    mcp_server_ids=settings.mcp_server_ids,
                     ssh_environment_ids=(
                         list(source.ssh_environment_ids)
                         if source.ssh_environment_ids is not None
                         else None
                     ),
-                    hook_ids=list(source.hook_ids),
-                    allow_subagents=source.allow_subagents,
-                    max_active_subagents=source.max_active_subagents,
+                    hook_ids=settings.hook_ids,
+                    allow_subagents=settings.allow_subagents,
+                    max_active_subagents=settings.max_active_subagents,
                     max_artifact_queries=source.max_artifact_queries,
                     allow_cloud_tool_results=source.allow_cloud_tool_results,
                     max_output_tokens=source.max_output_tokens,
                     temperature=source.temperature,
-                    reasoning_effort=session.metadata.get(
-                        "reasoning_effort", source.reasoning_effort
-                    ),
+                    reasoning_effort=settings.reasoning_effort,
                     stream=True,
                 )
             )
@@ -2218,18 +2223,6 @@ class ChatService:
                 return None
             session = self.store.get(ChatSession, session_id)
             settings = ChatScheduleService(self.store).turn_settings(session_id)
-            hook_ids = [
-                item
-                for item in session.metadata.get("hook_ids", [])
-                if isinstance(item, str)
-            ]
-            mcp_server_ids = settings.mcp_server_ids
-            if not self.store.list_session_entities(ChatTurn, session_id):
-                mcp_server_ids = [
-                    item
-                    for item in session.metadata.get("mcp_server_ids", [])
-                    if isinstance(item, str)
-                ]
             prepared = await self.prepare_async(
                 ChatCompletionRequest(
                     provider_id=session.provider_profile_id,
@@ -2242,13 +2235,13 @@ class ChatService:
                     ],
                     include_knowledge=False,
                     tools_enabled=settings.tools_enabled,
-                    mcp_server_ids=mcp_server_ids,
+                    mcp_server_ids=settings.mcp_server_ids,
                     ssh_environment_ids=settings.ssh_environment_ids,
-                    hook_ids=hook_ids,
+                    hook_ids=settings.hook_ids,
                     allow_subagents=settings.allow_subagents,
                     max_active_subagents=settings.max_active_subagents,
                     allow_cloud_tool_results=settings.allow_cloud_tool_results,
-                    reasoning_effort=session.metadata.get("reasoning_effort"),
+                    reasoning_effort=settings.reasoning_effort,
                     stream=True,
                 )
             )

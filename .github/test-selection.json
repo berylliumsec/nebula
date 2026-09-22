@@ -1,22 +1,23 @@
 {
-  "change_digest": "301fb4e9e9890583ec4dd6429c902c278a4138b3885420527248dabb2d7af173",
-  "reviewed_by": "Claude review of hook-assistant-message",
-  "reason": "#513 made chat.turn.completed hooks receive assistant_message (the answer the turn is about to store) on every completion path, which fixed operator Stop-hook ports that require it, but left the payload unbounded and undocumented: the starter hook's run.sh comment in guides.py (the only payload documentation) still listed only finish_reason and detail, and no test checked assistant_message on the routing-answer path (#501). _turn_end_hook_payload now bounds assistant_message to 64 KiB of UTF-8 (cut on a character boundary, the stored answer untouched) and adds assistant_message_truncated, false on every event including failed and cancelled, so all three turn ends keep one key set; the starter hook comment documents both keys. tests/v3/test_hook_assistant_message.py (5 tests, all fail on origin/main 8eced0a) covers the routing-answer completed hook with a guard hook that refuses a completion without a string answer, a 70,001-byte answer cut mid-character end to end, and the helper at, over and without the limit. The edited exact-payload tests in test_native_hook_turn_ends.py (4, fail on main for the new key) and the existing tests of the changed helper (#513's rejection and streaming-hold tests, the routing-answer hook test, the starter-files test) are selected by node id.",
-  "exclusions": "No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite) does not exercise native hook payload contents; the Python tests drive the hook runner directly. No full suites. test_chat.py, test_chat_tool_loop.py, test_native_hook_turn_ends.py, test_routing_prose_answer.py and test_guides.py were run in full locally (122 passed), plus the hook tests of test_chat_api.py and test_api.py (4 passed).",
+  "change_digest": "3bdc0701c742dbb618e82aa46bdc9c0fc48dda0b4fb440082e3f930159d12d5e",
+  "reviewed_by": "Claude review of subagent-choice-sticks",
+  "reason": "Operator report: the Subagents checkbox unchecks itself after being checked. #483 saves the choice on the conversation at once (metadata.allow_subagents / max_active_subagents for provider chats, metadata.provider_subagent for harness chats) and the composer re-syncs from the conversation whenever its revision changes, but turns then overwrote the saved choice. (1) Provider chats: goal dispatch, goal continuation and scheduled occurrences build their own ChatCompletionRequest from the previous turn (ChatScheduleService.turn_settings read the newest turn's request snapshot, hard-coded allow_subagents=False before any turn, and continuation copied the settled turn's request), and every turn writes its settings back on the conversation, so a goal or schedule turn reset allow_subagents, max_active_subagents and MCP servers to the older values; scheduled runs also sent no hooks and no reasoning effort, erasing both. turn_settings now reads MCP servers, hooks, reasoning effort, allow_subagents and max_active_subagents from the conversation (the snapshot only fills keys an older conversation never saved; removed or disabled MCP servers are still dropped), and dispatch, continuation and scheduled runs all send those values. Tools and SSH hosts still come from the newest turn, as before. (2) Harness chats: the composer leaves the subagent model out until it is verified, and HarnessRuntimeService._remember_chat_provider_subagent then wrote provider_subagent=None onto the chat, unchecking the box. A send now records a setting it carries but never erases the saved choice; the vendor-session binding still follows the turn, so the unverified turn runs without subagent tools. (3) The UI sync effect was reviewed and not changed (no vitest reproduction). tests/v3/test_subagent_choice_sticks.py (6 tests, all fail on origin/main) drives the PATCH endpoint and then a real goal dispatch plus continuation, a box checked mid-turn before continuation, a scheduled run after a turn and before any turn, captured Core-built requests for servers/hooks/effort on all three paths, and an unverified harness send; the other node ids are the existing tests of turn_settings, scheduled runs, goal dispatch/continuation and the harness chat subagent setting.",
+  "exclusions": "Scoped per the CI-scoping rule: test_chat_schedules.py, test_chat_goals.py, test_harness_provider_subagents.py, test_chat_subagents.py, test_session_record_lookups.py, test_chat_api.py, test_harnesses.py and test_api.py were run locally in full and pass but are not selected. No frontend tests: no ui/ change. No native tests: no Tauri or Rust change. No Playwright: area:core-api (the real-Core journey suite matched through chat.py, chat_schedules.py and harnesses.py) does not start goals, fire schedules or send a harness turn with an unverified subagent model; the Python tests drive the PATCH endpoint, ChatService and HarnessRuntimeService directly. No full suites.",
   "expected_tests": {
-    "python": 14,
+    "python": 13,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
   "python": [
-    "tests/v3/test_hook_assistant_message.py",
-    "tests/v3/test_native_hook_turn_ends.py::test_every_turn_end_sends_one_payload_shape",
-    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_runs_the_completed_hook_once",
-    "tests/v3/test_native_hook_turn_ends.py::test_required_completion_hook_can_reject_final_answer",
-    "tests/v3/test_native_hook_turn_ends.py::test_stream_holds_answer_until_required_completion_hook_accepts",
-    "tests/v3/test_routing_prose_answer.py::test_routing_answer_runs_the_completed_hook_once",
-    "tests/v3/test_guides.py::test_starter_files_are_discovered_and_never_overwritten"
+    "tests/v3/test_subagent_choice_sticks.py",
+    "tests/v3/test_chat_schedules.py::test_scheduled_occurrence_reuses_the_conversation_tool_settings",
+    "tests/v3/test_chat_schedules.py::test_due_schedule_runs_a_goal_turn",
+    "tests/v3/test_chat_goals.py::test_successful_provider_turn_automatically_continues_running_goal",
+    "tests/v3/test_chat_goals.py::test_model_and_effort_picked_mid_turn_drive_the_goal_continuation",
+    "tests/v3/test_harness_provider_subagents.py::test_subagent_tools_follow_the_chat_setting",
+    "tests/v3/test_harness_provider_subagents.py::test_operator_limit_reaches_the_harness_and_is_enforced",
+    "tests/v3/test_chat_api.py::test_harness_subagent_choice_is_saved_before_model_verification"
   ],
   "frontend": [],
   "native": [],
