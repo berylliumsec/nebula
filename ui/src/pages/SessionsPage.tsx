@@ -27,7 +27,7 @@ import { ChatResults } from "../components/ChatResults";
 import { AgentViewPanel, useStructuredResults, useUnseenCount } from "../components/structured-result";
 import { ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
 import { useChatNavigation } from "./useChatNavigation";
-import { reconcileListedSessions } from "./chatSessionList";
+import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionList";
 import { groupSidebarConversations } from "./conversationSidebar";
 import { subagentRequestFields } from "./chatSubagentChoice";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
@@ -1825,6 +1825,17 @@ export function SessionsPage() {
       openSessionChatView(selectedId, true);
     }
   };
+
+  // Naming finishes after the reply is saved, so the immediate post-turn list
+  // read can still contain the prompt title. Follow Core until it settles.
+  useEffect(() => {
+    if (!api || !engagement || !hasRecentPendingTitle(sessions)) return;
+    const timer = window.setInterval(() => {
+      if (hasRecentPendingTitle(sessions)) void refreshSessions();
+      else window.clearInterval(timer);
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [api, engagement, sessions]);
 
   const createGoalConversation = async (draft: ProviderGoalDraft): Promise<ChatGoal> => {
     if (!api || !engagement) throw new Error("Select a project before adding a goal.");

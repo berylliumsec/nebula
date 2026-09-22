@@ -3362,6 +3362,9 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     id: value.id,
     engagementId: value.engagement_id,
     title: value.title,
+    initialTitleState: typeof value.metadata?.initial_title_state === "string"
+      ? value.metadata.initial_title_state as ChatSessionSummary["initialTitleState"] : undefined,
+    messageCount: typeof value.metadata?.message_count === "number" ? value.metadata.message_count : undefined,
     backend: value.backend ?? "provider",
     providerId: value.provider_profile_id ?? undefined,
     harnessProfileId: value.harness_profile_id ?? undefined,

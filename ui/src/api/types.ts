@@ -2105,6 +2105,8 @@ export interface ChatSessionSummary {
   id: Identifier;
   engagementId: Identifier;
   title: string;
+  initialTitleState?: "pending" | "generated" | "failed" | "operator";
+  messageCount?: number;
   backend: "provider" | "harness";
   providerId?: Identifier;
   harnessProfileId?: Identifier;

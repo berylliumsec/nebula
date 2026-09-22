@@ -1,11 +1,11 @@
 {
-  "change_digest": "c17f201f220525bfc0804fce3818d04dc23d5f4cf003f52937f8a08379247778",
-  "reviewed_by": "Codex focused review for collapsible goal banner",
-  "reason": "The branch changes goal banner presentation, collapse behavior, and action hierarchy. Twelve collected ProviderGoalPanel component cases cover local display, disclosure, and goal actions.",
-  "exclusions": "No Python or native change. Unrelated UI tests and full suites are excluded. Browser responsive, real Core, LAN origin, and production journey checks are pending and are not claimed by this focused component run.",
+  "change_digest": "5e37a7e2ade3968fa70df4540010bc3c366c9684c598304f53597f82df70d9a7",
+  "reviewed_by": "Codex focused review for delayed conversation naming refresh",
+  "reason": "The diff maps Core's title state into the conversation list and refreshes recently completed chats until optional naming settles. Five collected chatSessionList cases cover stale-list reconciliation and the pending-title polling boundary.",
+  "exclusions": "No Core or native code changed. Unrelated UI tests and full suites are excluded. Real-Core browser, mobile WebKit, LAN-origin, and physical-device workflow gates remain unverified and are not claimed by this focused run.",
   "expected_tests": {
     "python": 0,
-    "frontend": 12,
+    "frontend": 5,
     "native": 0,
     "playwright": 0
   },
@@ -16,7 +16,7 @@
   "python_node": false,
   "python": [],
   "frontend": [
-    "ui/src/components/ProviderGoalPanel.test.tsx"
+    "ui/src/pages/chatSessionList.test.ts"
   ],
   "native": [],
   "playwright": []
