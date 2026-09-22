@@ -45,6 +45,30 @@ describe("interface diagnostics", () => {
     expect(logger.isDiagnosticsAvailable()).toBe(true);
   });
 
+  it("sends the paired browser CSRF cookie with diagnostic writes and buffered retries", async () => {
+    document.cookie = "nebula_csrf=paired%20csrf; path=/";
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 403 }))
+      .mockResolvedValue(new Response(JSON.stringify({ accepted: 1, error_ids: ["err_saved"] }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const logger = await freshLogger();
+      logger.configureBrowserDiagnostics("/api/v1");
+      logger.setCoreDiagnosticsHealth({ diagnosticsDegraded: false, browserDiagnosticIngress: "enabled" });
+      await logger.logDiagnostic({ level: "error", eventCode: "interface.test.failed", message: "Synthetic failure." });
+      expect(logger.isDiagnosticsAvailable()).toBe(false);
+      logger.setCoreDiagnosticsHealth({ diagnosticsDegraded: false, browserDiagnosticIngress: "enabled" });
+      await vi.waitFor(() => expect(logger.isDiagnosticsAvailable()).toBe(true));
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      for (const [, init] of fetchMock.mock.calls) {
+        expect(new Headers(init?.headers).get("X-Nebula-CSRF")).toBe("paired csrf");
+        expect(init?.credentials).toBe("same-origin");
+      }
+    } finally {
+      document.cookie = "nebula_csrf=; Max-Age=0; path=/";
+    }
+  });
+
   it("matches the shared cross-language schema, settings, features, and sanitizer contract", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ accepted: 1, error_ids: ["err_contract"] }), { status: 202 }),
