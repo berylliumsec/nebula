@@ -1934,6 +1934,41 @@ def test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt(tmp_path
     asyncio.run(scenario())
 
 
+def test_harness_gateway_digest_in_artifact_id_is_terminal_and_actionable(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
+        _, chat_turn, harness_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Read a prior artifact",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[mcp.id],
+        )
+        session = store.get(HarnessSession, harness_turn.harness_session_id)
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=harness_turn.id, connection=None, task=None
+        )
+        response = await runtime._gateway_call(
+            session, "tool_output.read", {"artifact_id": "a" * 64}
+        )
+        assert response["isError"] is True
+        failure = response["structuredContent"]
+        assert failure["schema"] == "nebula.tool-failure/v1"
+        assert failure["invalid_input"] == "artifact_id"
+        assert "sha256" in failure["next_action"]
+        assert failure["effective_input_schema"]["properties"]["artifact_id"]["type"] == "string"
+        assert failure["side_effects"] == "none"
+        latest = store.get(ChatTurn, chat_turn.id)
+        assert len(latest.tool_call_ids) == 1
+        assert store.get(ToolCall, latest.tool_call_ids[0]).status == ToolCallStatus.FAILED
+        runtime._active.pop(session.id)
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
 def test_harness_mcp_exposes_project_application_model(tmp_path):
     async def scenario() -> None:
         from nebula.v3.application_model.service import ApplicationModelService
@@ -2120,12 +2155,14 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
         assert call.engagement_id == engagement.id
         latest_turn = store.get(HarnessTurn, harness_turn.id)
         assert latest_turn.metadata["citations"][0]["source_id"] == source.id
-        with pytest.raises(HarnessConfigurationError, match="only a query"):
-            await runtime._gateway_call(
-                session,
-                "knowledge.search",
-                {"query": "marker", "engagement_id": other.id},
-            )
+        rejected = await runtime._gateway_call(
+            session,
+            "knowledge.search",
+            {"query": "marker", "engagement_id": other.id},
+        )
+        assert rejected["isError"] is True
+        assert rejected["structuredContent"]["schema"] == "nebula.tool-failure/v1"
+        assert rejected["structuredContent"]["side_effects"] == "none"
         runtime._complete_owner(
             latest_turn,
             "The marker is documented.",

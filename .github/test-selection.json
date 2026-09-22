@@ -1,18 +1,35 @@
 {
-  "change_digest": "8c74a147618f44aecc632a1f68dcbb6e046c5251b82d9000ac503957ac647480",
-  "reviewed_by": "Claude review of app-test-red-on-main",
-  "reason": "Two vitest tests in ui/src/App.test.tsx, 'keeps chat drafts durable while saved memory stays behind explicit disclosure' and 'edits a sent message in place instead of branching the conversation', fail on origin/main (683479f and a924636), alone under -t and with the whole file. git bisect over the ui/ commits since 337630e names 710b785 (#507, Record failed and stopped turns) as the first bad commit; f0294ac passes 42/42. Cause: the file's catch-all fixture unmatchedCoreResponse answers every unmatched path, including GET /chat/sessions/{id}/pending-turn, with []. Core answers that route with a ChatTurnSummary or null, never a list, but getPendingChatTurn maps any truthy body, so [] became a pending turn with no id or status. Before #507 that phantom turn only appended a 'Waiting for provider' placeholder after the loaded history. #507 filters the history through withoutTurnOutcome(current, pendingTurn.id), which keeps messages whose outcomeTurnId differs from the turn id; with an undefined id every ordinary message (outcomeTurnId undefined) matched and the whole transcript disappeared, so 'Port retained' and 'Any update on the certificate?' never rendered. The product path is correct for anything Core can send: a real pending turn always has an id. The fix is test-only: unmatchedCoreResponse answers /pending-turn with null, as Core does when a chat has no pending turn, which also removes the phantom running turn (and its GET /chat/turns/undefined/events stream) from every other test in the file that relied on the fallback. App.test.tsx: 2 failed / 40 passed before, 42 passed after.",
-  "exclusions": "No Python tests: no src/ or tests/ change. No native tests: no Tauri or Rust change. No Playwright: no product code changed, only a vitest fixture. Run locally but not selected: App.subagentChoice.test.tsx with App.test.tsx (45 passed), App.projectBoundary.test.tsx, WorkbenchBrowser.test.tsx, chatMessageReconciliation.test.ts and turnOutcomeNotes.test.ts (37 passed); npm run build and npm run audit:diagnostics clean. No full suites.",
+  "change_digest": "32b420574e46d8fec63faa8cffbfa12aa669fdb0d2584e8a7595d766d49d39f8",
+  "reviewed_by": "Codex focused tool-failure review",
+  "reason": "The changed journeys are Core chat and mission tool failures, fixed runtime retrieval, harness gateway calls, and pre-execution refusals. Eighteen focused contract cases and nine exact integration cases cover terminal status, effective-schema delivery to the next model request, correction, MCP capture, authorization indistinguishability, and denied or unroutable calls. The catalogued assistant reliability journey covers visible chat activity in desktop and mobile production Core profiles.",
+  "exclusions": "No frontend unit tests because no ui/src code changed; no native tests because no Rust code changed. Other backend and browser areas do not execute the changed failure path. No full suites.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 42,
+    "python": 27,
+    "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python": [],
-  "frontend": [
-    "ui/src/App.test.tsx"
+  "python": [
+    "tests/v3/test_tool_failures.py",
+    "tests/v3/test_harnesses.py::test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt",
+    "tests/v3/test_harnesses.py::test_harness_gateway_digest_in_artifact_id_is_terminal_and_actionable",
+    "tests/v3/test_harnesses.py::test_harness_gateway_queries_scoped_knowledge_with_citations",
+    "tests/v3/test_chat_tool_loop.py::test_denied_tool_is_returned_as_error_context_without_reexecution",
+    "tests/v3/test_chat_tool_loop.py::test_repeated_provider_call_id_cannot_duplicate_a_tool_effect",
+    "tests/v3/test_chat_tool_loop.py::test_malformed_routing_never_reaches_the_tool_broker",
+    "tests/v3/test_specialist_routing_tolerance.py::test_unavailable_tool_is_answered_with_a_failed_observation",
+    "tests/v3/test_specialist_routing_tolerance.py::test_a_routing_deviation_does_not_push_an_older_tool_failure_out_of_view"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "assistant-reliability/assistant-real-desktop",
+    "assistant-reliability/assistant-real-compact",
+    "assistant-reliability/assistant-real-chromium-320",
+    "assistant-reliability/assistant-real-chromium-390",
+    "assistant-reliability/assistant-real-chromium-430",
+    "assistant-reliability/assistant-real-webkit-320",
+    "assistant-reliability/assistant-real-webkit-390",
+    "assistant-reliability/assistant-real-webkit-430"
+  ]
 }

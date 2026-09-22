@@ -6,6 +6,7 @@ from copy import deepcopy
 
 import json
 import asyncio
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -177,7 +178,10 @@ def command_specs(
             input_schema={
                 "type": "object",
                 "properties": {
-                    "artifact_id": {"type": "string"},
+                    "artifact_id": {
+                        "type": "string",
+                        "description": "Artifact ID from an authorized tool result receipt; sha256 is a content digest, not an artifact ID.",
+                    },
                     "starting_line": {"type": "integer", "minimum": 1},
                     "line_count": {"type": "integer", "minimum": 1, "maximum": 200},
                 },
@@ -282,13 +286,26 @@ class AutomationBroker:
             raise InvalidToolArguments(
                 f"unknown automation capability: {invocation.tool_name}"
             ) from exc
+        call = await self.ledger.reserve(invocation, spec)
         errors = sorted(
             Draft202012Validator(spec.input_schema).iter_errors(invocation.arguments),
             key=lambda item: list(item.path),
         )
-        if errors:
-            raise InvalidToolArguments(errors[0].message)
-        call = await self.ledger.reserve(invocation, spec)
+        if errors or (
+            invocation.tool_name == "tool_output.read"
+            and isinstance(invocation.arguments.get("artifact_id"), str)
+            and re.fullmatch(r"[0-9a-fA-F]{64}", invocation.arguments["artifact_id"])
+        ):
+            error = InvalidToolArguments(
+                "artifact_id is a SHA-256 digest; use the artifact ID from an authorized receipt"
+                if not errors else errors[0].message
+            )
+            if errors:
+                error.__cause__ = errors[0]
+            setattr(error, "_nebula_before_execution", True)
+            if call.status == ToolCallStatus.PROPOSED:
+                await self.ledger.transition(call, ToolCallStatus.FAILED, error=str(error))
+            raise error
         retrieval = invocation.tool_name in {
             "tool_output.search",
             "tool_output.read",
@@ -304,7 +321,13 @@ class AutomationBroker:
             )
         if retrieval:
             running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
-            output = await asyncio.to_thread(self._retrieve, invocation)
+            try:
+                output = await asyncio.to_thread(self._retrieve, invocation)
+            except Exception as exc:
+                await self.ledger.transition(
+                    running, ToolCallStatus.FAILED, error=str(exc)
+                )
+                raise
             await self.ledger.transition(
                 running, ToolCallStatus.COMPLETE, result=output
             )
