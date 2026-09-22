@@ -152,11 +152,21 @@ def tool_failure(
     )
     if hash_as_artifact:
         field = "artifact_id"
-    denied = isinstance(error, PolicyDenied) or isinstance(error, PermissionError)
+    read_only_retrieval = spec.name in {
+        "tool_output.read",
+        "tool_output.search",
+        "workspace.read",
+        "workspace.search",
+    }
+    denied = isinstance(error, PolicyDenied) or (
+        isinstance(error, PermissionError) and not read_only_retrieval
+    )
     invalid = (
         isinstance(error, (InvalidToolArguments, ValidationError)) or hash_as_artifact
     )
-    missing = type(error).__name__ in {"ToolOutputAccessError", "NotFoundError"}
+    missing = type(error).__name__ in {"ToolOutputAccessError", "NotFoundError"} or (
+        read_only_retrieval and isinstance(error, (FileNotFoundError, PermissionError))
+    )
     if missing and spec.name == "tool_output.read":
         field = "artifact_id"
     if missing and spec.name == "tool_output.search":
@@ -179,12 +189,6 @@ def tool_failure(
         else "execution_failed"
     )
     before_execution = phase == "before_execution"
-    read_only_retrieval = spec.name in {
-        "tool_output.read",
-        "tool_output.search",
-        "workspace.read",
-        "workspace.search",
-    }
     no_effects = before_execution or read_only_retrieval
     side_effects = "none" if no_effects else "unknown"
     if hash_as_artifact:

@@ -218,6 +218,22 @@ def test_missing_and_unauthorized_artifacts_have_same_public_failure(tmp_path):
     assert public[0] == public[1]
 
 
+def test_read_only_missing_and_permission_errors_have_same_public_failure():
+    spec = _spec()
+    public = []
+    for error in (
+        FileNotFoundError("missing artifact"),
+        PermissionError("private artifact"),
+    ):
+        failure = tool_failure(
+            spec, {"artifact_id": "receipt-id"}, error, phase="after_execution"
+        )
+        failure.pop("diagnostic_reference")
+        public.append(failure)
+    assert public[0] == public[1]
+    assert public[0]["category"] == "unavailable_resource"
+
+
 def test_next_model_request_reads_guidance_and_corrects_arguments(tmp_path):
     responses = [
         _response(
@@ -336,7 +352,9 @@ def test_failure_categories_never_expose_exception_text(
     retry_safe,
 ):
     spec = _spec()
-    if phase == "after_execution" and category != "unavailable_resource":
+    if category == "permission_denied" or (
+        phase == "after_execution" and category != "unavailable_resource"
+    ):
         spec = spec.model_copy(
             update={"name": "mutating.write", "risk_class": RiskClass.WORKSPACE_WRITE}
         )
