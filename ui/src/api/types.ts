@@ -2063,6 +2063,9 @@ export interface ChatTurn {
     | "failed"
     | "cancelled"
     | "interrupted";
+  /** Saved partial output while a provider turn is paused. */
+  content: string;
+  reasoning: string;
   approvalId?: Identifier;
   harnessTurnId?: Identifier;
   toolCallIds: Identifier[];

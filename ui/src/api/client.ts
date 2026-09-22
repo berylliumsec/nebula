@@ -1597,6 +1597,8 @@ interface WireChatTurn extends WireEntity {
   session_id: string;
   started_at?: string;
   status: ChatTurn["status"];
+  content?: string;
+  reasoning?: string;
   approval_id?: string | null;
   harness_turn_id?: string | null;
   tool_call_ids?: string[];
@@ -3807,6 +3809,8 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
     startedAt: value.started_at ?? undefined,
     revision: value.revision,
     status: value.status,
+    content: value.content ?? "",
+    reasoning: value.reasoning ?? "",
     approvalId: value.approval_id ?? undefined,
     harnessTurnId: value.harness_turn_id ?? undefined,
     toolCallIds: value.tool_call_ids ?? [],

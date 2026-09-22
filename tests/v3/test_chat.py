@@ -3288,6 +3288,7 @@ def test_core_shutdown_leaves_an_inflight_provider_turn_recoverable(tmp_path):
             "Core stopped before this response completed. Review and resume it."
         )
         assert interrupted.request_snapshot["recovery"]["required"] is True
+        assert interrupted.request_snapshot["recovery"]["cause"] == "core_shutdown"
         assert interrupted.execution_claim_id is None
 
         # The next boot finds the same recoverable state a crash would leave.
@@ -3302,6 +3303,128 @@ def test_core_shutdown_leaves_an_inflight_provider_turn_recoverable(tmp_path):
         assert resumed.turn is not None
         assert resumed.turn.status == ChatTurnStatus.ROUTING
         await restarted.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(tmp_path):
+    class WaitingProvider(FakeProvider):
+        async def stream(self, request: ModelRequest):
+            del request
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            await asyncio.Event().wait()
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "auto-resume.db")
+        engagement = store.create(Engagement(name="Auto resume"))
+        profile = store.create(_profile(local=True))
+        session = store.create(
+            ChatSession(
+                engagement_id=engagement.id,
+                title="Supervisor",
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        reason = "Core stopped before this response completed. Review and resume it."
+        goal = store.create(
+            ChatGoal(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                objective="Continue safely",
+                completion_criteria=["Evidence reviewed"],
+                status=ChatGoalStatus.PAUSED,
+                blocked_reason=reason,
+            )
+        )
+        turn = store.create(
+            ChatTurn(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                goal_id=goal.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                status=ChatTurnStatus.INTERRUPTED,
+                error=reason,
+                reasoning="I should inspect the prior result.",
+                content="The previous step completed.",
+                request_snapshot={
+                    "model_request": ModelRequest(
+                        model="model-a",
+                        messages=[{"role": "user", "content": "Continue."}],
+                    ).model_dump(mode="json"),
+                    "context_usage": {},
+                    "recovery": {
+                        "required": True,
+                        "cause": "core_shutdown",
+                        "unknown_tool_call_ids": [],
+                        "unknown_hook_execution_ids": [],
+                    },
+                },
+            )
+        )
+        provider = WaitingProvider(profile.id, local=True)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        await service.startup()
+
+        assert service.resume_turns_stopped_by_core() == [turn.id]
+        assert service.resume_turns_stopped_by_core() == []
+        assert store.get(ChatGoal, goal.id).status == ChatGoalStatus.RUNNING
+        assert service.has_active_provider_turn(turn.id)
+        follower = service.follow_provider_turn(turn.id)
+        events = [await asyncio.wait_for(anext(follower), 2) for _ in range(3)]
+        assert [event for event, _ in events] == ["started", "reasoning_delta", "delta"]
+        assert events[1][1]["delta"] == turn.reasoning
+        assert events[2][1]["delta"] == turn.content
+        await follower.aclose()
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_core_update_auto_resume_keeps_uncertain_and_crashed_turns_parked(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "auto-resume-gates.db")
+        engagement = store.create(Engagement(name="Recovery gates"))
+        profile = store.create(_profile(local=True))
+        service = ChatService(store)
+        for cause, unknown in (
+            ("core_shutdown", ["tool-unknown"]),
+            ("core_restart", []),
+        ):
+            session = store.create(
+                ChatSession(
+                    engagement_id=engagement.id,
+                    title=cause,
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                )
+            )
+            store.create(
+                ChatTurn(
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                    status=ChatTurnStatus.INTERRUPTED,
+                    error="Core stopped while an effect outcome was unknown.",
+                    request_snapshot={
+                        "recovery": {
+                            "required": True,
+                            "cause": cause,
+                            "unknown_tool_call_ids": unknown,
+                            "unknown_hook_execution_ids": [],
+                        }
+                    },
+                )
+            )
+        await service.startup()
+        assert service.resume_turns_stopped_by_core() == []
+        assert all(
+            turn.status == ChatTurnStatus.INTERRUPTED
+            for turn in store.list_entities(ChatTurn)
+        )
+        await service.shutdown()
 
     asyncio.run(scenario())
 

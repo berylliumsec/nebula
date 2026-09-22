@@ -928,6 +928,8 @@ class ChatTurnSummary(NebulaModel):
     # The transcript counts up from here while the turn runs.
     started_at: datetime
     status: ChatTurnStatus
+    content: str = ""
+    reasoning: str = ""
     approval_id: str | None = None
     harness_turn_id: str | None = None
     tool_call_ids: list[str] = Field(default_factory=list)
@@ -2066,6 +2068,7 @@ def create_app(
             await start_component(
                 "chat", "follow-ups", chat_queue.startup, chat_queue.shutdown
             )
+            provider_chat.resume_turns_stopped_by_core()
         except BaseException:
             await stop_components()
             raise
@@ -12092,6 +12095,8 @@ def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:
         session_id=turn.session_id,
         started_at=turn.created_at,
         status=turn.status,
+        content=turn.content,
+        reasoning=turn.reasoning,
         approval_id=turn.approval_id,
         harness_turn_id=turn.harness_turn_id,
         tool_call_ids=turn.tool_call_ids,

@@ -1162,6 +1162,43 @@ def test_chat_stream_names_exhausted_final_answer_recovery(tmp_path, monkeypatch
     assert recoverable.json()["status"] == "failed"
 
 
+def test_pending_callback_turn_returns_saved_thinking_and_partial_answer(tmp_path):
+    store = NebulaStore(tmp_path / "paused-turn.db")
+    engagement = store.create(Engagement(name="Paused chat"))
+    profile = store.create(
+        ProviderProfile(name="Provider", provider_type="vllm", is_local=True)
+    )
+    session = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Supervisor",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.WAITING_CALLBACK,
+            reasoning="Check the returned evidence before continuing.",
+            content="I have dispatched the command.",
+        )
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    response = client.get(
+        f"/api/v1/chat/sessions/{session.id}/pending-turn", headers=_auth()
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == turn.id
+    assert response.json()["reasoning"] == turn.reasoning
+    assert response.json()["content"] == turn.content
+
+
 def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):
     from nebula.v3.domain import ChatSubagent
 
