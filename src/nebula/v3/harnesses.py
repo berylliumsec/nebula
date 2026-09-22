@@ -61,6 +61,7 @@ from uuid import uuid4
 
 import claude_agent_sdk
 from jsonschema import Draft7Validator
+from jsonschema.exceptions import ValidationError
 from packaging.version import InvalidVersion, Version
 from pydantic import Field, StringConstraints, field_validator
 
@@ -156,6 +157,7 @@ from .tool_results import (
     ToolResultReceipt,
     WorkspaceOutputService,
 )
+from .tool_failures import FAILURE_SCHEMA, tool_failure, unavailable_tool_failure
 from .tools import (
     ApprovalRequired,
     InvalidToolArguments,
@@ -300,7 +302,10 @@ _GATEWAY_RETRIEVAL_SCHEMAS: dict[str, dict[str, Any]] = {
     "tool_output.read": {
         "type": "object",
         "properties": {
-            "artifact_id": {"type": "string"},
+            "artifact_id": {
+                "type": "string",
+                "description": "Artifact ID from an authorized tool result receipt; sha256 is a content digest, not an artifact ID.",
+            },
             "starting_line": {"type": "integer", "minimum": 1},
             "line_count": {"type": "integer", "minimum": 1, "maximum": 200},
         },
@@ -12157,6 +12162,137 @@ class HarnessRuntimeService:
     async def _gateway_call(
         self, session: HarnessSession, name: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
+        """Normalize every gateway error before the harness model reads it."""
+
+        offered = None
+        cursor = None
+        seen_cursors: set[str] = set()
+        try:
+            for _ in range(64):
+                catalog = self._gateway_catalog(
+                    session, {"cursor": cursor} if cursor else None
+                )
+                offered = next(
+                    (item for item in catalog["tools"] if item["name"] == name),
+                    None,
+                )
+                if offered is not None:
+                    break
+                cursor = catalog.get("nextCursor")
+                if not isinstance(cursor, str) or cursor in seen_cursors:
+                    break
+                seen_cursors.add(cursor)
+        except Exception as exc:  # diagnostic-expected: tool_failure records the original exception and effective schema below.
+            fallback = ToolSpec.model_construct(
+                name=name,
+                description=name,
+                input_schema={"type": "object", "additionalProperties": True},
+                output_schema={"type": "object", "additionalProperties": True},
+                risk_class=RiskClass.LOCAL_READ,
+            )
+            failure = tool_failure(fallback, arguments, exc, phase="before_execution")
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps(failure, sort_keys=True)}
+                ],
+                "structuredContent": failure,
+                "isError": True,
+            }
+        if offered is None:
+            failure = unavailable_tool_failure(
+                name, "gateway tool is absent from this session's offered catalog"
+            )
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps(failure, sort_keys=True)}
+                ],
+                "structuredContent": failure,
+                "isError": True,
+            }
+        schema = offered.get("inputSchema") if offered else None
+        if not isinstance(schema, dict):
+            schema = {"type": "object", "additionalProperties": True}
+        schema = dict(schema)
+        schema.setdefault("type", "object")
+        # Preserve the exact offered gateway name and schema. Upstream MCP tool
+        # names can contain uppercase letters, while broker ToolSpec names are
+        # intentionally restricted; Draft7 validates the arguments below.
+        spec = ToolSpec.model_construct(
+            name=name,
+            description=str(offered.get("description") or name) if offered else name,
+            input_schema=schema,
+            output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ,
+        )
+        try:
+            if name not in _GATEWAY_RETRIEVAL_SCHEMAS:
+                Draft7Validator(schema).validate(arguments)
+            result = await self._gateway_call_unwrapped(session, name, arguments)
+        except Exception as exc:  # diagnostic-expected: tool_failure records the original exception and effective schema below.
+            phase = (
+                "before_execution"
+                if name in _GATEWAY_RETRIEVAL_SCHEMAS
+                or isinstance(
+                    exc, (InvalidToolArguments, PolicyDenied, ValidationError)
+                )
+                or isinstance(exc.__cause__, ValidationError)
+                else "after_execution"
+            )
+            failure = tool_failure(spec, arguments, exc, phase=phase)
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps(failure, sort_keys=True)}
+                ],
+                "structuredContent": failure,
+                "isError": True,
+            }
+        structured = result.get("structuredContent")
+        if result.get("isError") is True and not (
+            isinstance(structured, dict) and structured.get("schema") == FAILURE_SCHEMA
+        ):
+            original = structured or result
+            status = structured.get("status") if isinstance(structured, dict) else None
+            if status == "denied":
+                error: BaseException = PermissionError(repr(original))
+                phase = "before_execution"
+            elif status == "timed_out":
+                error = TimeoutError(repr(original))
+                phase = "after_execution"
+            elif status == "cancelled":
+                error = asyncio.CancelledError(repr(original))
+                phase = "after_execution"
+            else:
+                error = RuntimeError(repr(original))
+                phase = "after_execution"
+            failure = tool_failure(
+                spec,
+                arguments,
+                error,
+                phase=phase,
+            )
+            receipt = structured
+            if (
+                isinstance(receipt, dict)
+                and receipt.get("schema") == "nebula.tool-result/v2"
+            ):
+                failure["result_receipt"] = {
+                    "artifact_id": receipt.get("artifacts", [{}])[0].get("artifact_id")
+                    if receipt.get("artifacts")
+                    else None,
+                    "status": receipt.get("status"),
+                }
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps(failure, sort_keys=True)}
+                ],
+                "structuredContent": failure,
+                "isError": True,
+            }
+        return result
+
+    async def _gateway_call_unwrapped(
+        self, session: HarnessSession, name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
         turn = self._active_gateway_turn(session.id)
         if name == "browser.companion":
             current = self.store.get(HarnessSession, session.id)
@@ -12791,12 +12927,13 @@ class HarnessRuntimeService:
         call = self._attach_gateway_tool_call(turn, call.id)
         try:
             schema = _GATEWAY_RETRIEVAL_SCHEMAS[name]
-            if not Draft7Validator(schema).is_valid(arguments):
-                required = ", ".join(schema.get("required", []))
-                accepted = ", ".join(schema.get("properties", {}))
-                raise HarnessConfigurationError(
-                    f"Invalid arguments for {name}. Required: {required}. Accepted: {accepted}. Correct the arguments and retry."
-                )
+            Draft7Validator(schema).validate(arguments)
+            if (
+                name == "tool_output.read"
+                and isinstance(arguments.get("artifact_id"), str)
+                and re.fullmatch(r"[0-9a-fA-F]{64}", arguments["artifact_id"])
+            ):
+                raise InvalidToolArguments("artifact_id is a SHA-256 digest")
             if name == "tool_output.search":
                 output_service = ToolOutputService(self.store, self.artifact_store)
                 result = await asyncio.to_thread(

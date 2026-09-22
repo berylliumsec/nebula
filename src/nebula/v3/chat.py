@@ -209,6 +209,7 @@ from .tool_results import (
     sanitize_model_history_result,
     serialize_model_result,
 )
+from .tool_failures import tool_failure, unavailable_tool_failure
 
 if TYPE_CHECKING:
     from .automation_tools import AutomationToolComponents, AutomationToolPlatform
@@ -4547,11 +4548,20 @@ class ChatService:
                         exc,
                         stage="chat",
                     )
-                    provider_result = self._bounded_tool_error(
-                        "denied", exc.decision.reason
+                    failure = tool_failure(
+                        spec,
+                        call.arguments,
+                        exc,
+                        phase="before_execution",
+                        call_id=durable_call_id,
                     )
+                    provider_result = serialize_model_result(failure)
                     entry.update(
-                        {"status": "denied", "provider_result": provider_result}
+                        {
+                            "status": "denied",
+                            "provider_result": provider_result,
+                            "result_summary": failure["problem"],
+                        }
                     )
                 except Exception as exc:
                     record_caught_exception(
@@ -4561,14 +4571,30 @@ class ChatService:
                         exc,
                         stage="chat",
                     )
-                    provider_result = self._bounded_tool_error(
-                        "failed", f"{type(exc).__name__}: {str(exc)}"
+                    failure = tool_failure(
+                        spec,
+                        call.arguments,
+                        exc,
+                        phase="before_execution"
+                        if getattr(exc, "_nebula_before_execution", False)
+                        else "after_execution",
+                        call_id=durable_call_id,
                     )
+                    provider_result = serialize_model_result(failure)
                     entry.update(
-                        {"status": "failed", "provider_result": provider_result}
+                        {
+                            "status": "failed",
+                            "provider_result": provider_result,
+                            "result_summary": failure["problem"],
+                        }
                     )
                 else:
-                    fields, waiting_callback = self._tool_result_entry(result)
+                    fields, waiting_callback = self._tool_result_entry(
+                        result,
+                        spec=spec,
+                        arguments=call.arguments,
+                        call_id=durable_call_id,
+                    )
                     entry.update(fields)
                     receipt = result.receipt
                     if waiting_callback and receipt is not None:
@@ -5669,8 +5695,23 @@ class ChatService:
         durable_call_id = str(
             uuid5(NAMESPACE_URL, f"nebula:{turn.id}:chat:{turn.id}:step:{step}")
         )
-        provider_result = self._bounded_tool_error("failed", detail)
-        summary = str(json.loads(provider_result)["detail"])
+        safe_detail = str(
+            json.loads(self._bounded_tool_error("failed", detail))["detail"]
+        )
+        failure = (
+            tool_failure(
+                spec,
+                call.arguments,
+                InvalidToolArguments(detail),
+                phase="before_execution",
+                call_id=durable_call_id,
+            )
+            if spec is not None
+            else unavailable_tool_failure(call.name, detail, call_id=durable_call_id)
+        )
+        failure["detail"] = safe_detail
+        provider_result = serialize_model_result(failure)
+        summary = safe_detail
         display_name = spec.display_name if spec is not None else None
         entry: dict[str, Any] = {
             "step": step,
@@ -6020,7 +6061,14 @@ class ChatService:
             return True
         return result.output.get("timed_out") is True
 
-    def _tool_result_entry(self, result: Any) -> tuple[dict[str, Any], bool]:
+    def _tool_result_entry(
+        self,
+        result: Any,
+        *,
+        spec: Any = None,
+        arguments: dict[str, Any] | None = None,
+        call_id: str | None = None,
+    ) -> tuple[dict[str, Any], bool]:
         """Classify one broker result into its durable tool-history fields.
 
         Shared by the fresh execution path and the approval resume so that a
@@ -6030,6 +6078,27 @@ class ChatService:
 
         model_result = result.model_result()
         receipt = result.receipt
+        if self._tool_result_failed(result) and spec is not None:
+            failure = tool_failure(
+                spec,
+                arguments or {},
+                TimeoutError("tool execution timed out")
+                if result.execution.get("timed_out") is True
+                or (receipt and receipt.status == ToolResultStatus.TIMED_OUT)
+                else asyncio.CancelledError("tool execution was cancelled")
+                if receipt and receipt.status == ToolResultStatus.CANCELLED
+                else RuntimeError(
+                    f"tool execution returned {receipt.status.value if receipt else result.exit_code}; "
+                    f"receipt={model_result!r}"
+                ),
+                phase="after_execution",
+                call_id=call_id,
+            )
+            failure["result_receipt"] = {
+                "artifact_id": result.result_artifact_id,
+                "status": receipt.status.value if receipt else "failed",
+            }
+            model_result = failure
         waiting_callback = bool(
             receipt and receipt.results_url and receipt.results_api_key
         )
@@ -6120,8 +6189,14 @@ class ChatService:
             entry.update(
                 {
                     "status": "denied",
-                    "provider_result": self._bounded_tool_error(
-                        "denied", exc.decision.reason
+                    "provider_result": serialize_model_result(
+                        tool_failure(
+                            components.specs[invocation.tool_name],
+                            invocation.arguments,
+                            exc,
+                            phase="before_execution",
+                            call_id=str(entry["tool_call_id"]),
+                        )
                     ),
                 }
             )
@@ -6136,13 +6211,26 @@ class ChatService:
             entry.update(
                 {
                     "status": "failed",
-                    "provider_result": self._bounded_tool_error(
-                        "failed", f"{type(exc).__name__}: {str(exc)}"
+                    "provider_result": serialize_model_result(
+                        tool_failure(
+                            components.specs[invocation.tool_name],
+                            invocation.arguments,
+                            exc,
+                            phase="before_execution"
+                            if getattr(exc, "_nebula_before_execution", False)
+                            else "after_execution",
+                            call_id=str(entry["tool_call_id"]),
+                        )
                     ),
                 }
             )
         else:
-            fields, waiting_callback = self._tool_result_entry(result)
+            fields, waiting_callback = self._tool_result_entry(
+                result,
+                spec=components.specs[invocation.tool_name],
+                arguments=invocation.arguments,
+                call_id=str(entry["tool_call_id"]),
+            )
             entry.update(fields)
             receipt = result.receipt
             if waiting_callback and receipt is not None:

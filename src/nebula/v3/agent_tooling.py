@@ -39,7 +39,15 @@ from .providers import (
     _GEMINI_SYNTHETIC_CALL_ID,
 )
 from .redaction import redact_text
-from .tools import ApprovalRequired, PolicyDenied, ToolBroker, ToolInvocation, ToolSpec
+from .tools import (
+    ApprovalRequired,
+    InvalidToolArguments,
+    PolicyDenied,
+    ToolBroker,
+    ToolInvocation,
+    ToolSpec,
+)
+from .tool_failures import tool_failure, unavailable_tool_failure
 from .tool_results import (
     ToolResultStatus,
     sanitize_model_history_result,
@@ -456,15 +464,15 @@ class BrokeredToolSpecialist:
                 stage="agent_tooling",
             )
             status = "denied"
-            provider_result: dict[str, Any] | str = {
-                "status": status,
-                "detail": self._safe_text(denial.decision.reason),
-                "rule": denial.decision.rule,
-            }
-            summary = (
-                f"{invocation.tool_name} was denied: "
-                f"{self._safe_text(denial.decision.reason)}"
+            failure = tool_failure(
+                self.specs[invocation.tool_name],
+                invocation.arguments,
+                denial,
+                phase="before_execution",
+                call_id=invocation.id,
             )
+            provider_result: dict[str, Any] | str = failure
+            summary = str(failure["problem"])
             evidence_ids: list[str] = []
             reproducible: list[str] = []
             exit_code = None
@@ -488,9 +496,16 @@ class BrokeredToolSpecialist:
                 stage="agent_tooling",
             )
             status = "failed"
-            detail = self._safe_text(f"{type(exc).__name__}: {exc}")
-            provider_result = {"status": status, "detail": detail}
-            summary = f"{invocation.tool_name} failed: {detail}"
+            provider_result = tool_failure(
+                self.specs[invocation.tool_name],
+                invocation.arguments,
+                exc,
+                phase="before_execution"
+                if getattr(exc, "_nebula_before_execution", False)
+                else "after_execution",
+                call_id=invocation.id,
+            )
+            summary = str(provider_result["problem"])
             evidence_ids = []
             reproducible = []
             exit_code = None
@@ -498,9 +513,41 @@ class BrokeredToolSpecialist:
             trusted_result = False
         else:
             failed = self._tool_result_failed(result)
-            provider_result = serialize_model_result(result.model_result())
+            provider_result = (
+                tool_failure(
+                    self.specs[invocation.tool_name],
+                    invocation.arguments,
+                    TimeoutError("tool execution timed out")
+                    if result.execution.get("timed_out") is True
+                    or (
+                        result.receipt
+                        and result.receipt.status == ToolResultStatus.TIMED_OUT
+                    )
+                    else asyncio.CancelledError("tool execution was cancelled")
+                    if result.receipt
+                    and result.receipt.status == ToolResultStatus.CANCELLED
+                    else RuntimeError(
+                        f"tool returned failure receipt: {result.model_result()!r}"
+                    ),
+                    phase="after_execution",
+                    call_id=invocation.id,
+                )
+                if failed
+                else serialize_model_result(result.model_result())
+            )
+            if failed and isinstance(provider_result, dict):
+                provider_result["result_receipt"] = {
+                    "status": result.receipt.status.value
+                    if result.receipt
+                    else "failed",
+                    "artifact_id": result.result_artifact_id,
+                }
             try:
-                delivered = json.loads(provider_result)
+                delivered = (
+                    json.loads(provider_result)
+                    if isinstance(provider_result, str)
+                    else provider_result
+                )
             except (
                 json.JSONDecodeError
             ):  # diagnostic-expected: untrusted tool results fail closed
@@ -531,7 +578,7 @@ class BrokeredToolSpecialist:
                 if isinstance(parsed_exit, int) and not isinstance(parsed_exit, bool)
                 else result.exit_code
             )
-            trusted_result = result.receipt is None
+            trusted_result = result.receipt is None and not failed
 
         return SpecialistResult(
             summary=summary,
@@ -917,12 +964,29 @@ class BrokeredToolSpecialist:
         """A failed observation for a call Core answered without running it."""
 
         call = action.call
+        spec = self.specs.get(call.name)
+        failure = (
+            tool_failure(
+                spec,
+                dict(call.arguments),
+                InvalidToolArguments(action.detail),
+                phase="before_execution",
+                call_id=call.id,
+            )
+            if spec is not None
+            else unavailable_tool_failure(call.name, action.detail, call_id=call.id)
+        )
+        safe_detail = self._safe_text(action.detail)
+        failure["detail"] = safe_detail
+        if action.routing_error != "invalid_call":
+            failure["category"] = "call_not_run"
+            failure["next_action"] = safe_detail
         output: dict[str, Any] = {
             "model_call_id": call.id,
             "tool": call.name,
             "arguments": dict(call.arguments),
             "status": "failed",
-            "provider_result": {"status": "failed", "detail": action.detail},
+            "provider_result": failure,
             "trusted_result": False,
             "exit_code": None,
             "output_truncated": False,

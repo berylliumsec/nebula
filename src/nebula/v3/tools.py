@@ -1382,7 +1382,10 @@ def register_artifact_retrieval_tools(
             {
                 "type": "object",
                 "properties": {
-                    "artifact_id": {"type": "string"},
+                    "artifact_id": {
+                        "type": "string",
+                        "description": "Artifact ID from an authorized tool result receipt; sha256 is a content digest, not an artifact ID.",
+                    },
                     "starting_line": {"type": "integer", "minimum": 1, "default": 1},
                     "line_count": {
                         "type": "integer",
@@ -1497,14 +1500,34 @@ class ToolBroker:
         scope: ScopePolicy,
     ) -> PreparedToolCall:
         plugin = self.registry.get(invocation.tool_name)
-        self._validate(plugin.spec.input_schema, invocation.arguments, "input")
-        invocation = await self._canonicalize(invocation, plugin.spec)
-        if (
-            plugin.spec.idempotency == IdempotencyBehavior.KEY_REQUIRED
-            and not invocation.idempotency_key
-        ):
-            raise InvalidToolArguments("this tool requires an idempotency key")
         call = await self.ledger.reserve(invocation, plugin.spec)
+        try:
+            self._validate(plugin.spec.input_schema, invocation.arguments, "input")
+            if (
+                plugin.spec.name == "tool_output.read"
+                and isinstance(invocation.arguments.get("artifact_id"), str)
+                and re.fullmatch(
+                    r"[0-9a-fA-F]{64}", invocation.arguments["artifact_id"]
+                )
+            ):
+                raise InvalidToolArguments(
+                    "artifact_id is a SHA-256 digest; use the artifact ID from an authorized receipt"
+                )
+            invocation = await self._canonicalize(invocation, plugin.spec)
+            if (
+                plugin.spec.idempotency == IdempotencyBehavior.KEY_REQUIRED
+                and not invocation.idempotency_key
+            ):
+                raise InvalidToolArguments("this tool requires an idempotency key")
+        except Exception as exc:
+            # A call rejected before execution still needs a durable terminal
+            # status; otherwise the activity feed can leave it running forever.
+            setattr(exc, "_nebula_before_execution", True)
+            if call.status == ToolCallStatus.PROPOSED:
+                await self.ledger.transition(
+                    call, ToolCallStatus.FAILED, error=str(exc)
+                )
+            raise
         if call.status == ToolCallStatus.COMPLETE and call.result is not None:
             if (
                 isinstance(call.result, dict)

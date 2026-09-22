@@ -1002,6 +1002,7 @@ def serialize_model_result(value: dict[str, Any]) -> str:
 
 _HISTORY_RESULT_SCHEMAS = {
     TOOL_RESULT_SCHEMA,
+    "nebula.tool-failure/v1",
     "nebula.tool-output.search/v1",
     "nebula.tool-output.read/v1",
     "nebula.workspace.search/v1",

@@ -1,20 +1,35 @@
 {
-  "change_digest": "c5ba55a7cbf39c7db14025cc9610075fe643a05603ece9fd6835d93e0857d9e2",
-  "reviewed_by": "Codex focused review for nested subagent sidebar",
-  "reason": "The changed journey is the Assistant conversation list: Core-marked subagents appear under their main conversation, collapse by default, surface waiting activity on the parent, remain reachable through search and selected-session reload, and preserve ordinary branches. Five collected frontend cases cover the pure grouping rules. Eight collected mocked Playwright cases cover desktop 1440/1024 and mobile Chromium/WebKit 320/390/430 through the visible sidebar. One collected production-bundle real-Core LAN case verifies durable parent-child metadata, selection, and reload. The catalogued subagent-sidebar area selects only those nine browser runs.",
-  "exclusions": "No Python product tests: no Python product code changed; the ui/tests/fixtures/approval_core.py scenario is exercised by the selected real-Core browser case. No native tests: no Tauri or Rust code changed. Unrelated Assistant workflows and all full suites are excluded. The focused browser cases cover this sidebar journey and the unit cases cover lineage/search edge cases.",
+  "change_digest": "a5ef2486053fc193d448973f2c7a90ac0bdfbb40a4c60e9d53df770141ff8fe8",
+  "reviewed_by": "Codex focused tool-failure review",
+  "reason": "The changed journeys are Core chat and mission tool failures, fixed runtime retrieval, harness gateway calls, and pre-execution refusals. Nineteen focused contract cases and nine exact integration cases cover terminal status, effective-schema delivery to the next model request, correction, MCP capture, authorization and missing-resource indistinguishability, and denied or unroutable calls. The catalogued assistant reliability journey covers visible chat activity in desktop and mobile production Core profiles.",
+  "exclusions": "No frontend unit tests because no ui/src code changed; no native tests because no Rust code changed. Other backend and browser areas do not execute the changed failure path. No full suites.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 5,
+    "python": 28,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 8
   },
-  "python": [],
-  "frontend": [
-    "ui/src/pages/conversationSidebar.test.ts"
+  "python": [
+    "tests/v3/test_tool_failures.py",
+    "tests/v3/test_harnesses.py::test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt",
+    "tests/v3/test_harnesses.py::test_harness_gateway_digest_in_artifact_id_is_terminal_and_actionable",
+    "tests/v3/test_harnesses.py::test_harness_gateway_queries_scoped_knowledge_with_citations",
+    "tests/v3/test_chat_tool_loop.py::test_denied_tool_is_returned_as_error_context_without_reexecution",
+    "tests/v3/test_chat_tool_loop.py::test_repeated_provider_call_id_cannot_duplicate_a_tool_effect",
+    "tests/v3/test_chat_tool_loop.py::test_malformed_routing_never_reaches_the_tool_broker",
+    "tests/v3/test_specialist_routing_tolerance.py::test_unavailable_tool_is_answered_with_a_failed_observation",
+    "tests/v3/test_specialist_routing_tolerance.py::test_a_routing_deviation_does_not_push_an_older_tool_failure_out_of_view"
   ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "area:subagent-sidebar"
+    "entry:assistant-reliability/assistant-real-desktop",
+    "entry:assistant-reliability/assistant-real-compact",
+    "entry:assistant-reliability/assistant-real-chromium-320",
+    "entry:assistant-reliability/assistant-real-chromium-390",
+    "entry:assistant-reliability/assistant-real-chromium-430",
+    "entry:assistant-reliability/assistant-real-webkit-320",
+    "entry:assistant-reliability/assistant-real-webkit-390",
+    "entry:assistant-reliability/assistant-real-webkit-430"
   ]
 }
