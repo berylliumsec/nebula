@@ -84,9 +84,12 @@ def test_goal_resume_requires_interrupted_turn_recovery(tmp_path):
         {"request_snapshot": {"recovery": {"required": False}}},
         expected_revision=turn.revision,
     )
-    assert goals.write(
-        "session", GoalWrite(expected_revision=paused.revision, action="resume")
-    ).status == ChatGoalStatus.RUNNING
+    assert (
+        goals.write(
+            "session", GoalWrite(expected_revision=paused.revision, action="resume")
+        ).status
+        == ChatGoalStatus.RUNNING
+    )
 
 
 def test_parent_cancel_stops_child_and_reserves_budget(tmp_path):

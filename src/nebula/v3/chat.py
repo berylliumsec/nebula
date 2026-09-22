@@ -1492,12 +1492,9 @@ class ChatService:
                     and pending.request_snapshot.get("recovery", {}).get("required")
                     else None
                 )
-                if (
-                    goal.status == ChatGoalStatus.RUNNING
-                    and (
-                        goal.execution_claim_id is not None
-                        or interrupted_recovery is not None
-                    )
+                if goal.status == ChatGoalStatus.RUNNING and (
+                    goal.execution_claim_id is not None
+                    or interrupted_recovery is not None
                 ):
                     paused_at = utc_now()
                     self.store.update(

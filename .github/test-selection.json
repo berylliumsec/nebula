@@ -1,5 +1,5 @@
 {
-  "change_digest": "c90067418136eb84ba7c60225a21645bc98abc3c17a7d4bda479a7276b146fc0",
+  "change_digest": "67881ed898b7bd7aae685cad2e62a0d233dffd038a94d1e51335cadd1bcdf18d",
   "reviewed_by": "Codex focused restart-recovery review",
   "reason": "Goal resume must remain paused while an interrupted turn needs recovery, and Core startup must repair a running goal stranded behind that turn. The selected cases cover those paths plus safe and uncertain automatic resume.",
   "exclusions": "No frontend, native, or Playwright tests are selected because this diff changes Core goal and provider-turn state only. No full suites, live provider calls, or production UI journey were run.",
