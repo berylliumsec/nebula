@@ -23,6 +23,7 @@ from .domain import (
     BrowserTrafficExchange,
     BrowserWebSocketFrame,
     ChatMessage,
+    ChatAgentMessage,
     ChatSession,
     ChatTurn,
     Correlation,
@@ -170,6 +171,11 @@ _REFERENCE_RULES: dict[type[Entity], tuple[ReferenceRule, ...]] = {
     ChatMessage: (
         ReferenceRule("session_id", ChatSession),
         ReferenceRule("provider_profile_id", ProviderProfile, same_engagement=False),
+    ),
+    ChatAgentMessage: (
+        ReferenceRule("sender_session_id", ChatSession),
+        ReferenceRule("recipient_session_id", ChatSession),
+        ReferenceRule("transcript_message_id", ChatMessage),
     ),
     OperatorExecution: (
         ReferenceRule("operator_id", OperatorProfile, same_engagement=False),

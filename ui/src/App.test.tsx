@@ -902,7 +902,7 @@ describe("Nebula workspace", () => {
     let chatPresent = true;
     let chatTitle = "Saved context";
     let chatRevision = 1;
-    let chatMetadata: Record<string, unknown> = { message_count: 2 };
+    let chatMetadata: Record<string, unknown> = { message_count: 3 };
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
       if (path.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", version: "3.0.0", mode: "local", runner: "unavailable", human_pty: "unavailable" }), { status: 200 });
@@ -914,6 +914,7 @@ describe("Nebula workspace", () => {
       if (path.endsWith("/chat/sessions/session-1/messages")) return new Response(JSON.stringify([
         { ...entity, id: "message-1", engagement_id: "engagement-1", session_id: "session-1", sequence: 1, role: "user", content: "Use port 8443", citations: [], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } },
         { ...entity, id: "message-2", engagement_id: "engagement-1", session_id: "session-1", sequence: 2, role: "assistant", content: "Port retained\n\nUse `nmap` for verification.", citations: [], usage: { input_tokens: 2, output_tokens: 2, total_tokens: 4 } },
+        { ...entity, id: "message-3", engagement_id: "engagement-1", session_id: "session-1", sequence: 3, role: "system", content: "I verified the retry is idempotent.", metadata: { kind: "agent_message", sender_session_id: "peer-1", sender_title: "Retry reviewer" }, citations: [], usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } },
       ]), { status: 200 });
       if (path.endsWith("/chat/sessions/session-1/context")) return new Response(JSON.stringify({
         owner_type: "chat_session",
@@ -955,6 +956,9 @@ describe("Nebula workspace", () => {
     expect(localStorage.getItem("nebula.conversations.open")).toBe("true");
     expect(within(conversationPanel).getByTitle("Saved context")).toBeVisible();
     expect(await screen.findByText("Port retained")).toBeVisible();
+    const peerMessage = await screen.findByText("I verified the retry is idempotent.");
+    expect(peerMessage.closest("article")).toHaveClass("agent-message");
+    expect(screen.getByText("Message from Retry reviewer")).toBeVisible();
     const conversationSearch = screen.getByRole("searchbox", { name: "Search conversations" });
     await user.type(conversationSearch, "missing runtime");
     expect(screen.getByText("No conversations match “missing runtime”.")).toBeVisible();
@@ -1006,12 +1010,11 @@ describe("Nebula workspace", () => {
     await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
     await user.click(within(screen.getByRole("menu", { name: "Actions for Port review" })).getByRole("menuitem", { name: "Archive" }));
     const archivedToggle = await screen.findByRole("button", { name: /Archived\s*1/ });
-    expect(archivedToggle).toHaveAttribute("aria-expanded", "false");
+    expect(archivedToggle).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("This conversation is archived. Sending a message moves it back to your conversations.")).toBeVisible();
-    expect(screen.queryByRole("button", { name: "More actions for Port review" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More actions for Port review" })).toBeVisible();
     const archiveCall = [...fetchMock.mock.calls].reverse().find(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "PATCH");
     expect(JSON.parse(String(archiveCall?.[1]?.body))).toEqual({ archived: true, expected_revision: 2 });
-    await user.click(archivedToggle);
     await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
     await user.click(within(screen.getByRole("menu", { name: "Actions for Port review" })).getByRole("menuitem", { name: "Unarchive" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: /Archived\s*1/ })).not.toBeInTheDocument());

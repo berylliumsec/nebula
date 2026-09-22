@@ -582,6 +582,7 @@ class ChatQueueService:
                     harness_service_tier=request.harness_service_tier,
                     provider_subagent=request.harness_provider_subagent(),
                     pending_provider_subagent=request.harness_pending_provider_subagent(),
+                    allow_agent_messaging=request.allow_agent_messaging,
                     queue_claim=claim,
                 )
                 self.harness.start_chat_turn(turn.id)

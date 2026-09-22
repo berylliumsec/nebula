@@ -80,6 +80,7 @@ from .chat_subagents import (
     harness_subagent_instructions,
     subagent_limit,
 )
+from .chat_agent_messages import AgentMessageService
 from .automation_runtime import AutomationRuntimeUnavailable
 from .credentials import CredentialError, CredentialStore
 from .artifacts import ArtifactStore
@@ -377,6 +378,43 @@ _GATEWAY_SUBAGENT_NAMES = (
     "subagent.stop",
 )
 
+_GATEWAY_AGENT_MESSAGE_NAMES = (
+    "agent.list",
+    "agent.send",
+    "agent.read",
+)
+
+_GATEWAY_AGENT_MESSAGE_TO_PROVIDER = {
+    "agent.list": "list_agents",
+    "agent.send": "send_agent_message",
+    "agent.read": "read_agent_messages",
+}
+
+_GATEWAY_AGENT_MESSAGE_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
+    "agent.list": (
+        "List independent main agents in this project and unread messages from "
+        "them. Subagents and archived conversations are excluded.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    ),
+    "agent.send": (
+        "Send a concise finding, request, or coordination decision to another "
+        "independent main agent in this project. This does not start an idle agent.",
+        {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "maxLength": 200},
+                "message": {"type": "string", "minLength": 1, "maxLength": 20_000},
+            },
+            "required": ["session_id", "message"],
+            "additionalProperties": False,
+        },
+    ),
+    "agent.read": (
+        "Read messages from peer main agents that you have not received yet.",
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    ),
+}
+
 
 def _subagent_wait_limits(kind: HarnessKind | None) -> tuple[int, int]:
     """Default and longest subagent.wait for a harness, below its tool timeout.
@@ -665,6 +703,26 @@ def _harness_developer_instructions(
             if provider_subagent
             and any(
                 _is_gateway_subagent_tool(item.get("name")) for item in gateway_tools
+            )
+            else ""
+        )
+        + (
+            "Peer agents: agent.list discovers other independent main conversations "
+            "in this project. agent.send shares a concise finding, request, or "
+            "coordination decision; agent.read returns messages they sent you. "
+            "Do not send progress chatter. Agents cannot message subagents, archived "
+            "or temporary conversations, themselves, or another project. Sending a "
+            "message does not start an idle agent; it receives it on its next turn. "
+            if session.metadata.get("allow_agent_messaging") is True
+            and any(
+                str(item.get("name") or "").rsplit("__", 1)[-1]
+                in _GATEWAY_AGENT_MESSAGE_NAMES
+                or any(
+                    _portable_gateway_tool_name(name)
+                    == str(item.get("name") or "").rsplit("__", 1)[-1]
+                    for name in _GATEWAY_AGENT_MESSAGE_NAMES
+                )
+                for item in gateway_tools
             )
             else ""
         )
@@ -7771,6 +7829,7 @@ class HarnessRuntimeService:
         self._connection_browser_bindings: dict[str, str | None] = {}
         self._connection_subagent_bindings: dict[str, str | None] = {}
         self.provider_subagents: SubagentService | None = None
+        self.agent_messages: AgentMessageService | None = None
         self._gateways: dict[str, McpGatewaySession] = {}
         self._gateway_tool_maps: dict[
             str, dict[str, tuple[McpServerProfile, McpToolSnapshot]]
@@ -7815,6 +7874,37 @@ class HarnessRuntimeService:
             raise ValueError("harness runtime is already bound to a subagent service")
         self.provider_subagents = service
         service.harness_steer = self._steer_subagent_update
+
+    def bind_agent_messages(self, service: AgentMessageService) -> None:
+        """Bind project-scoped peer messaging for managed harness chats."""
+
+        if self.agent_messages is not None and self.agent_messages is not service:
+            raise ValueError("harness runtime is already bound to agent messaging")
+        self.agent_messages = service
+        service.harness_steer = self._steer_agent_message
+
+    async def _steer_agent_message(self, chat_session_id: str, text: str) -> bool:
+        """Add a peer-agent message to the recipient's running harness turn."""
+
+        for active in list(self._active.values()):
+            try:
+                turn = self.store.get(HarnessTurn, active.turn_id)
+            except NotFoundError:
+                continue
+            if turn.chat_session_id != chat_session_id:
+                continue
+            try:
+                await self.steer_turn(
+                    turn.id,
+                    text,
+                    actor_id="nebula-agent-messages",
+                    title="Agent message",
+                    summary="Nebula added a peer-agent message to the turn.",
+                )
+            except HarnessStateError:
+                return False
+            return True
+        return False
 
     async def _steer_subagent_update(self, chat_session_id: str, text: str) -> bool:
         """Add a subagent update to the chat's running harness turn.
@@ -9135,6 +9225,7 @@ class HarnessRuntimeService:
         content_blocks: list[ChatContentBlock] | None = None,
         provider_subagent: dict[str, Any] | None = None,
         pending_provider_subagent: dict[str, Any] | None = None,
+        allow_agent_messaging: bool = False,
     ) -> tuple[ChatSession, ChatTurn, HarnessTurn]:
         clean_prompt = prompt.strip()
         if not clean_prompt:
@@ -9402,6 +9493,7 @@ class HarnessRuntimeService:
                     metadata={
                         "context_management": "runtime_managed",
                         "initial_title_state": "pending",
+                        "allow_agent_messaging": allow_agent_messaging,
                         "harness_runtime_options": session.metadata.get(
                             "runtime_options", {}
                         ),
@@ -9506,11 +9598,13 @@ class HarnessRuntimeService:
             session_rollover_reason = "command_runtime_changed"
             oci_components = self._ensure_oci_components(session)
         session = self._bind_session_provider_subagent(session, subagent_setting)
+        session = self._bind_session_agent_messaging(session, allow_agent_messaging)
         # A choice this turn cannot use yet is remembered, never bound: the
         # vendor session only offers subagent tools on a validated setting.
         chat = self._remember_chat_provider_subagent(
             chat, subagent_setting or pending_provider_subagent
         )
+        chat = self._remember_chat_agent_messaging(chat, allow_agent_messaging)
         subagent_update = (
             self.provider_subagents.harness_update(chat.id)
             if self.provider_subagents is not None
@@ -9520,6 +9614,17 @@ class HarnessRuntimeService:
             runtime_context = (
                 runtime_context or ""
             ) + SubagentService.harness_report_context(subagent_update)
+        agent_update = (
+            self.agent_messages.inbox(chat.id, mark=False)
+            if allow_agent_messaging and self.agent_messages is not None
+            else {"messages": []}
+        )
+        if agent_update["messages"]:
+            runtime_context = (runtime_context or "") + (
+                "\n\nNebula peer-agent messages (act on them when relevant; reply "
+                "with agent.send):\n"
+                + json.dumps(agent_update["messages"], ensure_ascii=False)
+            )
         oci_snapshot = session.metadata.get("command_runtime_snapshot")
         if not isinstance(oci_snapshot, dict) and oci_components is not None:
             oci_snapshot = self._oci_snapshot(oci_components)
@@ -9572,6 +9677,7 @@ class HarnessRuntimeService:
                 "knowledge_enabled": knowledge_access,
                 "cloud_knowledge_confirmed": allow_cloud_knowledge,
                 "provider_subagent": subagent_setting,
+                "allow_agent_messaging": allow_agent_messaging,
             },
         )
         harness_turn = HarnessTurn(
@@ -9596,6 +9702,10 @@ class HarnessRuntimeService:
                 "knowledge_access": knowledge_access,
                 "cloud_knowledge_confirmed": allow_cloud_knowledge,
                 "provider_subagent": subagent_setting,
+                "allow_agent_messaging": allow_agent_messaging,
+                "agent_messages_delivered": [
+                    item["message_id"] for item in agent_update["messages"]
+                ],
                 "subagent_reports_delivered": (
                     [item.id for item in subagent_update.records]
                     if subagent_update
@@ -9652,6 +9762,10 @@ class HarnessRuntimeService:
             )
         if subagent_update and self.provider_subagents is not None:
             self.provider_subagents.mark_delivered(subagent_update)
+        if agent_update["messages"] and self.agent_messages is not None:
+            self.agent_messages.mark_message_ids_delivered(
+                [item["message_id"] for item in agent_update["messages"]]
+            )
         return chat, chat_turn, harness_turn
 
     def _bind_session_provider_subagent(
@@ -9702,6 +9816,46 @@ class HarnessRuntimeService:
             ChatSession,
             chat.id,
             {"metadata": {**chat.metadata, "provider_subagent": setting}},
+            expected_revision=chat.revision,
+        )
+
+    def _bind_session_agent_messaging(
+        self, session: HarnessSession, enabled: bool
+    ) -> HarnessSession:
+        """Bind the peer-tool catalog choice to this vendor session."""
+
+        session = self.store.get(HarnessSession, session.id)
+        if (session.metadata.get("allow_agent_messaging") is True) == enabled:
+            return session
+        return self.store.update(
+            HarnessSession,
+            session.id,
+            {
+                "metadata": {
+                    **session.metadata,
+                    "allow_agent_messaging": enabled,
+                }
+            },
+            expected_revision=session.revision,
+        )
+
+    def _remember_chat_agent_messaging(
+        self, chat: ChatSession, enabled: bool
+    ) -> ChatSession:
+        """Persist peer messaging with the main conversation."""
+
+        chat = self.store.get(ChatSession, chat.id)
+        if (chat.metadata.get("allow_agent_messaging") is True) == enabled:
+            return chat
+        return self.store.update(
+            ChatSession,
+            chat.id,
+            {
+                "metadata": {
+                    **chat.metadata,
+                    "allow_agent_messaging": enabled,
+                }
+            },
             expected_revision=chat.revision,
         )
 
@@ -11060,6 +11214,10 @@ class HarnessRuntimeService:
                     )
                     else None
                 ),
+                allow_agent_messaging=(
+                    original_chat_turn.request_snapshot.get("allow_agent_messaging")
+                    is True
+                ),
             )
             replacement = self.store.update(
                 HarnessTurn,
@@ -11991,7 +12149,11 @@ class HarnessRuntimeService:
                         },
                     }
                 )
-        if self._subagent_binding(current) is not None:
+        if (
+            _session_provider_subagent(current) is not None
+            and self.provider_subagents is not None
+            and not current.metadata.get("analysis_only")
+        ):
             kind = self.store.get(HarnessProfile, current.harness_profile_id).kind
             for name, (description, schema) in _gateway_subagent_tools(kind).items():
                 tools.append(
@@ -12003,6 +12165,25 @@ class HarnessRuntimeService:
                             "readOnlyHint": name == "subagent.list",
                             "destructiveHint": False,
                             "idempotentHint": name == "subagent.list",
+                            "openWorldHint": False,
+                        },
+                    }
+                )
+        if (
+            self.agent_messages is not None
+            and current.metadata.get("allow_agent_messaging") is True
+            and not current.metadata.get("analysis_only")
+        ):
+            for name, (description, schema) in _GATEWAY_AGENT_MESSAGE_SCHEMAS.items():
+                tools.append(
+                    {
+                        "name": name,
+                        "description": description,
+                        "inputSchema": schema,
+                        "annotations": {
+                            "readOnlyHint": name != "agent.send",
+                            "destructiveHint": False,
+                            "idempotentHint": name != "agent.send",
                             "openWorldHint": False,
                         },
                     }
@@ -12370,6 +12551,8 @@ class HarnessRuntimeService:
         if name in _GATEWAY_SUBAGENT_NAMES:
             # Outside the execution gate: a wait must not hold it for minutes.
             return await self._gateway_subagent(session, turn, name, arguments)
+        if name in _GATEWAY_AGENT_MESSAGE_NAMES:
+            return await self._gateway_agent_message(session, turn, name, arguments)
         async with self._gateway_execution_gate(turn):
             return await self._gateway_action_call(session, turn, name, arguments)
 
@@ -12513,6 +12696,95 @@ class HarnessRuntimeService:
                 stage="gateway",
                 metadata={"tool_name": name},
             )
+            self._finish_gateway_call(call.id, error=exc)
+            return self._gateway_denial(str(exc))
+        except Exception as exc:
+            self._finish_gateway_call(call.id, error=exc)
+            raise
+        self._finish_gateway_call(call.id, result=result)
+        serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
+        return {
+            "content": [{"type": "text", "text": serialized}],
+            "structuredContent": result,
+            "isError": False,
+        }
+
+    async def _gateway_agent_message(
+        self,
+        session: HarnessSession,
+        turn: HarnessTurn,
+        name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run a project-scoped peer-agent tool for a harness chat."""
+
+        service = self.agent_messages
+        if (
+            service is None
+            or turn.origin != HarnessTurnOrigin.CHAT
+            or not turn.chat_session_id
+            or not turn.chat_turn_id
+            or turn.metadata.get("allow_agent_messaging") is not True
+        ):
+            return self._gateway_denial(
+                "Agent messaging is turned off for this conversation."
+            )
+        description, schema = _GATEWAY_AGENT_MESSAGE_SCHEMAS[name]
+        del description
+        if not Draft7Validator(schema).is_valid(arguments):
+            accepted = ", ".join(schema.get("properties", {}))
+            return self._gateway_denial(
+                f"Invalid arguments for {name}. Accepted: {accepted}. "
+                "Correct the arguments and retry."
+            )
+        call = ToolCall(
+            id=str(uuid4()),
+            engagement_id=turn.engagement_id,
+            run_id=turn.chat_turn_id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=turn.chat_session_id,
+            chat_turn_id=turn.chat_turn_id,
+            tool_name=name,
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.LOCAL_READ,
+            arguments=arguments,
+            started_at=utc_now(),
+            metadata={"harness_turn_id": turn.id, "budget_class": "agent_message"},
+        )
+        call = self.store.reserve_tool_call(call)
+        call = self._attach_gateway_tool_call(turn, call.id)
+        invocation = ToolInvocation(
+            id=call.id,
+            engagement_id=turn.engagement_id,
+            run_id=turn.chat_turn_id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=turn.chat_session_id,
+            chat_turn_id=turn.chat_turn_id,
+            tool_name=_GATEWAY_AGENT_MESSAGE_TO_PROVIDER[name],
+            arguments=arguments,
+            workspace=self.workspace_resolver(turn.engagement_id),
+            idempotency_key=f"harness-agent-message:{turn.id}:"
+            + hashlib.sha256(
+                json.dumps(
+                    [name, arguments], sort_keys=True, ensure_ascii=False
+                ).encode()
+            ).hexdigest()[:40],
+            requested_by="harness-gateway",
+            runtime_session_kind="harness",
+            runtime_session_id=session.id,
+        )
+        try:
+            if name == "agent.list":
+                result = service.list_output(invocation)
+            elif name == "agent.read":
+                result = service.read_output(invocation)
+            else:
+                result = await service.send(
+                    invocation,
+                    str(arguments.get("session_id") or ""),
+                    str(arguments.get("message") or ""),
+                )
+        except (InvalidToolArguments, ChatError) as exc:
             self._finish_gateway_call(call.id, error=exc)
             return self._gateway_denial(str(exc))
         except Exception as exc:
@@ -13606,23 +13878,28 @@ class HarnessRuntimeService:
         return connection
 
     def _subagent_binding(self, session: HarnessSession) -> str | None:
-        """The provider subagent model and limit this session's vendor carries.
+        """The collaboration catalog and instructions this vendor carries.
 
-        The limit is part of the developer instructions, so changing it
-        reopens the connection like a model change does.
+        Provider-subagent limits and peer-agent messaging are both part of the
+        fixed gateway catalog/developer instructions, so changing either
+        reopens the connection.
         """
 
         setting = _session_provider_subagent(session)
-        if (
-            setting is None
-            or self.provider_subagents is None
-            or session.metadata.get("analysis_only")
-        ):
+        if session.metadata.get("analysis_only"):
             return None
-        return (
-            f"{setting['provider_profile_id']}\0{setting['model']}"
-            f"\0{setting.get('max_active') or ''}"
-        )
+        parts: list[str] = []
+        if setting is not None and self.provider_subagents is not None:
+            parts.append(
+                f"subagent\0{setting['provider_profile_id']}\0{setting['model']}"
+                f"\0{setting.get('max_active') or ''}"
+            )
+        if (
+            session.metadata.get("allow_agent_messaging") is True
+            and self.agent_messages is not None
+        ):
+            parts.append("agent-messaging")
+        return "\0".join(parts) if parts else None
 
     async def _request_permission(
         self,

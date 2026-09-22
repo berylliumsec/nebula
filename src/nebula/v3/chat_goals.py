@@ -69,6 +69,7 @@ class GoalConversationCreate(GoalCreate):
     # starts, and it reads them from the conversation.
     reasoning_effort: ReasoningEffort | None = None
     allow_subagents: bool = False
+    allow_agent_messaging: bool = False
     max_active_subagents: int | None = Field(
         default=None, ge=1, le=SUBAGENT_LIMIT_CEILING
     )
@@ -169,6 +170,7 @@ class ChatGoalService:
                 "hook_ids": body.hook_ids,
                 "reasoning_effort": body.reasoning_effort,
                 "allow_subagents": body.allow_subagents,
+                "allow_agent_messaging": body.allow_agent_messaging,
                 "max_active_subagents": body.max_active_subagents,
                 "message_count": 0,
                 "last_sequence": 0,

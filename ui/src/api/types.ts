@@ -1567,7 +1567,7 @@ export interface ProviderUpdateRequest {
   expectedRevision: number;
 }
 
-export type ChatRole = "user" | "assistant";
+export type ChatRole = "user" | "assistant" | "system";
 
 export interface ChatMessage {
   id?: Identifier;
@@ -1575,6 +1575,7 @@ export interface ChatMessage {
   content: string;
   reasoning?: string;
   contentBlocks?: ChatContentBlock[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface ChatContentBlock {
@@ -1802,6 +1803,8 @@ export interface ChatCompletionRequest {
    * provider chat, on subagentProviderId/subagentModel in a harness chat.
    */
   allowSubagents?: boolean;
+  /** Let this independent main agent discover and message opted-in project peers. */
+  allowAgentMessaging?: boolean;
   /** Harness chats: the provider profile their subagents run on. */
   subagentProviderId?: Identifier;
   /** Harness chats: the provider model their subagents run on. */
@@ -2142,6 +2145,8 @@ export interface ChatSessionSummary {
   reasoningEffort?: ReasoningEffort;
   /** Whether this conversation last ran with delegation available. */
   allowSubagents?: boolean;
+  /** Whether this main conversation can discover and message project peers. */
+  allowAgentMessaging?: boolean;
   /** Harness chats: the provider model their subagents last ran on. */
   subagentProviderId?: Identifier;
   subagentModel?: string;
@@ -2477,6 +2482,7 @@ export interface ChatSessionAssistantSettingsRequest {
   reasoningEffort?: ReasoningEffort;
   useModelReasoningDefault?: boolean;
   allowSubagents?: boolean;
+  allowAgentMessaging?: boolean;
   maxActiveSubagents?: number | null;
   subagentProviderId?: Identifier;
   subagentModel?: string;

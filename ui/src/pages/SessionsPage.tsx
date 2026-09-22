@@ -415,7 +415,7 @@ function assistantMessageStatus(message: ConversationMessage): ThreadMessageLike
 function convertConversationMessage(message: ConversationMessage): ThreadMessageLike {
   return {
     id: message.runtimeId ?? message.id,
-    role: message.role,
+    role: message.role === "system" ? "assistant" : message.role,
     content: message.content,
     createdAt: new Date(message.createdAt),
     status: message.role === "assistant" ? assistantMessageStatus(message) : undefined,
@@ -424,6 +424,7 @@ function convertConversationMessage(message: ConversationMessage): ThreadMessage
         durable: message.durable,
         sequence: message.sequence,
         state: message.state,
+        role: message.role,
       },
     },
   };
@@ -474,7 +475,7 @@ function ReplacedMessages({ group }: { group: ReplacedMessageGroup }) {
     <summary>{label}</summary>
     <p className="chat-replaced-note">Replaced by your edit and kept for reference. They are not sent to the model.</p>
     {group.items.map((item) => <article className="chat-replaced-message" key={item.id}>
-      <strong>{`${item.role === "user" ? "You" : "Assistant"} · ${timeLabel(item.createdAt)}`}</strong>
+      <strong>{`${item.role === "user" ? "You" : item.role === "system" ? "Peer agent" : "Assistant"} · ${timeLabel(item.createdAt)}`}</strong>
       <p>{item.content}</p>
     </article>)}
   </details>;
@@ -500,6 +501,7 @@ function persistedMessage(message: PersistedChatMessage): ConversationMessage {
     content: message.content,
     reasoning: message.reasoning,
     contentBlocks: message.contentBlocks,
+    metadata: message.metadata,
     createdAt: message.createdAt,
     citations: message.citations,
     usage: message.usage,
@@ -696,6 +698,8 @@ export function SessionsPage() {
   // harness chat also picks the provider model its subagents run on.
   const [allowSubagents, setAllowSubagents] = useState(false);
   const pendingSubagentSaveSessionRef = useRef<string | undefined>(undefined);
+  const [allowAgentMessaging, setAllowAgentMessaging] = useState(false);
+  const pendingAgentMessagingSaveSessionRef = useRef<string | undefined>(undefined);
   const [subagentProviderId, setSubagentProviderId] = useState("");
   const [subagentModel, setSubagentModel] = useState("");
   // How many subagents may run at once; undefined is no limit.
@@ -1144,6 +1148,9 @@ export function SessionsPage() {
   useEffect(() => {
     if (!activeChatSession) return;
     if (pendingSubagentSaveSessionRef.current === activeChatSession.id) return;
+    if (pendingAgentMessagingSaveSessionRef.current !== activeChatSession.id) {
+      setAllowAgentMessaging(activeChatSession.allowAgentMessaging === true);
+    }
     if (activeChatSession.backend === "harness") {
       setAllowSubagents(activeChatSession.allowSubagents === true);
       setSubagentProviderId(activeChatSession.subagentProviderId ?? "");
@@ -1902,6 +1909,7 @@ export function SessionsPage() {
       // the conversation; without them the new chat unchecks Subagents.
       reasoningEffort: reasoningEffort || undefined,
       allowSubagents,
+      allowAgentMessaging,
       maxActiveSubagents: allowSubagents ? subagentLimit : undefined,
       ...draft,
     });
@@ -2336,6 +2344,42 @@ export function SessionsPage() {
       }
     } finally {
       pendingSubagentSaveSessionRef.current = undefined;
+      setAssistantSettingsBusy(false);
+    }
+  };
+
+  const saveAgentMessagingChoice = async (enabled: boolean) => {
+    setAllowAgentMessaging(enabled);
+    setAssistantSettingsError(undefined);
+    if (!api || !sessionId || assistantSettingsBusy) {
+      setAssistantSettingsStatus("Agent messaging updated. Applies to your next message.");
+      return;
+    }
+    const current = sessions.find((item) => item.id === sessionId);
+    if (!current || current.isSubagent) return;
+    const selectionGeneration = sessionSelectionGenerationRef.current;
+    pendingAgentMessagingSaveSessionRef.current = sessionId;
+    setAssistantSettingsBusy(true);
+    setAssistantSettingsStatus("Saving agent messaging…");
+    try {
+      const updated = await api.updateChatSessionAssistantSettings(sessionId, {
+        allowAgentMessaging: enabled,
+        expectedRevision: current.revision,
+      });
+      setSessions((items) => items.map((item) => item.id === updated.id ? updated : item));
+      if (sessionSelectionGenerationRef.current === selectionGeneration) {
+        setAllowAgentMessaging(updated.allowAgentMessaging === true);
+        setAssistantSettingsStatus("Agent messaging saved. Applies to your next message.");
+      }
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions.agent_messaging_save_failed", "Agent messaging could not be saved.", error, "assistant_settings");
+      if (sessionSelectionGenerationRef.current === selectionGeneration) {
+        setAllowAgentMessaging(current.allowAgentMessaging === true);
+        setAssistantSettingsStatus("");
+        setAssistantSettingsError(error instanceof Error ? error.message : "Could not save agent messaging.");
+      }
+    } finally {
+      pendingAgentMessagingSaveSessionRef.current = undefined;
       setAssistantSettingsBusy(false);
     }
   };
@@ -2996,7 +3040,8 @@ export function SessionsPage() {
   const copyMessage = async (message: ConversationMessage) => {
     try {
       await copySelectionText(message.content);
-      setMessageActionStatus(`${message.role === "assistant" ? "Assistant response" : "Operator message"} copied exactly.`);
+      const label = message.role === "assistant" ? "Assistant response" : message.role === "system" ? "Agent message" : "Operator message";
+      setMessageActionStatus(`${label} copied exactly.`);
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions_page.message_copy", "A chat message could not be copied.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not copy the message.");
@@ -3503,7 +3548,7 @@ export function SessionsPage() {
     const knowledgeRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
     const allowCloudKnowledge = wantsKnowledge && !knowledgeRuntimeIsLocal;
 
-    const wantsTools = browserControlEnabled || (runtimeKind === "harness"
+    const wantsTools = browserControlEnabled || allowAgentMessaging || (runtimeKind === "harness"
       ? Boolean(harnessSessionId
         ? harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length
         : selectedMcpIds.length)
@@ -3617,6 +3662,7 @@ export function SessionsPage() {
       allowCloudKnowledge,
       toolsEnabled: runtimeKind === "provider" ? canUseTools : wantsTools,
       allowCloudToolResults,
+      allowAgentMessaging,
       harnessMode: runtimeKind === "harness" ? harnessMode || undefined : undefined,
       harnessReasoningEffort: runtimeKind === "harness"
         ? harnessReasoningEffort
@@ -4535,6 +4581,7 @@ export function SessionsPage() {
                   onChange={(choice) => void saveSubagentChoice(choice)}
                 />}
                 {runtimeKind === "provider" && <div className="chat-provider-subagents"><label className="chat-knowledge-toggle" data-guide="subagents"><input type="checkbox" checked={allowSubagents} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveSubagentChoice({ enabled: event.target.checked, providerId: "", model: "", limit: subagentLimit })} /><span><strong>Subagents</strong><small>Delegate independent work to parallel children on this model · {subagentLimitLabel(subagentLimit)}</small></span></label>{allowSubagents && <SubagentLimitField limit={subagentLimit} delegator="the assistant" disabled={sending || assistantSettingsBusy} onChange={(limit) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit })} />}</div>}
+                {(!activeChatSession || (!activeChatSession.isSubagent && !activeChatSession.archivedAt)) && <label className="chat-knowledge-toggle" data-guide="agent-messaging"><input type="checkbox" checked={allowAgentMessaging} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveAgentMessagingChoice(event.target.checked)} /><span><strong>Agent messaging</strong><small>Coordinate with other opted-in main agents in this project. Messages appear in both conversations.</small></span></label>}
                 {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><McpServerChoices api={api} projectId={engagement?.id} servers={mcpServers} selectedIds={selectedMcpIds} disabled={sending || assistantSettingsBusy} onChange={(nextIds) => void saveProviderAssistantSelections(nextIds, selectedHookIds)} /></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>
                 <AssistantSetupLinks items={[
@@ -4580,6 +4627,10 @@ export function SessionsPage() {
                 {loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <ThreadPrimitive.Messages>{({ message: threadMessage }) => {
                   const message = messagesById.get(threadMessage.id);
                   if (!message) return null;
+                  const agentMessage = message.role === "system" && message.metadata?.kind === "agent_message";
+                  const agentMessageSender = agentMessage && typeof message.metadata?.sender_title === "string"
+                    ? message.metadata.sender_title
+                    : "Peer agent";
                   const editing = messageEdit?.messageId === message.id ? messageEdit : undefined;
                   const replacedByEdit = editing
                     ? messages.filter((item) => item.durable && (item.sequence ?? 0) > (editing.sequence ?? 0)).length
@@ -4603,24 +4654,24 @@ export function SessionsPage() {
                         : undefined;
                   return (
                   <article
-                    className={`chat-message ${message.role === "user" ? "operator" : "assistant"}${editing ? " editing" : ""}${pendingReplacement ? " pending-replacement" : ""}`}
+                    className={`chat-message ${message.role === "user" ? "operator" : agentMessage ? "agent-message" : "assistant"}${editing ? " editing" : ""}${pendingReplacement ? " pending-replacement" : ""}`}
                     id={`chat-message-${message.id}`}
                     data-sequence={message.sequence}
                     data-selection-source-kind={message.role === "assistant" ? "assistant_message" : "chat_message"}
                     data-selection-source-id={message.id}
-                    data-selection-source-label={message.role === "assistant" ? "Assistant response" : "Chat message"}
+                    data-selection-source-label={message.role === "assistant" ? "Assistant response" : agentMessage ? "Agent message" : "Chat message"}
                     key={message.runtimeId ?? message.id}
                     tabIndex={-1}
                   >
                     <div className="chat-message-body">
-                      <header>{message.role === "assistant" && <><strong>{assistantSource}</strong>{runtimeConfiguration && <span>{runtimeConfiguration}</span>}</>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
+                      <header>{message.role === "assistant" && <><strong>{assistantSource}</strong>{runtimeConfiguration && <span>{runtimeConfiguration}</span>}</>}{agentMessage && <><strong>Message from {agentMessageSender}</strong><span>main agent</span></>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
                       {message.role === "assistant" && message.toolSuggestions && <ToolSuggestionChip summary={message.toolSuggestions} />}
                       {commentaryItems.length > 0 && <div className={`assistant-commentary${message.state === "streaming" ? " live" : ""}`} aria-label="Assistant commentary" aria-live="polite">
                         {commentaryItems.map((item) => <HarnessMarkdown content={item.text} key={item.key} />)}
                       </div>}
                       {message.role === "assistant" && <HarnessThinking items={messageActivityItems} />}
                       {message.role === "assistant" && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming" && Boolean(message.reasoning)} />}
-                      {message.content && (message.role === "assistant"
+                      {message.content && (message.role === "assistant" || agentMessage
                         ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={assistantRunnableLanguages} onRun={setRunCandidate} onRunInTerminal={runInTerminal} />
                         : editing
                           ? <form className="chat-message-edit" onSubmit={event => {event.preventDefault(); void resendEditedMessage();}}>
@@ -4702,7 +4753,7 @@ export function SessionsPage() {
                         ].filter(Boolean).join(" · ");
                         return <details className="chat-message-usage"><summary>{summary}</summary>{tokens && <span>{tokens.inputTokens.toLocaleString()} input · {tokens.outputTokens.toLocaleString()} output</span>}{detail && <span>{detail}</span>}</details>;
                       })()}
-                      {message.content && !editing && <footer className="chat-message-actions" data-guide="message-actions" aria-label="Message actions">{message.durable && <><IconAction icon={Bookmark} label="Bookmark" aria-pressed={chatNavigation.bookmarks.some(item => item.message_id === message.id && item.active)} onClick={() => void chatNavigation.toggleBookmark(message.id)} />{message.role === "user" && <IconAction icon={Pencil} label="Edit message" title="Edit and resend in this conversation" disabled={sending} onClick={() => beginMessageEdit(message)} />}</>}<button className="icon-button subtle" type="button" aria-label="Copy message" title="Copy exact message" onClick={() => void copyMessage(message)}><Copy size={14} /></button><button className="icon-button subtle" type="button" aria-label="Quote in composer" title={sending && runtimeKind === "harness" && selectedHarness?.capabilities?.steering ? "Quote as guidance for the active turn" : "Quote in an editable draft"} onClick={() => quoteMessage(message)}><MessageSquareQuote size={14} /></button>{message.durable && sessionId && <button className="icon-button subtle chat-fork-button" type="button" aria-label="Fork conversation here" title="Fork conversation here · files remain shared" disabled={sending} onClick={() => void forkConversation(message)}><GitFork size={14} /></button>}</footer>}
+                      {message.content && !editing && <footer className="chat-message-actions" data-guide="message-actions" aria-label="Message actions">{message.durable && <><IconAction icon={Bookmark} label="Bookmark" aria-pressed={chatNavigation.bookmarks.some(item => item.message_id === message.id && item.active)} onClick={() => void chatNavigation.toggleBookmark(message.id)} />{message.role === "user" && <IconAction icon={Pencil} label="Edit message" title="Edit and resend in this conversation" disabled={sending} onClick={() => beginMessageEdit(message)} />}</>}<button className="icon-button subtle" type="button" aria-label="Copy message" title="Copy exact message" onClick={() => void copyMessage(message)}><Copy size={14} /></button><button className="icon-button subtle" type="button" aria-label="Quote in composer" title={sending && runtimeKind === "harness" && selectedHarness?.capabilities?.steering ? "Quote as guidance for the active turn" : "Quote in an editable draft"} onClick={() => quoteMessage(message)}><MessageSquareQuote size={14} /></button>{message.durable && sessionId && !agentMessage && <button className="icon-button subtle chat-fork-button" type="button" aria-label="Fork conversation here" title="Fork conversation here · files remain shared" disabled={sending} onClick={() => void forkConversation(message)}><GitFork size={14} /></button>}</footer>}
                     </div>
                     {messageReplacements.map((group) => <ReplacedMessages group={group} key={group.id} />)}
                   </article>
