@@ -4030,6 +4030,18 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await expect(page.getByText("Deferred command")).toBeVisible();
   expect(targetActivityLoads).toBe(1);
 
+  // Regression: authoritative replacements used to measure every rendered row
+  // in a layout effect and synchronously write the measurements back to state.
+  // A rapid switch burst could then exceed React's nested update limit and
+  // replace the entire workspace with the fatal diagnostic boundary.
+  if ((page.viewportSize()?.width ?? 1_000) > 760) {
+    for (let index = 0; index < 20; index += 1) {
+      await page.locator(".session-select").filter({hasText: index % 2 ? "Target conversation" : "Source conversation"}).click();
+    }
+    await expect(page.getByRole("heading", {name: "The workspace could not be displayed"})).toHaveCount(0);
+    await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toBeVisible();
+  }
+
   const selectChat = async (title: string) => {
     const button = page.locator(".session-select").filter({hasText: title});
     if (!await button.isVisible()) {
