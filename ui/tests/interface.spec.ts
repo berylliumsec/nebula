@@ -9104,6 +9104,9 @@ test("assistant popup hides, restores and discards without changing the main con
   await expect(popup.getByRole("textbox")).toHaveValue("Explain the selected title");
   await popup.getByRole("button", { name: "Ask question" }).click();
   await expect(popup.getByText("A private answer with a follow-up.")).toBeVisible();
+  await expect(popup.getByRole("button", { name: "Copy response" })).toBeVisible();
+  await popup.getByRole("button", { name: "Copy response" }).click();
+  await expect(popup.getByRole("status")).toHaveText("Assistant response copied exactly.");
   const firstSessionId = requests[0].session_id as string;
   await popup.getByRole("textbox").fill("Keep this follow-up unsent");
   await popup.getByRole("button", { name: "Hide Ask Nebula" }).click();

@@ -1,23 +1,23 @@
 {
-  "change_digest": "e6545f053c3c43e05eff16ebb75df97519adf03774d7b3b59d9673b7c2ad5752",
-  "reviewed_by": "Codex focused review for new-chat runtime reset",
-  "reason": "The diff clears callback and interrupted-recovery state when the operator detaches into a new chat. The selected paused-provider recovery journey restores a waiting callback, starts a new chat, and proves Runtime and Harness are enabled across the permanent desktop and mobile browser profiles.",
-  "exclusions": "No Core, Python, or native behavior changed. Unrelated frontend and Playwright journeys and all full suites are excluded. The selected mock deliberately controls the otherwise timing-dependent waiting-callback state; live deployment health and build identity are verified separately.",
-  "expected_tests": {"python": 0, "frontend": 0, "native": 0, "playwright": 8},
+  "change_digest": "4592bc98aa098e8a58125ac198bcd0205ba256789b401fdf396f8916f71285ee",
+  "reviewed_by": "Codex focused review for Ask Nebula response-copy parity",
+  "reason": "The diff adds the main-chat copy affordance and origin-safe clipboard path to completed Ask Nebula responses. Focused component coverage proves exact content, success feedback, denied-clipboard recovery, and existing popup lifecycle behavior; the catalogued popup journey covers discoverability, touch geometry, accessibility, responsive layout, hide/restore, and production browser behavior across permanent desktop and mobile profiles.",
+  "exclusions": "No Core API, persistence, provider, Python, or native behavior changes. Real-Core mutation, unrelated frontend and Playwright journeys, live third-party provider execution, and physical-device workflows are excluded and are not claimed.",
+  "expected_tests": {"python": 0, "frontend": 19, "native": 0, "playwright": 8},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": [],
+  "frontend": ["ui/src/components/AskNebulaPopup.test.tsx"],
   "native": [],
   "playwright": [
-    "entry:paused-supervisor-recovery/desktop",
-    "entry:paused-supervisor-recovery/compact",
-    "entry:paused-supervisor-recovery/mobile-chromium-small",
-    "entry:paused-supervisor-recovery/mobile-chromium-ledger-390",
-    "entry:paused-supervisor-recovery/mobile-chromium-wide",
-    "entry:paused-supervisor-recovery/mobile-webkit-small",
-    "entry:paused-supervisor-recovery/mobile-webkit",
-    "entry:paused-supervisor-recovery/mobile-webkit-wide"
+    "entry:ask-nebula-popup/desktop",
+    "entry:ask-nebula-popup/compact",
+    "entry:ask-nebula-popup/mobile-chromium-small",
+    "entry:ask-nebula-popup/mobile-chromium-ledger-390",
+    "entry:ask-nebula-popup/mobile-chromium-wide",
+    "entry:ask-nebula-popup/mobile-webkit-small",
+    "entry:ask-nebula-popup/mobile-webkit",
+    "entry:ask-nebula-popup/mobile-webkit-wide"
   ]
 }

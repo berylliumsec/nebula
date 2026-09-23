@@ -1,10 +1,10 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { GripHorizontal, LoaderCircle, Minimize2, Send, Square, X } from "lucide-react";
+import { Check, Copy, GripHorizontal, LoaderCircle, Minimize2, Send, Square, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ApiClient } from "../api/client";
 import type { ChatCompletionRequest, ChatMessage, ChatSessionSummary } from "../api/types";
-import type { SelectionActionDraft } from "./selection";
+import { copySelectionText, type SelectionActionDraft } from "./selection";
 import { createPortal } from "react-dom";
 import { sha256Hex } from "../sha256";
 import { logCaughtDiagnostic } from "../diagnostics";
@@ -127,6 +127,7 @@ export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onC
   const harnessTurnId = useRef<string | undefined>(undefined);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string>();
+  const [copyFeedback, setCopyFeedback] = useState<{ kind: "success" | "error"; message: string }>();
   const [attempt, setAttempt] = useState(0);
   const branch = useRef<ChatSessionSummary | undefined>(undefined);
   const renewLease = useRef<(() => void) | undefined>(undefined);
@@ -187,6 +188,25 @@ export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onC
   }, [api, snapshot, attempt]);
 
   useEffect(() => { output.current?.scrollTo?.({ top: output.current.scrollHeight }); }, [hidden, messages, answer]);
+
+  useEffect(() => {
+    if (!copyFeedback) return;
+    const timeout = window.setTimeout(() => setCopyFeedback(undefined), 3_000);
+    return () => window.clearTimeout(timeout);
+  }, [copyFeedback]);
+
+  const copyResponse = async (content: string) => {
+    try {
+      await copySelectionText(content);
+      setCopyFeedback({ kind: "success", message: "Assistant response copied exactly." });
+    } catch (reason) {
+      void logCaughtDiagnostic("interface.ask_nebula.response_copy_failed", "An Ask Nebula response could not be copied.", reason, "chat");
+      setCopyFeedback({
+        kind: "error",
+        message: reason instanceof Error ? reason.message : "Could not copy the response. Select it and copy manually, or try again.",
+      });
+    }
+  };
 
   const stop = async () => {
     if (!api || stopping) return;
@@ -304,9 +324,17 @@ export function AskNebulaPopup({ api, snapshot, context, placementIndex = 0, onC
         <button className="icon-button subtle" type="button" aria-label="Close Ask Nebula" title="Close and discard" onClick={onClose}><X size={18} aria-hidden="true" /></button></div>
       <details className={styles.context}><summary>{context.source.label}{context.truncated ? " · shortened" : ""}</summary><pre>{context.text}</pre></details>
       <div className={styles.transcript} ref={output}>
-        {messages.map((message, index) => <div key={index} className={message.role === "user" ? styles.question : styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>)}
+        {messages.map((message, index) => <div key={index} className={message.role === "user" ? styles.question : styles.answer}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+          {message.role === "assistant" && message.content && <footer className={styles.responseActions} aria-label="Response actions">
+            <button className="icon-button subtle" type="button" aria-label="Copy response" title="Copy exact response" onClick={() => void copyResponse(message.content)}><Copy size={14} aria-hidden="true" /></button>
+          </footer>}
+        </div>)}
         {answer && <div className={styles.answer}><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div>}
       </div>
+      {copyFeedback && <div className={styles.copyFeedback} role={copyFeedback.kind === "error" ? "alert" : "status"} aria-live={copyFeedback.kind === "error" ? "assertive" : "polite"}>
+        {copyFeedback.kind === "success" && <Check size={13} aria-hidden="true" />} {copyFeedback.message}
+      </div>}
       {!api || !snapshot ? <p role="alert">Connect an assistant runtime to ask a question.</p> : !ready && !error ? <p role="status"><LoaderCircle size={14} className="spin" /> Preparing a temporary copy of the conversation…</p> : null}
       {error && <div role="alert" className={styles.error}>{error}{!ready && <button type="button" className="button quiet" onClick={() => setAttempt(value => value + 1)}>Try again</button>}</div>}
       {busy && <p role="status" className={styles.status}>{stopping ? "Stopping…" : needsAction.current ? "Action needed" : progress}</p>}
