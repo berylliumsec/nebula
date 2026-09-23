@@ -139,7 +139,7 @@ interface LocalModelStub {
   fail: boolean;
 }
 
-async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number; models?: string[] } = {}): Promise<LocalModelStub> {
+async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number; models?: string[]; responseContent?: string } = {}): Promise<LocalModelStub> {
   const requests: Array<Record<string, unknown>> = [];
   const stub: LocalModelStub = { origin: "", requests, server: undefined as unknown as Server, fail: options.fail === true };
   const server = createServer(async (request, response) => {
@@ -243,7 +243,7 @@ async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: nu
         model: "security-model",
         choices: [{
           index: 0,
-          message: { role: "assistant", content: "Real Core retained the exact research context." },
+          message: { role: "assistant", content: options.responseContent ?? "Real Core retained the exact research context." },
           finish_reason: "stop",
         }],
         usage: { prompt_tokens: 18, completion_tokens: 8, total_tokens: 26 },
@@ -1040,10 +1040,12 @@ test("production mission defaults to unlimited duration through real Core", asyn
 });
 
 test("assistant upgrade conversation switching restores durable Core history promptly", async ({ page }, testInfo) => {
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   const lanAddress = localNetworkIpv4();
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
-  const modelStub = await startLocalModelStub();
+  const modelStub = await startLocalModelStub({
+    responseContent: `Large durable response. ${"Compressible retained research context. ".repeat(3_500)}`,
+  });
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
@@ -1072,6 +1074,28 @@ test("assistant upgrade conversation switching restores durable Core history pro
     };
     const sourceId = await createConversation("Durable source conversation");
     const targetId = await createConversation("Durable target conversation");
+
+    const deliverySamples: Array<{ historyMs: number; stateMs: number; serverTiming?: string; contentEncoding?: string }> = [];
+    for (let index = 0; index < 5; index += 1) {
+      const historyStartedAt = Date.now();
+      const historyRequest = api.get(`chat/sessions/${sourceId}/messages`, {headers: {"Accept-Encoding": "gzip"}});
+      const stateStartedAt = Date.now();
+      const stateResponse = await api.get(`chat/sessions/${sourceId}/state`);
+      const stateMs = Date.now() - stateStartedAt;
+      const historyResponse = await historyRequest;
+      const historyMs = Date.now() - historyStartedAt;
+      expect(stateResponse.ok(), await stateResponse.text()).toBe(true);
+      expect(historyResponse.ok(), await historyResponse.text()).toBe(true);
+      expect(stateMs).toBeLessThan(1_000);
+      expect(historyMs).toBeLessThan(5_000);
+      deliverySamples.push({
+        historyMs,
+        stateMs,
+        serverTiming: historyResponse.headers()["server-timing"],
+        contentEncoding: historyResponse.headers()["content-encoding"],
+      });
+    }
+    expect(deliverySamples.every((sample) => sample.serverTiming?.startsWith("app;dur=") && sample.contentEncoding === "gzip")).toBe(true);
 
     const pairingResponse = await api.post(`http://127.0.0.1:${new URL(core.origin).port}/api/v1/auth/pairings`, {data: {name: "Chat cache acceptance"}});
     expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
@@ -1114,14 +1138,24 @@ test("assistant upgrade conversation switching restores durable Core history pro
     failHistory = true;
     await selectConversation(sourceId);
     await expect(page.getByRole("button", {name: "Reload conversation", exact: true})).toBeVisible();
-    await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
+    await expect(page.locator(".chat-message").filter({hasText: "Durable source conversation"})).toHaveCount(0);
     failHistory = false;
     await page.getByRole("button", {name: "Reload conversation", exact: true}).click();
     await expect(page.getByRole("button", {name: "Reload conversation", exact: true})).toHaveCount(0);
+    await selectConversation(targetId);
+    await expect(page.getByText("Durable target conversation", {exact: true})).toBeVisible();
+    await selectConversation(sourceId);
+    await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
+    await expect.poll(() => page.evaluate(() => performance.getEntriesByName("nebula.chat_switch.authoritative", "measure").at(-1)?.duration)).toBeGreaterThanOrEqual(0);
+    const browserMeasures = await page.evaluate(() => Object.fromEntries(
+      ["nebula.chat_switch.preview", "nebula.chat_switch.authoritative"].map((name) => [name, performance.getEntriesByName(name, "measure").at(-1)?.duration]),
+    ));
+    expect(browserMeasures["nebula.chat_switch.preview"]).toBeGreaterThanOrEqual(0);
+    expect(browserMeasures["nebula.chat_switch.authoritative"]).toBeGreaterThanOrEqual(0);
     await page.reload();
     await expect(page.getByText("Durable source conversation", {exact: true})).toBeVisible();
     const evidencePath = testInfo.outputPath("chat-cache-production-lan.json");
-    await writeFile(evidencePath, JSON.stringify({origin: core.origin, build: "ui/dist production", viewport: page.viewportSize(), workflow: "paired browser, durable A-B-A, held refresh, reload"}));
+    await writeFile(evidencePath, JSON.stringify({origin: core.origin, build: "ui/dist production", viewport: page.viewportSize(), workflow: "paired browser, durable A-B-A, held refresh, reload", deliverySamples, browserMeasures}));
     await testInfo.attach("chat-cache-production-lan", {path: evidencePath, contentType: "application/json"});
     const screenshotPath = testInfo.outputPath("chat-cache-visible-result.png");
     await page.screenshot({path: screenshotPath});

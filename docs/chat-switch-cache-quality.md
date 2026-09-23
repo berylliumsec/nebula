@@ -7,7 +7,7 @@ Entry: select A, select B, then return to A through Conversations.
 | Discover/select | URL, title and transcript identify the selected chat; cached content appears before refresh completes | URL; memory preview; Core refresh | focused browser journey |
 | Create/use/stream | Only durable messages enter previews; submission waits for refresh; existing drafts remain per chat | Core; existing draft storage | real Core create/use and browser disabled state |
 | Interrupt/background | Switching detaches viewers without cancelling work; obsolete fetches cannot replace the new chat | existing generation/abort guards; Core | rapid-switch browser regression |
-| Refresh/reconnect/retry | Fresh history replaces previews; failure retains readable preview with recovery and no submission | Core | browser failure/retry and real Core reload |
+| Refresh/reconnect/retry | Fresh history replaces previews; history failure discards the preview, while a later action-state failure retains authoritative history with recovery and no submission | Core | browser failure/retry and real Core reload |
 | Delete/revoke | Successful deletion invalidates preview; denied/missing history discards preview | Core | cache unit test and request error handling |
 | Scroll | Returning to a chat restores its reading position, including after refresh | transient per-chat memory | browser long transcript |
 | Scope | Cache is bounded to ten chats, isolated per project/API connection, and never persisted to browser storage | component-owned memory | unit test and implementation review |
@@ -24,3 +24,8 @@ Fork/create continues through existing selection and receives a cold load. Provi
 - Physical devices/software keyboards were not tested. No provider or harness command executes in these selected journeys. No full suite was run.
 
 Product rule: a readable transcript should not wait for a network refresh when a session-scoped preview is available. Preview state is presentation only; current Core state governs submission and approvals.
+
+The focused chat-switch performance tranche supersedes the 2026-09-12 failure
+presentation: a failed authoritative history request now clears the preview;
+failure after authoritative history loads preserves that history but disables
+turn-changing actions until retry.

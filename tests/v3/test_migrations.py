@@ -108,6 +108,67 @@ def _exercise_migration_cycle(database_url: str) -> None:
         engine.dispose()
 
 
+def _exercise_chat_session_lookup_cycle(database_url: str) -> None:
+    """Exercise the conversation projection at its reversible head boundary."""
+
+    engine = create_engine(database_url, future=True)
+    row_ids = ["postgres-chat-message", "postgres-chat-approval"]
+    try:
+        _run_migration(engine, command.downgrade, "0015_session_projection")
+        entities = Table("entities", MetaData(), autoload_with=engine)
+        with engine.begin() as connection:
+            connection.execute(
+                entities.insert(),
+                [
+                    _legacy_row(
+                        row_ids[0],
+                        "chat_messages",
+                        "project-1",
+                        {"session_id": "session-a", "content": "kept"},
+                    ),
+                    _legacy_row(
+                        row_ids[1],
+                        "approvals",
+                        "project-1",
+                        {"chat_session_id": "session-b", "status": "pending"},
+                    ),
+                ],
+            )
+
+        _run_migration(engine, command.upgrade, "head")
+        projected = Table("entities", MetaData(), autoload_with=engine)
+        with engine.connect() as connection:
+            values = dict(
+                connection.execute(
+                    select(projected.c.id, projected.c.chat_session_id).where(
+                        projected.c.id.in_(row_ids)
+                    )
+                ).all()
+            )
+        assert values == {
+            "postgres-chat-message": "session-a",
+            "postgres-chat-approval": "session-b",
+        }
+
+        _run_migration(engine, command.downgrade, "0015_session_projection")
+        downgraded = Table("entities", MetaData(), autoload_with=engine)
+        assert "chat_session_id" not in downgraded.c
+        with engine.begin() as connection:
+            payloads = dict(
+                connection.execute(
+                    select(downgraded.c.id, downgraded.c.payload).where(
+                        downgraded.c.id.in_(row_ids)
+                    )
+                ).all()
+            )
+            connection.execute(delete(downgraded).where(downgraded.c.id.in_(row_ids)))
+        assert payloads[row_ids[0]]["content"] == "kept"
+        assert payloads[row_ids[1]]["chat_session_id"] == "session-b"
+        _run_migration(engine, command.upgrade, "head")
+    finally:
+        engine.dispose()
+
+
 def test_sqlite_upgrade_downgrade_and_immutable_operation_events(tmp_path):
     _exercise_migration_cycle(f"sqlite+pysqlite:///{tmp_path / 'migrations.db'}")
 
@@ -238,4 +299,6 @@ def test_sqlite_migration_failure_leaves_no_partial_schema_and_can_retry(tmp_pat
     reason="NEBULA_TEST_POSTGRES_URL is required for PostgreSQL migration coverage",
 )
 def test_postgresql_upgrade_downgrade_and_immutable_operation_events():
-    _exercise_migration_cycle(os.environ["NEBULA_TEST_POSTGRES_URL"])
+    database_url = os.environ["NEBULA_TEST_POSTGRES_URL"]
+    _exercise_migration_cycle(database_url)
+    _exercise_chat_session_lookup_cycle(database_url)

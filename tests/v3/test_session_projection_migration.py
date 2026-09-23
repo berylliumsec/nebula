@@ -1,7 +1,7 @@
 """The additive display cache can roll back without touching operator data."""
 
 from alembic import command
-from sqlalchemy import inspect, select
+from sqlalchemy import MetaData, Table, inspect, select
 
 from nebula.v3.domain import ChatSession, ChatTurn
 from tests.v3.test_approval_continuation import fixture
@@ -19,8 +19,13 @@ def test_projection_migration_roundtrip_preserves_authoritative_records(tmp_path
     engine = store.database.engine
     _run_migration(engine, command.downgrade, "0014_application_graph")
     assert "session_projections" not in inspect(engine).get_table_names()
-    assert store.get(ChatTurn, owner.id) == original
-    _run_migration(engine, command.upgrade, "0015_session_projection")
+    entities = Table("entities", MetaData(), autoload_with=engine)
+    with engine.connect() as connection:
+        payload = connection.scalar(
+            select(entities.c.payload).where(entities.c.id == owner.id)
+        )
+    assert ChatTurn.model_validate(payload) == original
+    _run_migration(engine, command.upgrade, "head")
     with store.database.session() as database:
         assert database.scalar(select(SessionProjectionRow)) is None
     assert session_state(store, chat, runtime)["pending"]
