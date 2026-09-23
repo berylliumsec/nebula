@@ -62,7 +62,7 @@ def results_router(store, artifacts):
                     .where(
                         EntityRow.kind == "chat_messages",
                         EntityRow.engagement_id == session.engagement_id,
-                        EntityRow.payload["session_id"].as_string() == session_id,
+                        EntityRow.chat_session_id == session_id,
                     )
                     .order_by(EntityRow.payload["sequence"].as_integer())
                     .offset(offset)
@@ -82,7 +82,7 @@ def results_router(store, artifacts):
                     select(EntityRow).where(
                         EntityRow.kind == "tool_calls",
                         EntityRow.engagement_id == session.engagement_id,
-                        EntityRow.payload["chat_session_id"].as_string() == session_id,
+                        EntityRow.chat_session_id == session_id,
                     )
                 )
             ]
@@ -202,7 +202,7 @@ def results_router(store, artifacts):
                 .where(
                     EntityRow.kind == "chat_messages",
                     EntityRow.engagement_id == session.engagement_id,
-                    EntityRow.payload["session_id"].as_string() == session_id,
+                    EntityRow.chat_session_id == session_id,
                 )
                 .order_by(EntityRow.payload["sequence"].as_integer().desc())
                 .offset(offset)

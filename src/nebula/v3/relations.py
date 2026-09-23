@@ -25,7 +25,7 @@ from .domain import (
     ResourceRelationSet,
     utc_now,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, NebulaStore, NotFoundError, _entity_lookup_fields
 
 
 RESOURCE_ENTITY_KINDS: dict[ResourceKind, str] = {
@@ -610,6 +610,7 @@ class ResourceRelationService:
                 engagement_id=getattr(entity, "engagement_id"),
                 revision=entity.revision,
                 payload=entity.model_dump(mode="json"),
+                **_entity_lookup_fields(entity),
                 created_at=entity.created_at,
                 updated_at=entity.updated_at,
             )
@@ -650,6 +651,8 @@ class ResourceRelationService:
             row.revision = updated.revision
             row.updated_at = updated.updated_at
             row.engagement_id = getattr(updated, "engagement_id")
+            for field, value in _entity_lookup_fields(updated).items():
+                setattr(row, field, value)
             try:
                 self.sync_legacy_edges(session, updated)
             except IntegrityError as exc:

@@ -121,7 +121,7 @@ class ChatQueueService:
                 select(EntityRow)
                 .where(
                     EntityRow.kind == "chat_turns",
-                    EntityRow.payload["session_id"].as_string() == session_id,
+                    EntityRow.chat_session_id == session_id,
                 )
                 .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
                 .limit(1)

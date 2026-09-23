@@ -111,6 +111,13 @@ class EntityRow(Base):
             "automation_status",
             "automation_expires_at",
         ),
+        Index(
+            "ix_entities_kind_chat_session_created",
+            "kind",
+            "chat_session_id",
+            "created_at",
+            "id",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(200), primary_key=True)
@@ -129,6 +136,9 @@ class EntityRow(Base):
     automation_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # The JSON envelope remains authoritative. This nullable projection only
+    # makes exact-conversation reads indexable for chat-owned entity families.
+    chat_session_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

@@ -46,7 +46,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
             exists(
                 select(visible_chat.id).where(
                     visible_chat.kind == "chat_sessions",
-                    visible_chat.id == EntityRow.payload["session_id"].as_string(),
+                    visible_chat.id == EntityRow.chat_session_id,
                     func.coalesce(
                         visible_chat.payload["metadata"][
                             "temporary_assistant"
@@ -60,9 +60,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
             session = store.get(ChatSession, session_id)
             if session.engagement_id != project_id:
                 raise NotFoundError("Conversation is not in this project")
-            statement = statement.where(
-                EntityRow.payload["session_id"].as_string() == session_id
-            )
+            statement = statement.where(EntityRow.chat_session_id == session_id)
         if q.strip():
             statement = statement.where(
                 EntityRow.payload["content"]
@@ -128,7 +126,7 @@ def workspace_router(store: NebulaStore) -> APIRouter:
                 select(EntityRow).where(
                     EntityRow.kind == "chat_bookmarks",
                     EntityRow.engagement_id == session.engagement_id,
-                    EntityRow.payload["session_id"].as_string() == session_id,
+                    EntityRow.chat_session_id == session_id,
                 )
             )
             return [ChatBookmark.model_validate(row.payload) for row in rows]

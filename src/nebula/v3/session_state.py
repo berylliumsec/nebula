@@ -92,7 +92,7 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
     turn_query = select(EntityRow).where(
         EntityRow.kind == ChatTurn.entity_kind,
         EntityRow.engagement_id == session.engagement_id,
-        EntityRow.payload["session_id"].as_string() == session.id,
+        EntityRow.chat_session_id == session.id,
     )
     turns = [
         ChatTurn.model_validate(row.payload)
@@ -108,7 +108,7 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
                 EntityRow.kind == Approval.entity_kind,
                 EntityRow.engagement_id == session.engagement_id,
                 or_(
-                    EntityRow.payload["chat_session_id"].as_string() == session.id,
+                    EntityRow.chat_session_id == session.id,
                     EntityRow.payload["chat_turn_id"].as_string().in_(turn_ids),
                     EntityRow.id.in_(
                         [turn.approval_id for turn in turns if turn.approval_id]
@@ -123,7 +123,7 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
             select(EntityRow).where(
                 EntityRow.kind == HarnessInteraction.entity_kind,
                 EntityRow.engagement_id == session.engagement_id,
-                EntityRow.payload["chat_session_id"].as_string() == session.id,
+                EntityRow.chat_session_id == session.id,
             )
         )
     ]

@@ -38,7 +38,7 @@ def source_message(database, session, turn):
         select(EntityRow)
         .where(
             EntityRow.kind == "chat_messages",
-            EntityRow.payload["session_id"].as_string() == session.id,
+            EntityRow.chat_session_id == session.id,
             EntityRow.payload["role"].as_string() == "user",
             EntityRow.created_at >= turn.created_at,
         )
@@ -59,7 +59,7 @@ def catchup_projection(store, session, cursor):
                 select(EntityRow)
                 .where(
                     EntityRow.kind == "chat_turns",
-                    EntityRow.payload["session_id"].as_string() == session.id,
+                    EntityRow.chat_session_id == session.id,
                 )
                 .order_by(EntityRow.updated_at.desc())
                 .limit(101)
@@ -92,7 +92,7 @@ def catchup_projection(store, session, cursor):
                     select(EntityRow)
                     .where(
                         EntityRow.kind == "chat_messages",
-                        EntityRow.payload["session_id"].as_string() == session.id,
+                        EntityRow.chat_session_id == session.id,
                         EntityRow.payload["role"].as_string() == "assistant",
                         EntityRow.created_at > cursor.through_at,
                         EntityRow.created_at <= through,
@@ -110,7 +110,7 @@ def catchup_projection(store, session, cursor):
                     select(EntityRow)
                     .where(
                         EntityRow.kind == "chat_messages",
-                        EntityRow.payload["session_id"].as_string() == session.id,
+                        EntityRow.chat_session_id == session.id,
                         EntityRow.payload["role"].as_string() == "user",
                         EntityRow.payload["sequence"].as_integer() < message.sequence,
                     )

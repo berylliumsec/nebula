@@ -7664,19 +7664,16 @@ class ChatService:
         )
 
     def list_turn_hook_executions(self, turn_id: str) -> list[NativeHookExecution]:
-        """Return every durable hook attempt for a turn, paging past the store cap."""
+        """Return every durable hook attempt for a turn from its chat projection."""
 
         turn = self.store.get(ChatTurn, turn_id)
-        executions: list[NativeHookExecution] = []
-        offset = 0
-        while page := self.store.list_entities(
-            NativeHookExecution,
-            engagement_id=turn.engagement_id,
-            offset=offset,
-            limit=1_000,
-        ):
-            executions.extend(item for item in page if item.chat_turn_id == turn.id)
-            offset += len(page)
+        executions = [
+            item
+            for item in self.store.list_session_entities(
+                NativeHookExecution, turn.session_id
+            )
+            if item.chat_turn_id == turn.id
+        ]
         return sorted(executions, key=lambda item: (item.started_at, item.id))
 
     def list_session_hook_executions(
@@ -7687,18 +7684,8 @@ class ChatService:
         pending = self.pending_turn(session_id)
         if pending is not None:
             return self.list_turn_hook_executions(pending.id)
-        latest: ChatTurn | None = None
-        offset = 0
-        while page := self.store.list_entities(ChatTurn, offset=offset, limit=1_000):
-            for item in page:
-                if item.session_id != session_id:
-                    continue
-                if latest is None or (item.created_at, item.id) > (
-                    latest.created_at,
-                    latest.id,
-                ):
-                    latest = item
-            offset += len(page)
+        turns = self.store.list_session_entities(ChatTurn, session_id)
+        latest = max(turns, key=lambda item: (item.created_at, item.id), default=None)
         return self.list_turn_hook_executions(latest.id) if latest is not None else []
 
     async def _run_terminal_native_hooks(
@@ -9037,24 +9024,11 @@ class ChatService:
     def _session_messages(
         self, session: ChatSession, *, include_replaced: bool = False
     ) -> list[ChatMessage]:
-        messages: list[ChatMessage] = []
-        offset = 0
-        while True:
-            page = self.store.list_entities(
-                ChatMessage,
-                engagement_id=session.engagement_id,
-                offset=offset,
-                limit=1_000,
-            )
-            messages.extend(
-                message
-                for message in page
-                if message.session_id == session.id
-                and (include_replaced or not message_is_replaced(message))
-            )
-            if len(page) < 1_000:
-                break
-            offset += len(page)
+        messages = self.store.list_session_entities(ChatMessage, session.id)
+        if not include_replaced:
+            messages = [
+                message for message in messages if not message_is_replaced(message)
+            ]
         return sorted(
             messages, key=lambda item: (item.sequence, item.created_at, item.id)
         )

@@ -103,6 +103,30 @@ _AUTOMATION_ENTITY_KINDS = frozenset(
     }
 )
 
+_CHAT_SESSION_ID_ENTITY_KINDS = frozenset(
+    {
+        "chat_bookmarks",
+        "chat_decisions",
+        "chat_goals",
+        "chat_messages",
+        "chat_queues",
+        "chat_read_cursors",
+        "chat_schedules",
+        "chat_turns",
+    }
+)
+
+_CHAT_SESSION_REFERENCE_ENTITY_KINDS = frozenset(
+    {
+        "approvals",
+        "harness_interactions",
+        "harness_turns",
+        "native_checkpoints",
+        "native_hook_executions",
+        "tool_calls",
+    }
+)
+
 
 def _automation_lookup_fields(entity: Entity) -> dict[str, Any]:
     """Return indexed projections for the run-scoped browser entity family."""
@@ -116,6 +140,22 @@ def _automation_lookup_fields(entity: Entity) -> dict[str, Any]:
         "automation_status": getattr(status, "value", status),
         "automation_expires_at": getattr(entity, "expires_at", None),
     }
+
+
+def _chat_lookup_fields(entity: Entity) -> dict[str, Any]:
+    """Return the indexed exact-conversation projection for known chat records."""
+
+    if entity.entity_kind in _CHAT_SESSION_ID_ENTITY_KINDS:
+        return {"chat_session_id": getattr(entity, "session_id", None)}
+    if entity.entity_kind in _CHAT_SESSION_REFERENCE_ENTITY_KINDS:
+        return {"chat_session_id": getattr(entity, "chat_session_id", None)}
+    return {}
+
+
+def _entity_lookup_fields(entity: Entity) -> dict[str, Any]:
+    """Return every denormalized lookup field maintained for an entity row."""
+
+    return {**_automation_lookup_fields(entity), **_chat_lookup_fields(entity)}
 
 
 PayloadFilterValue = str | Sequence[str] | None
@@ -163,7 +203,7 @@ class StoreTransaction:
             engagement_id=entity_engagement_id(entity),
             revision=entity.revision,
             payload=_dump_entity(entity),
-            **_automation_lookup_fields(entity),
+            **_entity_lookup_fields(entity),
             created_at=entity.created_at,
             updated_at=entity.updated_at,
         )
@@ -229,7 +269,7 @@ class StoreTransaction:
             .values(
                 payload=_dump_entity(updated),
                 engagement_id=entity_engagement_id(updated),
-                **_automation_lookup_fields(updated),
+                **_entity_lookup_fields(updated),
                 revision=updated.revision,
                 updated_at=updated.updated_at,
             )
@@ -403,7 +443,7 @@ class NebulaStore:
 
         statement = select(EntityRow).where(
             EntityRow.kind == model.entity_kind,
-            EntityRow.payload["session_id"].as_string() == session_id,
+            EntityRow.chat_session_id == session_id,
         )
         if statuses is not None:
             statement = statement.where(
@@ -505,7 +545,7 @@ class NebulaStore:
                     engagement_id=entity_engagement_id(entity),
                     revision=entity.revision,
                     payload=_dump_entity(entity),
-                    **_automation_lookup_fields(entity),
+                    **_entity_lookup_fields(entity),
                     created_at=entity.created_at,
                     updated_at=entity.updated_at,
                 )
@@ -577,7 +617,7 @@ class NebulaStore:
                     engagement_id=engagement_id,
                     revision=entity.revision,
                     payload=_dump_entity(entity),
-                    **_automation_lookup_fields(entity),
+                    **_entity_lookup_fields(entity),
                     created_at=entity.created_at,
                     updated_at=entity.updated_at,
                 )
@@ -741,7 +781,7 @@ class NebulaStore:
                     engagement_id=call.engagement_id,
                     revision=call.revision,
                     payload=_dump_entity(call),
-                    **_automation_lookup_fields(call),
+                    **_entity_lookup_fields(call),
                     created_at=call.created_at,
                     updated_at=call.updated_at,
                 )
@@ -1042,7 +1082,7 @@ class NebulaStore:
                 .values(
                     payload=_dump_entity(updated_entity),
                     engagement_id=entity_engagement_id(updated_entity),
-                    **_automation_lookup_fields(updated_entity),
+                    **_entity_lookup_fields(updated_entity),
                     revision=updated_entity.revision,
                     updated_at=updated_entity.updated_at,
                 )
@@ -1143,7 +1183,7 @@ class NebulaStore:
                 .values(
                     payload=_dump_entity(updated_entity),
                     engagement_id=entity_engagement_id(updated_entity),
-                    **_automation_lookup_fields(updated_entity),
+                    **_entity_lookup_fields(updated_entity),
                     revision=updated_entity.revision,
                     updated_at=updated_entity.updated_at,
                 )
@@ -1290,7 +1330,7 @@ class NebulaStore:
         ]
         active_turn = and_(
             EntityRow.kind == "chat_turns",
-            EntityRow.payload["session_id"].as_string().in_(session_ids),
+            EntityRow.chat_session_id.in_(session_ids),
             EntityRow.payload["status"]
             .as_string()
             .in_(("routing", "waiting_approval", "waiting_callback", "finalizing")),
@@ -1301,7 +1341,7 @@ class NebulaStore:
             )
         active_harness_turn = and_(
             EntityRow.kind == "harness_turns",
-            EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
+            EntityRow.chat_session_id.in_(session_ids),
             EntityRow.payload["status"]
             .as_string()
             .in_(("queued", "running", "waiting_approval")),
@@ -1362,7 +1402,7 @@ class NebulaStore:
                             "chat_schedules",
                         )
                     ),
-                    EntityRow.payload["session_id"].as_string().in_(session_ids),
+                    EntityRow.chat_session_id.in_(session_ids),
                 ),
                 and_(
                     EntityRow.kind == "context_snapshots",
@@ -1371,11 +1411,11 @@ class NebulaStore:
                 ),
                 and_(
                     EntityRow.kind.in_(("tool_calls", "approvals")),
-                    EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
+                    EntityRow.chat_session_id.in_(session_ids),
                 ),
                 and_(
                     EntityRow.kind.in_(("harness_turns", "harness_interactions")),
-                    EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
+                    EntityRow.chat_session_id.in_(session_ids),
                 ),
                 # Workspace checkpoints and native hook runs are captured for a
                 # conversation but carry the project's id; left behind they
@@ -1384,7 +1424,7 @@ class NebulaStore:
                     EntityRow.kind.in_(
                         ("native_checkpoints", "native_hook_executions")
                     ),
-                    EntityRow.payload["chat_session_id"].as_string().in_(session_ids),
+                    EntityRow.chat_session_id.in_(session_ids),
                 ),
                 and_(
                     EntityRow.kind.in_(("chat_subagents", "chat_subagent_messages")),
@@ -1415,7 +1455,7 @@ class NebulaStore:
             # Chat-origin tool calls key their budget counter by the turn id.
             chat_turn_ids = select(EntityRow.id).where(
                 EntityRow.kind == "chat_turns",
-                EntityRow.payload["session_id"].as_string().in_(session_ids),
+                EntityRow.chat_session_id.in_(session_ids),
             )
             session.execute(
                 delete(RunBudgetCounterRow).where(
