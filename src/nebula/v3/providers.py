@@ -76,6 +76,21 @@ class ProviderError(RuntimeError):
     """A normalized, secret-safe provider failure."""
 
 
+class ProviderCredentialLockedError(ProviderError):
+    """The provider secret exists behind an interactive host-vault lock."""
+
+    code = "provider_credential_locked"
+    _nebula_diagnostic_reason_code = "dependency_unavailable"
+    _nebula_diagnostic_operator_detail = (
+        "The selected provider credential is saved, but the operating-system "
+        "vault on the Nebula host is locked."
+    )
+    _nebula_diagnostic_impact = (
+        "The provider request did not start; saved conversations and local work "
+        "remain available."
+    )
+
+
 class ProviderContextLengthError(ProviderError):
     """The provider explicitly rejected the request for exceeding context."""
 
@@ -5994,13 +6009,13 @@ def provider_from_profile(
     if profile.secret_ref:
         if profile.secret_ref.startswith("env:"):
             secret_env = profile.secret_ref.removeprefix("env:")
-        elif profile.secret_ref.startswith(("vault:", "session:")):
+        elif profile.secret_ref.startswith(("systemd:", "vault:", "session:")):
             credential_ref = profile.secret_ref
             if credential_resolver is not None:
                 secret_value = credential_resolver(profile.secret_ref)
         else:
             raise ValueError(
-                "provider secret_ref must use env:NAME, vault:ID, or session:ID"
+                "provider secret_ref must use env:NAME, systemd:NAME, vault:ID, or session:ID"
             )
     raw_options = profile.metadata.get("options", {})
     options = raw_options if isinstance(raw_options, dict) else {}
@@ -6093,6 +6108,7 @@ __all__ = [
     "ProviderCatalogEntry",
     "ProviderConfig",
     "ProviderError",
+    "ProviderCredentialLockedError",
     "ProviderContextLengthError",
     "ProviderOverloadedError",
     "ProviderResponseError",

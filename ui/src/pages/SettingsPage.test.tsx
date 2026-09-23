@@ -164,6 +164,23 @@ describe("settings page dialogs", () => {
     );
   });
 
+  it("saves an unattended provider with an opaque systemd credential reference", async () => {
+    workspace.addProvider.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderSettings("/settings");
+
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    const dialog = screen.getByRole("dialog", { name: "Add model provider" });
+    await user.click(within(dialog).getByText("Advanced provider options"));
+    await user.type(within(dialog).getByLabelText(/systemd service credential/i), "openai-api-key");
+    await user.click(within(dialog).getByRole("button", { name: "Add provider" }));
+
+    await waitFor(() => expect(workspace.addProvider).toHaveBeenCalledWith(expect.objectContaining({
+      credentialEnv: undefined,
+      credentialRef: "systemd:openai-api-key",
+    })));
+  });
+
   it("trims the operator display name and refuses a blank one", async () => {
     workspace.createOperatorProfile.mockResolvedValue(undefined);
     const user = userEvent.setup();

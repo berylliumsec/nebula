@@ -5642,6 +5642,7 @@ export class ApiClient {
       reference: string;
       persistence: CredentialStatus["persistence"];
       available: boolean;
+      state: CredentialStatus["state"];
     }>("credentials", {
       method: "POST",
       body: JSON.stringify({ secret, persistence }),

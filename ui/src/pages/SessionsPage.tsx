@@ -97,6 +97,10 @@ import { ChatPreviewCache } from "./chatPreviewCache";
 import { Link, useSearchParams, type NavigateOptions } from "react-router-dom";
 import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime, providerDefaultModel } from "../api/runtimeDefaults";
+import {
+  prepareProviderCredential,
+  runWithProviderCredentialRecovery,
+} from "./providerCredentialRecovery";
 import type {
   ChatCompletionRequest,
   ChatGoal,
@@ -3547,6 +3551,18 @@ export function SessionsPage() {
         : item));
     };
 
+    try {
+      await prepareProviderCredential(api, providerRuntime?.credentialRef);
+    } catch (credentialError) {
+      // diagnostic-expected: preflight failures are rendered inline and stop submission.
+      const detail = credentialError instanceof Error
+        ? credentialError.message
+        : "The provider credential is unavailable on the Nebula Core host.";
+      setChatError(detail);
+      failQueuedFollowUp(detail);
+      return;
+    }
+
     const wantsKnowledge = canUseKnowledge;
     const knowledgeRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
     const allowCloudKnowledge = wantsKnowledge && !knowledgeRuntimeIsLocal;
@@ -3740,7 +3756,7 @@ export function SessionsPage() {
 
     let requestCompleted = false;
     try {
-      const response = await api.streamChat(chatRequest, (streamEvent) => {
+      const streamRequest = () => api.streamChat(chatRequest, (streamEvent) => {
         if (controller.signal.aborted) return;
         if (streamEvent.type === "started") {
           returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
@@ -3748,6 +3764,13 @@ export function SessionsPage() {
         if (streamEvent.type === "done") returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
         applyChatEvent(streamEvent, assistantId, userId, chatRequest);
       }, controller.signal);
+      // Core returns the typed locked-vault error before accepting the turn,
+      // so the helper's single unlock-and-resubmit cannot duplicate work.
+      const response = await runWithProviderCredentialRecovery(
+        api,
+        providerRuntime?.credentialRef,
+        streamRequest,
+      );
       requestCompleted = true;
       if (controller.signal.aborted || detachedStreamsRef.current.has(controller)) return;
       returnedSessionId = response?.sessionId ?? returnedSessionId;

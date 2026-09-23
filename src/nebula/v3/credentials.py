@@ -7,7 +7,9 @@ from .diagnostics import record_caught_exception
 import os
 from contextlib import closing
 import re
+import stat
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 from uuid import uuid4
 
@@ -25,9 +27,10 @@ from .vault_probe import (
 from .vault_probe import vault_state as probe_vault_state
 
 _REFERENCE = re.compile(
-    r"^(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})$"
+    r"^(?:env:[A-Za-z_][A-Za-z0-9_]*|systemd:[A-Za-z0-9_.-]{1,128}|(?:vault|session):[0-9a-f]{32})$"
 )
 _SERVICE_NAME = "io.berylliumsec.nebula.provider-credentials"
+_MAX_SECRET_BYTES = 16_384
 
 _VAULT_LOCKED_DETAIL = (
     "the operating-system credential vault is locked; unlock it on the Nebula "
@@ -48,6 +51,10 @@ class CredentialUnavailableError(CredentialError):
 
 
 class CredentialNotFoundError(CredentialError):
+    pass
+
+
+class CredentialVaultLockedError(CredentialUnavailableError):
     pass
 
 
@@ -74,8 +81,17 @@ class CredentialCreateRequest(NebulaModel):
 
 class CredentialStatus(NebulaModel):
     reference: str
-    persistence: Literal["environment", "vault", "session"]
+    persistence: Literal["environment", "systemd", "vault", "session"]
     available: bool
+    state: Literal[
+        "available",
+        "locked",
+        "missing",
+        "backend_unavailable",
+        "session_expired",
+        "environment_missing",
+        "service_credential_missing",
+    ]
 
 
 @dataclass
@@ -144,7 +160,10 @@ class CredentialStore:
             reference = f"session:{identifier}"
             self._session[reference] = SecretStr(value)
             return CredentialStatus(
-                reference=reference, persistence="session", available=True
+                reference=reference,
+                persistence="session",
+                available=True,
+                state="available",
             )
         state = self.vault_state
         if state != "available" or self.keyring_backend is None:
@@ -170,33 +189,70 @@ class CredentialStore:
                 "the operating-system credential vault could not save the credential"
             ) from exc
         return CredentialStatus(
-            reference=f"vault:{identifier}", persistence="vault", available=True
+            reference=f"vault:{identifier}",
+            persistence="vault",
+            available=True,
+            state="available",
         )
 
     def status(self, reference: str) -> CredentialStatus:
         self._validate_reference(reference)
         if reference.startswith("env:"):
             name = reference.removeprefix("env:")
+            available = bool(os.getenv(name))
             return CredentialStatus(
                 reference=reference,
                 persistence="environment",
-                available=bool(os.getenv(name)),
+                available=available,
+                state="available" if available else "environment_missing",
+            )
+        if reference.startswith("systemd:"):
+            available = self._systemd_value(reference) is not None
+            return CredentialStatus(
+                reference=reference,
+                persistence="systemd",
+                available=available,
+                state="available" if available else "service_credential_missing",
             )
         if reference.startswith("session:"):
+            available = reference in self._session
             return CredentialStatus(
                 reference=reference,
                 persistence="session",
-                available=reference in self._session,
+                available=available,
+                state="available" if available else "session_expired",
             )
+        vault_state = self.vault_state
+        if vault_state == "locked":
+            return CredentialStatus(
+                reference=reference,
+                persistence="vault",
+                available=False,
+                state="locked",
+            )
+        if vault_state != "available":
+            return CredentialStatus(
+                reference=reference,
+                persistence="vault",
+                available=False,
+                state="backend_unavailable",
+            )
+        available = self._vault_value(reference) is not None
         return CredentialStatus(
             reference=reference,
             persistence="vault",
-            available=self._vault_value(reference) is not None,
+            available=available,
+            state="available" if available else "missing",
         )
 
     def resolve(self, reference: str) -> SecretStr:
         status = self.status(reference)
         if not status.available:
+            if status.state == "locked":
+                raise CredentialVaultLockedError(
+                    "the operating-system credential vault is locked; unlock it on "
+                    "the Nebula host and retry"
+                )
             raise CredentialNotFoundError(
                 f"provider credential reference is unavailable: {reference}"
             )
@@ -204,8 +260,20 @@ class CredentialStore:
             return SecretStr(os.environ[reference.removeprefix("env:")])
         if reference.startswith("session:"):
             return self._session[reference]
+        if reference.startswith("systemd:"):
+            value = self._systemd_value(reference)
+            if value is None:
+                raise CredentialNotFoundError(
+                    f"provider service credential is unavailable: {reference}"
+                )
+            return SecretStr(value)
         value = self._vault_value(reference)
         if value is None:
+            if self.vault_state == "locked":
+                raise CredentialVaultLockedError(
+                    "the operating-system credential vault is locked; unlock it on "
+                    "the Nebula host and retry"
+                )
             raise CredentialNotFoundError(
                 f"provider credential reference is unavailable: {reference}"
             )
@@ -213,8 +281,10 @@ class CredentialStore:
 
     def delete(self, reference: str) -> None:
         self._validate_reference(reference)
-        if reference.startswith("env:"):
-            raise CredentialError("environment credentials are managed outside Nebula")
+        if reference.startswith(("env:", "systemd:")):
+            raise CredentialError(
+                "environment and service credentials are managed outside Nebula"
+            )
         if reference.startswith("session:"):
             self._session.pop(reference, None)
             return
@@ -273,6 +343,63 @@ class CredentialStore:
                 caught_error,
                 stage="credentials",
             )
+            return None
+
+    @staticmethod
+    def _systemd_value(reference: str) -> str | None:
+        """Read one systemd service credential without accepting a path."""
+
+        name = reference.removeprefix("systemd:")
+        directory = os.getenv("CREDENTIALS_DIRECTORY")
+        if not directory:
+            return None
+        root = Path(directory)
+        try:
+            root_stat = root.stat()
+            if not stat.S_ISDIR(root_stat.st_mode):
+                return None
+            descriptor = os.open(
+                root / name,
+                os.O_RDONLY
+                | getattr(os, "O_CLOEXEC", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+        except (FileNotFoundError, NotADirectoryError, OSError):
+            # diagnostic-expected: inaccessible service credentials are unavailable.
+            return None
+        try:
+            item_stat = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(item_stat.st_mode)
+                or item_stat.st_size > _MAX_SECRET_BYTES
+            ):
+                return None
+            chunks: list[bytes] = []
+            remaining = _MAX_SECRET_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            raw = b"".join(chunks)
+        except OSError:
+            # diagnostic-expected: unreadable service credentials are unavailable.
+            return None
+        finally:
+            os.close(descriptor)
+        if not raw or len(raw) > _MAX_SECRET_BYTES:
+            return None
+        if raw.endswith(b"\r\n"):
+            raw = raw[:-2]
+        elif raw.endswith(b"\n"):
+            raw = raw[:-1]
+        if not raw:
+            return None
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            # diagnostic-expected: non-text service credentials are unavailable.
             return None
 
     def _secret_service_collection(self, connection: object) -> Any:
@@ -379,6 +506,7 @@ __all__ = [
     "CredentialStatus",
     "CredentialStore",
     "CredentialUnavailableError",
+    "CredentialVaultLockedError",
     "VaultState",
     "valid_credential_reference",
 ]
