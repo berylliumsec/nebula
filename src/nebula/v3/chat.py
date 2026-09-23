@@ -1187,6 +1187,13 @@ def _normalize_routing_arguments(
 # the turn stops routing and answers from the results it has, like Cline's
 # mistake counter. Any call that runs resets the count.
 _ROUTING_DEVIATION_LIMIT = 3
+# Restart recovery is background work. A Core restart can surface many durable
+# provider turns at once, and each routing step validates and serializes the
+# turn's full tool history on the API event loop. Keep a small amount of
+# provider/network overlap without letting a recovery backlog monopolize the
+# process that serves operator requests. Turns started by the operator do not
+# use this gate.
+_AUTOMATIC_RECOVERY_CONCURRENCY = 2
 # A call Core answered without running it spends no budget.
 _REFUSED_BUDGET_CLASS = "refused"
 _REPLAYED_CALL_REFUSAL = (
@@ -1456,6 +1463,9 @@ class ChatService:
         self.managed_skill_root = managed_skill_root
         self.worker_id = worker_id or f"core-worker-{uuid4()}"
         self._active_provider_turns: dict[str, _ActiveProviderTurn] = {}
+        self._automatic_recovery_slots = asyncio.Semaphore(
+            _AUTOMATIC_RECOVERY_CONCURRENCY
+        )
         self._naming_tasks: set[asyncio.Task[Any]] = set()
         self._naming_sessions: set[str] = set()
         self.subagents = SubagentService(store, self)
@@ -1696,7 +1706,7 @@ class ChatService:
                             GoalWrite(expected_revision=goal.revision, action="resume"),
                             allow_pending_recovery=True,
                         )
-                    self.start_provider_turn(prepared)
+                    self.start_provider_turn(prepared, automatic_recovery=True)
                     resumed.append(saved.id)
                 except Exception as exc:
                     record_caught_exception(
@@ -2170,7 +2180,9 @@ class ChatService:
                 )
         prepared.execution_claim_id = None
 
-    def start_provider_turn(self, prepared: PreparedChat) -> str:
+    def start_provider_turn(
+        self, prepared: PreparedChat, *, automatic_recovery: bool = False
+    ) -> str:
         turn = prepared.turn
         if turn is None:
             raise ChatError("provider chat is missing its durable turn")
@@ -2183,13 +2195,30 @@ class ChatService:
         runtime = _ActiveProviderTurn()
         self._active_provider_turns[turn.id] = runtime
         runtime.task = create_diagnostic_task(
-            self._produce_provider_turn(prepared, runtime),
+            self._run_provider_turn(
+                prepared,
+                runtime,
+                automatic_recovery=automatic_recovery,
+            ),
             feature="chat",
             event_code="chat.provider_turn",
             failure_message="A provider chat turn stopped unexpectedly.",
             name=f"nebula-provider-chat-{turn.id}",
         )
         return turn.id
+
+    async def _run_provider_turn(
+        self,
+        prepared: PreparedChat,
+        runtime: _ActiveProviderTurn,
+        *,
+        automatic_recovery: bool,
+    ) -> None:
+        if not automatic_recovery:
+            await self._produce_provider_turn(prepared, runtime)
+            return
+        async with self._automatic_recovery_slots:
+            await self._produce_provider_turn(prepared, runtime)
 
     def has_active_provider_turn(self, turn_id: str) -> bool:
         runtime = self._active_provider_turns.get(turn_id)
