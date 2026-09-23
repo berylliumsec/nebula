@@ -5082,8 +5082,7 @@ export class ApiClient {
     } catch (error) {
       // A request the interface abandoned (view change, project switch, health
       // deadline) is a cancellation: Core was never shown to be unreachable.
-      const cancelled = init.signal?.aborted === true
-        || (typeof error === "object" && error !== null && (error as { name?: unknown }).name === "AbortError");
+      const cancelled = requestWasCancelled(error, init.signal);
       void logDiagnostic({
         level: cancelled ? "debug" : "error",
         eventCode: cancelled ? "interface.api.request_cancelled" : "interface.api.transport_failed",
@@ -5129,13 +5128,15 @@ export class ApiClient {
     try {
       return (await response.json()) as T;
     } catch (error) {
+      const cancelled = requestWasCancelled(error, init.signal);
       void logDiagnostic({
-        level: "error",
-        eventCode: "interface.api.response_parse_failed",
-        message: "The interface could not parse a Nebula Core response.",
-        outcome: "failure",
+        level: cancelled ? "debug" : "error",
+        eventCode: cancelled ? "interface.api.request_cancelled" : "interface.api.response_parse_failed",
+        message: cancelled ? "The interface cancelled a Nebula Core request." : "The interface could not parse a Nebula Core response.",
+        outcome: cancelled ? "cancelled" : "failure",
         stage: "response-parse",
-        retryable: true,
+        retryable: !cancelled,
+        safeFailureCause: cancelled ? "The caller abandoned the request while reading the response." : undefined,
         exception: error,
         metadata: {
           method: init.method ?? "GET",
@@ -10532,6 +10533,11 @@ export class ApiClient {
       { method: "POST", body: JSON.stringify({ expected_revision: handoff.revision, desktop_device_id: desktopDeviceId, state, error }) },
     ).then(mapBrowserHandoff);
   }
+}
+
+function requestWasCancelled(error: unknown, signal?: AbortSignal | null): boolean {
+  return signal?.aborted === true
+    || (typeof error === "object" && error !== null && (error as { name?: unknown }).name === "AbortError");
 }
 
 export function mapUpstreamProviders(value: unknown): UpstreamProviderOption[] {

@@ -27,6 +27,7 @@
     {"name": "settings-catalog", "patterns": ["ui/src/settingsCatalog.ts"], "areas": ["settings-search", "critical-workspaces"]},
     {"name": "project-lifecycle", "patterns": ["ui/src/components/Project*", "ui/src/components/Workspace*", "ui/src/components/HostFolder*", "ui/src/pages/Projects*", "src/nebula/v3/project*.py", "src/nebula/v3/workspace*.py"], "areas": ["project-lifecycle"]},
     {"name": "mission-restart-recovery", "patterns": ["ui/src/pages/AgentsPage.tsx", "ui/src/components-workbench.css", "src/nebula/v3/missions.py"], "areas": ["mission-restart-recovery"]},
+    {"name": "core-connection-resilience", "patterns": ["ui/src/App.tsx", "ui/src/state/useCoreConnectionMonitor.ts", "ui/src/api/client.ts", "ui/src/components/AppShell.tsx"], "areas": ["core-connection-resilience"]},
     {"name": "core-api", "patterns": ["src/nebula/v3/api.py", "src/nebula/v3/core.py", "src/nebula/v3/domain.py", "src/nebula/v3/storage.py", "src/nebula/v3/server.py"], "areas": ["core-api"]},
     {"name": "themes", "patterns": ["ui/src/components/Theme*", "ui/src/pages/Appearance*", "ui/src/theme/**"], "areas": ["themes"]},
     {"name": "desktop-shell", "patterns": ["ui/src-tauri/**"], "areas": ["desktop-shell"]},
@@ -35,6 +36,11 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "core-connection-resilience": [
+      {"area":"core-connection-resilience","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"},
+      {"area":"core-connection-resilience","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"},
+      {"area":"core-connection-resilience","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"}
+    ],
     "project-runtime-policy": [
       {"area":"project-runtime-policy","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
       {"area":"project-runtime-policy","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},

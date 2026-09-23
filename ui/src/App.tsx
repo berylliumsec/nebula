@@ -25,7 +25,10 @@ function CanonicalProjectBoundary() {
     if (requested && engagement?.id !== requested.id) selectEngagement(requested.id);
   }, [engagement?.id, requested, selectEngagement]);
 
-  if (workspaceState === "starting" || workspaceState === "bootstrapping") return <div className="route-loading" role="status">Opening project…</div>;
+  if ((workspaceState === "starting" || workspaceState === "bootstrapping")
+    && (!requested || engagement?.id !== requested.id)) {
+    return <div className="route-loading" role="status">Opening project…</div>;
+  }
   if (!requested) {
     // Nothing is substituted, but the operator still needs a way back: the
     // project they were using, or any active one.
@@ -34,6 +37,8 @@ function CanonicalProjectBoundary() {
     return <section className="page"><div className="standard-empty-state" role="alert"><h1>Project unavailable</h1><p>This link points to a deleted, inaccessible, or unknown project. Nebula did not substitute another project.</p>{escape && <Link className="button primary" to={projectRoot(escape.id)}>Open {escape.name}</Link>}</div></section>;
   }
   if (engagement?.id !== requested.id) return <div className="route-loading" role="status">Switching project…</div>;
+  // Reconnecting the current project refreshes authoritative data in place.
+  // Keep its route mounted so current view state and unsent input survive.
   return <Outlet />;
 }
 

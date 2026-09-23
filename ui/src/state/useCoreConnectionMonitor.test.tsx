@@ -38,7 +38,7 @@ describe("Core reachability monitoring", () => {
     expect(update).toHaveBeenCalledWith(healthy);
   });
 
-  it("bounds hung probes and ignores their eventual result", async () => {
+  it("confirms three hung probes before reporting loss and ignores their eventual results", async () => {
     let finish!: (health: HealthResponse) => void;
     let signal!: AbortSignal;
     const api = {health: vi.fn((next?: AbortSignal) => {signal = next!; return new Promise<HealthResponse>(resolve => {finish = resolve;});})};
@@ -46,12 +46,27 @@ describe("Core reachability monitoring", () => {
     renderHook(() => useCoreConnectionMonitor(api, true, update, fail));
     await advance(10_000);
     expect(signal.aborted).toBe(true);
-    expect(fail).toHaveBeenCalledTimes(1);
+    expect(fail).not.toHaveBeenCalled();
     await act(async () => finish(healthy));
     expect(update).not.toHaveBeenCalled();
-    api.health.mockResolvedValue(healthy);
+    await advance(6_000);
+    expect(fail).not.toHaveBeenCalled();
+    await advance(6_000);
+    expect(api.health).toHaveBeenCalledTimes(3);
+    expect(fail).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the workspace available when a failed probe is followed by success", async () => {
+    const api = {health: vi.fn()
+      .mockRejectedValueOnce(new Error("transient LAN failure"))
+      .mockResolvedValue(healthy)};
+    const update = vi.fn(), fail = vi.fn();
+    renderHook(() => useCoreConnectionMonitor(api, true, update, fail));
     await advance(5_000);
+    expect(fail).not.toHaveBeenCalled();
+    await advance(1_000);
     expect(update).toHaveBeenCalledWith(healthy);
+    expect(fail).not.toHaveBeenCalled();
   });
 
   it("does not apply an old endpoint's failure after reconnect", async () => {
@@ -80,6 +95,9 @@ describe("Core reachability monitoring", () => {
       document.dispatchEvent(new Event("visibilitychange"));
     });
     expect(api.health).toHaveBeenCalledTimes(1);
+    expect(fail).not.toHaveBeenCalled();
+    await advance(2_000);
+    expect(api.health).toHaveBeenCalledTimes(3);
     expect(fail).toHaveBeenCalledTimes(1);
   });
 });
