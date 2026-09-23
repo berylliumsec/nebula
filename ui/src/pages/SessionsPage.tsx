@@ -1981,6 +1981,8 @@ export function SessionsPage() {
     setHistoricalActivityState({});
     setHistoricalActivityErrors({});
     setPendingResponse(undefined);
+    setInterruptedRecovery(undefined);
+    setWaitingCallback(undefined);
   };
 
   const newConversation = () => {
