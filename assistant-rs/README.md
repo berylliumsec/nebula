@@ -13,6 +13,9 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
   current SQLite schema, preserving revisions, lookup and search projections.
 - `nebula-assistant-runtime`: fair project/parent/session queue selection;
   waits release execution slots while retaining session ownership. No execution.
+- `nebula-assistant-services`: saved-context mutations, active decision snapshots,
+  revision history, atomic project promotion, and per-device read cursors. Source
+  and session revisions are rechecked inside the bounded writer transaction.
 - `nebula-assistant-lab`: fixture generation, replay and journal measurements.
 
 The lab refuses existing output directories and refuses to open databases without
@@ -86,4 +89,21 @@ the test's dedicated marker. Regenerate its schema/default oracle from the root:
 
 ```sh
 PYTHONPATH=src python -m scripts.capture_assistant_storage --output assistant-rs/compatibility/python-storage.json
+```
+
+Saved context is read in one SQLite statement, retaining a consistent projection
+during concurrent promotion. Complete collections are capped at 10,000 records
+and 16 MiB and fail explicitly above either limit. The existing active-context
+limit remains 100 entries / 40,000 Unicode characters. This is separate from
+queue admission; oversized history is not reported as a transient queue failure.
+
+The 27-transition `python-context.json` fixture covers the existing Python
+decision/cursor service behavior. It compares complete success payloads with
+server creation/update timestamps labeled explicitly, and compares error statuses.
+Timestamp/history retention and concurrent writes also have dedicated Rust tests.
+This does not establish HTTP error-envelope parity, authentication middleware,
+fork orchestration, prompt assembly, catch-up projection or production UI parity.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_context --output assistant-rs/compatibility/python-context.json
 ```

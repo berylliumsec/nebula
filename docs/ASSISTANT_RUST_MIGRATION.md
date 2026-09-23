@@ -158,3 +158,38 @@ PostgreSQL support, safe execution recovery or mission-checkpoint compatibility.
 SQLite uses the existing WAL/NORMAL durability setting. Its writer lock excludes
 other Rust stores but cannot exclude an unmodified Python Core. HTTP, production
 browser/LAN and actual execution acceptance remain required for the full rewrite.
+
+## Saved context and read-cursor port contract
+
+Journeys: select a conversation, save selected text as an explicit decision,
+edit/supersede/remove it, promote it to project context, refresh from another
+device, and acknowledge catch-up through a recorded timestamp. The database owns
+record identity, revisions, retained history, project membership, and device read
+watermarks. Reading or acknowledging activity must not resolve an approval or
+execute a turn. The authenticated device identity overrides a supplied device ID.
+
+The service layer will preserve the existing decision/read-cursor data shapes and
+cross-conversation checks, keep promotion atomic, reject stale edits and backwards
+or future read cursors, and retain exact source-selection validation. Bounded
+reads must fail explicitly rather than silently drop saved context. Transaction
+preconditions will recheck records used to authorize/validate a mutation.
+
+The service port includes save/edit/supersede/remove/promote and active-context
+snapshots, plus cursor lookup and monotonic acknowledgment. The source/session
+preconditions are checked under `BEGIN IMMEDIATE`; stale reads cannot commit a
+new decision after the referenced source was edited or deleted. Promotion retains
+the local revision history and creates its project copy in one transaction.
+
+Evidence: 27 deterministic Python service-oracle transitions; seven exact Rust
+service tests, including history retention, promotion collision rollback,
+concurrent revisions, a queued source-change race, 10,001 retained context rows,
+Unicode limits, paired-device identity and database reopen. These and the nine
+affected storage tests passed locally, along with 23 selected Python oracle and
+test-selection checks. The cumulative CI selection is 47 exact Rust / 44 Python
+tests. The fixture compares complete success payloads except labeled server
+creation/update timestamps, and error statuses rather than full HTTP envelopes.
+
+HTTP/authentication middleware, context fork orchestration and prompt assembly,
+catch-up pending projections, production browser/mobile/LAN journeys and final
+packaging remain required integration gates. No shipped routes are activated.
+This step does not run providers or tools.

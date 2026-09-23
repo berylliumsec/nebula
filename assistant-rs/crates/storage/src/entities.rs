@@ -44,6 +44,10 @@ pub enum Error {
     #[error("assistant storage admission is full; retry after capacity becomes available")]
     Capacity,
     #[error(
+        "saved context exceeds 10,000 records or 16 MiB; use paginated record access to inspect the retained history"
+    )]
+    ReadLimit,
+    #[error(
         "assistant storage is closing; inspect durable state before retrying an uncertain mutation"
     )]
     Closed,
@@ -142,6 +146,13 @@ pub enum Mutation {
     },
 }
 
+/// Rechecked inside the writer transaction after service validation.
+pub struct Precondition {
+    pub kind: AssistantKind,
+    pub id: String,
+    pub revision: i64,
+}
+
 /// A primitive entity query, matching legacy `(created_at, id)` ordering.
 /// `session_id` uses the indexed projection for the eight session-owned kinds.
 /// Peer/subagent relationships need their explicit relationship queries instead.
@@ -187,6 +198,7 @@ pub struct Admission {
 }
 
 struct WriteRequest {
+    preconditions: Vec<Precondition>,
     mutations: Vec<Mutation>,
     _bytes: OwnedSemaphorePermit,
     reply: oneshot::Sender<Result<Vec<Option<StoredAssistantRecord>>>>,
@@ -272,10 +284,31 @@ impl SqliteAssistantStore {
         &self,
         mutations: Vec<Mutation>,
     ) -> Result<Vec<Option<StoredAssistantRecord>>> {
+        self.apply_guarded(Vec::new(), mutations).await
+    }
+
+    pub async fn apply_guarded(
+        &self,
+        preconditions: Vec<Precondition>,
+        mutations: Vec<Mutation>,
+    ) -> Result<Vec<Option<StoredAssistantRecord>>> {
         if self.closing.load(Ordering::Acquire) {
             return Err(Error::Closed);
         }
-        let bytes = request_size(&mutations)?;
+        let mut bytes = request_size(&mutations)?;
+        if preconditions.len() > 64 {
+            return Err(Error::TransactionLimit);
+        }
+        for guard in &preconditions {
+            validate_id(&guard.id)?;
+            if guard.revision < 1 {
+                return Err(Error::InvalidBounds);
+            }
+            bytes += guard.id.len() + 64;
+        }
+        if bytes > MAX_TRANSACTION_BYTES {
+            return Err(Error::TransactionLimit);
+        }
         let byte_permit = self
             .bytes
             .clone()
@@ -287,6 +320,7 @@ impl SqliteAssistantStore {
         })?;
         let (reply, result) = oneshot::channel();
         slot.send(Command::Apply(WriteRequest {
+            preconditions,
             mutations,
             _bytes: byte_permit,
             reply,
@@ -388,6 +422,48 @@ impl SqliteAssistantStore {
             records,
             next_offset: None,
         })
+    }
+
+    pub async fn latest_message_sequence(&self, session_id: &str) -> Result<i64> {
+        validate_id(session_id)?;
+        let _permit = self.read_permit()?;
+        Ok(sqlx::query_scalar("SELECT coalesce(max(json_extract(payload, '$.sequence')), 0) FROM entities WHERE kind = 'chat_messages' AND chat_session_id = ?")
+            .bind(session_id).fetch_one(&self.readers).await?)
+    }
+
+    /// One SQLite statement/snapshot, so a concurrent promotion cannot fall
+    /// between pages. Never return a silently incomplete context collection.
+    pub async fn decisions(
+        &self,
+        session_id: &str,
+        project_id: &str,
+        active_only: bool,
+    ) -> Result<Vec<StoredAssistantRecord>> {
+        validate_id(session_id)?;
+        validate_id(project_id)?;
+        let _permit = self.read_permit()?;
+        let query = format!(
+            "{SELECT_RECORD} WHERE kind = 'chat_decisions' AND engagement_id = ? AND (chat_session_id = ? OR json_extract(payload, '$.scope') = 'project') AND (? = 0 OR json_extract(payload, '$.status') = 'active') ORDER BY created_at, id LIMIT 10001"
+        );
+        let mut rows = sqlx::query(&query)
+            .bind(project_id)
+            .bind(session_id)
+            .bind(active_only)
+            .fetch(&self.readers);
+        let mut records = Vec::new();
+        let mut bytes = 0usize;
+        while let Some(row) = rows.try_next().await? {
+            let size: i64 = row.try_get("payload_bytes")?;
+            if size < 0 || size as u64 > MAX_RECORD_BYTES as u64 {
+                return Err(RecordError::TooLarge.into());
+            }
+            bytes += size as usize;
+            if records.len() == 10000 || bytes > 16 * 1024 * 1024 {
+                return Err(Error::ReadLimit);
+            }
+            records.push(decode_row(row)?);
+        }
+        Ok(records)
     }
 
     pub async fn shutdown(&self) -> Result<()> {
@@ -555,7 +631,9 @@ async fn writer(
     while let Some(command) = receiver.recv().await {
         match command {
             Command::Apply(request) => {
-                let result = apply_transaction(&mut connection, request.mutations).await;
+                let result =
+                    apply_transaction(&mut connection, request.preconditions, request.mutations)
+                        .await;
                 let _ = request.reply.send(result);
             }
             Command::Shutdown(reply) => {
@@ -574,9 +652,21 @@ async fn writer(
 
 async fn apply_transaction(
     connection: &mut SqliteConnection,
+    preconditions: Vec<Precondition>,
     mutations: Vec<Mutation>,
 ) -> Result<Vec<Option<StoredAssistantRecord>>> {
     let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
+    for guard in preconditions {
+        let revision: Option<i64> =
+            sqlx::query_scalar("SELECT revision FROM entities WHERE kind = ? AND id = ?")
+                .bind(guard.kind.as_str())
+                .bind(guard.id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if revision != Some(guard.revision) {
+            return Err(Error::Conflict);
+        }
+    }
     let mut changed = Vec::with_capacity(mutations.len());
     let mut changed_bytes = 0usize;
     for mutation in mutations {

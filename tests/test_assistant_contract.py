@@ -82,3 +82,10 @@ def test_storage_oracle_matches_current_python_database():
 
     path = Path(__file__).parents[1] / "assistant-rs/compatibility/python-storage.json"
     assert collect_storage() == json.loads(path.read_text())
+
+
+def test_context_oracle_matches_current_python_services():
+    from scripts.capture_assistant_context import collect_context
+
+    path = Path(__file__).parents[1] / "assistant-rs/compatibility/python-context.json"
+    assert collect_context() == json.loads(path.read_text())

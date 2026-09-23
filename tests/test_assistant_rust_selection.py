@@ -38,6 +38,13 @@ def test_exact_assistant_selection_is_separate_from_native():
         "journal",
         "committed_events_survive_reopen_and_idempotent_retries",
     )
+    assert assistant_rust_target(
+        "nebula-assistant-services/context::python_service_oracle_matches_saved_context_and_cursor_transitions"
+    ) == (
+        "nebula-assistant-services",
+        "context",
+        "python_service_oracle_matches_saved_context_and_cursor_transitions",
+    )
 
 
 @pytest.mark.parametrize(

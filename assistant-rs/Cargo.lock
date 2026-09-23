@@ -1053,6 +1053,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "nebula-assistant-services"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "nebula-assistant-domain",
+ "nebula-assistant-storage",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "nebula-assistant-storage"
 version = "0.1.0"
 dependencies = [
