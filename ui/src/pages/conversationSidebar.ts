@@ -55,11 +55,13 @@ export function groupSidebarConversations(
     if (query && !parentMatches && !matchingChildren.length) continue;
     const waitingChildren = childSessions.filter(child => activity[child.id] === "waiting").length;
     const workingChildren = childSessions.filter(child => activity[child.id] === "working").length;
-    const states = [activity[session.id], ...childSessions.map(child => activity[child.id])];
+    // Child lifecycle belongs to the supervisor. A child wait remains active
+    // work here; only the parent conversation can ask the operator to act.
+    const childWorking = childSessions.some(child => ["working", "waiting"].includes(activity[child.id]));
     const newestUpdate = Math.max(...[session, ...childSessions].map(item => Date.parse(item.updatedAt) || 0));
-    const label = states.includes("waiting") ? "Needs you"
+    const label = activity[session.id] === "waiting" ? "Needs you"
       : session.archivedAt ? "Archived"
-        : states.includes("working") ? "Working"
+        : activity[session.id] === "working" || childWorking ? "Working"
           : newestUpdate >= startOfToday.getTime() ? "Today"
             : newestUpdate >= weekAgo ? "Previous 7 days" : "Older";
     const expanded = expandedParents.has(session.id) || Boolean(query && matchingChildren.length);

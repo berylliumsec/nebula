@@ -7,6 +7,7 @@ from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompletionRequest, ChatService
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.domain import (
+    Approval,
     ChatGoalUsageCharge,
     ChatMessage,
     ChatSession,
@@ -20,6 +21,7 @@ from nebula.v3.domain import (
     ProviderCapabilityVerification,
     ProviderProfile,
     ProviderVerificationStatus,
+    RiskClass,
 )
 from nebula.v3.providers import (
     ModelCapabilities,
@@ -277,6 +279,112 @@ def _messages(store: NebulaStore, session_id: str) -> list[ChatMessage]:
         ),
         key=lambda item: item.sequence,
     )
+
+
+def test_child_approval_is_delivered_to_its_active_supervisor(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider([], [])
+        store, project, profile, chat = _setup(tmp_path, provider)
+        parent_session = store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Supervisor",
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        parent_turn = store.create(
+            ChatTurn(
+                engagement_id=project.id,
+                session_id=parent_session.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        child_session = store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title="Subagent",
+                provider_profile_id=profile.id,
+                model="model-a",
+                parent_session_id=parent_session.id,
+                metadata={"subagent_id": "child-record"},
+            )
+        )
+        approval = store.create(
+            Approval(
+                engagement_id=project.id,
+                run_id="child-turn",
+                risk_class=RiskClass.LOCAL_READ,
+                exact_request={
+                    "tool_name": "safe_read",
+                    "arguments": {"path": "/tmp/item"},
+                },
+                policy_rationale="approval boundary",
+                requested_by="chat-assistant",
+            )
+        )
+        child_turn = store.create(
+            ChatTurn(
+                id="child-turn",
+                engagement_id=project.id,
+                session_id=child_session.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                status=ChatTurnStatus.WAITING_APPROVAL,
+                approval_id=approval.id,
+                tool_history=[
+                    {
+                        "name": "safe_read",
+                        "arguments": {"path": "/tmp/item"},
+                        "status": "waiting_approval",
+                    }
+                ],
+            )
+        )
+        record = store.create(
+            ChatSubagent(
+                id="child-record",
+                engagement_id=project.id,
+                parent_session_id=parent_session.id,
+                parent_turn_id=parent_turn.id,
+                child_session_id=child_session.id,
+                child_turn_id=child_turn.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                name="Reader",
+                task="Read the item.",
+            )
+        )
+
+        await chat.subagents.turn_settled(child_turn.id)
+
+        (notice,) = store.list_entities(ChatSubagentMessage)
+        assert notice.subagent_id == record.id
+        assert "You own the child lifecycle" in notice.content
+        assert "stop_subagent" in notice.content
+        assert (
+            store.get(ChatTurn, child_turn.id).status == ChatTurnStatus.WAITING_APPROVAL
+        )
+        assert store.get(ChatSubagent, record.id).status == ChatSubagentStatus.RUNNING
+
+        active_parent = store.get(ChatTurn, parent_turn.id)
+        store.update(
+            ChatTurn,
+            active_parent.id,
+            {"status": ChatTurnStatus.COMPLETE},
+            expected_revision=active_parent.revision,
+        )
+        await chat.subagents.turn_settled(child_turn.id)
+
+        assert store.get(ChatTurn, child_turn.id).status == ChatTurnStatus.CANCELLED
+        assert store.get(ChatSubagent, record.id).status == ChatSubagentStatus.STOPPED
+        posted = _messages(store, parent_session.id)
+        assert any("You own the child lifecycle" in item.content for item in posted)
+        assert any(item.metadata.get("subagent_status") == "stopped" for item in posted)
+        await chat.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_subagent_tools_require_opt_in(tmp_path: Path) -> None:

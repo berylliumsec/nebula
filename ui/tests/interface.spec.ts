@@ -2431,11 +2431,11 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
   };
   let sidebar = await openSidebar();
   const parentRow = sidebar.locator(".session-list-item").filter({ has: page.locator('[data-session-id="sidebar-parent"]') });
-  await expect(parentRow).toContainText("2 subagents · 1 needs you");
+  await expect(parentRow).toContainText("2 subagents · 1 with supervisor");
   await expect(sidebar.locator('[data-session-id="sidebar-child-a"]')).toHaveCount(0);
   await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toHaveCount(0);
   await expect(sidebar.locator('[data-session-id="sidebar-branch"]')).toBeVisible();
-  await expect(parentRow.locator(".conversation-activity-marker")).toHaveAttribute("aria-label", "Waiting for you");
+  await expect(parentRow.locator(".conversation-activity-marker")).toHaveAttribute("aria-label", "Working");
   const toggle = sidebar.getByRole("button", { name: "Expand 2 subagents for Main investigation" });
   if (mobile) {
     const bounds = await toggle.boundingBox();
@@ -2452,7 +2452,7 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
   await expect(longModelLabel).toHaveCSS("text-overflow", "ellipsis");
   expect(await longModelLabel.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
   expect(await longModelRow.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-  await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toContainText("Needs your input");
+  await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toContainText("Waiting on supervisor");
   await sidebar.locator('[data-session-id="sidebar-child-b"]').click();
   await expect(page).toHaveURL(/session=sidebar-child-b/);
   await expect(page.getByText("Subagent conversation · files remain shared.")).toBeVisible();
