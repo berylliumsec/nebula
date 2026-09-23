@@ -1,28 +1,32 @@
 {
-  "change_digest": "ccc2dc5ad07db230147a8e2277171794ce6313e4f410743b15ae4c7369697495",
-  "reviewed_by": "Codex focused review for the live chat-switch render crash",
-  "reason": "The hotfix removes the transcript-height layout-effect feedback loop that can exceed React's nested update limit during rapid authoritative conversation replacement, retains content-visibility with a fixed intrinsic estimate, and treats superseded AbortError rejections as cancellations. One frontend case covers cancellation classification. Four permanent conversation-switch entries cover the regression journey in desktop Chromium, emulated mobile Chromium, emulated mobile WebKit, and real Core.",
-  "exclusions": "Full suites are not approved and are excluded. Python and native tests are empty because the hotfix changes only React rendering, browser diagnostics, CSS, and the existing Playwright journey. Unrelated providers, harness execution, missions, browser tooling, terminals, reports, packaging, migrations, and API contracts are excluded. Additional viewport profiles duplicate the same selected journey and were already green on the merged performance tranche. Physical-phone testing remains unavailable and will be reported separately.",
+  "change_digest": "9f16db889f24cec6a80ad485106f8dbc8155bea21b4b6ab928156442c6454e44",
+  "reviewed_by": "Codex focused review for subagent restart cross-record recovery",
+  "reason": "The branch makes the child turn's durable restart-recovery state authoritative over the paired ChatSubagent record, repairs terminal writes from an overlapping old Core before automatic resume, fences the resumed record, preserves premature interruption posts as audit history, and emits a distinct deterministic recovered result. Five selected Python cases cover graceful shutdown, live old/new worker overlap, a previously reported false terminal write, waiting-parent recovery, and in-flight parent/child shutdown. Eight Playwright cases cover the existing recovering/approval presentation on desktop and two mobile engines, production Core integration, and a new real-Core restart acceptance seeded at the contradictory durable state.",
+  "exclusions": "Full suites are not approved and are excluded. Unrelated provider inference, harness execution, Missions, browser tooling, terminals, reports, packaging, migrations, storage engines, and native Rust workflows are excluded. Frontend unit tests are empty because no UI implementation changed; the selected Playwright journeys assert the recovering state, error copy, controls, accessibility, reload behavior, desktop, mobile Chromium, mobile WebKit, and the exact zero-click repair through real Core and the production bundle. Native tests are empty because no Rust or Tauri source changed.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 1,
+    "python": 5,
+    "frontend": 0,
     "native": 0,
-    "playwright": 4
+    "playwright": 8
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/diagnostics/loggerCancellation.test.ts"
+  "python": [
+    "tests/v3/test_chat_subagents.py::test_restart_keeps_recoverable_subagent_round_live",
+    "tests/v3/test_chat_subagents.py::test_restart_repairs_a_late_terminal_child_write_from_the_old_core",
+    "tests/v3/test_chat_subagents.py::test_core_shutdown_preserves_safely_interrupted_subagents_for_restart",
+    "tests/v3/test_chat_subagents.py::test_restart_resumes_a_parent_waiting_on_an_interrupted_subagent",
+    "tests/v3/test_chat_subagents.py::test_core_shutdown_interrupts_an_inflight_parent_tool_turn"
   ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:conversation-switch-performance/desktop",
-    "entry:conversation-switch-performance/mobile-chromium-small",
-    "entry:conversation-switch-performance/mobile-webkit",
-    "entry:conversation-switch-performance/assistant-real-desktop"
+    "entry:chat-subagents/desktop",
+    "entry:chat-subagents/mobile-chromium",
+    "entry:chat-subagents/mobile-webkit",
+    "entry:chat-subagents-core/real-core"
   ]
 }

@@ -297,6 +297,25 @@ def recoverable_after_core_restart(turn: ChatTurn) -> bool:
     )
 
 
+def restart_recovery_pending(turn: ChatTurn) -> bool:
+    """Whether a child turn still owns a live Core-restart recovery.
+
+    Unlike ``recoverable_after_core_restart``, this intentionally ignores
+    unresolved effect receipts. Those receipts delay continuation; they do
+    not make the child round terminal while Core reconciles them.
+    """
+
+    if turn.status != ChatTurnStatus.INTERRUPTED:
+        return False
+    recovery = turn.request_snapshot.get("recovery")
+    if not isinstance(recovery, dict) or recovery.get("required") is not True:
+        return False
+    return recovery.get("cause") in {"core_shutdown", "core_restart"} or (
+        recovery.get("cause") is None
+        and (turn.error or "").startswith(("Core stopped ", "Core restarted "))
+    )
+
+
 # Compatibility for callers outside the lifecycle service.  Automatic recovery
 # now covers both a graceful stop and a process restart.
 safely_stopped_by_core = recoverable_after_core_restart
@@ -319,6 +338,16 @@ def _add_usage(first: ChatTokenUsage, second: ChatTokenUsage) -> ChatTokenUsage:
         input_tokens=first.input_tokens + second.input_tokens,
         output_tokens=first.output_tokens + second.output_tokens,
         total_tokens=first.total_tokens + second.total_tokens,
+    )
+
+
+def _subtract_usage(first: ChatTokenUsage, second: ChatTokenUsage) -> ChatTokenUsage:
+    """Remove one prematurely settled turn debit without going below zero."""
+
+    return ChatTokenUsage(
+        input_tokens=max(0, first.input_tokens - second.input_tokens),
+        output_tokens=max(0, first.output_tokens - second.output_tokens),
+        total_tokens=max(0, first.total_tokens - second.total_tokens),
     )
 
 
@@ -525,12 +554,11 @@ class SubagentService:
             }
             for entry in history[-RECENT_STEPS:]
         ]
-        state = record.status.value
+        recovering = turn is not None and restart_recovery_pending(turn)
+        state = "recovering" if recovering else record.status.value
         approval: dict[str, Any] | None = None
         question: dict[str, Any] | None = None
         if record.status == ChatSubagentStatus.RUNNING and turn is not None:
-            if turn.status == ChatTurnStatus.INTERRUPTED:
-                state = "recovering"
             if turn.status == ChatTurnStatus.WAITING_APPROVAL and turn.approval_id:
                 state = "waiting_approval"
                 try:
@@ -584,10 +612,10 @@ class SubagentService:
             "usage": usage.model_dump(mode="json"),
             "started_at": record.started_at.isoformat(),
             "finished_at": record.finished_at.isoformat()
-            if record.finished_at
+            if record.finished_at and not recovering
             else None,
             "elapsed_seconds": max(0.0, (finished - record.started_at).total_seconds()),
-            "result": record.result,
+            "result": "" if recovering else record.result,
             "error": (
                 turn.error
                 if state == "recovering" and turn is not None
@@ -1847,12 +1875,21 @@ class SubagentService:
             self._close_question(question, "The subagent ended before a reply.")
 
     async def _child_settled(self, record: ChatSubagent, turn: ChatTurn) -> None:
+        if restart_recovery_pending(turn):
+            # The turn is the recovery authority. This must hold even when
+            # unresolved effects prevent immediate continuation, and even for
+            # a late callback from an overlapping Core worker.
+            return
         if record.status in CHAT_SUBAGENT_TERMINAL_STATUSES:
-            return
-        if self.chat.shutting_down and safely_stopped_by_core(turn):
-            # The next Core will reclaim this safe turn. Reporting an
-            # interruption now would let the parent move on without its child.
-            return
+            if (
+                record.status != ChatSubagentStatus.INTERRUPTED
+                or not self._restart_recovery_fenced(record, turn)
+            ):
+                return
+            # A previous binary can finish unwinding after the new Core has
+            # fenced this resumed child. Restore the composed record before
+            # recording the new worker's actual terminal outcome.
+            record = self._restore_restart_record(record, turn)
         if turn.status == ChatTurnStatus.WAITING_CALLBACK:
             await self._child_paused(record, turn)
             return
@@ -1952,6 +1989,80 @@ class SubagentService:
         self._notify()
         self._charge_parent_goal(record, turn)
         await self._deliver(record)
+
+    @staticmethod
+    def _restart_recovery_marker(record: ChatSubagent) -> dict[str, Any] | None:
+        marker = record.parent_request.get("_core_restart_recovery")
+        return marker if isinstance(marker, dict) else None
+
+    def _restart_recovery_fenced(self, record: ChatSubagent, turn: ChatTurn) -> bool:
+        marker = self._restart_recovery_marker(record)
+        return marker is not None and marker.get("child_turn_id") == turn.id
+
+    def _restore_restart_record(
+        self, record: ChatSubagent, turn: ChatTurn
+    ) -> ChatSubagent:
+        """Restore or fence the subagent side of one resumed child turn.
+
+        ``parent_request`` is an existing cross-version-safe envelope: an old
+        binary preserves this marker even if it writes after the new Core. A
+        generation gives a recovered terminal report a fresh deterministic ID
+        when an earlier false interruption was already posted.
+        """
+
+        latest = self.get(record.id)
+        marker = self._restart_recovery_marker(latest) or {}
+        generation = marker.get("generation", 0)
+        if not isinstance(generation, int) or isinstance(generation, bool):
+            generation = 0
+        superseded = [
+            item
+            for item in marker.get("superseded_result_message_ids", [])
+            if isinstance(item, str) and item
+        ]
+        changes: dict[str, Any] = {}
+        if latest.status == ChatSubagentStatus.INTERRUPTED:
+            if latest.result_message_id and latest.result_message_id not in superseded:
+                superseded.append(latest.result_message_id)
+            generation += 1
+            changes.update(
+                {
+                    "status": ChatSubagentStatus.RUNNING,
+                    "finished_at": None,
+                    "usage": _subtract_usage(latest.usage, turn.usage),
+                    "result": "",
+                    "error": None,
+                    "result_message_id": None,
+                    "reported_at": None,
+                    "pending_goal_charge_turn_id": None,
+                }
+            )
+        elif latest.status != ChatSubagentStatus.RUNNING:
+            raise ConflictError(
+                f"restart recovery cannot reopen a {latest.status.value} subagent"
+            )
+        changes["parent_request"] = {
+            **latest.parent_request,
+            "_core_restart_recovery": {
+                "child_turn_id": turn.id,
+                "generation": generation,
+                "fenced_at": utc_now().isoformat(),
+                "superseded_result_message_ids": superseded,
+            },
+        }
+        restored = self.store.update(
+            ChatSubagent,
+            latest.id,
+            changes,
+            expected_revision=latest.revision,
+        )
+        self._notify()
+        return restored
+
+    def fence_restart_resume(self, subagent_id: str, turn: ChatTurn) -> ChatSubagent:
+        """Fence a resumed child against a late terminal write by an old Core."""
+
+        return self._restore_restart_record(self.get(subagent_id), turn)
 
     async def _child_waiting_approval(
         self, record: ChatSubagent, turn: ChatTurn
@@ -2343,16 +2454,29 @@ class SubagentService:
             updates(transaction)
 
     def _post_result(self, record: ChatSubagent) -> None:
+        marker = self._restart_recovery_marker(record)
+        recovered_generation = (
+            marker.get("generation")
+            if marker is not None
+            and marker.get("child_turn_id") == record.child_turn_id
+            and isinstance(marker.get("generation"), int)
+            and not isinstance(marker.get("generation"), bool)
+            else 0
+        )
         heading = {
             ChatSubagentStatus.COMPLETED: "Subagent finished",
             ChatSubagentStatus.FAILED: "Subagent failed",
             ChatSubagentStatus.STOPPED: "Subagent stopped",
             ChatSubagentStatus.INTERRUPTED: "Subagent interrupted",
         }.get(record.status, "Subagent update")
+        if recovered_generation and record.status == ChatSubagentStatus.COMPLETED:
+            heading = "Subagent recovered and finished"
         finished = record.finished_at or utc_now()
         # Round one keeps the id posted before rounds existed.
-        key = f"nebula:subagent-result:{record.id}" + (
-            f":round:{record.rounds}" if record.rounds > 1 else ""
+        key = (
+            f"nebula:subagent-result:{record.id}"
+            + (f":recovery:{recovered_generation}" if recovered_generation else "")
+            + (f":round:{record.rounds}" if record.rounds > 1 else "")
         )
         message_id = str(uuid5(NAMESPACE_URL, key))
         # A provider parent reads the post from its history; a harness gets
@@ -2371,6 +2495,7 @@ class SubagentService:
                 "kind": "subagent_result",
                 "subagent_status": record.status.value,
                 "subagent_round": record.rounds,
+                "recovered_after_core_restart": bool(recovered_generation),
                 "elapsed_seconds": max(
                     0.0, (finished - record.started_at).total_seconds()
                 ),
@@ -2519,6 +2644,16 @@ class SubagentService:
                 if record.status not in CHAT_SUBAGENT_TERMINAL_STATUSES:
                     continue
                 turn = self._child_turn(record)
+                if (
+                    record.status == ChatSubagentStatus.INTERRUPTED
+                    and turn is not None
+                    and restart_recovery_pending(turn)
+                ):
+                    try:
+                        self._restore_restart_record(record, turn)
+                    except ConflictError:  # diagnostic-expected: recovery rereads a concurrent old-worker write
+                        pass
+                    continue
                 if turn is not None and turn.id == record.pending_goal_charge_turn_id:
                     self._charge_parent_goal(record, turn)
                 await self._deliver(record)

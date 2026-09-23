@@ -1625,15 +1625,25 @@ class ChatService:
                     or saved.status != ChatTurnStatus.INTERRUPTED
                 ):
                     continue
+                recovery_subagent: ChatSubagent | None = None
                 if saved.request_snapshot.get("subagent_child"):
                     records = self.store.find_entities(
                         ChatSubagent, {"child_session_id": saved.session_id}
                     )
-                    if not any(
-                        record.child_turn_id == saved.id
-                        and record.status == ChatSubagentStatus.RUNNING
-                        for record in records
-                    ):
+                    recovery_subagent = next(
+                        (
+                            record
+                            for record in records
+                            if record.child_turn_id == saved.id
+                            and record.status
+                            in {
+                                ChatSubagentStatus.RUNNING,
+                                ChatSubagentStatus.INTERRUPTED,
+                            }
+                        ),
+                        None,
+                    )
+                    if recovery_subagent is None:
                         continue
                 pending = self.pending_turn(saved.session_id)
                 if pending is None or pending.id != saved.id:
@@ -1672,6 +1682,14 @@ class ChatService:
                 )
                 try:
                     prepared = self.prepare_resume(latest.id)
+                    if recovery_subagent is not None:
+                        if prepared.turn is None:
+                            raise ChatHistoryConflict(
+                                "subagent restart recovery lost its child turn"
+                            )
+                        self.subagents.fence_restart_resume(
+                            recovery_subagent.id, prepared.turn
+                        )
                     if goal is not None:
                         goals.write(
                             saved.session_id,
