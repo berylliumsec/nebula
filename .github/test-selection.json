@@ -1,18 +1,29 @@
 {
-  "change_digest": "0914188020af650cbc717b375497f464d3b2ced730e540a7fcb90dec2726c04e",
-  "reviewed_by": "Codex native command hook boundary review",
-  "reason": "Core now automatically runs project-native tool.before and tool.after hooks around run_command and process_io. The focused native-hook and automation-runtime files cover manifest admission, durable outcomes, both command tools, blocking denial before runtime creation, existing runtime behavior, and the existing storage cleanup regression for generalized hook ownership.",
-  "exclusions": "No frontend, native, Playwright, provider, harness, Docker, VPN, proxy, network-scope, or unrelated backend tests are selected. The API/UI shape is unchanged; provider and harness native command paths remain harness-owned. A packaged real-Core command-hook workflow is exercised after merge and deployment.",
-  "expected_tests": {"python": 46, "frontend": 0, "native": 0, "playwright": 0},
+  "change_digest": "a23a5ff5a4b68b19a9c1673dd8469c378b1c6d6b64e0a536229472160aadfa17",
+  "reviewed_by": "Codex focused review for truthful subagent restart recovery and bounded sidebar labels",
+  "reason": "The diff maps interrupted recoverable turns to operator attention, bounds long sidebar labels, and turns one side-effect-free completion-hook rejection into explicit model feedback. Focused cases cover successful repair, safe refusal with a durable decision note, activity state, sidebar grouping, responsive geometry, and a production real-Core hierarchy journey.",
+  "exclusions": "Unrelated Python, frontend, Playwright, and native suites are excluded. Live third-party provider execution and physical-device workflows are not required to prove the normalized Core retry contract, durable outcome, or bounded sidebar geometry and are not claimed.",
+  "expected_tests": {"python": 5, "frontend": 5, "native": 0, "playwright": 8},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_native_hooks.py",
-    "tests/v3/test_automation_runtime.py",
-    "tests/v3/test_storage.py::test_delete_chat_session_removes_native_checkpoints_and_hook_executions"
+    "tests/v3/test_chat_api.py::test_chat_session_activity_reports_core_owned_turn_state",
+    "tests/v3/test_native_hook_turn_ends.py::test_required_completion_hook_feedback_reaches_model_and_rechecks_answer",
+    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_routes_again_with_completion_hook_feedback",
+    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_preserves_model_decision_when_completion_hook_still_blocks",
+    "tests/v3/test_turn_outcome_history.py::test_failed_turn_saves_an_outcome_note_so_the_next_request_alternates"
   ],
-  "frontend": [],
+  "frontend": ["ui/src/pages/conversationSidebar.test.ts"],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:subagent-sidebar/desktop",
+    "entry:subagent-sidebar/mobile-chromium-small",
+    "entry:subagent-sidebar/mobile-chromium-ledger-390",
+    "entry:subagent-sidebar/mobile-chromium-wide",
+    "entry:subagent-sidebar/mobile-webkit-small",
+    "entry:subagent-sidebar/mobile-webkit",
+    "entry:subagent-sidebar/mobile-webkit-wide",
+    "entry:subagent-sidebar/assistant-real-desktop"
+  ]
 }

@@ -9965,7 +9965,11 @@ def create_app(
                             "idle"
                             if turn is None
                             else "waiting"
-                            if turn.status == ChatTurnStatus.WAITING_APPROVAL
+                            if turn.status
+                            in {
+                                ChatTurnStatus.WAITING_APPROVAL,
+                                ChatTurnStatus.INTERRUPTED,
+                            }
                             else "working"
                         ),
                         turn_id=turn.id if turn else None,

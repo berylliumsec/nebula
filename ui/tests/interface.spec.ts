@@ -2352,7 +2352,7 @@ test("stabilization conversations sidebar icon reveals the left pane", async ({ 
 
 reloadTest("assistant upgrade nests subagents beneath a collapsed main conversation", async ({ page }) => {
   const parent = { ...entity, id: "sidebar-parent", engagement_id: "scratch-project", title: "Main investigation", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
-  const childA = { ...entity, id: "sidebar-child-a", engagement_id: "scratch-project", title: "Subagent · API mapping", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: { subagent_id: "sub-a" } };
+  const childA = { ...entity, id: "sidebar-child-a", engagement_id: "scratch-project", title: "Subagent · API mapping", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "deepseek/deepseek-flash-latest-with-a-deliberately-long-provider-model-identifier", metadata: { subagent_id: "sub-a" } };
   const childB = { ...entity, id: "sidebar-child-b", engagement_id: "scratch-project", title: "Subagent · Edge review", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: { subagent_id: "sub-b" } };
   const branch = { ...entity, id: "sidebar-branch", engagement_id: "scratch-project", title: "Ordinary branch", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: {} };
   const items = [childA, branch, childB, parent];
@@ -2394,6 +2394,11 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
   await expect(sidebar.locator('[data-session-id="sidebar-child-a"]')).toBeVisible();
   await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toBeVisible();
   await expect(sidebar.locator(".nested-subagent")).toHaveCount(2);
+  const longModelRow = sidebar.locator('[data-session-id="sidebar-child-a"]').locator("..");
+  const longModelLabel = longModelRow.locator("small");
+  await expect(longModelLabel).toHaveCSS("text-overflow", "ellipsis");
+  expect(await longModelLabel.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  expect(await longModelRow.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toContainText("Needs your input");
   await sidebar.locator('[data-session-id="sidebar-child-b"]').click();
   await expect(page).toHaveURL(/session=sidebar-child-b/);

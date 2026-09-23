@@ -440,6 +440,66 @@ def test_tool_turn_routes_again_with_completion_hook_feedback(tmp_path):
         "Check the repository state before answering" in str(message.content)
         for message in provider.requests[2].messages
     )
+    assert "safe, owned, and in scope" in str(provider.requests[2].messages[-1].content)
+    assert "exact operator action required" in str(
+        provider.requests[2].messages[-1].content
+    )
+
+
+def test_tool_turn_preserves_model_decision_when_completion_hook_still_blocks(
+    tmp_path,
+):
+    script = "#!/bin/sh\nprintf 'another owner has an unmerged worktree\\n'\nexit 3\n"
+    workspace = tmp_path / "workspace"
+    _write_native_hook(
+        workspace,
+        "repository-lifecycle",
+        events=["chat.turn.completed"],
+        script=script,
+        failure_policy="block",
+    )
+    broker = RecordingBroker()
+    responses = [
+        _response(
+            calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
+        ),
+        _response(text="Initial answer."),
+        _response(
+            calls=[ToolCall(id="finish-2", name="finish_response", arguments={})]
+        ),
+        _response(
+            text=(
+                "I cannot safely repair another owner's unmerged worktree. "
+                "The operator must reconcile that owner before completion."
+            )
+        ),
+    ]
+    store, service, prepared, _ = _prepared(tmp_path, responses, broker)
+    prepared.hook_snapshots = [
+        snapshot_native_hook("repository-lifecycle", discover_native_hooks(workspace))
+    ]
+
+    with pytest.raises(ChatError, match="required native hook 'repository-lifecycle'"):
+        asyncio.run(service.complete(prepared))
+
+    turn = store.get(ChatTurn, "turn")
+    assert turn.status == ChatTurnStatus.FAILED
+    assert turn.request_snapshot["completion_hook_resolution"] == {
+        "hook_id": "repository-lifecycle",
+        "output": "another owner has an unmerged worktree",
+        "candidate": (
+            "I cannot safely repair another owner's unmerged worktree. "
+            "The operator must reconcile that owner before completion."
+        ),
+    }
+    note = next(
+        item
+        for item in service.session_messages(turn.session_id)
+        if item.metadata.get("kind") == "turn_outcome"
+    )
+    assert "Model decision after completion-hook feedback" in note.content
+    assert "operator must reconcile that owner" in note.content
+    assert len(service.list_turn_hook_executions("turn")) == 2
 
 
 @pytest.mark.parametrize("blocked", [False, True])

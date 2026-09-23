@@ -883,7 +883,7 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
     )
 
     sessions = {}
-    for state in ("working", "waiting", "idle"):
+    for state in ("working", "waiting", "recovery", "idle"):
         sessions[state] = store.create(
             ChatSession(
                 engagement_id=engagement.id,
@@ -918,6 +918,16 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
             status=ChatTurnStatus.WAITING_APPROVAL,
         )
     )
+    recovery_turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=sessions["recovery"].id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.INTERRUPTED,
+            request_snapshot={"recovery": {"required": True}},
+        )
+    )
     store.create(
         ChatTurn(
             engagement_id=engagement.id,
@@ -946,6 +956,11 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
             "session_id": sessions["waiting"].id,
             "state": "waiting",
             "turn_id": waiting_turn.id,
+        },
+        sessions["recovery"].id: {
+            "session_id": sessions["recovery"].id,
+            "state": "waiting",
+            "turn_id": recovery_turn.id,
         },
         sessions["idle"].id: {
             "session_id": sessions["idle"].id,
