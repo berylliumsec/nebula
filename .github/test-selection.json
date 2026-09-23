@@ -1,23 +1,27 @@
 {
-  "change_digest": "c67f2e2dba1fe5b058fb385c9754dd449b4bdb2ffd2ba80ab269675b0bb7459a",
-  "reviewed_by": "Codex focused review for the automation callback waiting panel",
-  "reason": "The diff replaces the unbounded callback row with a compact accessible status panel. Focused component coverage proves exact URL copy, collapsed setup detail, success feedback, and denied-clipboard recovery; the catalogued browser journey proves long-URL containment, disclosure, touch geometry, accessibility, and responsive rendering across the permanent desktop and mobile profiles.",
-  "exclusions": "No Core API, callback persistence, provider, Python, native, or command-execution behavior changes. Unrelated frontend and Playwright journeys, live provider execution, full suites, and physical-device workflows are excluded and are not claimed.",
-  "expected_tests": {"python": 0, "frontend": 2, "native": 0, "playwright": 8},
+  "change_digest": "4cfb67978d2c4169b4929e6b52551f277c7da7706eab7d60c08058f3043195c3",
+  "reviewed_by": "Codex focused review for supervisor-owned subagent attention",
+  "reason": "The diff routes blocked child approvals to the active supervisor, cancels an orphaned blocked child when no supervisor turn remains, normalizes child activity as supervisor-owned work, and prevents nested child state from promoting the parent to operator attention. Exact backend tests cover lifecycle delivery and API normalization; the sidebar unit file covers grouping; the catalogued subagent-sidebar matrix covers collapsed and expanded hierarchy, state copy, accessibility, responsive geometry, refresh, production build, and a real-Core persisted hierarchy.",
+  "exclusions": "No unrelated chat, goal, queue, harness, provider, workspace, or native journeys are selected. Third-party provider execution, broad backend/frontend suites, origin-sensitive APIs beyond the selected real-Core sidebar journey, and physical-device workflows are excluded and are not claimed.",
+  "expected_tests": {"python": 2, "frontend": 5, "native": 0, "playwright": 9},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": ["ui/src/components/CallbackWaitingStatus.test.tsx"],
+  "python": [
+    "tests/v3/test_chat_subagents.py::test_child_approval_is_delivered_to_its_active_supervisor",
+    "tests/v3/test_chat_api.py::test_chat_session_activity_reports_core_owned_turn_state"
+  ],
+  "frontend": ["ui/src/pages/conversationSidebar.test.ts"],
   "native": [],
   "playwright": [
-    "entry:automation-callback/desktop",
-    "entry:automation-callback/compact",
-    "entry:automation-callback/mobile-chromium-small",
-    "entry:automation-callback/mobile-chromium-ledger-390",
-    "entry:automation-callback/mobile-chromium-wide",
-    "entry:automation-callback/mobile-webkit-small",
-    "entry:automation-callback/mobile-webkit",
-    "entry:automation-callback/mobile-webkit-wide"
+    "entry:subagent-sidebar/assistant-real-desktop",
+    "entry:subagent-sidebar/compact",
+    "entry:subagent-sidebar/desktop",
+    "entry:subagent-sidebar/mobile-chromium-ledger-390",
+    "entry:subagent-sidebar/mobile-chromium-small",
+    "entry:subagent-sidebar/mobile-chromium-wide",
+    "entry:subagent-sidebar/mobile-webkit",
+    "entry:subagent-sidebar/mobile-webkit-small",
+    "entry:subagent-sidebar/mobile-webkit-wide"
   ]
 }

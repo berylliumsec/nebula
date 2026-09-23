@@ -40,13 +40,13 @@ describe("groupSidebarConversations", () => {
     expect(result.groups[0].rows.map(row => [row.session.id, row.depth])).toEqual([["parent", 0], ["child", 1]]);
   });
 
-  it("promotes a collapsed parent to Needs you when its child waits", () => {
-    const parent = session("parent", { archivedAt: "2026-09-21T11:00:00Z" });
+  it("keeps child waits under supervisor control", () => {
+    const parent = session("parent");
     const waiting = session("waiting", { parentSessionId: parent.id, isSubagent: true });
     const working = session("working", { parentSessionId: parent.id, isSubagent: true });
     const result = groupSidebarConversations([parent, waiting, working], { waiting: "waiting", working: "working" }, "", new Set(), now);
 
-    expect(result.groups[0].label).toBe("Needs you");
+    expect(result.groups[0].label).toBe("Working");
     expect(result.groups[0].rows).toHaveLength(1);
     expect(result.groups[0].rows[0]).toMatchObject({ childCount: 2, waitingChildren: 1, workingChildren: 1 });
   });

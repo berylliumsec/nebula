@@ -4897,10 +4897,10 @@ export function SessionsPage() {
           <nav>
             {sidebarConversations.groups.map(group => <section className="session-list-group" aria-labelledby={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`} key={group.label}><h3 id={`conversation-group-${group.label.replaceAll(" ", "-").toLowerCase()}`}>{group.label === "Archived" ? <button className="session-list-group-toggle" type="button" aria-expanded={archivedGroupOpen || Boolean(sessionQuery)} onClick={() => setArchivedGroupOpen((current) => !current)}><ChevronDown size={12} aria-hidden="true" className={archivedGroupOpen || sessionQuery ? undefined : "collapsed"} /> Archived <span>{group.rootCount}</span></button> : group.label}</h3>{(group.label !== "Archived" || archivedGroupOpen || sessionQuery) && group.rows.map(({ session, depth, childCount, waitingChildren, workingChildren, expanded, searchRevealed }) => {
               const actionsOpen = sessionActionsId === session.id;
-              const activityState = sessionActivity[session.id] === "waiting" || waitingChildren ? "waiting" : sessionActivity[session.id] === "working" || workingChildren ? "working" : "idle";
+              const activityState = sessionActivity[session.id] === "waiting" && !depth ? "waiting" : sessionActivity[session.id] === "working" || waitingChildren || workingChildren ? "working" : "idle";
               const subtitle = childCount
-                ? `${childCount} subagent${childCount === 1 ? "" : "s"}${waitingChildren ? ` · ${waitingChildren} needs you` : workingChildren ? ` · ${workingChildren} working` : ""}`
-                : depth && activityState === "waiting" ? "Needs your input"
+                ? `${childCount} subagent${childCount === 1 ? "" : "s"}${waitingChildren ? ` · ${waitingChildren} with supervisor` : workingChildren ? ` · ${workingChildren} working` : ""}`
+                : depth && sessionActivity[session.id] === "waiting" ? "Waiting on supervisor"
                   : depth && activityState === "working" ? `Working${session.model ? ` · ${session.model}` : ""}`
                     : session.model || "Saved conversation";
               const displayTitle = depth ? session.title.replace(/^Subagent\s*·\s*/, "") : session.title;

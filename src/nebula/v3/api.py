@@ -9965,7 +9965,8 @@ def create_app(
                             "idle"
                             if turn is None
                             else "waiting"
-                            if turn.status
+                            if not is_subagent_session(session)
+                            and turn.status
                             in {
                                 ChatTurnStatus.WAITING_APPROVAL,
                                 ChatTurnStatus.INTERRUPTED,

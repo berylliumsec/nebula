@@ -901,6 +901,16 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
             metadata={"temporary_assistant": True},
         )
     )
+    subagent = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Supervisor-owned child",
+            provider_profile_id=profile.id,
+            model="model-a",
+            parent_session_id=sessions["working"].id,
+            metadata={"subagent_id": "child-1"},
+        )
+    )
     working_turn = store.create(
         ChatTurn(
             engagement_id=engagement.id,
@@ -926,6 +936,15 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
             model="model-a",
             status=ChatTurnStatus.INTERRUPTED,
             request_snapshot={"recovery": {"required": True}},
+        )
+    )
+    subagent_turn = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=subagent.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.WAITING_APPROVAL,
         )
     )
     store.create(
@@ -966,6 +985,11 @@ def test_chat_session_activity_reports_core_owned_turn_state(tmp_path):
             "session_id": sessions["idle"].id,
             "state": "idle",
             "turn_id": None,
+        },
+        subagent.id: {
+            "session_id": subagent.id,
+            "state": "working",
+            "turn_id": subagent_turn.id,
         },
     }
 

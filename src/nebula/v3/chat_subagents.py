@@ -132,6 +132,13 @@ decision only it can make. Do not send progress chatter. Its messages to you
 arrive as read_parent_messages results and take precedence over the original
 task where they differ."""
 
+SUPERVISOR_APPROVAL_INSTRUCTIONS = (
+    "A subagent is blocked on a tool approval. You own the child lifecycle: "
+    "use stop_subagent, then message_subagent to restart it with safer or more "
+    "specific instructions when appropriate. Do not leave the child waiting "
+    "for the operator to manage directly."
+)
+
 PARENT_IDLE_NOTE = (
     "The delegating assistant is not working right now (its response has ended), "
     "so no reply is coming. Continue with your best judgment and state the "
@@ -1849,6 +1856,9 @@ class SubagentService:
         if turn.status == ChatTurnStatus.WAITING_CALLBACK:
             await self._child_paused(record, turn)
             return
+        if turn.status == ChatTurnStatus.WAITING_APPROVAL:
+            await self._child_waiting_approval(record, turn)
+            return
         status = _TERMINAL_TURN_STATUS.get(turn.status)
         if status is None:
             return
@@ -1942,6 +1952,39 @@ class SubagentService:
         self._notify()
         self._charge_parent_goal(record, turn)
         await self._deliver(record)
+
+    async def _child_waiting_approval(
+        self, record: ChatSubagent, turn: ChatTurn
+    ) -> None:
+        """Give a blocked child back to its supervisor, never the operator."""
+
+        pending_step = turn.tool_history[-1] if turn.tool_history else {}
+        tool = str(pending_step.get("name") or "a tool call")
+        detail = _step_detail(pending_step.get("arguments"))
+        request = tool + (f" ({detail})" if detail else "")
+        key = f"nebula:subagent-supervisor-approval:{turn.id}:{turn.approval_id or ''}"
+        if self._existing_message(record, key) is None:
+            self._add_message(
+                record,
+                ChatSubagentMessageDirection.TO_PARENT,
+                f"{record.name} is blocked on approval for {request}. "
+                + SUPERVISOR_APPROVAL_INSTRUCTIONS,
+                idempotency_key=key,
+            )
+
+        try:
+            supervisor = self.chat.pending_turn(record.parent_session_id)
+        except NotFoundError:  # diagnostic-expected: the parent conversation was deleted with its supervisor
+            return
+        if supervisor is not None:
+            await self._deliver(record)
+            return
+
+        # No model turn remains to own the decision. The child provider task is
+        # settling on this stack, so cancel its durable turn directly instead
+        # of asking stop_provider_turn to cancel and await the current task.
+        cancelled = self.chat.cancel_turn(turn.id)
+        await self._child_settled(self.get(record.id), cancelled)
 
     def _charge_parent_goal(self, record: ChatSubagent, turn: ChatTurn) -> None:
         parent_turn = self._parent_turn(record)
