@@ -857,9 +857,16 @@
     ],
     "assistant-queue-reconciliation": [
       {"area":"assistant-queue-reconciliation","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant follow-up queue delegates ordered provider messages to Core","runtime":"mock","shard":"1/1"},
-      {"area":"assistant-queue-reconciliation","project":"narrow","test_match":"tests/interface.spec.ts","grep":"assistant follow-up queue delegates ordered provider messages to Core","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-queue-reconciliation","project":"compact","test_match":"tests/interface.spec.ts","grep":"assistant follow-up queue delegates ordered provider messages to Core","runtime":"mock","shard":"1/1"},
       {"area":"assistant-queue-reconciliation","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"assistant follow-up queue delegates ordered provider messages to Core","runtime":"mock","shard":"1/1"},
-      {"area":"assistant-queue-reconciliation","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant follow-up queue delegates ordered provider messages to Core","runtime":"mock","shard":"1/1"}
+      {"area":"assistant-queue-reconciliation","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"assistant follow-up queue delegates ordered provider messages to Core","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-queue-reconciliation","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"assistant follow-up queue delegates ordered provider messages to Core","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-queue-reconciliation","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"assistant follow-up queue delegates ordered provider messages to Core","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-queue-reconciliation","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant follow-up queue delegates ordered provider messages to Core","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-queue-reconciliation","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"assistant follow-up queue delegates ordered provider messages to Core","runtime":"mock","shard":"1/1"}
+    ],
+    "assistant-queue-core": [
+      {"area":"assistant-queue-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core keeps queued controls reachable and durable","runtime":"real-core","shard":"1/1"}
     ],
     "branch-review": [
   {
