@@ -45,6 +45,12 @@ def test_exact_assistant_selection_is_separate_from_native():
         "context",
         "python_service_oracle_matches_saved_context_and_cursor_transitions",
     )
+    assert assistant_rust_target(
+        "nebula-assistant-transport/http::python_authentication_oracle_matches_http_status_headers_and_bodies"
+    ) == (
+        "nebula-assistant-transport", "http",
+        "python_authentication_oracle_matches_http_status_headers_and_bodies",
+    )
 
 
 @pytest.mark.parametrize(

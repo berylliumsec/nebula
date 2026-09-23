@@ -180,7 +180,7 @@ fn recorded_datetime(value: &str) -> bool {
         || NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f").is_ok()
 }
 
-fn require_canonical_fields(schema: &mut Value) {
+pub(crate) fn require_canonical_fields(schema: &mut Value) {
     // A model_dump(mode="json") record includes every field, including nulls
     // and factory defaults. Do not invent UUIDs/times during a migration read.
     if schema.get("additionalProperties") == Some(&Value::Bool(false))
@@ -220,7 +220,7 @@ fn resolved<'a>(schema: &'a Value, root: &'a Value) -> &'a Value {
     }
 }
 
-fn fill_defaults(schema: &Value, root: &Value, payload: &mut Value) {
+pub(crate) fn fill_defaults(schema: &Value, root: &Value, payload: &mut Value) {
     let schema = resolved(schema, root);
     // JSON schema may express a Python float default as an integer (0). Match
     // model_dump's float representation without touching opaque metadata.

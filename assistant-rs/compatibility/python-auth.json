@@ -1,0 +1,2695 @@
+{
+  "cases": [
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_401",
+          "detail": "valid bearer token required",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Requests that require this credential cannot complete. The credential value was not added to diagnostics.",
+          "operator_detail": "valid bearer token required",
+          "reason_code": "authentication_failed",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.authentication_failed",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 401,
+        "www_authenticate": "Bearer"
+      },
+      "headers": {},
+      "method": "GET",
+      "name": "missing",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": [],
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Authorization": "Bearer fixture-core"
+      },
+      "method": "GET",
+      "name": "bearer",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": [],
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Authorization": "bEaReR fixture-core"
+      },
+      "method": "GET",
+      "name": "case-insensitive-bearer",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_401",
+          "detail": "valid bearer token required",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Requests that require this credential cannot complete. The credential value was not added to diagnostics.",
+          "operator_detail": "valid bearer token required",
+          "reason_code": "authentication_failed",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.authentication_failed",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 401,
+        "www_authenticate": "Bearer"
+      },
+      "headers": {
+        "Authorization": "Bearer wrong"
+      },
+      "method": "GET",
+      "name": "wrong-bearer",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_401",
+          "detail": "valid bearer token required",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Requests that require this credential cannot complete. The credential value was not added to diagnostics.",
+          "operator_detail": "valid bearer token required",
+          "reason_code": "authentication_failed",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.authentication_failed",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 401,
+        "www_authenticate": "Bearer"
+      },
+      "headers": {
+        "Authorization": "Bearer "
+      },
+      "method": "GET",
+      "name": "empty-bearer",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_401",
+          "detail": "valid bearer token required",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Requests that require this credential cannot complete. The credential value was not added to diagnostics.",
+          "operator_detail": "valid bearer token required",
+          "reason_code": "authentication_failed",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.authentication_failed",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 401,
+        "www_authenticate": "Bearer"
+      },
+      "headers": {},
+      "method": "GET",
+      "name": "non-ascii-bearer",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {
+        "Authorization": "42656172657220c3a9"
+      }
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": [],
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf"
+      },
+      "method": "GET",
+      "name": "paired-read",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": [],
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Authorization": "Bearer wrong",
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf"
+      },
+      "method": "GET",
+      "name": "bearer-fallback-cookie",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": [],
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=\"fixture\\055device\"; nebula_csrf=fixture-csrf"
+      },
+      "method": "GET",
+      "name": "quoted-cookie",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": [],
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=wrong; nebula_device=fixture-device; nebula_csrf=fixture-csrf"
+      },
+      "method": "GET",
+      "name": "duplicate-cookie-last-wins",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_401",
+          "detail": "valid bearer token required",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Requests that require this credential cannot complete. The credential value was not added to diagnostics.",
+          "operator_detail": "valid bearer token required",
+          "reason_code": "authentication_failed",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.authentication_failed",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 401,
+        "www_authenticate": "Bearer"
+      },
+      "headers": {
+        "Cookie": "nebula_device=wrong"
+      },
+      "method": "GET",
+      "name": "wrong-cookie",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": "2029-12-31T23:59:59Z",
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": "2029-12-31T23:59:59Z",
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {
+        "revoked_at": "2029-12-31T23:59:59+00:00"
+      },
+      "expected": {
+        "body": {
+          "code": "api.http_401",
+          "detail": "valid bearer token required",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Requests that require this credential cannot complete. The credential value was not added to diagnostics.",
+          "operator_detail": "valid bearer token required",
+          "reason_code": "authentication_failed",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.authentication_failed",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 401,
+        "www_authenticate": "Bearer"
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf"
+      },
+      "method": "GET",
+      "name": "revoked",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-01T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-01T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {
+        "idle_expires_at": "2030-01-01T00:00:00+00:00"
+      },
+      "expected": {
+        "body": {
+          "code": "api.http_401",
+          "detail": "valid bearer token required",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Requests that require this credential cannot complete. The credential value was not added to diagnostics.",
+          "operator_detail": "valid bearer token required",
+          "reason_code": "authentication_failed",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.authentication_failed",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 401,
+        "www_authenticate": "Bearer"
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf"
+      },
+      "method": "GET",
+      "name": "idle-expired",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-01-01T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-01T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-01-01T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-01T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {
+        "absolute_expires_at": "2030-01-01T00:00:00+00:00",
+        "idle_expires_at": "2030-01-01T00:00:00+00:00"
+      },
+      "expected": {
+        "body": {
+          "code": "api.http_401",
+          "detail": "valid bearer token required",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Requests that require this credential cannot complete. The credential value was not added to diagnostics.",
+          "operator_detail": "valid bearer token required",
+          "reason_code": "authentication_failed",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.authentication_failed",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 401,
+        "www_authenticate": "Bearer"
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf"
+      },
+      "method": "GET",
+      "name": "absolute-expired",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": [],
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Origin": "https://nebula.test:9443"
+      },
+      "method": "GET",
+      "name": "read-origin-valid",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_403",
+          "detail": "paired-device origin validation failed",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The denied operation was not performed.",
+          "operator_detail": "paired-device origin validation failed",
+          "reason_code": "permission_denied",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.permission_denied",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 403,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Origin": "https://wrong.test"
+      },
+      "method": "GET",
+      "name": "read-origin-wrong",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_403",
+          "detail": "paired-device origin validation failed",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The denied operation was not performed.",
+          "operator_detail": "paired-device origin validation failed",
+          "reason_code": "permission_denied",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.permission_denied",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 403,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf"
+      },
+      "method": "GET",
+      "name": "non-ascii-origin",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {
+        "Origin": "68747470733a2f2f6e6562756c612e74657374c3a9"
+      }
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_400",
+          "detail": "invalid paired-device Host header",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operator_detail": "invalid paired-device Host header",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 400,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Host": ""
+      },
+      "method": "GET",
+      "name": "empty-host",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_400",
+          "detail": "invalid paired-device Host header",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operator_detail": "invalid paired-device Host header",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 400,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Host": "user@nebula.test:9443"
+      },
+      "method": "GET",
+      "name": "invalid-host-18",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_400",
+          "detail": "invalid paired-device Host header",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operator_detail": "invalid paired-device Host header",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 400,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Host": "nebula.test/path"
+      },
+      "method": "GET",
+      "name": "invalid-host-19",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_400",
+          "detail": "invalid paired-device Host header",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operator_detail": "invalid paired-device Host header",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 400,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Host": "nebula.test?query"
+      },
+      "method": "GET",
+      "name": "invalid-host-20",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_400",
+          "detail": "invalid paired-device Host header",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operator_detail": "invalid paired-device Host header",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 400,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Host": "nebula.test#fragment"
+      },
+      "method": "GET",
+      "name": "invalid-host-21",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": [],
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Host": "[::1]:9443",
+        "Origin": "https://[::1]:9443"
+      },
+      "method": "GET",
+      "name": "ipv6-host",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": {
+        "device_id": "supplied-device",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_403",
+          "detail": "paired-device CSRF validation failed",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The denied operation was not performed.",
+          "operator_detail": "paired-device CSRF validation failed",
+          "reason_code": "permission_denied",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.permission_denied",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 403,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Origin": "https://nebula.test:9443"
+      },
+      "method": "PUT",
+      "name": "mutation-csrf-missing",
+      "path": "/api/v1/chat/sessions/session/read-cursor",
+      "raw_headers": {}
+    },
+    {
+      "body": {
+        "device_id": "supplied-device",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_403",
+          "detail": "paired-device CSRF validation failed",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The denied operation was not performed.",
+          "operator_detail": "paired-device CSRF validation failed",
+          "reason_code": "permission_denied",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.permission_denied",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 403,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Origin": "https://nebula.test:9443",
+        "X-Nebula-CSRF": "wrong"
+      },
+      "method": "PUT",
+      "name": "mutation-csrf-wrong",
+      "path": "/api/v1/chat/sessions/session/read-cursor",
+      "raw_headers": {}
+    },
+    {
+      "body": {
+        "device_id": "supplied-device",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_403",
+          "detail": "paired-device CSRF validation failed",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The denied operation was not performed.",
+          "operator_detail": "paired-device CSRF validation failed",
+          "reason_code": "permission_denied",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.permission_denied",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 403,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device",
+        "Origin": "https://nebula.test:9443",
+        "X-Nebula-CSRF": "fixture-csrf"
+      },
+      "method": "PUT",
+      "name": "mutation-csrf-cookie-missing",
+      "path": "/api/v1/chat/sessions/session/read-cursor",
+      "raw_headers": {}
+    },
+    {
+      "body": {
+        "device_id": "supplied-device",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_403",
+          "detail": "paired-device mutation requires Origin",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The denied operation was not performed.",
+          "operator_detail": "paired-device mutation requires Origin",
+          "reason_code": "permission_denied",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.permission_denied",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 403,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "X-Nebula-CSRF": "fixture-csrf"
+      },
+      "method": "PUT",
+      "name": "mutation-origin-missing",
+      "path": "/api/v1/chat/sessions/session/read-cursor",
+      "raw_headers": {}
+    },
+    {
+      "body": {
+        "device_id": "supplied-device",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_403",
+          "detail": "paired-device origin validation failed",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The denied operation was not performed.",
+          "operator_detail": "paired-device origin validation failed",
+          "reason_code": "permission_denied",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.permission_denied",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 403,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Origin": "https://wrong.test",
+        "X-Nebula-CSRF": "fixture-csrf"
+      },
+      "method": "PUT",
+      "name": "mutation-origin-wrong",
+      "path": "/api/v1/chat/sessions/session/read-cursor",
+      "raw_headers": {}
+    },
+    {
+      "body": {
+        "device_id": "supplied-device",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "code": "api.http_403",
+          "detail": "paired-device CSRF validation failed",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The denied operation was not performed.",
+          "operator_detail": "paired-device CSRF validation failed",
+          "reason_code": "permission_denied",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.permission_denied",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 403,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Origin": "https://nebula.test:9443"
+      },
+      "method": "PUT",
+      "name": "non-ascii-csrf",
+      "path": "/api/v1/chat/sessions/session/read-cursor",
+      "raw_headers": {
+        "X-Nebula-CSRF": "c3a9"
+      }
+    },
+    {
+      "body": {
+        "device_id": "supplied-device",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "paired",
+          "engagement_id": "project",
+          "id": "chat-read-ca185ce27681242665572f098423d11169ba6c37d34ad719838d311bb59fed78",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf",
+        "Origin": "https://nebula.test:9443",
+        "X-Nebula-CSRF": "fixture-csrf"
+      },
+      "method": "PUT",
+      "name": "mutation-valid",
+      "path": "/api/v1/chat/sessions/session/read-cursor",
+      "raw_headers": {}
+    },
+    {
+      "body": {
+        "device_id": "supplied-device",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {},
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "supplied-device",
+          "engagement_id": "project",
+          "id": "chat-read-b4993d31d6d0b27e395bc5941543f870fd68eaeb1417a3e6b730fca7b111f4a6",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Authorization": "Bearer fixture-core"
+      },
+      "method": "PUT",
+      "name": "bearer-mutation",
+      "path": "/api/v1/chat/sessions/session/read-cursor",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-31T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 2,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-03-02T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2029-12-31T23:54:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {
+        "last_used_at": "2029-12-31T23:54:00+00:00"
+      },
+      "expected": {
+        "body": [],
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf"
+      },
+      "method": "GET",
+      "name": "idle-refresh",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    },
+    {
+      "body": null,
+      "device_after": {
+        "absolute_expires_at": "2030-01-03T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "<generated>",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-03T00:00:00Z",
+        "last_used_at": "2030-01-01T00:00:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 2,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "<generated>"
+      },
+      "device_before": {
+        "absolute_expires_at": "2030-01-03T00:00:00Z",
+        "app_version": null,
+        "capabilities": [
+          "read-fixture"
+        ],
+        "created_at": "2029-12-22T00:00:00Z",
+        "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+        "heartbeat_at": null,
+        "id": "paired",
+        "idle_expires_at": "2030-01-02T00:00:00Z",
+        "last_used_at": "2029-12-31T23:54:00Z",
+        "metadata": {
+          "preserve": "opaque"
+        },
+        "name": "Fixture phone",
+        "ownership_claims": [],
+        "platform": null,
+        "revision": 1,
+        "revoked_at": null,
+        "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+        "updated_at": "2029-12-22T00:00:00Z"
+      },
+      "device_changes": {
+        "absolute_expires_at": "2030-01-03T00:00:00+00:00",
+        "last_used_at": "2029-12-31T23:54:00+00:00"
+      },
+      "expected": {
+        "body": [],
+        "status": 200,
+        "www_authenticate": null
+      },
+      "headers": {
+        "Cookie": "nebula_device=fixture-device; nebula_csrf=fixture-csrf"
+      },
+      "method": "GET",
+      "name": "idle-refresh-capped",
+      "path": "/api/v1/chat/sessions/session/decisions",
+      "raw_headers": {}
+    }
+  ],
+  "core_token": "fixture-core",
+  "device": {
+    "absolute_expires_at": "2030-03-02T00:00:00Z",
+    "app_version": null,
+    "capabilities": [
+      "read-fixture"
+    ],
+    "created_at": "2029-12-22T00:00:00Z",
+    "csrf_sha256": "d0402ad756bd4cbb3092b343429b5ff78dd9677cbadf1e80c97433d2303f958e",
+    "heartbeat_at": null,
+    "id": "paired",
+    "idle_expires_at": "2030-01-02T00:00:00Z",
+    "last_used_at": "2030-01-01T00:00:00Z",
+    "metadata": {
+      "preserve": "opaque"
+    },
+    "name": "Fixture phone",
+    "ownership_claims": [],
+    "platform": null,
+    "revision": 1,
+    "revoked_at": null,
+    "token_sha256": "80b2f897e93e81f769edd02733c0f3e41ecf29e43d76d10a263c67b726b1fe67",
+    "updated_at": "2029-12-22T00:00:00Z"
+  },
+  "device_schema": {
+    "$defs": {
+      "ResourceKind": {
+        "description": "Stable, UI-independent names for resources that can cross surfaces.",
+        "enum": [
+          "project",
+          "conversation",
+          "note",
+          "source",
+          "library_item",
+          "workspace_file",
+          "asset",
+          "evidence",
+          "finding",
+          "report",
+          "terminal_session",
+          "terminal_command",
+          "browser_session",
+          "browser_assessment",
+          "browser_tab",
+          "browser_exchange",
+          "mission",
+          "execution",
+          "approval",
+          "receipt",
+          "artifact"
+        ],
+        "title": "ResourceKind",
+        "type": "string"
+      },
+      "ResourceRef": {
+        "additionalProperties": false,
+        "description": "Canonical identity passed between Core, UI, devices, and durable records.",
+        "properties": {
+          "id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ResourceKind"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Project Id"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Revision"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "ResourceRef",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "description": "Revocable browser-device session; only token hashes are durable.",
+    "properties": {
+      "absolute_expires_at": {
+        "format": "date-time",
+        "title": "Absolute Expires At",
+        "type": "string"
+      },
+      "app_version": {
+        "anyOf": [
+          {
+            "maxLength": 100,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "App Version"
+      },
+      "capabilities": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 128,
+        "title": "Capabilities",
+        "type": "array"
+      },
+      "created_at": {
+        "format": "date-time",
+        "title": "Created At",
+        "type": "string"
+      },
+      "csrf_sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Csrf Sha256",
+        "type": "string"
+      },
+      "heartbeat_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Heartbeat At"
+      },
+      "id": {
+        "maxLength": 200,
+        "minLength": 1,
+        "title": "Id",
+        "type": "string"
+      },
+      "idle_expires_at": {
+        "format": "date-time",
+        "title": "Idle Expires At",
+        "type": "string"
+      },
+      "last_used_at": {
+        "format": "date-time",
+        "title": "Last Used At",
+        "type": "string"
+      },
+      "metadata": {
+        "additionalProperties": true,
+        "title": "Metadata",
+        "type": "object"
+      },
+      "name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "title": "Name",
+        "type": "string"
+      },
+      "ownership_claims": {
+        "items": {
+          "$ref": "#/$defs/ResourceRef"
+        },
+        "maxItems": 100,
+        "title": "Ownership Claims",
+        "type": "array"
+      },
+      "platform": {
+        "anyOf": [
+          {
+            "maxLength": 100,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Platform"
+      },
+      "revision": {
+        "default": 1,
+        "minimum": 1,
+        "title": "Revision",
+        "type": "integer"
+      },
+      "revoked_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Revoked At"
+      },
+      "token_sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "title": "Token Sha256",
+        "type": "string"
+      },
+      "updated_at": {
+        "format": "date-time",
+        "title": "Updated At",
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "token_sha256",
+      "csrf_sha256",
+      "idle_expires_at",
+      "absolute_expires_at"
+    ],
+    "title": "PairedDeviceSession",
+    "type": "object"
+  },
+  "format": "nebula.assistant-auth-oracle/v1",
+  "now": "2030-01-01T00:00:00+00:00",
+  "origin": "https://nebula.test:9443",
+  "session": {
+    "backend": "provider",
+    "created_at": "2029-12-22T00:00:00Z",
+    "engagement_id": "project",
+    "forked_from_message_id": null,
+    "harness_profile_id": null,
+    "harness_session_id": null,
+    "id": "session",
+    "metadata": {},
+    "model": "fixture",
+    "parent_session_id": null,
+    "provider_profile_id": "provider",
+    "revision": 1,
+    "title": "Fixture",
+    "updated_at": "2029-12-22T00:00:00Z"
+  },
+  "source_sha256": {
+    "src/nebula/v3/api.py": "064e0fd6840d45d9e5b9b8ad4d3be2a422638277091baefdf2164fee896b9fcb",
+    "src/nebula/v3/domain.py": "37c393be699b94a229192972ef5623e00bd8359b8e60e15b361d2903155f1cd8",
+    "src/nebula/v3/storage.py": "551685e63f310546b1e7b97921c16d6a3227284cfc3eba0c54f5898c3a50b362"
+  }
+}

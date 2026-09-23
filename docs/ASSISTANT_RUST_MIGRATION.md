@@ -27,8 +27,8 @@ Branch: `codex/rust-core-rewrite`.
 
 All product journeys remain required and unverified for Rust. Browser/device/LAN
 matrices from the product-quality skill remain mandatory before activating the
-replacement. This foundation changes no assistant route, UI, provider, or harness
-execution. No changes to other product areas are needed for its use.
+replacement. The experimental Rust router has three Assistant handlers; shipped
+routes, UI, provider and harness execution have not switched to Rust.
 
 ## Development boundaries
 
@@ -107,10 +107,11 @@ Python selection also regenerates the corpus to detect oracle drift.
 
 The contract is canonical `model_dump(mode="json")` output, not arbitrary API
 inputs. The subsequent SQLite port adds deterministic historical field defaults;
-missing identities and timestamps still fail closed. All 85
-inventoried assistant routes remain unported; the records module has no HTTP
-listener and is not wired into shipped Core. There is still no Rust assistant
-production journey or whole-assistant performance evidence.
+missing identities and timestamps still fail closed. The inventory records 85
+mounted Assistant route entries. Three now have experimental Rust HTTP handlers;
+none is activated in shipped Core and full route parity remains unverified.
+There is still no Rust assistant production journey or whole-assistant
+performance evidence.
 
 The requested [Figma journey review](ASSISTANT_RUST_FIGMA_REVIEW.md) inspected live
 Assistant designs, including desktop/mobile exports, and records superseded
@@ -189,7 +190,54 @@ test-selection checks. The cumulative CI selection is 47 exact Rust / 44 Python
 tests. The fixture compares complete success payloads except labeled server
 creation/update timestamps, and error statuses rather than full HTTP envelopes.
 
-HTTP/authentication middleware, context fork orchestration and prompt assembly,
-catch-up pending projections, production browser/mobile/LAN journeys and final
-packaging remain required integration gates. No shipped routes are activated.
-This step does not run providers or tools.
+Full HTTP integration, context fork orchestration and prompt assembly, catch-up
+pending projections, production browser/mobile/LAN journeys and final packaging
+remain required integration gates. The initial authenticated HTTP handlers below
+are experimental; no shipped routes are activated. Providers and tools are not
+run by this layer.
+
+## Assistant HTTP authentication and first routes
+
+Journey: reach saved context/read acknowledgments through `/api/v1` with the same
+local bearer token or paired-browser cookies. Paired mutations require the current
+Host/Origin and double-submit CSRF checks. Authenticated device identity owns the
+cursor; request bodies cannot impersonate another device. Revoked/expired devices
+must fail on the next request, and idle refresh must never undo revocation.
+
+Authorities: existing paired-device records (hashes only), configured Core token,
+trusted listener scheme, and the Assistant entity store. Capture Python API
+responses on temporary databases with deterministic clocks; exercise valid and
+invalid credentials, non-ASCII bytes, malformed origins/hosts, revocation, expiry,
+lookup beyond 1,000 records, and concurrent idle refresh. HTTP requests get bounded
+body/admission limits. No production listener or shipped entry point changes until
+transport and product gates pass. Other areas retain their routes and logic.
+
+First transport integration targets saved-context GET/PUT and read-cursor PUT.
+Required evidence includes response/error shape checks, authenticated service
+mutations and reload, dependency-specific schema validation, and selected Rust
+HTTP tests. Full request coercion, remaining routes, WebSocket/SSE, desktop launch,
+production UI/mobile/LAN and performance acceptance remain gates for the rewrite.
+
+Implemented: bearer/cookie fallback, double-submit CSRF, Host/Origin checks,
+revocation and both expiry bounds, paired-device cursor ownership, bounded request
+admission/bodies/response retention, request identities and deadlines. Idle refresh
+uses revision checks and revalidates revocation inside the bounded writer lane.
+The listener scheme is trusted configuration, never inferred from client-supplied
+forwarding headers. Some malformed Host forms are rejected more strictly than
+Python; all captured valid Host forms and authentication responses match.
+
+Local evidence: nine affected storage regressions, one device-contract test and
+seven exact HTTP tests passed. The HTTP corpus compares 33 Python cases including
+complete normalized error bodies and device state; separate tests cover 1,001
+older devices, simultaneous refresh, queued revocation, response retention,
+deadline recovery, durable context/cursor updates and an isolated TCP listener.
+All 24 selected Python contract/selection checks passed; the auth oracle check was
+rerun after correcting its canonical starting records. Clippy (warnings denied),
+Ruff and formatting passed. Cumulative CI selection: 55 exact Rust / 45 Python.
+
+The three route implementations are listed in
+[`rust-routes.json`](../assistant-rs/compatibility/rust-routes.json). This manifest
+does not claim route parity: request coercion/validation lists, general service
+error envelopes, CORS, diagnostics persistence, streaming and launch integration
+are outstanding. No production desktop/mobile/LAN, physical-device or performance
+gate is satisfied by the loopback fixture. The requested full rewrite is incomplete.

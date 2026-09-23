@@ -89,3 +89,10 @@ def test_context_oracle_matches_current_python_services():
 
     path = Path(__file__).parents[1] / "assistant-rs/compatibility/python-context.json"
     assert collect_context() == json.loads(path.read_text())
+
+
+def test_auth_oracle_matches_current_python_assistant_boundary():
+    from scripts.capture_assistant_auth import collect_auth
+
+    path = Path(__file__).parents[1] / "assistant-rs/compatibility/python-auth.json"
+    assert collect_auth() == json.loads(path.read_text())

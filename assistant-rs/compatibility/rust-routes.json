@@ -1,0 +1,35 @@
+{
+  "format": "nebula.assistant-rust-routes/v1",
+  "shipped": false,
+  "parity_verified": false,
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{session_id}/decisions",
+      "status": "experimental"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/chat/sessions/{session_id}/decisions/{decision_id}",
+      "status": "experimental"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/chat/sessions/{session_id}/read-cursor",
+      "status": "experimental"
+    }
+  ],
+  "evidence": [
+    "python-auth.json: 33 middleware comparisons with identical initial records",
+    "python-context.json: 27 saved-context and cursor transitions",
+    "nebula-assistant-transport/http: seven exact integration tests"
+  ],
+  "remaining_gates": [
+    "Full request coercion and validation-error lists",
+    "General service-error envelope parity",
+    "CORS and durable diagnostics integration",
+    "Shipped listener and lifecycle integration",
+    "Production desktop, mobile, LAN, reconnect and device journeys",
+    "Whole-Assistant route coverage and performance acceptance"
+  ]
+}

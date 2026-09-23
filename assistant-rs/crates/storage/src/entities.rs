@@ -17,6 +17,7 @@ use std::{
 use chrono::{DateTime, SecondsFormat, Utc};
 use fs2::FileExt;
 use futures_util::TryStreamExt;
+use nebula_assistant_domain::auth::PairedDevice;
 use nebula_assistant_domain::records::{
     AssistantKind, MAX_RECORD_BYTES, RecordError, StoredAssistantRecord,
 };
@@ -205,6 +206,13 @@ struct WriteRequest {
 }
 enum Command {
     Apply(WriteRequest),
+    TouchDevice {
+        id: String,
+        revision: i64,
+        now: DateTime<Utc>,
+        _bytes: OwnedSemaphorePermit,
+        reply: oneshot::Sender<Result<bool>>,
+    },
     Shutdown(oneshot::Sender<Result<()>>),
 }
 
@@ -348,6 +356,58 @@ impl SqliteAssistantStore {
             .await?
             .ok_or(Error::NotFound)?;
         decode_row(row)
+    }
+
+    /// Shared authentication dependency only; Assistant cannot create, revoke,
+    /// or change device permissions through this storage surface.
+    pub async fn paired_device(&self, token_sha256: &str) -> Result<Option<PairedDevice>> {
+        if token_sha256.len() != 64
+            || !token_sha256
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(Error::InvalidBounds);
+        }
+        let _permit = self.read_permit()?;
+        let query = format!(
+            "{SELECT_RECORD} WHERE kind = 'paired_device_sessions' AND json_extract(payload, '$.token_sha256') = ? ORDER BY created_at, id LIMIT 1"
+        );
+        sqlx::query(&query)
+            .bind(token_sha256)
+            .fetch_optional(&self.readers)
+            .await?
+            .map(decode_device)
+            .transpose()
+    }
+
+    /// Revalidate expiry/revocation inside the writer before extending idle
+    /// expiry. A conflict requires a fresh authentication check.
+    pub async fn touch_device(&self, id: &str, revision: i64, now: DateTime<Utc>) -> Result<bool> {
+        validate_id(id)?;
+        if revision < 1 {
+            return Err(Error::InvalidBounds);
+        }
+        if self.closing.load(Ordering::Acquire) {
+            return Err(Error::Closed);
+        }
+        let bytes = self
+            .bytes
+            .clone()
+            .try_acquire_many_owned((id.len() + 128) as u32)
+            .map_err(|_| Error::Capacity)?;
+        let slot = self.commands.try_reserve().map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => Error::Capacity,
+            mpsc::error::TrySendError::Closed(_) => Error::Closed,
+        })?;
+        let (reply, result) = oneshot::channel();
+        slot.send(Command::TouchDevice {
+            id: id.into(),
+            revision,
+            now,
+            _bytes: bytes,
+            reply,
+        });
+        result.await.map_err(|_| Error::Closed)?
     }
 
     pub async fn list(&self, query: ListQuery) -> Result<Page> {
@@ -621,6 +681,26 @@ fn decode_row(row: SqliteRow) -> Result<StoredAssistantRecord> {
     Ok(record)
 }
 
+fn decode_device(row: SqliteRow) -> Result<PairedDevice> {
+    let size: i64 = row.try_get("payload_bytes")?;
+    if size < 0 || size as u64 > MAX_RECORD_BYTES as u64 {
+        return Err(RecordError::TooLarge.into());
+    }
+    let payload: String = row.try_get("payload")?;
+    let device = PairedDevice::decode(payload.as_bytes())?;
+    if device.id() != row.try_get::<&str, _>("id")?
+        || device.revision() != row.try_get::<i64, _>("revision")?
+        || row.try_get::<&str, _>("kind")? != "paired_device_sessions"
+        || row.try_get::<Option<&str>, _>("engagement_id")?.is_some()
+        || row.try_get::<Option<&str>, _>("chat_session_id")?.is_some()
+        || sql_time(&device.payload()["created_at"])? != row.try_get::<&str, _>("created_at")?
+        || sql_time(&device.payload()["updated_at"])? != row.try_get::<&str, _>("updated_at")?
+    {
+        return Err(Error::CorruptEnvelope);
+    }
+    Ok(device)
+}
+
 async fn writer(
     mut connection: SqliteConnection,
     file: File,
@@ -636,6 +716,16 @@ async fn writer(
                         .await;
                 let _ = request.reply.send(result);
             }
+            Command::TouchDevice {
+                id,
+                revision,
+                now,
+                _bytes,
+                reply,
+            } => {
+                let outcome = touch_device_transaction(&mut connection, &id, revision, now).await;
+                let _ = reply.send(outcome);
+            }
             Command::Shutdown(reply) => {
                 receiver.close();
                 shutdown = Some(reply);
@@ -648,6 +738,36 @@ async fn writer(
     if let Some(reply) = shutdown {
         let _ = reply.send(result);
     }
+}
+
+async fn touch_device_transaction(
+    connection: &mut SqliteConnection,
+    id: &str,
+    revision: i64,
+    now: DateTime<Utc>,
+) -> Result<bool> {
+    let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
+    let row = sqlx::query(&format!(
+        "{SELECT_RECORD} WHERE kind='paired_device_sessions' AND id=?"
+    ))
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(row) = row else { return Ok(false) };
+    let device = decode_device(row)?;
+    if !device.valid_at(now) {
+        return Ok(false);
+    }
+    if device.revision() != revision {
+        return Err(Error::Conflict);
+    }
+    if device.refresh_due(now) {
+        let refreshed = device.refreshed(now)?;
+        sqlx::query("UPDATE entities SET payload=?, revision=?, updated_at=? WHERE kind='paired_device_sessions' AND id=? AND revision=?")
+            .bind(serde_json::to_string(refreshed.payload())?).bind(refreshed.revision()).bind(sql_time(&refreshed.payload()["updated_at"])?).bind(id).bind(revision).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(true)
 }
 
 async fn apply_transaction(

@@ -16,6 +16,9 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
 - `nebula-assistant-services`: saved-context mutations, active decision snapshots,
   revision history, atomic project promotion, and per-device read cursors. Source
   and session revisions are rechecked inside the bounded writer transaction.
+- `nebula-assistant-transport`: experimental Axum routes for saved-context GET/PUT
+  and read-cursor PUT, with bearer/paired-device authentication. No shipped entry
+  point mounts this router yet; full request/error and production parity are open.
 - `nebula-assistant-lab`: fixture generation, replay and journal measurements.
 
 The lab refuses existing output directories and refuses to open databases without
@@ -101,9 +104,32 @@ The 27-transition `python-context.json` fixture covers the existing Python
 decision/cursor service behavior. It compares complete success payloads with
 server creation/update timestamps labeled explicitly, and compares error statuses.
 Timestamp/history retention and concurrent writes also have dedicated Rust tests.
-This does not establish HTTP error-envelope parity, authentication middleware,
-fork orchestration, prompt assembly, catch-up projection or production UI parity.
+This service fixture does not establish HTTP error-envelope parity, fork
+orchestration, prompt assembly, catch-up projection or production UI parity.
 
 ```sh
 PYTHONPATH=src python -m scripts.capture_assistant_context --output assistant-rs/compatibility/python-context.json
+```
+
+The separate `python-auth.json` fixture captures 33 requests through Python's real
+authentication middleware, with identical canonical paired-device records on both
+sides. Rust compares status, bearer challenge, normalized error/success bodies and
+device state. Device lookup filters by token hash in SQL, without the legacy
+1,000-row list limit. Activity refresh rechecks revocation/expiry and revision in
+the single writer transaction; it cannot restore a revoked device. Credentials
+are omitted from device debug output and storage-error responses.
+
+The host supplies a trusted HTTP/HTTPS scheme; forwarded headers do not change it.
+By default, request bodies are capped at 1 MiB and handlers at 30 seconds. Admitted
+responses reserve 16 MiB each from a 64 MiB budget, so at most four buffered
+responses can be retained under the default configuration even though the request
+limit is 128. Permits remain held until the body is consumed or dropped. These are
+conservative development bounds, not measured throughput settings. Connection
+limits, streaming protocols, full Pydantic coercion/error lists, CORS, diagnostic
+persistence and shipped lifecycle integration remain pending. The library does
+not start a listener automatically; its TCP test binds only an isolated loopback
+port and uses disposable data.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_auth --output assistant-rs/compatibility/python-auth.json
 ```
