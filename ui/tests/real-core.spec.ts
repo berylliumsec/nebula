@@ -214,16 +214,18 @@ async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: nu
           object: "chat.completion.chunk",
           created: 1,
           model: "security-model",
-          choices: [{ index: 0, delta: { role: "assistant", content: "**Core is continuing in Project A**" }, finish_reason: null }],
+          choices: [{ index: 0, delta: { role: "assistant", content: options.responseContent ?? "**Core is continuing in Project A**" }, finish_reason: null }],
         })}\n\n`);
         setTimeout(() => {
-          response.write(`data: ${JSON.stringify({
-            id: "chatcmpl-real-core-stream",
-            object: "chat.completion.chunk",
-            created: 1,
-            model: "security-model",
-            choices: [{ index: 0, delta: { content: " and finished after the viewer detached." }, finish_reason: null }],
-          })}\n\n`);
+          if (options.responseContent === undefined) {
+            response.write(`data: ${JSON.stringify({
+              id: "chatcmpl-real-core-stream",
+              object: "chat.completion.chunk",
+              created: 1,
+              model: "security-model",
+              choices: [{ index: 0, delta: { content: " and finished after the viewer detached." }, finish_reason: null }],
+            })}\n\n`);
+          }
           response.write(`data: ${JSON.stringify({
             id: "chatcmpl-real-core-stream",
             object: "chat.completion.chunk",
@@ -3903,6 +3905,103 @@ reliabilityTest("stabilization real Core keeps the Subagents choice across refre
     await expect(page.getByRole("checkbox", {name: /Provider subagents/})).not.toBeChecked();
     await testInfo.attach("subagents-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId}), contentType: "application/json"});
   } finally {await core.stop();}
+});
+
+reliabilityTest("stabilization real Core repairs and completes a stranded restart subagent", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const modelStub = await startLocalModelStub({responseContent: "Recovered child report.", streamDelayMs: 0});
+  const core = await startApprovalCore(localNetworkIpv4(), "settings");
+  try {
+    const projects = await (await core.api.get("engagements")).json() as Array<{id: string}>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const providerResponse = await core.api.post("providers", {data: {
+      name: "Restart recovery provider",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: {local_only: true, residency: [], permits_sensitive_data: false},
+      metadata: {default_model: "security-model"},
+    }});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const parentResponse = await core.api.post("chat/completions", {data: {
+      backend: "provider",
+      provider_id: provider.id,
+      model: "security-model",
+      engagement_id: projectId,
+      messages: [{role: "user", content: "Create the restart recovery acceptance conversation."}],
+      include_knowledge: false,
+      stream: false,
+    }});
+    expect(parentResponse.ok(), await parentResponse.text()).toBe(true);
+    const parent = await parentResponse.json() as {session_id: string};
+    expect(parent.session_id).toBeTruthy();
+
+    await core.disconnect();
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const seeded = spawnSync(python, ["-c", [
+      "import sys",
+      "from pathlib import Path",
+      "from nebula.v3.domain import ChatMessage, ChatRole, ChatSession, ChatSubagent, ChatSubagentStatus, ChatTurn, ChatTurnStatus, utc_now",
+      "from nebula.v3.providers import ModelRequest",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
+      "project_id, provider_id, parent_session_id = sys.argv[2:]",
+      "parent_session = store.get(ChatSession, parent_session_id)",
+      "parent_turn_id = 'restart-recovery-parent-turn'",
+      "subagent_id = 'restart-recovery-subagent'",
+      "child_session_id = 'restart-recovery-child-session'",
+      "child_turn_id = 'restart-recovery-child-turn'",
+      "false_message_id = 'restart-recovery-false-terminal-message'",
+      "now = utc_now()",
+      "sequence = int(parent_session.metadata.get('last_sequence') or 0) + 1",
+      "parent_turn = ChatTurn(id=parent_turn_id, engagement_id=project_id, session_id=parent_session_id, provider_profile_id=provider_id, model='security-model', status=ChatTurnStatus.COMPLETE)",
+      "child_session = ChatSession(id=child_session_id, engagement_id=project_id, title='Subagent · Restart investigator', provider_profile_id=provider_id, model='security-model', parent_session_id=parent_session_id, metadata={'subagent_id': subagent_id})",
+      "child_turn = ChatTurn(id=child_turn_id, engagement_id=project_id, session_id=child_session_id, provider_profile_id=provider_id, model='security-model', status=ChatTurnStatus.INTERRUPTED, error='Core restarted before this response completed. Core will resume it automatically.', request_snapshot={'subagent_child': True, 'model_request': ModelRequest(model='security-model', messages=[{'role': 'user', 'content': 'Finish the recovered child report.'}], stream=False).model_dump(mode='json'), 'context_usage': {}, 'recovery': {'required': True, 'cause': 'core_restart', 'unknown_tool_call_ids': [], 'unknown_hook_execution_ids': [], 'interrupted_at': now.isoformat()}})",
+      "record = ChatSubagent(id=subagent_id, engagement_id=project_id, parent_session_id=parent_session_id, parent_turn_id=parent_turn_id, child_session_id=child_session_id, child_turn_id=child_turn_id, provider_profile_id=provider_id, model='security-model', name='Restart investigator', task='Finish after Core restart.', status=ChatSubagentStatus.INTERRUPTED, finished_at=now, error='Core shut down while this subagent was running.', result_message_id=false_message_id, reported_at=now)",
+      "false_message = ChatMessage(id=false_message_id, engagement_id=project_id, session_id=parent_session_id, sequence=sequence, role=ChatRole.ASSISTANT, content='Subagent interrupted: Restart investigator\\n\\nError: Core shut down while this subagent was running.', provider_profile_id=provider_id, model='security-model', metadata={'kind': 'subagent_result', 'subagent_id': subagent_id, 'subagent_name': 'Restart investigator', 'child_session_id': child_session_id, 'subagent_status': 'interrupted', 'subagent_round': 1})",
+      "with store.transaction() as transaction:",
+      "    transaction.add(parent_turn)",
+      "    transaction.add(child_session)",
+      "    transaction.add(child_turn)",
+      "    transaction.add(record)",
+      "    transaction.add(false_message)",
+      "    transaction.update(ChatSession, parent_session_id, {'metadata': {**parent_session.metadata, 'message_count': sequence, 'last_sequence': sequence}}, expected_revision=parent_session.revision)",
+    ].join("\n"), core.dataDir, projectId!, provider.id, parent.session_id], {
+      cwd: repository,
+      env: {...process.env, PYTHONPATH: path.join(repository, "src")},
+      encoding: "utf8",
+    });
+    expect(seeded.status, seeded.stderr || seeded.stdout).toBe(0);
+
+    await core.restart();
+    await expect.poll(async () => {
+      const response = await core.api.get(`chat/sessions/${parent.session_id}/subagents`);
+      const payload = await response.json() as {subagents: Array<{status: string; result: string; result_message_id: string | null}>};
+      return payload.subagents[0];
+    }, {timeout: 20_000}).toMatchObject({status: "completed", result: "Recovered child report."});
+
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Restart recovery acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Restart recovery acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}`);
+    await expect(page.getByText("Subagent interrupted: Restart investigator", {exact: false})).toBeVisible();
+    const recoveredMessage = page.locator(".chat-message").filter({hasText: "Subagent recovered and finished: Restart investigator"});
+    await expect(recoveredMessage).toBeVisible();
+    await expect(recoveredMessage.getByText("Recovered child report.", {exact: true}).first()).toBeVisible();
+    await testInfo.attach("subagent-restart-recovery", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId: parent.session_id, modelRequests: modelStub.requests.length}), contentType: "application/json"});
+    await testInfo.attach("subagent-restart-recovery-screen", {body: await page.screenshot(), contentType: "image/png"});
+  } finally {
+    await core.stop();
+    await stopLocalModelStub(modelStub);
+  }
 });
 
 reliabilityTest("assistant upgrade real Core nests durable subagent conversations", async ({page}, testInfo) => {

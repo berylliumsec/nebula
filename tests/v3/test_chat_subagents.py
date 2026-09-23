@@ -22,6 +22,7 @@ from nebula.v3.domain import (
     ProviderProfile,
     ProviderVerificationStatus,
     RiskClass,
+    utc_now,
 )
 from nebula.v3.providers import (
     ModelCapabilities,
@@ -658,33 +659,21 @@ def test_restart_keeps_recoverable_subagent_round_live(tmp_path: Path) -> None:
         await _drain(chat, parent_turn_id)
         (record,) = store.list_entities(ChatSubagent)
         await _until(lambda: bool(provider.child_requests))
-        # Simulate a crash: drop the in-memory worker without settling the child.
-        for runtime in chat._active_provider_turns.values():
-            if runtime.task is not None:
-                runtime.task.cancel()
-        chat._active_provider_turns.clear()
-        store.update(
-            ChatSubagent,
-            record.id,
-            {
-                "status": ChatSubagentStatus.RUNNING,
-                "finished_at": None,
-                "result_message_id": None,
-            },
-            expected_revision=store.get(ChatSubagent, record.id).revision,
-        )
-        child_turn = store.get(ChatTurn, record.child_turn_id)
-        store.update(
-            ChatTurn,
-            child_turn.id,
-            {"status": ChatTurnStatus.ROUTING, "error": None},
-            expected_revision=child_turn.revision,
-        )
 
         restarted = ChatService(
             store, provider_factory=lambda _: provider, worker_id="worker-2"
         )
+        # The replacement Core parks the child while the previous worker is
+        # still alive. Its later unwind must not close the recoverable round.
         await restarted.startup()
+        old_tasks = [
+            runtime.task
+            for runtime in chat._active_provider_turns.values()
+            if runtime.task is not None
+        ]
+        for task in old_tasks:
+            task.cancel()
+        await asyncio.gather(*old_tasks, return_exceptions=True)
 
         interrupted = store.get(ChatSubagent, record.id)
         assert interrupted.status == ChatSubagentStatus.RUNNING
@@ -700,6 +689,96 @@ def test_restart_keeps_recoverable_subagent_round_live(tmp_path: Path) -> None:
             is False
         )
         assert restarted.subagents.view(interrupted)["status"] == "running"
+        await restarted.shutdown()
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_restart_repairs_a_late_terminal_child_write_from_the_old_core(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1", "start_subagent", task="Long task.", name="Slow", context=None
+                ),
+                _finish("p2"),
+                _response(text="Delegated."),
+            ],
+            child=[_response(text="Recovered report.")],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        provider.child_gate = asyncio.Event()
+        prepared = await chat.prepare_async(
+            _request(project, content="Go.", allow_subagents=True)
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _drain(chat, parent_turn_id)
+        (record,) = store.list_entities(ChatSubagent)
+        await _until(lambda: bool(provider.child_requests))
+
+        restarted = ChatService(
+            store, provider_factory=lambda _: provider, worker_id="worker-2"
+        )
+        await restarted.startup()
+        old_tasks = [
+            runtime.task
+            for runtime in chat._active_provider_turns.values()
+            if runtime.task is not None
+        ]
+        for task in old_tasks:
+            task.cancel()
+        await asyncio.gather(*old_tasks, return_exceptions=True)
+
+        # Reproduce the write made by a previous binary after the replacement
+        # Core had already marked the child turn recoverable.
+        stale = store.get(ChatSubagent, record.id)
+        stale = store.update(
+            ChatSubagent,
+            stale.id,
+            {
+                "status": ChatSubagentStatus.INTERRUPTED,
+                "finished_at": utc_now(),
+                "error": "Core shut down while this subagent was running.",
+            },
+            expected_revision=stale.revision,
+        )
+        await chat.subagents._deliver(stale)
+        stale = store.get(ChatSubagent, record.id)
+        false_result_id = stale.result_message_id
+        assert false_result_id is not None
+        assert restarted.subagents.view(stale)["status"] == "recovering"
+        assert restarted.subagents.view(stale)["finished_at"] is None
+
+        child = store.get(ChatTurn, record.child_turn_id)
+        assert restarted.resume_turns_stopped_by_core() == [child.id]
+        fenced = store.get(ChatSubagent, record.id)
+        assert fenced.status == ChatSubagentStatus.RUNNING
+        assert fenced.finished_at is None
+        assert fenced.result_message_id is None
+        marker = fenced.parent_request["_core_restart_recovery"]
+        assert marker["generation"] == 1
+        assert marker["superseded_result_message_ids"] == [false_result_id]
+
+        provider.child_gate.set()
+        await _drain(restarted, child.id)
+        completed = store.get(ChatSubagent, record.id)
+        assert completed.status == ChatSubagentStatus.COMPLETED
+        assert completed.result == "Recovered report."
+        assert completed.result_message_id != false_result_id
+        result_messages = [
+            message
+            for message in _messages(store, record.parent_session_id)
+            if message.metadata.get("kind") == "subagent_result"
+        ]
+        assert [message.metadata["subagent_status"] for message in result_messages] == [
+            "interrupted",
+            "completed",
+        ]
+        assert result_messages[-1].metadata["recovered_after_core_restart"] is True
+        assert result_messages[-1].content.startswith("Subagent recovered and finished")
         await restarted.shutdown()
         await chat.shutdown()
 
