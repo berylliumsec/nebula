@@ -423,6 +423,22 @@ pub(crate) fn catchup_device(query: Option<&str>) -> Result<String, ApiError> {
         .into())
 }
 
+pub(crate) fn activity_project(query: Option<&str>) -> Result<String, ApiError> {
+    let fields = query_fields(query)?;
+    fields
+        .get("engagement_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            query_errors(vec![field_error(
+                "missing",
+                "engagement_id",
+                "Field required",
+                &Value::Null,
+            )])
+        })
+}
+
 pub(crate) fn results(query: Option<&str>) -> Result<ResultsQuery, ApiError> {
     let fields = query_fields(query)?;
     let mut output = Map::new();

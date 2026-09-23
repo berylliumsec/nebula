@@ -1,14 +1,14 @@
 {
-  "change_digest": "219cde7ffab7eb3bbb7291f4365b3e5f35257e4579d256fb2704d85df4e50e4b",
-  "reviewed_by": "Codex Assistant retained Results review with independent storage, projection and Python oracle agents",
-  "reason": "Cumulative Assistant-only port: 87 exact Rust tests and 50 Python tests across seven feature/policy files. Current increment adds nine Rust tests for readonly ToolCall/Artifact codecs; complete Results/context source snapshots; aggregate row/byte limits; 110 Python HTTP and retained-record comparisons; safe bounded artifact file reads; deterministic timeout/admission recovery; and projection expansion. Catch-up oracle now has 78 cases, retaining all earlier cases. Local selection is the nine new tests plus 35 affected regressions: 13 HTTP, two shared-dependency, two storage/three service catch-up, four storage/four service navigation and seven context tests (44 total). These cover shared HTTP oracle/config wiring, new dependency variants and the removal of inappropriate entity-ID validation from retained session project filters. Local Python selects two read-contract oracle checks and one Results oracle check (3). Collect each exact Rust test before execution; compilation/collection600seconds percommand, execution120seconds pertest; Python300seconds. No full suites.",
-  "exclusions": "Fifteen experimental Assistant HTTP route handlers only. No shipped launch path, production UI, other product areas or desktop-native changes. Browser/device/LAN/reconnect, complete route parity, providers/harnesses, durable admission/recovery, historical/PostgreSQL/checkpoint migration, packaging and whole-Assistant performance remain open. File previews only inspect harmless retained bytes; no commands, live databases/services, external sources or document SDK. Read/resource limits and refusal of symlink/nonregular artifacts are explicit compatibility extensions. No full suites.",
+  "change_digest": "c78cf4a986336fc8ca3bcc3173ba8dc6916f4129e10f33b7dbe873810f621037",
+  "reviewed_by": "Codex Assistant status read review with independent storage and service agents",
+  "reason": "Cumulative Assistant-only port: 95 exact Rust tests and 51 Python checks across eight selected feature/policy files. Current increment adds eight Rust tests for immutable NativeHookExecution codecs, complete activity/queue/hook snapshots, 1,001-row reads and shared row/byte refusal, 40-case Python HTTP parity, canonical errors, ephemeral queue defaults, raw record and display-watermark purity/reopen, and pending-error precedence. Local selection is eight new tests plus 17 affected regressions: 14 HTTP and three dependency decoder tests (25 total), because shared routing/error/HTTP oracle wiring and dependency variants changed. Local Python selects one status oracle check. Each Rust test collects exactly once; compilation/collection 600 seconds per command, execution 120 seconds per test, Python 300 seconds. No full suites.",
+  "exclusions": "Eighteen experimental Assistant handlers only. No shipped launch, production UI, other product areas, desktop-native, queue dispatch, hooks or command execution. These reads do not implement pending-turn/session-hook reconciliation. Historical/PostgreSQL/checkpoint migrations, full route parity, browser/device/LAN/reconnect, packaging and whole-Assistant performance remain open. Complete-read limits, consistent queue snapshots and refusal to invent missing hook observation times are explicit extensions. Malformed hook schema failures currently use a sanitized500 rather than the Python 422 validation detail; canonical retained read/error parity does not close that gap. No live state or full suites.",
   "expected_tests": {
-    "python": 50,
+    "python": 51,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 87
+    "assistant_rust": 95
   },
   "python_versions": [
     "3.12"
@@ -22,7 +22,8 @@
     "tests/test_assistant_storage_interop.py",
     "tests/test_assistant_navigation_contract.py",
     "tests/test_assistant_read_contracts.py",
-    "tests/test_assistant_results_contract.py"
+    "tests/test_assistant_results_contract.py",
+    "tests/test_assistant_status_contract.py"
   ],
   "frontend": [],
   "native": [],
@@ -114,6 +115,14 @@
     "nebula-assistant-services/results::expanded_result_limits_preserve_retained_sources",
     "nebula-assistant-services/results::artifact_preview_enforces_digest_paths_and_bounded_regular_files",
     "nebula-assistant-services/results::preview_timeout_retains_blocking_admission_until_work_finishes",
-    "nebula-assistant-transport/http::python_results_http_oracle_preserves_outputs_context_and_reopened_records"
+    "nebula-assistant-transport/http::python_results_http_oracle_preserves_outputs_context_and_reopened_records",
+    "nebula-assistant-domain/status_dependencies::native_hook_records_preserve_history_and_require_recorded_terminal_times",
+    "nebula-assistant-storage/status::status_snapshots_preserve_activity_queue_and_hook_read_contracts",
+    "nebula-assistant-storage/status::status_snapshot_row_limits_are_shared_and_release_readers",
+    "nebula-assistant-storage/status::status_snapshot_byte_limits_cover_roots_and_dependencies",
+    "nebula-assistant-services/status::python_status_oracle_matches_retained_projections_and_errors",
+    "nebula-assistant-services/status::status_reads_preserve_rows_and_ephemeral_queue_absence_after_reopen",
+    "nebula-assistant-services/status::activity_conflicts_precede_corrupt_visible_sessions",
+    "nebula-assistant-transport/http::python_status_http_oracle_preserves_activity_queues_and_hook_receipts"
   ]
 }

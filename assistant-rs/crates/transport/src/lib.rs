@@ -86,6 +86,9 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
         .route("/api/v1/chat-messages", get(catalog_messages))
         .route("/api/v1/chat-messages/{entity_id}", get(catalog_message))
         .route("/api/v1/chat/sessions/{session_id}/catch-up", get(catch_up))
+        .route("/api/v1/chat/session-activity", get(session_activity))
+        .route("/api/v1/chat/sessions/{session_id}/queue", get(saved_queue))
+        .route("/api/v1/chat/turns/{turn_id}/hooks", get(turn_hooks))
         .route(
             "/api/v1/chat/sessions/{session_id}/results",
             get(read_results),
@@ -367,6 +370,37 @@ async fn turn_summary(
     request: Request,
 ) -> Response {
     let result = state.services.turn_summary(&session, &turn).await;
+    reply(request, result)
+}
+async fn session_activity(State(state): State<AppState>, request: Request) -> Response {
+    let (parts, _) = request.into_parts();
+    let result = match validation::activity_project(parts.uri.query()) {
+        Ok(project) => state
+            .services
+            .session_activity(&project)
+            .await
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
+}
+async fn saved_queue(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let result = state
+        .services
+        .saved_queue(&session, (state.config.clock)())
+        .await;
+    reply(request, result)
+}
+async fn turn_hooks(
+    State(state): State<AppState>,
+    Path(turn): Path<String>,
+    request: Request,
+) -> Response {
+    let result = state.services.turn_hooks(&turn).await;
     reply(request, result)
 }
 async fn read_results(

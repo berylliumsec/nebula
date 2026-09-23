@@ -797,6 +797,12 @@ async fn read_oracle(oracle: Value, expected_cases: usize, observed_clock: fn() 
         .await
         .unwrap();
     let mut stamps = std::collections::BTreeSet::new();
+    if oracle["fixed_response_clock"] == true {
+        let clock = DateTime::parse_from_rfc3339(oracle["clock"].as_str().unwrap()).unwrap();
+        for z in [false, true] {
+            stamps.insert(clock.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, z));
+        }
+    }
     let mut connection = raw(&path).await;
     for field in ["projects", "dependency_records", "initial_records"] {
         for row in oracle[field].as_array().into_iter().flatten() {
@@ -967,6 +973,22 @@ async fn read_oracle(oracle: Value, expected_cases: usize, observed_clock: fn() 
         })
         .collect();
     assert_eq!(actual, expected);
+    if let Some(dependencies) = oracle["final_dependencies"].as_array() {
+        let mut connection = raw(&path).await;
+        for expected in dependencies {
+            let retained: (String, String) =
+                sqlx::query_as("SELECT kind,payload FROM entities WHERE id=?")
+                    .bind(expected["payload"]["id"].as_str().unwrap())
+                    .fetch_one(&mut connection)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                json!({"kind":retained.0,"payload":serde_json::from_str::<Value>(&retained.1).unwrap()}),
+                *expected
+            );
+        }
+        connection.close().await.unwrap();
+    }
     reopened.shutdown().await.unwrap();
 }
 
@@ -995,6 +1017,16 @@ async fn python_results_http_oracle_preserves_outputs_context_and_reopened_recor
     read_oracle(
         serde_json::from_str(include_str!("../../../compatibility/python-results.json")).unwrap(),
         110,
+        catchup_now,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn python_status_http_oracle_preserves_activity_queues_and_hook_receipts() {
+    read_oracle(
+        serde_json::from_str(include_str!("../../../compatibility/python-status.json")).unwrap(),
+        40,
         catchup_now,
     )
     .await;

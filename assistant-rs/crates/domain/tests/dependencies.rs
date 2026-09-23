@@ -77,7 +77,9 @@ fn shared_dependency_records_preserve_python_fields_and_reject_incoherent_state(
                 p["contains_secret"] = true.into();
                 p["response"] = json!({"secret":"must-not-persist"});
             }
-            Kind::ToolCall | Kind::Artifact => unreachable!("covered by Results dependency tests"),
+            Kind::ToolCall | Kind::Artifact | Kind::NativeHookExecution => {
+                unreachable!("covered by retained read dependency tests")
+            }
         }
         assert!(StoredDependency::decode(kind, &serde_json::to_vec(&p).unwrap()).is_err());
     }

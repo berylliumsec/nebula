@@ -6,6 +6,7 @@ pub mod context;
 pub mod generated;
 pub mod navigation;
 pub mod results;
+pub mod status;
 mod unicode_casefold;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -29,6 +30,12 @@ pub enum Error {
     StorageNotFound(&'static str),
     #[error("{0}")]
     Conflict(&'static str),
+    #[error("{0}")]
+    HistoryConflict(&'static str),
+    #[error("Retained Assistant state cannot be projected")]
+    LegacyUnhandled,
+    #[error("Assistant model validation failed")]
+    ModelValidation(Vec<Value>),
     #[error("{kind} entity not found: {id}")]
     EntityNotFound { kind: &'static str, id: String },
     #[error("revision conflict: expected {expected}, found {found}")]

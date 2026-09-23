@@ -13,14 +13,16 @@ pub enum DependencyKind {
     HarnessTurn,
     ToolCall,
     Artifact,
+    NativeHookExecution,
 }
 impl DependencyKind {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Approval,
         Self::HarnessInteraction,
         Self::HarnessTurn,
         Self::ToolCall,
         Self::Artifact,
+        Self::NativeHookExecution,
     ];
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -29,6 +31,7 @@ impl DependencyKind {
             Self::HarnessTurn => "harness_turns",
             Self::ToolCall => "tool_calls",
             Self::Artifact => "artifacts",
+            Self::NativeHookExecution => "native_hook_executions",
         }
     }
 }
@@ -52,6 +55,11 @@ static SCHEMAS: LazyLock<Result<Value, RecordError>> = LazyLock::new(|| {
     for kind in [DependencyKind::ToolCall, DependencyKind::Artifact] {
         schemas[kind.as_str()] = results["dependency_schemas"][kind.as_str()].clone();
     }
+    let status: Value =
+        serde_json::from_str(include_str!("../../../compatibility/python-status.json"))
+            .map_err(|_| RecordError::Schema)?;
+    schemas[DependencyKind::NativeHookExecution.as_str()] =
+        status["dependency_schemas"][DependencyKind::NativeHookExecution.as_str()].clone();
     Ok(schemas)
 });
 static VALIDATORS: LazyLock<Result<HashMap<DependencyKind, Validator>, RecordError>> =
@@ -102,6 +110,14 @@ impl StoredDependency {
         {
             return Err(RecordError::Shape(kind.as_str()));
         }
+        if kind == DependencyKind::NativeHookExecution
+            && p.get("late_outcome")
+                .is_some_and(|v| !v.is_null() && v.get("observed_at").is_none())
+        {
+            // An observed process result must keep its recorded observation
+            // time; reading history must not invent one from the current clock.
+            return Err(RecordError::Shape(kind.as_str()));
+        }
         let schema = &SCHEMAS.as_ref().map_err(|_| RecordError::Schema)?[kind.as_str()];
         fill_defaults(schema, schema, &mut p);
         if !VALIDATORS.as_ref().map_err(|_| RecordError::Schema)?[&kind].is_valid(&p)
@@ -150,6 +166,16 @@ impl StoredDependency {
         }
         let truthy = |field: &str| p[field].as_str().is_some_and(|v| !v.is_empty());
         match kind {
+            DependencyKind::NativeHookExecution => {
+                if (p["status"] != "running") == p["completed_at"].is_null() {
+                    return Err(RecordError::Invariant(
+                        "hook completion timestamp must match terminal status",
+                    ));
+                }
+                if !p["late_outcome"].is_null() {
+                    timestamp(&p["late_outcome"]["observed_at"])?;
+                }
+            }
             DependencyKind::HarnessTurn => {
                 let coherent = match p["origin"].as_str() {
                     Some("chat") => {

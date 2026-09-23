@@ -49,6 +49,13 @@ oracle covers stored outputs, missing previews and context-policy variants.
 Production drawer, source navigation, draft preservation and reconnect acceptance
 remain open; no new Figma inspection or browser run is implied by this increment.
 
+Activity, saved follow-up queue and recorded hook summaries now have a 40-case
+isolated Python/Rust HTTP comparison. Sidebar activity preserves hidden-session
+conflict detection and pending recovery markers; an absent queue remains unsaved.
+These reads support main-chat, nested-chat and recovery displays but do not
+implement queue dispatch, receipt reconciliation or production UI acceptance.
+Malformed hook-schema error details still have a documented parity gap.
+
 ## Resolve conflicting design generations
 
 - Recovery frame `7:5` says the operator must reconcile and resume. The current

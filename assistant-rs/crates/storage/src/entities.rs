@@ -34,6 +34,8 @@ mod catchup;
 pub use catchup::{CatchupSnapshot, PendingSnapshot};
 mod results;
 pub use results::ResultsSnapshot;
+mod status;
+pub use status::{ActivitySnapshot, QueueSnapshot, TurnHooksSnapshot};
 
 const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MUTATIONS: usize = 64;

@@ -122,6 +122,21 @@ impl ApiError {
     }
     pub(crate) fn service(error: ServiceError) -> Self {
         match error {
+            ServiceError::HistoryConflict(detail) => {
+                Self::named(409, detail.into(), "chat.chat_history_conflict", "chat")
+            }
+            ServiceError::ModelValidation(errors) => {
+                let mut error = Self::validation(errors);
+                error.code = "api.model_validation".into();
+                error
+            }
+            ServiceError::LegacyUnhandled => Self::named(
+                500,
+                "The operation failed unexpectedly. No verified recovery procedure is available."
+                    .into(),
+                "api.unhandled_exception",
+                "chat",
+            ),
             ServiceError::Unavailable(detail) => Self::http(503, detail),
             ServiceError::Timeout(detail) => Self::http(504, detail),
             ServiceError::Invalid(detail) => Self::http(422, detail),
@@ -148,9 +163,14 @@ impl ApiError {
             .filter(|s| !s.is_empty())
             .map(Value::from)
             .unwrap_or_else(|| guidance["cause"].clone());
-        let retryable = self.status >= 500;
+        let unhandled = self.code == "api.unhandled_exception";
+        let retryable = self.status >= 500 && !unhandled;
         let mut value = json!({"detail":self.detail,"code":self.code,"feature":self.feature,"request_id":request_id,"error_id":format!("err_{}",uuid::Uuid::new_v4().simple()),"retryable":retryable,"help_article":GUIDANCE["features"][self.feature]["help_article"],"reason_code":reason,"operator_detail":operator,"impact":guidance["impact"],"remediation_id":format!("{}.{reason}",self.feature),"recovery_action":if retryable {"Retry this operation"} else {"Review recovery guidance"},"recovery_destination":"/settings#diagnostics-settings"});
-        if let Some(operation) = operation_id.filter(|s| !s.is_empty()) {
+        if unhandled {
+            value["help_article"] = Value::Null;
+            value["operator_detail"] = guidance["cause"].clone();
+        }
+        if let Some(operation) = operation_id.filter(|s| !s.is_empty() && !unhandled) {
             value["operation_id"] = operation.into();
         }
         let bytes=match crate::json_bytes(&value) { Ok(bytes)=>bytes,Err(_)=>return Self::http(413,"Assistant validation response exceeds its configured limit; send a smaller request").response(request_id,None) };

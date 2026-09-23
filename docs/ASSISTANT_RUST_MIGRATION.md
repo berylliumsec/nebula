@@ -30,7 +30,7 @@ Branch: `codex/rust-core-rewrite`.
 
 All product journeys remain required and unverified for Rust. Browser/device/LAN
 matrices from the product-quality skill remain mandatory before activating the
-replacement. The experimental Rust router has fifteen Assistant handlers; shipped
+replacement. The experimental Rust router has eighteen Assistant handlers; shipped
 routes, UI, provider and harness execution have not switched to Rust.
 
 ## Development boundaries
@@ -464,3 +464,56 @@ large collections, explicit expansion failure, bounded file paths and determinis
 preview timeout/admission recovery. This is library/isolated-HTTP evidence only.
 Cumulative CI selection is 87 exact Rust tests and 50 Python tests. The production
 Results journey and all whole-Assistant performance gates remain incomplete.
+
+
+## Activity, saved queue and retained hook read contract
+
+Journey: select or refresh a conversation, understand the sidebar's idle/working/
+waiting indicator, inspect the saved follow-up queue, and expand recorded native
+hook outcomes for a known turn. These reads support the inspected main chat,
+compact controls, nested-chat and recovery designs. Core entities own activity,
+queue contents and hook receipts; the existing UI owns expansion and selection.
+A read must never start a queue runner, invoke a hook, reconcile an uncertain
+execution, dispatch a turn, or turn a temporary default into a saved record.
+
+Preserve activity's project-wide conflict detection before session filtering,
+all historical project values, canonical temporary-session filtering, and the
+string-valued subagent marker (including empty strings). A missing queue returns
+an ephemeral revision-zero response; an existing canonical-ID queue retains its
+stored scope and opaque item order. Hook summaries retain timestamp ordering,
+late outcomes and reconciliation while omitting raw snapshots and process output.
+Read every same-session hook before turn filtering, matching legacy validation.
+Use complete snapshots with shared row/byte bounds and explicit limit failures.
+
+Planned evidence: a fixed-clock isolated Python HTTP oracle; immutable hook codec;
+scoped storage/projection/HTTP cases for retained values, invalid records, limits,
+missing identities, default queues and reopened state. Discovery/selection data,
+empty/error states, refresh/reopen and revocation are required in this slice.
+Queue writes/dispatch, pending-turn and session-hook reads that reconcile receipts,
+full recovery and the production browser/device/LAN matrix remain separate gates.
+A consistent Rust queue snapshot will replace the legacy GET's racy second
+existence lookup; document this as a consistency extension. No speedup claim is
+established by these read ports.
+
+Implemented: three read routes for project activity, saved queue state and a known
+turn's retained hook summaries. Their immutable snapshots share row/byte bounds;
+1,001-session/hook reads verify completeness beyond the Python page size. Activity
+checks pending conflicts before reporting session decode failures, and queue GET
+never creates a record. Hook summaries preserve aware/naive timestamp semantics,
+late outcomes and opaque reconciliation while omitting raw process output.
+The 40-case Python oracle retains all 97 Assistant records and 14 hook dependencies
+exactly across reads and database reopen. It includes canonical conflict, malformed
+opaque recovery, timestamp-comparison and ephemeral queue-validation errors.
+
+Known limits: malformed hook schemas currently receive a sanitized Rust 500 failure
+instead of Python's detailed 422 model-validation envelope. Missing recorded late
+observation timestamps are refused rather than generated during hydration. Complete
+snapshot limits and the atomic queue existence check are explicit extensions.
+These observations do not establish shipped UI or full recovery behavior.
+
+Local validation: 25 exact Rust tests passed (eight new status cases, 14 HTTP and
+three dependency regressions), plus the one status-oracle Python test. The latter
+passed in 6.10 seconds; the cumulative Python selection collects 51 tests. Raw-row,
+envelope, projection-watermark and ephemeral-queue assertions passed before and
+after reopening. Cumulative CI now selects 95 exact Rust tests and 51 Python checks;
+no browser, execution, migration or performance gate is inferred from these runs.

@@ -16,7 +16,7 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
 - `nebula-assistant-services`: saved-context mutations, active decision snapshots,
   revision history, atomic project promotion, per-device read cursors, transcript
   navigation, project message search, durable bookmarks, conversation catalogs,
-  catch-up and retained Results/context-source reads. Source
+  catch-up, retained Results/context-source reads, activity, saved queues and hook summaries. Source
   and session revisions are rechecked inside the bounded writer transaction.
 - `nebula-assistant-transport`: experimental Axum routes for saved-context GET/PUT
   and read-cursor PUT, transcript/search GET, bookmark GET/PUT, conversation
@@ -214,4 +214,14 @@ Regenerate the retained-read oracles from the repository root:
 PYTHONPATH=src python -m scripts.capture_assistant_catalog --output assistant-rs/compatibility/python-catalog.json
 PYTHONPATH=src python -m scripts.capture_assistant_catchup --output assistant-rs/compatibility/python-catchup.json
 PYTHONPATH=src python -m scripts.capture_assistant_results --output assistant-rs/compatibility/python-results.json
+```
+
+Activity, saved queue and retained hook GETs do not reconcile effects or dispatch
+work. Absent queues remain response-only revision-zero values. Hook summaries
+retain recorded outcomes while omitting raw process output. Schema-corrupt hook
+records currently return a sanitized failure rather than the exact legacy 422
+validation detail; complete malformed-record error parity remains open.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_status --output assistant-rs/compatibility/python-status.json
 ```

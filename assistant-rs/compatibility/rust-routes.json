@@ -77,6 +77,21 @@
       "method": "GET",
       "path": "/api/v1/chat/sessions/{session_id}/context-sources",
       "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/session-activity",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{session_id}/queue",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/turns/{turn_id}/hooks",
+      "status": "experimental"
     }
   ],
   "evidence": [
@@ -87,7 +102,8 @@
     "python-catalog.json: 64 generated catalog/read comparisons",
     "python-catchup.json: 78 catch-up, summary and device-cursor comparisons",
     "python-results.json: 110 retained Results, context-source, artifact-preview and query comparisons",
-    "nebula-assistant-transport/http: fourteen exact integration tests passed locally"
+    "python-status.json: 40 activity, saved queue and retained hook read/error comparisons",
+    "nebula-assistant-transport/http: fifteen exact integration tests passed locally"
   ],
   "remaining_gates": [
     "JSON syntax, content-type and method edge cases",
@@ -96,6 +112,7 @@
     "Shipped listener and lifecycle integration",
     "Production desktop, mobile, LAN, reconnect and device journeys",
     "Whole-Assistant route coverage and performance acceptance",
-    "Full shared project schema validation and production search-load measurements"
+    "Full shared project schema validation and production search-load measurements",
+    "Malformed hook schemas: Rust sanitizes failure rather than returning the exact Python 422 validation detail"
   ]
 }
