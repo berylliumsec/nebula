@@ -922,7 +922,6 @@ export function SessionsPage() {
     [subagentState.subagents],
   );
   const [loadingHistory, setLoadingHistory] = useState(false);
-  const [messageIntrinsicSizes, setMessageIntrinsicSizes] = useState<Map<string, number>>(() => new Map());
   const [sessionReadReady, setSessionReadReady] = useState(true);
   const chatPreviews = useMemo(() => new ChatPreviewCache<{
     messages: ConversationMessage[];
@@ -1120,13 +1119,19 @@ export function SessionsPage() {
     [messages],
   );
   useLayoutEffect(() => {
-    const sizes = new Map<string, number>();
     for (const message of messages) {
       const element = document.getElementById(`chat-message-${message.id}`);
-      if (element) sizes.set(message.id, Math.max(1, Math.ceil(element.getBoundingClientRect().height)));
+      if (!element) continue;
+      if (loadingHistory) {
+        element.classList.remove("render-contained");
+        element.style.removeProperty("--chat-message-intrinsic-size");
+        continue;
+      }
+      const height = Math.max(1, Math.ceil(element.getBoundingClientRect().height));
+      element.style.setProperty("--chat-message-intrinsic-size", `${height}px`);
+      element.classList.add("render-contained");
     }
-    setMessageIntrinsicSizes(sizes);
-  }, [messages, sessionId]);
+  }, [loadingHistory, messages, sessionId]);
   const activityItemsByAssistantId = useMemo(
     () => groupByAssistantId(activityItems.filter(shouldShowActivityItem)),
     [activityItems],
@@ -4780,17 +4785,15 @@ export function SessionsPage() {
                       : historicalTurnId
                         ? activityLedgerFromHarness("Work summary", message.state, [])
                         : undefined;
-                  const messageIntrinsicSize = messageIntrinsicSizes.get(message.id);
                   return (
                   <article
-                    className={`chat-message ${message.role === "user" ? "operator" : agentMessage ? "agent-message" : "assistant"}${!loadingHistory && messageIntrinsicSize !== undefined ? " render-contained" : ""}${editing ? " editing" : ""}${pendingReplacement ? " pending-replacement" : ""}`}
+                    className={`chat-message ${message.role === "user" ? "operator" : agentMessage ? "agent-message" : "assistant"}${editing ? " editing" : ""}${pendingReplacement ? " pending-replacement" : ""}`}
                     id={`chat-message-${message.id}`}
                     data-sequence={message.sequence}
                     data-selection-source-kind={message.role === "assistant" ? "assistant_message" : "chat_message"}
                     data-selection-source-id={message.id}
                     data-selection-source-label={message.role === "assistant" ? "Assistant response" : agentMessage ? "Agent message" : "Chat message"}
                     key={message.runtimeId ?? message.id}
-                    style={messageIntrinsicSize === undefined ? undefined : {"--chat-message-intrinsic-size": `${messageIntrinsicSize}px`} as CSSProperties}
                     tabIndex={-1}
                   >
                     <div className="chat-message-body">

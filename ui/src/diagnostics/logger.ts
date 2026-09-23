@@ -615,6 +615,22 @@ export function installGlobalDiagnosticHandlers(): void {
     });
   });
   window.addEventListener("unhandledrejection", (event) => {
+    if (event.reason && typeof event.reason === "object" && (event.reason as {name?: unknown}).name === "AbortError") {
+      // Navigating between conversations intentionally abandons superseded reads.
+      // Do not surface those cancellations as browser errors or failure incidents.
+      event.preventDefault();
+      void logDiagnostic({
+        level: "debug",
+        eventCode: "interface.promise.cancelled",
+        message: "The interface abandoned an obsolete asynchronous operation.",
+        outcome: "cancelled",
+        stage: "promise",
+        retryable: false,
+        safeFailureCause: "A newer interface action superseded the pending operation.",
+        exception: event.reason instanceof Error ? event.reason : undefined,
+      });
+      return;
+    }
     void logDiagnostic({
       level: "error",
       eventCode: "interface.promise.unhandled_rejection",
