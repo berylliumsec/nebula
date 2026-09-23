@@ -15,6 +15,7 @@ const uiBuild = {
 const backendHost = process.env.NEBULA_DEV_BACKEND ?? "http://127.0.0.1:8765";
 
 export default defineConfig({
+  resolve: {alias: {"lucide-react": path.resolve(import.meta.dirname, "src/icons/index.ts")}},
   plugins: [react(), {
     name: "nebula-build-identity",
     enforce: "post",

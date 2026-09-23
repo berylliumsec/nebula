@@ -7595,6 +7595,38 @@ test("stabilization audit every primary workspace view", async ({ page }, testIn
   }
 });
 
+test("Phosphor icon pack renders across every primary workspace", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  for (const [name, route, heading] of workspaces) {
+    await openWorkspace(page, route, heading);
+    const result = await page.locator("svg.lucide:visible").evaluateAll((icons) => ({
+      count: icons.length,
+      invalid: icons.flatMap((icon) => {
+        const bounds = icon.getBoundingClientRect();
+        const family = icon.getAttribute("data-icon-family");
+        const weight = icon.getAttribute("data-icon-weight");
+        const hasArtwork = Boolean(icon.querySelector("path, circle, rect, line, polyline, polygon, ellipse"));
+        return family === "phosphor" && ["regular", "light"].includes(weight ?? "") && hasArtwork && bounds.width > 0 && bounds.height > 0
+          ? [] : [icon.outerHTML.slice(0, 240)];
+      }),
+      duplicateIds: (() => {
+        const ids = icons.flatMap(icon => [...icon.querySelectorAll("[id]")].map(node => node.id));
+        return ids.filter((id, index) => ids.indexOf(id) !== index);
+      })(),
+    }));
+    expect(result.count, `${name} should expose mapped interface glyphs`).toBeGreaterThan(0);
+    expect(result.invalid, `${name} contains an unmapped or empty glyph`).toEqual([]);
+    expect(result.duplicateIds, `${name} contains colliding SVG definition ids`).toEqual([]);
+    if (name === "workbench") {
+      const screenshotPath = process.env.NEBULA_ICON_SCREENSHOT_DIR
+        ? (await import("node:path")).join(process.env.NEBULA_ICON_SCREENSHOT_DIR, `phosphor-${testInfo.project.name}.png`)
+        : testInfo.outputPath(`phosphor-${testInfo.project.name}.png`);
+      if (process.env.NEBULA_ICON_SCREENSHOT_DIR) await (await import("node:fs/promises")).mkdir(process.env.NEBULA_ICON_SCREENSHOT_DIR, { recursive: true });
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+    }
+  }
+});
+
 test("mobile Workbench navigation has one authority and no duplicate tab strip", async ({ page }) => {
   test.skip((page.viewportSize()?.width ?? 1440) > 760, "Mobile navigation contract");
   await openWorkspace(page, "/?view=activity", "Workbench");
