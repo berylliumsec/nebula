@@ -2700,6 +2700,33 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });
 
+test("assistant upgrade production LAN names an active durable conversation", async () => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub({streamDelayMs: 3_000});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const provider = await (await api.post("providers", {data: {name: "Early naming acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}})).json() as {id: string};
+    const completion = api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Investigate expired HTTPS certificate rotation"}], include_knowledge: false, stream: true}});
+
+    const namedSession = await expect.poll(async () => {
+      const sessions = await (await api.get(`chat-sessions?engagement_id=${projects[0].id}`)).json() as Array<{id: string; title: string; metadata: Record<string, unknown>}>;
+      return sessions.find(session => session.title === "Expired HTTPS Certificate Review") ?? null;
+    }, {timeout: 2_500}).not.toBeNull();
+    void namedSession;
+
+    const sessions = await (await api.get(`chat-sessions?engagement_id=${projects[0].id}`)).json() as Array<{id: string; title: string; metadata: Record<string, unknown>}>;
+    const named = sessions.find(session => session.title === "Expired HTTPS Certificate Review");
+    expect(named?.metadata.initial_title_state).toBe("generated");
+    const messages = await (await api.get(`chat/sessions/${named?.id}/messages`)).json() as Array<{role: string}>;
+    expect(messages.map(message => message.role)).toEqual(["user"]);
+
+    const response = await completion;
+    expect(response.ok(), await response.text()).toBe(true);
+  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+});
+
 for (const decision of ["Approve", "Reject"] as const) {
   test(`assistant upgrade stabilization real Core ${decision.toLowerCase()} continues exactly once`, async ({page}, testInfo) => {
     test.setTimeout(90_000);

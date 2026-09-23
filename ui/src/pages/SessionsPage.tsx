@@ -1885,8 +1885,8 @@ export function SessionsPage() {
     }
   };
 
-  // Naming finishes after the reply is saved, so the immediate post-turn list
-  // read can still contain the prompt title. Follow Core until it settles.
+  // Core names a conversation after its first durable message, independently
+  // of a long-running reply. Follow that optional task until it settles.
   useEffect(() => {
     if (!api || !engagement || !hasRecentPendingTitle(sessions)) return;
     const timer = window.setInterval(() => {
