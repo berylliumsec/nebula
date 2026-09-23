@@ -90,6 +90,11 @@ jobs:
       - name: Install Chromium for browser runtime regression tests
         if: env.RUN_SELECTED == 'true' && needs.selection.outputs.python_browser == 'true'
         run: poetry run playwright install --with-deps chromium
+      - name: Install pinned Rust for selected assistant storage interoperability test
+        if: env.RUN_SELECTED == 'true' && contains(needs.selection.outputs.python, 'tests/test_assistant_storage_interop.py')
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.94.0
       - name: Test
         if: env.RUN_SELECTED == 'true'
         env:

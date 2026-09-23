@@ -5,10 +5,12 @@ replacement for the shipped assistant. Other Nebula areas are out of scope.
 See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
 
 - `nebula-assistant-domain`: bounded stream-event types and immutable validation
-  of all 13 canonical persisted assistant record kinds. Request validation and
-  historical default migrations are not implemented.
+  of all 13 canonical persisted assistant record kinds, plus deterministic
+  historical field defaults. General request coercion is not implemented.
 - `nebula-assistant-storage`: SQLite journal with a bounded single writer,
   append-only records, idempotency, commit notifications and bounded replay.
+  Its separate `entities` module reads and updates an isolated copy of Nebula's
+  current SQLite schema, preserving revisions, lookup and search projections.
 - `nebula-assistant-runtime`: fair project/parent/session queue selection;
   waits release execution slots while retaining session ownership. No execution.
 - `nebula-assistant-lab`: fixture generation, replay and journal measurements.
@@ -59,3 +61,29 @@ PYTHONPATH=src python scripts/capture_assistant_records.py --output assistant-rs
 Run that command from the repository root using Nebula's Python environment.
 See `../docs/ASSISTANT_RUST_FIGMA_REVIEW.md` for the live design review and the
 remaining operator journey gates. Design inspection is not product acceptance.
+
+The entity store requires application schema 5 and Alembic
+`0016_chat_session_lookup`; it refuses missing, older or future databases without
+modifying them. It does not bootstrap/migrate schema or implement session-level
+authorization/deletion policy. A file lock excludes other Rust stores only:
+the caller must stop Python before any future cutover. The shipped application
+does not launch or call this layer.
+
+Entity transactions have at most 64 mutations and 16 MiB each of request and
+returned records. Defaults bound queued plus active request bytes to 16 MiB,
+queued requests to 128, read admission to 128 and read connections to four.
+Read pages return at most 1,000 records, normally at most 4 MiB; a first oversized
+record may return alone up to the 16 MiB per-record bound. Continuation offsets
+follow legacy ordering and do not claim a stable snapshot across multiple pages.
+Capacity errors mean the mutation was not queued. Cancelled callers must inspect
+record identities/revisions to resolve an uncertain result; accepted requests
+drain on shutdown and acknowledgments follow commit.
+
+`tests/test_assistant_storage_interop.py` creates a real isolated Python database,
+writes in Rust, reopens in Python without bootstrap/repair, writes again in Python,
+then verifies in Rust. The companion example refuses ordinary databases lacking
+the test's dedicated marker. Regenerate its schema/default oracle from the root:
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_storage --output assistant-rs/compatibility/python-storage.json
+```

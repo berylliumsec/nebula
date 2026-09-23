@@ -1,14 +1,14 @@
 {
-  "change_digest": "852d436e305ec03badc0b11dbe934e614dcf33024167527bb8698a12686e6b67",
-  "reviewed_by": "Codex focused review for Assistant Rust journal, scheduler and canonical persisted record contracts",
-  "reason": "Assistant stream journal correctness (commit/reopen, contention, idempotency, replay bounds, process exit, ownership, cancellation) and fair scheduling (project/parent fairness, session FIFO, waits, bounded admission and cleanup). Python selection covers the assistant contract projection and exact-test receipt/runner policy, including existing guard regressions. Three CLI cases verify new fixture/replay behavior, truthful journal-only measurements, bounded inputs and no Core server mode. Canonical persisted-record port: six exact Rust tests compare 147 Python-oracle cases across 13 kinds, retention/retraction, missing identity fields, errors without payload disclosure, byte bounds and concurrent readers. Python contract tests regenerate the oracle against current schemas. The locked JSON representation now preserves arbitrary precision integers; existing focused journal/scheduler/CLI selections remain in CI to cover the cumulative PR.",
-  "exclusions": "The shipped assistant routes, UI, providers, harnesses, credentials, database, package entry points and every other product area are unchanged. The new Rust workspace is an isolated laboratory, not a replacement. Full suites, production/browser/LAN/device tests, provider calls, real tools and live service/database access are excluded; their required assistant migration gates remain pending. No desktop-native tests are selected because its separate Rust workspace is unchanged. Figma inspection is design review only and is not production or prototype clickthrough evidence. Canonical record validation does not provide request coercion, historical default migration, service authorization or executable route parity.",
+  "change_digest": "eab21d1c949fa9fc8e96fe3e0021643b09583ed0e816a008c2f3ee8200fcdf0d",
+  "reviewed_by": "Codex focused review for Assistant Rust persistence and Python interoperability",
+  "reason": "Assistant stream journal correctness (commit/reopen, contention, idempotency, replay bounds, process exit, ownership, cancellation) and fair scheduling (project/parent fairness, session FIFO, waits, bounded admission and cleanup). Python selection covers the assistant contract projection and exact-test receipt/runner policy, including existing guard regressions. Three CLI cases verify new fixture/replay behavior, truthful journal-only measurements, bounded inputs and no Core server mode. Canonical persisted-record port: six exact Rust tests compare 147 Python-oracle cases across 13 kinds, retention/retraction, missing identity fields, errors without payload disclosure, byte bounds and concurrent readers. Python contract tests regenerate the oracle against current schemas. The locked JSON representation now preserves arbitrary precision integers; existing focused journal/scheduler/CLI selections remain in CI to cover the cumulative PR. Existing-schema SQLite persistence: nine exact storage tests cover thirteen kinds, transactional projections, revision conflicts, WAL reader isolation, indexed paging, byte limits, cancellation, process exit, schema refusal and patch amplification. A seventh domain test compares legacy defaults with Python. Python tests regenerate the isolated storage fixture and perform an actual Python to Rust to Python to Rust handoff. Rust compile/collection: 600 seconds per command; each selected Rust test: 120 seconds. Interop build: 600 seconds; each child: 120 seconds.",
+  "exclusions": "Shipped application entry points, routes, UI, providers, harnesses, credentials and all other product areas remain unchanged. Rust persistence operates on isolated current-schema SQLite copies only. No PostgreSQL or historical migration support is claimed. No live database or service access, provider calls, real tools, full suites or production/browser/LAN/device runs. Product gates remain pending. Figma review is design inspection, not prototype clickthrough or production evidence. Desktop-native workspace is unchanged. These storage primitives do not implement service authorization, workflow deletion, dispatch, SSE or executable route parity.",
   "expected_tests": {
-    "python": 41,
+    "python": 43,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 30
+    "assistant_rust": 40
   },
   "python_versions": [
     "3.12"
@@ -18,7 +18,8 @@
   "python": [
     "tests/test_assistant_rust_selection.py",
     "tests/test_assistant_contract.py",
-    "tests/test_test_selection.py"
+    "tests/test_test_selection.py",
+    "tests/test_assistant_storage_interop.py"
   ],
   "frontend": [],
   "native": [],
@@ -53,6 +54,16 @@
     "nebula-assistant-domain/records::retracted_history_remains_present_but_is_not_current",
     "nebula-assistant-domain/records::omitted_factory_fields_are_not_invented_on_read",
     "nebula-assistant-domain/records::malformed_or_oversized_records_fail_without_echoing_content",
-    "nebula-assistant-domain/records::shared_validators_accept_concurrent_readers"
+    "nebula-assistant-domain/records::shared_validators_accept_concurrent_readers",
+    "nebula-assistant-storage/entities::reads_python_records_and_checks_persisted_envelopes",
+    "nebula-assistant-storage/entities::atomic_changes_preserve_search_revisions_and_legacy_readability",
+    "nebula-assistant-storage/entities::conflicts_and_invalid_changes_roll_back_the_entire_batch",
+    "nebula-assistant-storage/entities::simultaneous_updates_have_one_winner_and_reads_survive_writer_contention",
+    "nebula-assistant-storage/entities::session_queries_filter_before_paging_and_respect_byte_bounds",
+    "nebula-assistant-storage/entities::bounded_admission_and_cancelled_callers_preserve_accepted_mutations",
+    "nebula-assistant-storage/entities::unsupported_schemas_and_invalid_configuration_are_refused_without_changes",
+    "nebula-assistant-storage/entities::acknowledged_mutations_survive_process_exit",
+    "nebula-assistant-storage/entities::oversized_records_corrupt_projections_and_patch_amplification_are_bounded",
+    "nebula-assistant-domain/records::legacy_defaults_match_python_without_inventing_identity"
   ]
 }

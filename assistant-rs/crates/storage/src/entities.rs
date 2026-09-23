@@ -1,0 +1,709 @@
+//! Assistant records in Nebula's existing SQLite entity envelope.
+//!
+//! This layer performs no schema migrations, authorization, dispatch or workflow
+//! deletion. Services must enforce those policies before submitting a transaction.
+//! Development and migration tests use isolated databases, never live Core state.
+
+use std::{
+    fs::File,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
+
+use chrono::{DateTime, SecondsFormat, Utc};
+use fs2::FileExt;
+use futures_util::TryStreamExt;
+use nebula_assistant_domain::records::{
+    AssistantKind, MAX_RECORD_BYTES, RecordError, StoredAssistantRecord,
+};
+use serde_json::{Map, Value};
+use sqlx::{
+    Connection, QueryBuilder, Row, Sqlite, SqliteConnection, SqlitePool,
+    sqlite::{
+        SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteRow, SqliteSynchronous,
+    },
+};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+
+const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
+const MAX_MUTATIONS: usize = 64;
+const SELECT_RECORD: &str = "SELECT id, kind, engagement_id, revision, chat_session_id, created_at, updated_at, length(CAST(payload AS BLOB)) AS payload_bytes, CASE WHEN length(CAST(payload AS BLOB)) <= 16777216 THEN payload ELSE NULL END AS payload FROM entities";
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(
+        "database is not at supported Nebula schema 5 / 0016_chat_session_lookup; migrate an isolated copy before opening it"
+    )]
+    IncompatibleSchema,
+    #[error("another Rust assistant writer owns this database")]
+    AlreadyOwned,
+    #[error("assistant storage admission is full; retry after capacity becomes available")]
+    Capacity,
+    #[error(
+        "assistant storage is closing; inspect durable state before retrying an uncertain mutation"
+    )]
+    Closed,
+    #[error("assistant record was not found")]
+    NotFound,
+    #[error("assistant record revision or identity conflicts; reload the current record")]
+    Conflict,
+    #[error("stored assistant envelope and payload disagree")]
+    CorruptEnvelope,
+    #[error("invalid assistant storage configuration or query bounds")]
+    InvalidBounds,
+    #[error("transaction must contain 1 to 64 mutations and at most 16 MiB")]
+    TransactionLimit,
+    #[error("patches cannot replace id, created_at, updated_at or revision")]
+    ProtectedField,
+    #[error("assistant revision is exhausted")]
+    RevisionExhausted,
+    #[error(transparent)]
+    Record(#[from] RecordError),
+    // Database messages can include values. Do not expose their display strings
+    // through an API error; a future transport can attach a diagnostic reference.
+    #[error("assistant database operation failed")]
+    Database(#[source] sqlx::Error),
+    #[error("assistant database file could not be opened")]
+    Io(#[source] std::io::Error),
+    #[error("assistant record JSON could not be encoded")]
+    Json(#[source] serde_json::Error),
+}
+
+impl From<sqlx::Error> for Error {
+    fn from(error: sqlx::Error) -> Self {
+        if matches!(&error, sqlx::Error::Database(error) if error.is_unique_violation()) {
+            Self::Conflict
+        } else {
+            Self::Database(error)
+        }
+    }
+}
+impl From<std::io::Error> for Error {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+impl From<serde_json::Error> for Error {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Json(error)
+    }
+}
+type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Clone, Copy, Debug)]
+pub struct Config {
+    pub writer_capacity: usize,
+    pub queued_bytes: usize,
+    pub readers: u32,
+    pub read_capacity: usize,
+    pub page_bytes: usize,
+}
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            writer_capacity: 128,
+            queued_bytes: 16 * 1024 * 1024,
+            readers: 4,
+            read_capacity: 128,
+            page_bytes: 4 * 1024 * 1024,
+        }
+    }
+}
+impl Config {
+    fn validate(self) -> Result<()> {
+        if !(1..=2048).contains(&self.writer_capacity)
+            || !(1..=64 * 1024 * 1024).contains(&self.queued_bytes)
+            || !(1..=16).contains(&self.readers)
+            || !(self.readers as usize..=4096).contains(&self.read_capacity)
+            || !(1..=16 * 1024 * 1024).contains(&self.page_bytes)
+        {
+            return Err(Error::InvalidBounds);
+        }
+        Ok(())
+    }
+}
+
+pub enum Mutation {
+    Create(StoredAssistantRecord),
+    Patch {
+        kind: AssistantKind,
+        id: String,
+        expected_revision: i64,
+        changes: Map<String, Value>,
+    },
+    Delete {
+        kind: AssistantKind,
+        id: String,
+        expected_revision: i64,
+    },
+}
+
+/// A primitive entity query, matching legacy `(created_at, id)` ordering.
+/// `session_id` uses the indexed projection for the eight session-owned kinds.
+/// Peer/subagent relationships need their explicit relationship queries instead.
+pub struct ListQuery {
+    pub kind: AssistantKind,
+    pub engagement_id: Option<String>,
+    pub session_id: Option<String>,
+    pub statuses: Option<Vec<String>>,
+    pub include_temporary: bool,
+    pub newest_first: bool,
+    pub offset: u64,
+    pub limit: u32,
+}
+impl ListQuery {
+    pub fn new(kind: AssistantKind) -> Self {
+        Self {
+            kind,
+            engagement_id: None,
+            session_id: None,
+            statuses: None,
+            include_temporary: false,
+            newest_first: false,
+            offset: 0,
+            limit: 100,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct Page {
+    pub records: Vec<StoredAssistantRecord>,
+    /// Continue from this offset when either the row or byte limit was reached.
+    /// A first record larger than the page budget is returned alone, so reads
+    /// always make progress; the per-record 16 MiB bound still applies.
+    pub next_offset: Option<u64>,
+}
+
+#[derive(Debug)]
+pub struct Admission {
+    pub available_queue_entries: usize,
+    pub available_bytes: usize,
+    pub available_reads: usize,
+}
+
+struct WriteRequest {
+    mutations: Vec<Mutation>,
+    _bytes: OwnedSemaphorePermit,
+    reply: oneshot::Sender<Result<Vec<Option<StoredAssistantRecord>>>>,
+}
+enum Command {
+    Apply(WriteRequest),
+    Shutdown(oneshot::Sender<Result<()>>),
+}
+
+#[derive(Clone)]
+pub struct SqliteAssistantStore {
+    commands: mpsc::Sender<Command>,
+    readers: SqlitePool,
+    bytes: Arc<Semaphore>,
+    read_slots: Arc<Semaphore>,
+    closing: Arc<AtomicBool>,
+    page_bytes: usize,
+}
+
+impl SqliteAssistantStore {
+    /// An instantaneous diagnostic snapshot, not a reservation or a promise
+    /// that a subsequent admission will succeed.
+    pub fn admission(&self) -> Admission {
+        Admission {
+            available_queue_entries: self.commands.capacity(),
+            available_bytes: self.bytes.available_permits(),
+            available_reads: self.read_slots.available_permits(),
+        }
+    }
+
+    /// Open an existing current-schema database. Caller owns process-level
+    /// cutover: this lock excludes other Rust stores, not a legacy Python Core.
+    pub async fn open(path: &Path, config: Config) -> Result<Self> {
+        config.validate()?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)?;
+        file.try_lock_exclusive().map_err(|error| {
+            if error.kind() == std::io::ErrorKind::WouldBlock {
+                Error::AlreadyOwned
+            } else {
+                Error::Io(error)
+            }
+        })?;
+        // Refuse unknown/future schemas before changing journal or durability
+        // pragmas. No version marker or other product's schema is rewritten.
+        let mut probe = SqliteConnection::connect_with(&read_options(path)).await?;
+        validate_schema(&mut probe).await?;
+        probe.close().await?;
+        let connection = SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .filename(path)
+                .create_if_missing(false)
+                .foreign_keys(true)
+                .journal_mode(SqliteJournalMode::Wal)
+                .synchronous(SqliteSynchronous::Normal)
+                .busy_timeout(Duration::from_secs(5)),
+        )
+        .await?;
+        let readers = SqlitePoolOptions::new()
+            .max_connections(config.readers)
+            .acquire_timeout(Duration::from_secs(5))
+            .connect_with(read_options(path))
+            .await?;
+        let (commands, receiver) = mpsc::channel(config.writer_capacity);
+        let closing = Arc::new(AtomicBool::new(false));
+        tokio::spawn(writer(connection, file, receiver, closing.clone()));
+        Ok(Self {
+            commands,
+            readers,
+            bytes: Arc::new(Semaphore::new(config.queued_bytes)),
+            read_slots: Arc::new(Semaphore::new(config.read_capacity)),
+            closing,
+            page_bytes: config.page_bytes,
+        })
+    }
+
+    /// Only the successful return acknowledges durability. Dropping this future
+    /// after enqueue does not retract the transaction: inspect its identities
+    /// and revisions before retrying. A Capacity error means nothing was queued.
+    pub async fn apply(
+        &self,
+        mutations: Vec<Mutation>,
+    ) -> Result<Vec<Option<StoredAssistantRecord>>> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err(Error::Closed);
+        }
+        let bytes = request_size(&mutations)?;
+        let byte_permit = self
+            .bytes
+            .clone()
+            .try_acquire_many_owned(bytes as u32)
+            .map_err(|_| Error::Capacity)?;
+        let slot = self.commands.try_reserve().map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => Error::Capacity,
+            mpsc::error::TrySendError::Closed(_) => Error::Closed,
+        })?;
+        let (reply, result) = oneshot::channel();
+        slot.send(Command::Apply(WriteRequest {
+            mutations,
+            _bytes: byte_permit,
+            reply,
+        }));
+        result.await.map_err(|_| Error::Closed)?
+    }
+
+    fn read_permit(&self) -> Result<OwnedSemaphorePermit> {
+        if self.closing.load(Ordering::Acquire) {
+            return Err(Error::Closed);
+        }
+        self.read_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Error::Capacity)
+    }
+
+    pub async fn get(&self, kind: AssistantKind, id: &str) -> Result<StoredAssistantRecord> {
+        validate_id(id)?;
+        let _permit = self.read_permit()?;
+        let row = sqlx::query(&format!("{SELECT_RECORD} WHERE kind = ? AND id = ?"))
+            .bind(kind.as_str())
+            .bind(id)
+            .fetch_optional(&self.readers)
+            .await?
+            .ok_or(Error::NotFound)?;
+        decode_row(row)
+    }
+
+    pub async fn list(&self, query: ListQuery) -> Result<Page> {
+        if !(1..=1000).contains(&query.limit)
+            || query.offset > (i64::MAX - 1001) as u64
+            || query.session_id.is_some() && !session_owned(query.kind)
+            || query
+                .statuses
+                .as_ref()
+                .is_some_and(|items| items.len() > 64 || items.iter().any(|s| s.len() > 200))
+        {
+            return Err(Error::InvalidBounds);
+        }
+        let _permit = self.read_permit()?;
+        let mut sql = QueryBuilder::<Sqlite>::new(SELECT_RECORD);
+        sql.push(" WHERE kind = ").push_bind(query.kind.as_str());
+        if let Some(project) = &query.engagement_id {
+            sql.push(" AND engagement_id = ").push_bind(project);
+        }
+        if let Some(session) = &query.session_id {
+            sql.push(" AND chat_session_id = ").push_bind(session);
+        }
+        if query.kind == AssistantKind::Session && !query.include_temporary {
+            sql.push(
+                " AND coalesce(json_extract(payload, '$.metadata.temporary_assistant'), 0) IS 0",
+            );
+        }
+        if let Some(statuses) = &query.statuses {
+            if statuses.is_empty() {
+                return Ok(Page {
+                    records: vec![],
+                    next_offset: None,
+                });
+            }
+            sql.push(" AND json_extract(payload, '$.status') IN (");
+            let mut values = sql.separated(", ");
+            for status in statuses {
+                values.push_bind(status);
+            }
+            values.push_unseparated(")");
+        }
+        sql.push(if query.newest_first {
+            " ORDER BY created_at DESC, id DESC"
+        } else {
+            " ORDER BY created_at, id"
+        })
+        .push(" LIMIT ")
+        .push_bind(i64::from(query.limit) + 1)
+        .push(" OFFSET ")
+        .push_bind(query.offset as i64);
+        let statement = sql.build();
+        let mut rows = statement.fetch(&self.readers);
+        let mut records = Vec::new();
+        let mut bytes = 0usize;
+        while let Some(row) = rows.try_next().await? {
+            let size = row.try_get::<i64, _>("payload_bytes")?;
+            if size < 0 || size as u64 > MAX_RECORD_BYTES as u64 {
+                return Err(RecordError::TooLarge.into());
+            }
+            if records.len() == query.limit as usize
+                || !records.is_empty() && bytes + size as usize > self.page_bytes
+            {
+                return Ok(Page {
+                    next_offset: Some(query.offset + records.len() as u64),
+                    records,
+                });
+            }
+            bytes += size as usize;
+            records.push(decode_row(row)?);
+        }
+        Ok(Page {
+            records,
+            next_offset: None,
+        })
+    }
+
+    pub async fn shutdown(&self) -> Result<()> {
+        if self.closing.swap(true, Ordering::AcqRel) {
+            return Err(Error::Closed);
+        }
+        let (reply, result) = oneshot::channel();
+        self.commands
+            .send(Command::Shutdown(reply))
+            .await
+            .map_err(|_| Error::Closed)?;
+        let outcome = result.await.map_err(|_| Error::Closed)?;
+        self.readers.close().await;
+        outcome
+    }
+}
+
+fn read_options(path: &Path) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .foreign_keys(true)
+        .busy_timeout(Duration::from_secs(5))
+        .pragma("query_only", "ON")
+}
+
+async fn validate_schema(connection: &mut SqliteConnection) -> Result<()> {
+    let result: std::result::Result<_, sqlx::Error> = async {
+        let version: Option<i64> = sqlx::query_scalar("SELECT max(version) FROM schema_versions").fetch_one(&mut *connection).await?;
+        let revisions: Vec<String> = sqlx::query_scalar("SELECT version_num FROM alembic_version").fetch_all(&mut *connection).await?;
+        sqlx::query("SELECT id, kind, engagement_id, revision, payload, chat_session_id, created_at, updated_at FROM entities LIMIT 0").execute(&mut *connection).await?;
+        sqlx::query("SELECT id, project_id, resource_kind, resource_id, revision, label, description, breadcrumb, content, updated_at FROM search_documents LIMIT 0").execute(&mut *connection).await?;
+        let index_columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_index_info('ix_entities_kind_chat_session_created') ORDER BY seqno").fetch_all(&mut *connection).await?;
+        Ok((version, revisions, index_columns))
+    }.await;
+    match result {
+        Ok((Some(5), revisions, columns))
+            if revisions == ["0016_chat_session_lookup"]
+                && columns == ["kind", "chat_session_id", "created_at", "id"] =>
+        {
+            Ok(())
+        }
+        _ => Err(Error::IncompatibleSchema),
+    }
+}
+
+fn validate_id(id: &str) -> Result<()> {
+    if id.is_empty() || id.chars().count() > 200 {
+        Err(Error::InvalidBounds)
+    } else {
+        Ok(())
+    }
+}
+fn request_size(mutations: &[Mutation]) -> Result<usize> {
+    if mutations.is_empty() || mutations.len() > MAX_MUTATIONS {
+        return Err(Error::TransactionLimit);
+    }
+    let mut bytes = 0usize;
+    for mutation in mutations {
+        bytes = bytes
+            .checked_add(match mutation {
+                Mutation::Create(record) => serde_json::to_vec(record.payload())?.len(),
+                Mutation::Patch {
+                    id,
+                    expected_revision,
+                    changes,
+                    ..
+                } => {
+                    validate_id(id)?;
+                    if *expected_revision < 1 {
+                        return Err(Error::InvalidBounds);
+                    }
+                    if ["id", "created_at", "updated_at", "revision"]
+                        .iter()
+                        .any(|key| changes.contains_key(*key))
+                    {
+                        return Err(Error::ProtectedField);
+                    }
+                    id.len() + serde_json::to_vec(changes)?.len() + 64
+                }
+                Mutation::Delete {
+                    id,
+                    expected_revision,
+                    ..
+                } => {
+                    validate_id(id)?;
+                    if *expected_revision < 1 {
+                        return Err(Error::InvalidBounds);
+                    }
+                    id.len() + 64
+                }
+            })
+            .ok_or(Error::TransactionLimit)?;
+        if bytes > MAX_TRANSACTION_BYTES {
+            return Err(Error::TransactionLimit);
+        }
+    }
+    Ok(bytes.max(1))
+}
+
+fn session_owned(kind: AssistantKind) -> bool {
+    matches!(
+        kind,
+        AssistantKind::Bookmark
+            | AssistantKind::Decision
+            | AssistantKind::Goal
+            | AssistantKind::Message
+            | AssistantKind::Queue
+            | AssistantKind::ReadCursor
+            | AssistantKind::Schedule
+            | AssistantKind::Turn
+    )
+}
+fn session_projection(record: &StoredAssistantRecord) -> Option<&str> {
+    if session_owned(record.kind()) {
+        record.payload()["session_id"].as_str()
+    } else {
+        None
+    }
+}
+fn record_revision(record: &StoredAssistantRecord) -> Result<i64> {
+    record.payload()["revision"]
+        .as_i64()
+        .filter(|v| *v >= 1)
+        .ok_or(Error::CorruptEnvelope)
+}
+fn sql_time(value: &Value) -> Result<String> {
+    let time = value
+        .as_str()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .ok_or(Error::CorruptEnvelope)?;
+    Ok(time
+        .with_timezone(&Utc)
+        .format("%Y-%m-%d %H:%M:%S%.6f")
+        .to_string())
+}
+fn decode_row(row: SqliteRow) -> Result<StoredAssistantRecord> {
+    let size: i64 = row.try_get("payload_bytes")?;
+    if size < 0 || size as u64 > MAX_RECORD_BYTES as u64 {
+        return Err(RecordError::TooLarge.into());
+    }
+    let payload: String = row.try_get("payload")?;
+    let kind = AssistantKind::try_from(row.try_get::<&str, _>("kind")?)?;
+    let record = StoredAssistantRecord::decode_persisted(kind, payload.as_bytes())?;
+    let p = record.payload();
+    if p["id"].as_str() != Some(row.try_get::<&str, _>("id")?)
+        || record_revision(&record)? != row.try_get::<i64, _>("revision")?
+        || p["engagement_id"].as_str() != row.try_get::<Option<&str>, _>("engagement_id")?
+        || session_projection(&record) != row.try_get::<Option<&str>, _>("chat_session_id")?
+        || sql_time(&p["created_at"])? != row.try_get::<&str, _>("created_at")?
+        || sql_time(&p["updated_at"])? != row.try_get::<&str, _>("updated_at")?
+    {
+        return Err(Error::CorruptEnvelope);
+    }
+    Ok(record)
+}
+
+async fn writer(
+    mut connection: SqliteConnection,
+    file: File,
+    mut receiver: mpsc::Receiver<Command>,
+    closing: Arc<AtomicBool>,
+) {
+    let mut shutdown = None;
+    while let Some(command) = receiver.recv().await {
+        match command {
+            Command::Apply(request) => {
+                let result = apply_transaction(&mut connection, request.mutations).await;
+                let _ = request.reply.send(result);
+            }
+            Command::Shutdown(reply) => {
+                receiver.close();
+                shutdown = Some(reply);
+            }
+        }
+    }
+    closing.store(true, Ordering::Release);
+    let result = connection.close().await.map_err(Error::from);
+    drop(file);
+    if let Some(reply) = shutdown {
+        let _ = reply.send(result);
+    }
+}
+
+async fn apply_transaction(
+    connection: &mut SqliteConnection,
+    mutations: Vec<Mutation>,
+) -> Result<Vec<Option<StoredAssistantRecord>>> {
+    let mut tx = connection.begin_with("BEGIN IMMEDIATE").await?;
+    let mut changed = Vec::with_capacity(mutations.len());
+    let mut changed_bytes = 0usize;
+    for mutation in mutations {
+        match mutation {
+            Mutation::Create(record) => {
+                let record = StoredAssistantRecord::decode_persisted(
+                    record.kind(),
+                    &serde_json::to_vec(record.payload())?,
+                )?;
+                let p = record.payload();
+                sqlx::query("INSERT INTO entities (id, kind, engagement_id, revision, payload, chat_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+                    .bind(p["id"].as_str()).bind(record.kind().as_str()).bind(p["engagement_id"].as_str())
+                    .bind(record_revision(&record)?).bind(serde_json::to_string(p)?).bind(session_projection(&record))
+                    .bind(sql_time(&p["created_at"])?).bind(sql_time(&p["updated_at"])?).execute(&mut *tx).await?;
+                update_search(&mut tx, &record).await?;
+                changed.push(Some(record));
+            }
+            Mutation::Patch {
+                kind,
+                id,
+                expected_revision,
+                changes,
+            } => {
+                let row = sqlx::query(&format!("{SELECT_RECORD} WHERE id = ? AND kind = ?"))
+                    .bind(&id)
+                    .bind(kind.as_str())
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or(Error::NotFound)?;
+                let current = decode_row(row)?;
+                if record_revision(&current)? != expected_revision {
+                    return Err(Error::Conflict);
+                }
+                let mut payload = current.into_payload();
+                payload
+                    .as_object_mut()
+                    .ok_or(Error::CorruptEnvelope)?
+                    .extend(changes);
+                payload["revision"] = Value::from(
+                    expected_revision
+                        .checked_add(1)
+                        .ok_or(Error::RevisionExhausted)?,
+                );
+                payload["updated_at"] =
+                    Value::String(Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true));
+                let record =
+                    StoredAssistantRecord::decode_persisted(kind, &serde_json::to_vec(&payload)?)?;
+                let result = sqlx::query("UPDATE entities SET payload = ?, engagement_id = ?, chat_session_id = ?, revision = ?, updated_at = ? WHERE id = ? AND kind = ? AND revision = ?")
+                    .bind(serde_json::to_string(record.payload())?).bind(record.payload()["engagement_id"].as_str()).bind(session_projection(&record))
+                    .bind(record_revision(&record)?).bind(sql_time(&payload["updated_at"])?).bind(id).bind(kind.as_str()).bind(expected_revision)
+                    .execute(&mut *tx).await?;
+                if result.rows_affected() != 1 {
+                    return Err(Error::Conflict);
+                }
+                update_search(&mut tx, &record).await?;
+                changed.push(Some(record));
+            }
+            Mutation::Delete {
+                kind,
+                id,
+                expected_revision,
+            } => {
+                let revision: Option<i64> =
+                    sqlx::query_scalar("SELECT revision FROM entities WHERE id = ? AND kind = ?")
+                        .bind(&id)
+                        .bind(kind.as_str())
+                        .fetch_optional(&mut *tx)
+                        .await?;
+                if revision.ok_or(Error::NotFound)? != expected_revision {
+                    return Err(Error::Conflict);
+                }
+                sqlx::query("DELETE FROM search_documents WHERE id = ?")
+                    .bind(&id)
+                    .execute(&mut *tx)
+                    .await?;
+                sqlx::query("DELETE FROM entities WHERE id = ? AND kind = ? AND revision = ?")
+                    .bind(id)
+                    .bind(kind.as_str())
+                    .bind(expected_revision)
+                    .execute(&mut *tx)
+                    .await?;
+                changed.push(None);
+            }
+        }
+        // A tiny patch can expand into a large existing record. Bound the
+        // actual retained response as well as the queued request; exceeding
+        // either limit rolls the entire transaction back.
+        if let Some(Some(record)) = changed.last() {
+            changed_bytes += serde_json::to_vec(record.payload())?.len();
+            if changed_bytes > MAX_TRANSACTION_BYTES {
+                return Err(Error::TransactionLimit);
+            }
+        }
+    }
+    tx.commit().await?;
+    Ok(changed)
+}
+
+async fn update_search(
+    connection: &mut SqliteConnection,
+    record: &StoredAssistantRecord,
+) -> Result<()> {
+    let p = record.payload();
+    let id = p["id"].as_str().ok_or(Error::CorruptEnvelope)?;
+    if record.kind() != AssistantKind::Session || p["metadata"]["temporary_assistant"] == true {
+        sqlx::query("DELETE FROM search_documents WHERE id = ?")
+            .bind(id)
+            .execute(connection)
+            .await?;
+        return Ok(());
+    }
+    let label: String = p["title"]
+        .as_str()
+        .ok_or(Error::CorruptEnvelope)?
+        .trim()
+        .chars()
+        .take(500)
+        .collect();
+    let description: String = p["model"]
+        .as_str()
+        .ok_or(Error::CorruptEnvelope)?
+        .trim()
+        .chars()
+        .take(300)
+        .collect();
+    sqlx::query("INSERT INTO search_documents (id, project_id, resource_kind, resource_id, revision, label, description, breadcrumb, content, updated_at) VALUES (?, ?, 'conversation', ?, ?, ?, ?, 'Workbench', '', ?) ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, resource_kind = excluded.resource_kind, resource_id = excluded.resource_id, revision = excluded.revision, label = excluded.label, description = excluded.description, breadcrumb = excluded.breadcrumb, content = excluded.content, updated_at = excluded.updated_at")
+        .bind(id).bind(p["engagement_id"].as_str()).bind(id).bind(record_revision(record)?)
+        .bind(if label.is_empty() { "Conversation" } else { &label }).bind(description).bind(sql_time(&p["updated_at"])?).execute(connection).await?;
+    Ok(())
+}

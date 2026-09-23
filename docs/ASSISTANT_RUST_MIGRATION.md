@@ -50,7 +50,7 @@ It uses temporary storage. An inventory is not evidence that routes were ported.
 
 ## Remaining work and release gates
 
-Pending: assistant request validation and historical record normalization,
+Pending: assistant request validation and historical migration coverage,
 authenticated API/stream integration,
 provider and harness adapters, persistent admission and ownership, goals,
 follow-ups, collaboration, safe recovery, historical migrations, PostgreSQL,
@@ -106,7 +106,8 @@ fields, privacy-preserving errors, byte limits and concurrent readers. The
 Python selection also regenerates the corpus to detect oracle drift.
 
 The contract is canonical `model_dump(mode="json")` output, not arbitrary API
-inputs. Missing historical fields still require an explicit migration. All 85
+inputs. The subsequent SQLite port adds deterministic historical field defaults;
+missing identities and timestamps still fail closed. All 85
 inventoried assistant routes remain unported; the records module has no HTTP
 listener and is not wired into shipped Core. There is still no Rust assistant
 production journey or whole-assistant performance evidence.
@@ -121,3 +122,39 @@ oracle cases; all four selected Python contract tests passed. Workspace Clippy
 with warnings denied and formatting passed. The cumulative CI selection is 30
 exact Rust tests plus 41 Python tests. The earlier journal measurement belongs to
 its recorded binary hash; no performance claim was made for this continuation.
+
+## SQLite persistence port contract
+
+The persistence layer targets the existing `entities` envelope at application
+schema 5 / Alembic `0016_chat_session_lookup`. Python-created isolated databases
+are the compatibility oracle. No live state is used or activated during this work.
+
+Journey: create a conversation, retain its transcript, change its metadata, list
+and select it again, and reopen its data after switching implementations. Entity
+payloads/revisions are authoritative; `chat_session_id` and `search_documents`
+are transactional projections. Acknowledgment follows commit. A stale revision
+rejects the entire batch. Admission bounds both queued entries and queued bytes;
+read pages have a size bound and explicit continuation rather than dropping rows.
+Provider dispatch, hooks, commands, and other product entities are not executed
+by this storage layer. Historical optional fields may receive only deterministic
+schema defaults; missing identities/timestamps must not be invented on read.
+
+The fixture captures Python-produced DDL, thirteen entity envelopes and thirteen
+legacy-default cases. Nine exact storage cases exercise atomic rollback,
+simultaneous revision conflicts, session lookup past 1,000 unrelated rows,
+byte/queue bounds, cancelled callers, draining shutdown, process exit after commit,
+schema refusal and retained search projections. A domain regression compares all
+thirteen defaulted records with Python, including float normalization; opaque
+metadata and large integers stay unchanged.
+
+The separate Python interoperability test bootstraps a real database, closes it,
+runs Rust mutations, then reopens it in Python with bootstrap disabled. Python
+reads the changed records and search projection, checks schema markers and an
+unrelated row, performs another update/delete, and closes before Rust verifies
+the result. No two implementations run against the database simultaneously.
+
+This is current-schema storage interoperability, not historical schema migration,
+PostgreSQL support, safe execution recovery or mission-checkpoint compatibility.
+SQLite uses the existing WAL/NORMAL durability setting. Its writer lock excludes
+other Rust stores but cannot exclude an unmodified Python Core. HTTP, production
+browser/LAN and actual execution acceptance remain required for the full rewrite.

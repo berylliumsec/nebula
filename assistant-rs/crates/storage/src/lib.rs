@@ -1,5 +1,7 @@
 //! Isolated assistant event journal: bounded writer, durable replay, no execution.
 
+pub mod entities;
+
 use std::{
     collections::HashMap,
     fs::File,

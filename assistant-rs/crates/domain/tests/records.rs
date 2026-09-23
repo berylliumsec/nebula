@@ -121,3 +121,31 @@ fn shared_validators_accept_concurrent_readers() {
         handle.join().unwrap();
     }
 }
+
+#[test]
+fn legacy_defaults_match_python_without_inventing_identity() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../../compatibility/python-storage.json")).unwrap();
+    let cases = fixture["legacy_records"].as_array().unwrap();
+    assert_eq!(cases.len(), 13);
+    for case in cases {
+        let kind = AssistantKind::try_from(case["kind"].as_str().unwrap()).unwrap();
+        let normalized = StoredAssistantRecord::decode_persisted(
+            kind,
+            &serde_json::to_vec(&case["payload"]).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(normalized.payload(), &case["normalized"], "{kind:?}");
+        for field in ["id", "revision", "created_at", "updated_at"] {
+            let mut missing = case["payload"].clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(
+                StoredAssistantRecord::decode_persisted(
+                    kind,
+                    &serde_json::to_vec(&missing).unwrap()
+                )
+                .is_err()
+            );
+        }
+    }
+}

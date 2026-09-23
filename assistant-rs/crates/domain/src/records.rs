@@ -1,9 +1,9 @@
 //! Read-only contracts for canonical Python-persisted assistant records.
 //!
 //! This is deliberately separate from request validation: records have already
-//! received Pydantic defaults/coercion. Nothing here creates identities, fills
-//! missing historical fields, runs work, or repairs records on read. Unknown
-//! fields and incompatible records are reported, never silently dropped.
+//! received Pydantic defaults/coercion. The persisted decoder additionally fills
+//! deterministic legacy defaults, without creating identities or timestamps.
+//! Unknown fields and incompatible records are reported, never silently dropped.
 
 use std::{collections::HashMap, sync::LazyLock};
 
@@ -106,6 +106,28 @@ pub struct StoredAssistantRecord {
 }
 
 impl StoredAssistantRecord {
+    /// Read an older persisted payload using deterministic model defaults only.
+    /// Identity, revision and timestamps must already exist. Opaque dictionaries
+    /// remain untouched; no current clock, UUID factory or external helper runs.
+    pub fn decode_persisted(kind: AssistantKind, bytes: &[u8]) -> Result<Self, RecordError> {
+        if bytes.len() > MAX_RECORD_BYTES {
+            return Err(RecordError::TooLarge);
+        }
+        let mut payload: Value = serde_json::from_slice(bytes).map_err(|_| RecordError::Json)?;
+        for field in ["id", "revision", "created_at", "updated_at"] {
+            if payload.get(field).is_none() {
+                return Err(RecordError::Shape(kind.as_str()));
+            }
+        }
+        let schemas = SCHEMAS.as_ref().map_err(|_| RecordError::Schema)?;
+        let schema = &schemas["entities"][kind.as_str()];
+        fill_defaults(schema, schema, &mut payload);
+        Self::decode(
+            kind,
+            &serde_json::to_vec(&payload).map_err(|_| RecordError::Json)?,
+        )
+    }
+
     pub fn decode(kind: AssistantKind, bytes: &[u8]) -> Result<Self, RecordError> {
         if bytes.len() > MAX_RECORD_BYTES {
             return Err(RecordError::TooLarge);
@@ -181,11 +203,83 @@ fn require_canonical_fields(schema: &mut Value) {
     }
 }
 
+static SCHEMAS: LazyLock<Result<Value, RecordError>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../../../compatibility/python-assistant.json"))
+        .map_err(|_| RecordError::Schema)
+});
+
+fn resolved<'a>(schema: &'a Value, root: &'a Value) -> &'a Value {
+    if let Some(name) = schema
+        .get("$ref")
+        .and_then(Value::as_str)
+        .and_then(|reference| reference.strip_prefix("#/$defs/"))
+    {
+        &root["$defs"][name]
+    } else {
+        schema
+    }
+}
+
+fn fill_defaults(schema: &Value, root: &Value, payload: &mut Value) {
+    let schema = resolved(schema, root);
+    // JSON schema may express a Python float default as an integer (0). Match
+    // model_dump's float representation without touching opaque metadata.
+    if schema.get("type").and_then(Value::as_str) == Some("number")
+        && let Some(value) = payload.as_f64()
+        && let Some(number) = serde_json::Number::from_f64(value)
+    {
+        *payload = Value::Number(number);
+    }
+    if schema.get("type").and_then(Value::as_str) == Some("string")
+        && schema.get("enum").is_none()
+        && schema.get("const").is_none()
+        && schema.get("format").is_none()
+        && let Some(value) = payload.as_str()
+    {
+        *payload = Value::String(value.trim().to_owned());
+    }
+    if let Some(branches) = schema.get("anyOf").and_then(Value::as_array) {
+        for branch in branches {
+            if !payload.is_null() && branch.get("type").and_then(Value::as_str) != Some("null") {
+                fill_defaults(branch, root, payload);
+            }
+        }
+    }
+    if let (Some(properties), Some(object)) = (
+        schema.get("properties").and_then(Value::as_object),
+        payload.as_object_mut(),
+    ) {
+        for (name, property) in properties {
+            if !object.contains_key(name)
+                && !schema["required"]
+                    .as_array()
+                    .is_some_and(|fields| fields.iter().any(|field| field == name))
+            {
+                let default = property.get("default").cloned().or_else(|| {
+                    match resolved(property, root).get("type").and_then(Value::as_str) {
+                        Some("array") => Some(Value::Array(Vec::new())),
+                        Some("object") => Some(Value::Object(Default::default())),
+                        _ => None,
+                    }
+                });
+                if let Some(default) = default {
+                    object.insert(name.clone(), default);
+                }
+            }
+            if let Some(value) = object.get_mut(name) {
+                fill_defaults(property, root, value);
+            }
+        }
+    } else if let (Some(items), Some(values)) = (schema.get("items"), payload.as_array_mut()) {
+        for value in values {
+            fill_defaults(items, root, value);
+        }
+    }
+}
+
 static VALIDATORS: LazyLock<Result<HashMap<AssistantKind, Validator>, RecordError>> =
     LazyLock::new(|| {
-        let inventory: Value =
-            serde_json::from_str(include_str!("../../../compatibility/python-assistant.json"))
-                .map_err(|_| RecordError::Schema)?;
+        let inventory = SCHEMAS.as_ref().map_err(|_| RecordError::Schema)?;
         AssistantKind::ALL
             .into_iter()
             .map(|kind| {
