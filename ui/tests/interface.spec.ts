@@ -2892,6 +2892,63 @@ test("stabilization workspace notices leave the composer reachable", async ({pag
   await expect(page.locator(".diagnostics-unavailable")).toHaveCount(0);
 });
 
+test("stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss", async ({page}) => {
+  test.setTimeout(45_000);
+  let healthReads = 0;
+  let failuresRemaining = 0;
+  await page.route(/\/api\/v1\/health(?:\?|$)/, async route => {
+    healthReads += 1;
+    if (failuresRemaining > 0) {
+      failuresRemaining -= 1;
+      await route.abort("connectionfailed");
+      return;
+    }
+    await route.fulfill({json: {
+      status: "ok",
+      version: "3.0.0",
+      mode: "local",
+      runner: "ready",
+      human_pty: "unavailable",
+      container_terminal: "configured",
+      diagnostics: {writable: true, degraded: false, browser_event_ingress: "enabled"},
+    }});
+  });
+  await page.route(/\/api\/v1\/harnesses(?:\?|$)/, route => route.fulfill({json: [{
+    ...entity,
+    id: "connection-resilience-fixture",
+    name: "Connection resilience fixture",
+    kind: "grok_acp",
+    connection_mode: "spawn",
+    transport: "stdio",
+    executable: "/bin/true",
+    auth_mode: "existing_session",
+    enabled: true,
+    default_model: "fixture",
+    privacy: {local_only: true, permits_sensitive_data: true},
+    capabilities: {models: ["fixture"], checked_at: entity.updated_at, authentication_state: "verified"},
+  }]}));
+
+  await page.goto("/?view=chat");
+  await page.getByRole("button", {name: "New chat", exact: true}).click();
+  const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+  await composer.fill("Keep this unsent draft through reconnect.");
+
+  const beforeTransientMiss = healthReads;
+  failuresRemaining = 1;
+  await expect.poll(() => healthReads, {timeout: 9_000}).toBeGreaterThanOrEqual(beforeTransientMiss + 2);
+  await expect(page.getByText("Nebula Core is unavailable.", {exact: true})).toHaveCount(0);
+  await expect(composer).toHaveValue("Keep this unsent draft through reconnect.");
+
+  const beforeConfirmedLoss = healthReads;
+  failuresRemaining = 3;
+  await expect.poll(() => healthReads, {timeout: 10_000}).toBeGreaterThanOrEqual(beforeConfirmedLoss + 3);
+  await expect(page.getByText("Nebula Core is unavailable.", {exact: true})).toBeVisible();
+  await expect(composer).toHaveValue("Keep this unsent draft through reconnect.");
+
+  await expect(page.getByText("Nebula Core is unavailable.", {exact: true})).toHaveCount(0, {timeout: 8_000});
+  await expect(composer).toHaveValue("Keep this unsent draft through reconnect.");
+});
+
 test("project scope normalizes root URLs and confirms all-target mode", async ({ page }) => {
   let durableScope = {
     ...entity,

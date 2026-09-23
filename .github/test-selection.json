@@ -1,13 +1,13 @@
 {
-  "change_digest": "c510684d8f8494002ecb404f002d9fb9ec6c2fa21530564a092cac51f0bdf3c7",
-  "reviewed_by": "Codex focused review for provider credential recovery",
-  "reason": "The branch adds bounded systemd service credentials, typed locked-vault failures, a native Linux Secret Service unlock command, provider configuration UI, and chat preflight recovery. Twenty-seven collected credential backend/API cases, ten focused frontend cases, one exact native reference-boundary case, and six catalogued provider-settings browser cases cover the changed boundaries without expanding to unrelated suites.",
-  "exclusions": "Full suites and unrelated provider, harness, browser-control, and project workflows are excluded. The selected Playwright journey covers desktop Chromium plus 390px Chromium and WebKit provider settings; the native Secret Service prompt itself requires an interactive Linux desktop and is verified separately through the exact native boundary test and manual host workflow. LAN-origin execution is excluded because credential status and recovery use the same Core API on all HTTP origins and native unlock is deliberately unavailable to browsers.",
+  "change_digest": "8212c1bfd0d5ecd1ffca73b5a9796a5856cdf7933f65f93f63b263058b4554b0",
+  "reviewed_by": "Codex focused review for LAN connection resilience",
+  "reason": "The branch confirms transient Core health failures before replacing the workspace, preserves the current project route during reconnect, preserves immediate browser-offline handling, classifies response-body aborts as cancellations, and uses origin-neutral startup copy. Seven collected frontend cases cover probe timing, confirmation, recovery, stale responses, and cancellation diagnostics. Thirty-three manifest contract cases validate the new impact mapping. Three catalogued browser journeys verify draft preservation, confirmed loss, and automatic recovery on desktop Chromium, mobile Chromium, and mobile WebKit.",
+  "exclusions": "Full suites and unrelated backend, provider, harness, terminal, project, native, and desktop-shell workflows are excluded. No Python browser runtime is needed for the manifest contract tests. The selected browser journey uses the production UI bundle with controlled Core responses; authenticated non-loopback real-Core verification remains a separate deployment acceptance step because the fix changes browser connection policy rather than a Core endpoint.",
   "expected_tests": {
-    "python": 27,
-    "frontend": 10,
-    "native": 1,
-    "playwright": 6
+    "python": 33,
+    "frontend": 7,
+    "native": 0,
+    "playwright": 3
   },
   "python_versions": [
     "3.12"
@@ -15,18 +15,16 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_credentials.py"
+    "tests/test_playwright_impact.py"
   ],
   "frontend": [
-    "ui/src/pages/SettingsPage.test.tsx",
-    "ui/src/pages/providerCredentialRecovery.test.ts"
+    "ui/src/api/clientCancellation.test.ts",
+    "ui/src/state/useCoreConnectionMonitor.test.tsx"
   ],
-  "native": [
-    "credential_vault::tests::provider_reference_is_bounded_and_opaque"
-  ],
+  "native": [],
   "playwright": [
-    "entry:assistant-settings-navigation/desktop",
-    "entry:assistant-settings-navigation/mobile-chromium",
-    "entry:assistant-settings-navigation/mobile-webkit"
+    "entry:core-connection-resilience/desktop",
+    "entry:core-connection-resilience/mobile-chromium",
+    "entry:core-connection-resilience/mobile-webkit"
   ]
 }
