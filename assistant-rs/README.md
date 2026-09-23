@@ -18,7 +18,8 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
   and session revisions are rechecked inside the bounded writer transaction.
 - `nebula-assistant-transport`: experimental Axum routes for saved-context GET/PUT
   and read-cursor PUT, with bearer/paired-device authentication. No shipped entry
-  point mounts this router yet; full request/error and production parity are open.
+  point mounts this router yet. Typed request coercion and error envelopes have
+  Python-oracle coverage; complete route and production parity are open.
 - `nebula-assistant-lab`: fixture generation, replay and journal measurements.
 
 The lab refuses existing output directories and refuses to open databases without
@@ -125,11 +126,31 @@ responses reserve 16 MiB each from a 64 MiB budget, so at most four buffered
 responses can be retained under the default configuration even though the request
 limit is 128. Permits remain held until the body is consumed or dropped. These are
 conservative development bounds, not measured throughput settings. Connection
-limits, streaming protocols, full Pydantic coercion/error lists, CORS, diagnostic
-persistence and shipped lifecycle integration remain pending. The library does
+limits, streaming protocols, malformed JSON/content-type/method edge cases, CORS,
+diagnostic persistence and shipped lifecycle integration remain pending. The library does
 not start a listener automatically; its TCP test binds only an isolated loopback
 port and uses disposable data.
 
 ```sh
 PYTHONPATH=src python -m scripts.capture_assistant_auth --output assistant-rs/compatibility/python-auth.json
+```
+
+`python-http.json` captures 120 real Python API requests and the 23 final saved
+records. Rust matches normalized response bodies, error codes/features, field
+locations, operation identities, defaults, ignored extra fields, Unicode bounds,
+revision/datetime coercion and duplicate/stale-write messages. Expected revisions
+retain arbitrary precision until compared with stored revisions. Timestamp
+parsing uses pinned [Speedate](https://docs.rs/speedate/0.17.0/speedate/), with
+explicit rejection of year zero to preserve Python readability. The shared
+diagnostic catalog is compiled into Rust; no Python runtime is invoked.
+
+Error and success serialization both stop at the 16 MiB response bound. A focused
+regression supplies a large invalid body that would amplify into multiple field
+errors, verifies a bounded 413 response, then successfully submits a corrected
+request. The corpus uses a documented repeat-string encoding for large boundary
+values, expanded only in tests. This is finite compatibility evidence, not proof
+of every malformed-input or production UI behavior.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_http --output assistant-rs/compatibility/python-http.json
 ```

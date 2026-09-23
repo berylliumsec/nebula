@@ -464,3 +464,162 @@ async fn isolated_tcp_listener_serves_authenticated_assistant_routes() {
     server.await.unwrap();
     store.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn python_http_input_and_error_oracle_preserves_final_records() {
+    use nebula_assistant_storage::entities::ListQuery;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("nebula.db");
+    let store = setup(&path).await;
+    store
+        .apply(vec![Mutation::Delete {
+            kind: Kind::Session,
+            id: "session".into(),
+            expected_revision: 1,
+        }])
+        .await
+        .unwrap();
+    let oracle: Value =
+        serde_json::from_str(include_str!("../../../compatibility/python-http.json")).unwrap();
+    let oracle = expand_http_fixture(oracle);
+    assert_eq!(oracle["cases"].as_array().unwrap().len(), 120);
+    let initial = oracle["initial"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            Mutation::Create(
+                StoredAssistantRecord::decode(
+                    Kind::try_from(row["kind"].as_str().unwrap()).unwrap(),
+                    &serde_json::to_vec(&row["payload"]).unwrap(),
+                )
+                .unwrap(),
+            )
+        })
+        .collect();
+    store.apply(initial).await.unwrap();
+    let app = router(store.clone(), config()).unwrap();
+    for case in oracle["cases"].as_array().unwrap() {
+        let mut input = request(
+            case["method"].as_str().unwrap(),
+            case["path"].as_str().unwrap(),
+            case["body"].clone(),
+        );
+        if let Some(raw) = case["raw_body"].as_str() {
+            *input.body_mut() = Body::from(raw.to_owned());
+        }
+        input.headers_mut().insert(
+            "x-nebula-operation-id",
+            HeaderValue::from_static("fixture-operation"),
+        );
+        let response = app.clone().oneshot(input).await.unwrap();
+        let status = response.status().as_u16();
+        let actual = normalize(value(response).await);
+        // Keep failure output bounded when checking long rejected input fields.
+        if actual != case["expected"]["body"]
+            || u64::from(status) != case["expected"]["status"].as_u64().unwrap()
+        {
+            panic!(
+                "{}: status {status} expected {}; actual {} expected {}",
+                case["name"],
+                case["expected"]["status"],
+                actual.to_string().chars().take(2200).collect::<String>(),
+                case["expected"]["body"]
+                    .to_string()
+                    .chars()
+                    .take(2200)
+                    .collect::<String>()
+            );
+        }
+    }
+    let mut final_records = std::collections::BTreeMap::new();
+    for kind in [Kind::Decision, Kind::ReadCursor] {
+        let rows = store
+            .list(ListQuery {
+                limit: 1000,
+                ..ListQuery::new(kind)
+            })
+            .await
+            .unwrap();
+        for row in rows.records {
+            let payload = normalize(row.into_payload());
+            final_records.insert(
+                payload["id"].as_str().unwrap().to_owned(),
+                json!({"kind":kind.as_str(),"payload":payload}),
+            );
+        }
+    }
+    let expected: std::collections::BTreeMap<_, _> = oracle["final"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["payload"]["id"].as_str().unwrap().to_owned(),
+                row.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(final_records, expected);
+    store.shutdown().await.unwrap();
+}
+
+fn expand_http_fixture(mut value: Value) -> Value {
+    match &mut value {
+        Value::Object(fields) if fields.len() == 1 && fields.contains_key("$repeat_string") => {
+            let repeated = &fields["$repeat_string"];
+            let text = repeated[0].as_str().unwrap();
+            let count = repeated[1].as_u64().unwrap();
+            assert_eq!(text.chars().count(), 1);
+            assert!(count <= 200001);
+            text.repeat(count as usize).into()
+        }
+        Value::Object(fields) => {
+            for item in fields.values_mut() {
+                *item = expand_http_fixture(item.take());
+            }
+            value
+        }
+        Value::Array(items) => {
+            for item in items {
+                *item = expand_http_fixture(item.take());
+            }
+            value
+        }
+        _ => value,
+    }
+}
+
+#[tokio::test]
+async fn validation_error_amplification_cannot_exceed_response_budget() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("nebula.db");
+    let store = setup(&path).await;
+    let mut options = config();
+    options.body_bytes = 16 * 1024 * 1024;
+    options.response_budget_bytes = 16 * 1024 * 1024;
+    let app = router(store.clone(), options).unwrap();
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            "/api/v1/chat/sessions/session/read-cursor",
+            json!({"extra":"x".repeat(6*1024*1024)}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 413);
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    assert!(!bytes.is_empty());
+    let response = app
+        .oneshot(request(
+            "PUT",
+            "/api/v1/chat/sessions/session/read-cursor",
+            json!({"expected_revision":0,"device_id":"phone","through_at":"2020-01-01T00:00:00Z"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    value(response).await;
+    store.shutdown().await.unwrap();
+}

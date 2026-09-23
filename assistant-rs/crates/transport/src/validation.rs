@@ -1,0 +1,368 @@
+//! Python-compatible JSON field validation for Assistant context requests.
+//! Unknown fields retain the existing BaseModel behavior: they are ignored.
+use crate::ApiError;
+use nebula_assistant_services::context::{CursorWrite, DecisionWrite};
+use serde_json::{Map, Value, json};
+use speedate::{Date, DateTime, DateTimeConfig, MicrosecondsPrecisionOverflowBehavior, TimeConfig};
+use strum::EnumMessage;
+
+pub(crate) trait RequestModel: serde::de::DeserializeOwned {
+    const CURSOR: bool;
+}
+impl RequestModel for CursorWrite {
+    const CURSOR: bool = true;
+}
+impl RequestModel for DecisionWrite {
+    const CURSOR: bool = false;
+}
+
+fn error(
+    kind: &str,
+    field: Option<&str>,
+    message: String,
+    input: &Value,
+    context: Option<Value>,
+) -> Value {
+    let mut location = vec![json!("body")];
+    if let Some(field) = field {
+        location.push(json!(field));
+    }
+    let mut value = json!({"type":kind,"loc":location,"msg":message,"input":input});
+    if let Some(context) = context {
+        value["ctx"] = context;
+    }
+    value
+}
+fn field_error(kind: &str, field: &str, message: &str, input: &Value) -> Value {
+    error(kind, Some(field), message.into(), input, None)
+}
+
+pub(crate) fn validate<T: RequestModel>(input: Value) -> Result<T, ApiError> {
+    let Some(fields) = input.as_object() else {
+        return Err(ApiError::validation(vec![error(
+            if input.is_null() {
+                "missing"
+            } else {
+                "model_attributes_type"
+            },
+            None,
+            if input.is_null() {
+                "Field required"
+            } else {
+                "Input should be a valid dictionary or object to extract fields from"
+            }
+            .into(),
+            &input,
+            None,
+        )]));
+    };
+    let mut output = Map::new();
+    let mut errors = Vec::new();
+    let mut required = |name: &str| {
+        if let Some(value) = fields.get(name) {
+            Some(value)
+        } else {
+            errors.push(field_error("missing", name, "Field required", &input));
+            None
+        }
+    };
+    if let Some(value) = required("expected_revision") {
+        match integer(value) {
+            Ok(number) if number.to_string().starts_with('-') => errors.push(error(
+                "greater_than_equal",
+                Some("expected_revision"),
+                "Input should be greater than or equal to 0".into(),
+                value,
+                Some(json!({"ge":0})),
+            )),
+            Ok(number) => {
+                output.insert("expected_revision".into(), number);
+            }
+            Err((kind, message)) => {
+                errors.push(field_error(kind, "expected_revision", message, value))
+            }
+        }
+    }
+    if T::CURSOR {
+        if let Some(value) = fields.get("through_at") {
+            match datetime(value) {
+                Ok(stamp) => {
+                    output.insert("through_at".into(), stamp.into());
+                }
+                Err((kind, detail)) => {
+                    let (message, context) = match detail {
+                        Some(detail) => (
+                            format!(
+                                "Input should be a valid datetime{}, {detail}",
+                                if kind == "datetime_from_date_parsing" {
+                                    " or date"
+                                } else {
+                                    ""
+                                }
+                            ),
+                            Some(json!({"error":detail})),
+                        ),
+                        None => ("Input should be a valid datetime".into(), None),
+                    };
+                    errors.push(error(kind, Some("through_at"), message, value, context));
+                }
+            }
+        } else {
+            errors.push(field_error(
+                "missing",
+                "through_at",
+                "Field required",
+                &input,
+            ));
+        }
+        if let Some(value) = fields.get("device_id") {
+            string(
+                &mut output,
+                &mut errors,
+                "device_id",
+                value,
+                false,
+                Some(1),
+                Some(200),
+                None,
+            );
+        } else {
+            errors.push(field_error(
+                "missing",
+                "device_id",
+                "Field required",
+                &input,
+            ));
+        }
+    } else {
+        for (name, nullable, max, pattern) in [
+            (
+                "action",
+                false,
+                None,
+                Some("^(save|supersede|remove|promote)$"),
+            ),
+            (
+                "kind",
+                false,
+                None,
+                Some("^(decision|constraint|assumption|question)$"),
+            ),
+            ("text", false, Some(4000), None),
+            ("source_message_id", true, None, None),
+            ("source_selection", true, Some(200000), None),
+        ] {
+            if let Some(value) = fields.get(name) {
+                string(
+                    &mut output,
+                    &mut errors,
+                    name,
+                    value,
+                    nullable,
+                    None,
+                    max,
+                    pattern,
+                );
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return Err(ApiError::validation(errors));
+    }
+    serde_json::from_value(Value::Object(output)).map_err(|_| {
+        ApiError::http(
+            422,
+            "Assistant request cannot be represented by its validated contract",
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn string(
+    output: &mut Map<String, Value>,
+    errors: &mut Vec<Value>,
+    field: &str,
+    value: &Value,
+    nullable: bool,
+    min: Option<usize>,
+    max: Option<usize>,
+    pattern: Option<&str>,
+) {
+    if nullable && value.is_null() {
+        output.insert(field.into(), Value::Null);
+        return;
+    }
+    let Some(text) = value.as_str() else {
+        errors.push(field_error(
+            "string_type",
+            field,
+            "Input should be a valid string",
+            value,
+        ));
+        return;
+    };
+    let len = text.chars().count();
+    if let Some(min) = min.filter(|min| len < *min) {
+        errors.push(error(
+            "string_too_short",
+            Some(field),
+            format!(
+                "String should have at least {min} character{}",
+                if min == 1 { "" } else { "s" }
+            ),
+            value,
+            Some(json!({"min_length":min})),
+        ));
+    } else if let Some(max) = max.filter(|max| len > *max) {
+        errors.push(error(
+            "string_too_long",
+            Some(field),
+            format!("String should have at most {max} characters"),
+            value,
+            Some(json!({"max_length":max})),
+        ));
+    } else if let Some(pattern) =
+        pattern.filter(|p| !p[2..p.len() - 2].split('|').any(|choice| choice == text))
+    {
+        errors.push(error(
+            "string_pattern_mismatch",
+            Some(field),
+            format!("String should match pattern '{pattern}'"),
+            value,
+            Some(json!({"pattern":pattern})),
+        ));
+    } else {
+        output.insert(field.into(), value.clone());
+    }
+}
+
+type IntegerError = (&'static str, &'static str);
+fn integer(value: &Value) -> Result<Value, IntegerError> {
+    const PARSE: IntegerError = (
+        "int_parsing",
+        "Input should be a valid integer, unable to parse string as an integer",
+    );
+    const SIZE: IntegerError = (
+        "int_parsing_size",
+        "Unable to parse input string as an integer, exceeded maximum size",
+    );
+    if let Value::Bool(value) = value {
+        return Ok(json!(i64::from(*value)));
+    }
+    if let Value::Number(value) = value {
+        if value.as_i64() == Some(0) || value.as_f64() == Some(0.0) {
+            return Ok(json!(0));
+        }
+        let raw = value.to_string();
+        if !raw.contains(['.', 'e', 'E']) {
+            return Ok(Value::Number(value.clone()));
+        }
+        let number = value.as_f64().ok_or(SIZE)?;
+        if !number.is_finite() {
+            return Err(("finite_number", "Input should be a finite number"));
+        }
+        if number.fract() != 0.0 {
+            return Err((
+                "int_from_float",
+                "Input should be a valid integer, got a number with a fractional part",
+            ));
+        }
+        // Python accepts integral JSON floats beyond i64 as integers as well.
+        return format!("{number:.0}")
+            .parse::<serde_json::Number>()
+            .map(Value::Number)
+            .map_err(|_| SIZE);
+    }
+    let Some(raw) = value.as_str() else {
+        return Err(("int_type", "Input should be a valid integer"));
+    };
+    if raw.len() > 4300 {
+        return Err(SIZE);
+    }
+    let mut text = raw.trim();
+    if let Some(rest) = text.strip_prefix('+') {
+        if rest.starts_with('-') {
+            return Err(PARSE);
+        }
+        text = rest;
+    }
+    let negative = text.starts_with('-');
+    if negative {
+        text = &text[1..];
+    }
+    if text.is_empty() || !text.as_bytes()[0].is_ascii_digit() {
+        return Err(PARSE);
+    }
+    // Pydantic permits underscores within leading zero padding, including
+    // repeated underscores there. Remaining digits use single separators.
+    while text.len() > 1
+        && (text.starts_with('0') || text.starts_with('_'))
+        && !text[1..].starts_with('.')
+    {
+        text = &text[1..];
+    }
+    if let Some((whole, fraction)) = text.split_once('.') {
+        if fraction.is_empty() || !fraction.bytes().all(|b| b == b'0') {
+            return Err(PARSE);
+        }
+        text = whole;
+    }
+    if text.starts_with('_')
+        || text.ends_with('_')
+        || text.contains("__")
+        || !text.bytes().all(|b| b.is_ascii_digit() || b == b'_')
+    {
+        return Err(PARSE);
+    }
+    let digits = text.replace('_', "");
+    let digits = digits.trim_start_matches('0');
+    let canonical = if digits.is_empty() {
+        "0".into()
+    } else {
+        format!("{}{digits}", if negative { "-" } else { "" })
+    };
+    canonical
+        .parse::<serde_json::Number>()
+        .map(Value::Number)
+        .map_err(|_| PARSE)
+}
+
+fn datetime(value: &Value) -> Result<String, (&'static str, Option<&'static str>)> {
+    let config = DateTimeConfig::builder()
+        .time_config(
+            TimeConfig::builder()
+                .unix_timestamp_offset(Some(0))
+                .microseconds_precision_overflow_behavior(
+                    MicrosecondsPrecisionOverflowBehavior::Truncate,
+                )
+                .build(),
+        )
+        .build();
+    let parsed = match value {
+        Value::String(text) => match DateTime::parse_str_with_config(text, &config) {
+            Ok(date) => Ok(date),
+            Err(_) => match Date::parse_str(text) {
+                Ok(date) if date.year == 0 => {
+                    return Err(("datetime_parsing", Some("year 0 is out of range")));
+                }
+                Ok(date) => return Ok(format!("{date}T00:00:00")),
+                Err(error) => {
+                    return Err(("datetime_from_date_parsing", error.get_documentation()));
+                }
+            },
+        },
+        Value::Number(number) => {
+            DateTime::from_float_with_config(number.as_f64().unwrap_or(f64::INFINITY), &config)
+        }
+        _ => return Err(("datetime_type", None)),
+    };
+    parsed
+        .map_err(|error| ("datetime_parsing", error.get_documentation()))
+        .and_then(|date| {
+            if date.date.year == 0 {
+                Err(("datetime_parsing", Some("year 0 is out of range")))
+            } else {
+                Ok(date.to_string())
+            }
+        })
+}

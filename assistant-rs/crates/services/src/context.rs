@@ -8,6 +8,36 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+/// Expected revisions preserve Python's integer range until compared with the
+/// persisted i64 revision. Oversized expectations can never match a stored row.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(transparent)]
+pub struct Revision(serde_json::Number);
+impl Revision {
+    fn is_zero(&self) -> bool {
+        self.0.as_i64() == Some(0)
+    }
+    fn is_negative(&self) -> bool {
+        self.0.to_string().starts_with('-')
+    }
+    fn matches(&self, value: &Value) -> bool {
+        value.as_number() == Some(&self.0)
+    }
+    fn as_i64(&self) -> Option<i64> {
+        self.0.as_i64()
+    }
+}
+impl From<i64> for Revision {
+    fn from(value: i64) -> Self {
+        Self(value.into())
+    }
+}
+impl std::fmt::Display for Revision {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionAction {
@@ -28,7 +58,7 @@ pub enum DecisionKind {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DecisionWrite {
-    pub expected_revision: i64,
+    pub expected_revision: Revision,
     #[serde(default)]
     pub action: DecisionAction,
     #[serde(default)]
@@ -42,7 +72,7 @@ pub struct DecisionWrite {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CursorWrite {
-    pub expected_revision: i64,
+    pub expected_revision: Revision,
     pub through_at: String,
     pub device_id: String,
 }
@@ -83,7 +113,7 @@ fn revision_entry(record: &StoredAssistantRecord) -> Result<Value> {
 
 impl AssistantRecords {
     pub async fn decisions(&self, session_id: &str) -> Result<Vec<StoredAssistantRecord>> {
-        let session = self.store.get(Kind::Session, session_id).await?;
+        let session = self.get(Kind::Session, session_id).await?;
         Ok(self
             .store
             .decisions(
@@ -131,7 +161,7 @@ impl AssistantRecords {
         decision_id: &str,
         body: DecisionWrite,
     ) -> Result<StoredAssistantRecord> {
-        if body.expected_revision < 0
+        if body.expected_revision.is_negative()
             || body.text.chars().count() > 4000
             || body
                 .source_selection
@@ -140,18 +170,18 @@ impl AssistantRecords {
         {
             return Err(Error::Invalid("Decision request exceeds its field bounds"));
         }
-        let session = self.store.get(Kind::Session, session_id).await?;
+        let session = self.get(Kind::Session, session_id).await?;
         let project = &session.payload()["engagement_id"];
         if decision_id.chars().count() > 200 {
             return Err(Error::Invalid("Decision identity is too long"));
         }
         let mut guards = vec![guard(&session)?];
-        if body.expected_revision == 0 {
+        if body.expected_revision.is_zero() {
             if body.action != DecisionAction::Save || body.text.trim().is_empty() {
                 return Err(Error::Invalid("Write the decision before saving"));
             }
             let source = match body.source_message_id.as_deref().filter(|s| !s.is_empty()) {
-                Some(id) => Some(self.store.get(Kind::Message, id).await?),
+                Some(id) => Some(self.get(Kind::Message, id).await?),
                 None => None,
             };
             if source
@@ -187,7 +217,7 @@ impl AssistantRecords {
                 .apply_guarded(guards, vec![Mutation::Create(record)])
                 .await?);
         }
-        let current = self.store.get(Kind::Decision, decision_id).await?;
+        let current = self.get(Kind::Decision, decision_id).await?;
         let p = current.payload();
         if &p["engagement_id"] != project
             || p["scope"] == "conversation" && p["session_id"] != session_id
@@ -196,7 +226,7 @@ impl AssistantRecords {
                 "Decision does not belong to this project chat",
             ));
         }
-        if p["revision"] != body.expected_revision {
+        if !body.expected_revision.matches(&p["revision"]) {
             return Err(Error::Conflict(
                 "Decision changed on another device. Reload and reapply your edit",
             ));
@@ -254,16 +284,15 @@ impl AssistantRecords {
         supplied_device: &str,
         authenticated_device: Option<&str>,
     ) -> Result<Option<StoredAssistantRecord>> {
-        self.store.get(Kind::Session, session_id).await?;
+        self.get(Kind::Session, session_id).await?;
         let owner = owner(supplied_device, authenticated_device)?;
         match self
-            .store
             .get(Kind::ReadCursor, &cursor_id(session_id, owner))
             .await
         {
             Ok(record) => Ok(Some(record)),
-            Err(StorageError::NotFound) => Ok(None),
-            Err(error) => Err(error.into()),
+            Err(Error::EntityNotFound { .. }) => Ok(None),
+            Err(error) => Err(error),
         }
     }
 
@@ -273,10 +302,10 @@ impl AssistantRecords {
         body: CursorWrite,
         authenticated_device: Option<&str>,
     ) -> Result<StoredAssistantRecord> {
-        if body.expected_revision < 0 {
+        if body.expected_revision.is_negative() {
             return Err(Error::Invalid("Expected revision must be non-negative"));
         }
-        let session = self.store.get(Kind::Session, session_id).await?;
+        let session = self.get(Kind::Session, session_id).await?;
         let owner = owner(&body.device_id, authenticated_device)?;
         let identity = cursor_id(session_id, owner);
         let through = DateTime::parse_from_rfc3339(&body.through_at)
@@ -295,14 +324,14 @@ impl AssistantRecords {
             },
             true,
         );
-        if body.expected_revision == 0 {
+        if body.expected_revision.is_zero() {
             let record=self.create_record(Kind::ReadCursor,json!({"id":identity,"engagement_id":session.payload()["engagement_id"],"session_id":session_id,"device_id":owner,"through_at":through_text}))?;
             return one(self
                 .store
                 .apply_guarded(guards, vec![Mutation::Create(record)])
                 .await?);
         }
-        let current = self.store.get(Kind::ReadCursor, &identity).await?;
+        let current = self.get(Kind::ReadCursor, &identity).await?;
         let old = DateTime::parse_from_rfc3339(
             current.payload()["through_at"]
                 .as_str()
@@ -319,7 +348,13 @@ impl AssistantRecords {
             expected_revision, ..
         } = &mut change
         {
-            *expected_revision = body.expected_revision;
+            *expected_revision =
+                body.expected_revision
+                    .as_i64()
+                    .ok_or_else(|| Error::RevisionConflict {
+                        expected: body.expected_revision.to_string(),
+                        found: current.payload()["revision"].as_i64().unwrap_or(0),
+                    })?;
         }
         one(self.store.apply_guarded(guards, vec![change]).await?)
     }

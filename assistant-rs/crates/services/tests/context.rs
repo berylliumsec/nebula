@@ -76,8 +76,16 @@ fn normalize(mut value: Value) -> Value {
 }
 fn status(error: &Error) -> u16 {
     match error {
-        Error::Conflict(_) | Error::Storage(StorageError::Conflict) => 409,
-        Error::NotFound(_) | Error::Storage(StorageError::NotFound) => 404,
+        Error::RevisionConflict { .. }
+        | Error::Conflict(_)
+        | Error::Storage(
+            StorageError::Conflict
+            | StorageError::AlreadyExists(_)
+            | StorageError::RevisionConflict { .. },
+        ) => 409,
+        Error::EntityNotFound { .. }
+        | Error::NotFound(_)
+        | Error::Storage(StorageError::NotFound) => 404,
         Error::Invalid(_) => 422,
         other => panic!("unexpected service error: {other:?}"),
     }
@@ -170,7 +178,7 @@ async fn promotion_collision_rolls_back_and_edits_retain_the_original_history() 
                 write(json!({"expected_revision":2,"action":"promote"}))
             )
             .await,
-        Err(Error::Storage(StorageError::Conflict))
+        Err(Error::Storage(StorageError::AlreadyExists(_)))
     ));
     assert_eq!(store.get(Kind::Decision, "one").await.unwrap(), edited);
     store.shutdown().await.unwrap();
@@ -236,7 +244,7 @@ async fn transaction_guards_reject_changed_or_deleted_sessions_without_partial_w
                 .apply(vec![Mutation::Delete {
                     kind: Kind::Session,
                     id: "session".into(),
-                    expected_revision: 2,
+                    expected_revision: 2.into(),
                 }])
                 .await
                 .unwrap();

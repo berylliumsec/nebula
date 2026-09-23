@@ -20,6 +20,8 @@ tower = { version = "=0.5.3", features = ["util"] }
 http-body-util = "=0.1.3"
 subtle = "=2.6.1"
 tracing = "=0.1.44"
+speedate = "=0.17.0"
+strum = "=0.27.2"
 sha2 = "=0.10.9"
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde"] }
 clap = { version = "=4.6.1", features = ["derive"] }

@@ -22,11 +22,12 @@
   "evidence": [
     "python-auth.json: 33 middleware comparisons with identical initial records",
     "python-context.json: 27 saved-context and cursor transitions",
-    "nebula-assistant-transport/http: seven exact integration tests"
+    "python-http.json: 120 request, error and persistence comparisons",
+    "nebula-assistant-transport/http: nine exact integration tests"
   ],
   "remaining_gates": [
-    "Full request coercion and validation-error lists",
-    "General service-error envelope parity",
+    "JSON syntax, content-type and method edge cases",
+    "Unusual validation-guidance ordering and complete route parity",
     "CORS and durable diagnostics integration",
     "Shipped listener and lifecycle integration",
     "Production desktop, mobile, LAN, reconnect and device journeys",

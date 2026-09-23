@@ -230,7 +230,7 @@ async fn simultaneous_updates_have_one_winner_and_reads_survive_writer_contentio
     while let Some(result) = tasks.join_next().await {
         match result.unwrap() {
             Ok(_) => winners += 1,
-            Err(Error::Conflict) => {}
+            Err(Error::RevisionConflict { .. }) => {}
             other => panic!("unexpected {other:?}"),
         }
     }

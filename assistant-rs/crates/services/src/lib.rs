@@ -17,6 +17,10 @@ pub enum Error {
     NotFound(&'static str),
     #[error("{0}")]
     Conflict(&'static str),
+    #[error("{kind} entity not found: {id}")]
+    EntityNotFound { kind: &'static str, id: String },
+    #[error("revision conflict: expected {expected}, found {found}")]
+    RevisionConflict { expected: String, found: i64 },
     #[error(transparent)]
     Storage(#[from] StorageError),
     #[error(transparent)]
@@ -42,6 +46,15 @@ impl AssistantRecords {
     /// HTTP request bodies must never supply the clock.
     pub fn with_clock(store: SqliteAssistantStore, clock: fn() -> DateTime<Utc>) -> Self {
         Self { store, clock }
+    }
+    async fn get(&self, kind: AssistantKind, id: &str) -> Result<StoredAssistantRecord> {
+        self.store.get(kind, id).await.map_err(|error| match error {
+            StorageError::NotFound => Error::EntityNotFound {
+                kind: kind.as_str(),
+                id: id.into(),
+            },
+            error => error.into(),
+        })
     }
     fn create_record(
         &self,

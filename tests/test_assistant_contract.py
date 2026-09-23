@@ -96,3 +96,14 @@ def test_auth_oracle_matches_current_python_assistant_boundary():
 
     path = Path(__file__).parents[1] / "assistant-rs/compatibility/python-auth.json"
     assert collect_auth() == json.loads(path.read_text())
+
+
+def test_http_oracle_matches_current_python_assistant_boundary():
+    from scripts.capture_assistant_http import collect_http
+
+    saved = json.loads(
+        (
+            Path(__file__).parents[1] / "assistant-rs/compatibility/python-http.json"
+        ).read_text()
+    )
+    assert collect_http() == saved

@@ -1,25 +1,28 @@
 //! Initial Assistant HTTP routes. No listener or shipped entry point is enabled
 //! by this library; a host must supply its trusted scheme and existing store.
 mod auth;
+mod errors;
+mod validation;
 pub use auth::Authentication;
 use auth::{Principal, header};
 use axum::{
-    Json, Router,
+    Router,
     body::{Body, to_bytes},
     extract::{Path, Request, State},
-    http::{HeaderValue, StatusCode},
+    http::HeaderValue,
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, put},
 };
 use chrono::{DateTime, Utc};
+use errors::ApiError;
 use futures_util::StreamExt;
 use nebula_assistant_services::{
     AssistantRecords, Error as ServiceError,
     context::{CursorWrite, DecisionWrite},
 };
-use nebula_assistant_storage::entities::{Error as StorageError, SqliteAssistantStore};
-use serde_json::{Value, json};
+use nebula_assistant_storage::entities::SqliteAssistantStore;
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
@@ -195,16 +198,21 @@ async fn advance_cursor(
     };
     api_reply(&parts, result)
 }
-async fn decode<T: serde::de::DeserializeOwned>(body: Body, limit: usize) -> Result<T, ApiError> {
+async fn decode<T: validation::RequestModel>(body: Body, limit: usize) -> Result<T, ApiError> {
     let bytes = to_bytes(body, limit)
         .await
         .map_err(|_| ApiError::http(413, "Assistant request body exceeds its configured limit"))?;
-    serde_json::from_slice(&bytes).map_err(|_| {
-        ApiError::http(
-            422,
-            "Assistant request does not match its expected JSON fields",
-        )
-    })
+    let value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).map_err(|_| {
+            ApiError::http(
+                422,
+                "Assistant request does not match its expected JSON fields",
+            )
+        })?
+    };
+    validation::validate(value)
 }
 fn reply(request: Request, result: Result<Value, ServiceError>) -> Response {
     let (parts, _) = request.into_parts();
@@ -217,7 +225,7 @@ fn api_reply(parts: &axum::http::request::Parts, result: Result<Value, ApiError>
         .map_or("", |r| r.0.as_str());
     let operation = header(&parts.headers, "x-nebula-operation-id");
     match result {
-        Ok(value)=>match serde_json::to_vec(&value) {
+        Ok(value)=>match json_bytes(&value) {
             Ok(bytes) if bytes.len()<=MAX_RESPONSE_BYTES => ([("content-type","application/json")],bytes).into_response(),
             _=>ApiError::http(413,"Assistant response exceeds its configured limit; inspect retained records with pagination").response(id,operation.as_deref()),
         },
@@ -225,102 +233,24 @@ fn api_reply(parts: &axum::http::request::Parts, result: Result<Value, ApiError>
     }
 }
 
-pub(crate) struct ApiError {
-    status: u16,
-    detail: String,
-    code: Option<&'static str>,
-}
-impl ApiError {
-    fn http(status: u16, detail: impl Into<String>) -> Self {
-        Self {
-            status,
-            detail: detail.into(),
-            code: None,
+/// Bound serialization while writing, not after allocating an oversized body.
+fn json_bytes(value: &Value) -> Result<Vec<u8>, serde_json::Error> {
+    struct Bounded(Vec<u8>);
+    impl std::io::Write for Bounded {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > MAX_RESPONSE_BYTES.saturating_sub(self.0.len()) {
+                return Err(std::io::Error::other(
+                    "Assistant response byte limit exceeded",
+                ));
+            }
+            self.0.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
         }
     }
-    fn unauthorized() -> Self {
-        Self::http(401, "valid bearer token required")
-    }
-    fn capacity() -> Self {
-        Self::http(
-            503,
-            "Assistant request capacity is full; retry after capacity becomes available",
-        )
-    }
-    fn storage(error: StorageError) -> Self {
-        match error {
-            StorageError::Capacity => Self::capacity(),
-            StorageError::Conflict => Self {
-                status: 409,
-                detail: error.to_string(),
-                code: Some("chat.conflict_error"),
-            },
-            StorageError::NotFound => Self {
-                status: 404,
-                detail: error.to_string(),
-                code: Some("chat.not_found_error"),
-            },
-            StorageError::ReadLimit => Self::http(413, error.to_string()),
-            _ => Self::http(
-                503,
-                "Assistant storage is unavailable; inspect durable state before retrying a mutation",
-            ),
-        }
-    }
-    fn service(error: ServiceError) -> Self {
-        match error {
-            ServiceError::Invalid(detail) => Self::http(422, detail),
-            ServiceError::NotFound(detail) => Self::http(404, detail),
-            ServiceError::Conflict(detail) => Self {
-                status: 409,
-                detail: detail.into(),
-                code: Some("chat.conflict_error"),
-            },
-            ServiceError::Storage(error) => Self::storage(error),
-            _ => Self::http(422, "Assistant record does not match its storage contract"),
-        }
-    }
-    fn response(self, request_id: &str, operation_id: Option<&str>) -> Response {
-        let (reason, impact) = match self.status {
-            401 => (
-                "authentication_failed",
-                "Requests that require this credential cannot complete. The credential value was not added to diagnostics.",
-            ),
-            403 => (
-                "permission_denied",
-                "The denied operation was not performed.",
-            ),
-            400 | 413 | 422 => ("invalid_input", "The operation was not applied."),
-            404 => ("not_found", "The requested resource is unavailable."),
-            409 => ("state_conflict", "The operation was not applied."),
-            _ => (
-                "service_unavailable",
-                "The request could not complete. Inspect saved state before retrying a mutation.",
-            ),
-        };
-        let retryable = self.status >= 500;
-        let mut value = json!({"detail":self.detail,"code":self.code.map(str::to_owned).unwrap_or_else(||format!("api.http_{}",self.status)),"feature":"chat","request_id":request_id,"error_id":format!("err_{}",uuid::Uuid::new_v4().simple()),"retryable":retryable,"help_article":"provider-model","reason_code":reason,"operator_detail":self.detail,"impact":impact,"remediation_id":format!("chat.{reason}"),"recovery_action":if retryable {"Retry this operation"} else {"Review recovery guidance"},"recovery_destination":"/settings#diagnostics-settings"});
-        if let Some(operation) = operation_id.filter(|s| !s.is_empty()) {
-            value["operation_id"] = operation.into();
-        }
-        let mut response = (
-            StatusCode::from_u16(self.status).expect("static HTTP status"),
-            Json(value),
-        )
-            .into_response();
-        if self.status == 401 {
-            response
-                .headers_mut()
-                .insert("www-authenticate", HeaderValue::from_static("Bearer"));
-        }
-        if self.status == 503 {
-            response
-                .headers_mut()
-                .insert("retry-after", HeaderValue::from_static("1"));
-        }
-        if let Ok(id) = HeaderValue::from_str(request_id) {
-            response.headers_mut().insert("x-request-id", id);
-        }
-        response
-    }
+    let mut writer = Bounded(Vec::new());
+    serde_json::to_writer(&mut writer, value)?;
+    Ok(writer.0)
 }

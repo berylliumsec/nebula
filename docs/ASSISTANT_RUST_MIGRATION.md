@@ -241,3 +241,38 @@ does not claim route parity: request coercion/validation lists, general service
 error envelopes, CORS, diagnostics persistence, streaming and launch integration
 are outstanding. No production desktop/mobile/LAN, physical-device or performance
 gate is satisfied by the loopback fixture. The requested full rewrite is incomplete.
+
+## HTTP input and failure compatibility contract
+
+Journey: save/edit Context or acknowledge activity, receive an actionable error
+for invalid fields or a stale revision, correct the request and retry without
+losing history. The existing request schemas own coercion/defaults and validation
+locations; durable entity revisions own conflicts and successful mutations.
+Authentication must remain authoritative, rejected requests must not mutate
+Assistant records, and operation/request identities must stay correlated.
+
+Capture the real Python API's request validation and service failures on isolated
+data, including missing/wrong types, bounds, Unicode, numeric revision/datetime
+coercions, cross-conversation references and duplicate/stale writes. Compare full
+normalized JSON error/success bodies and final persisted state in Rust. Keep body
+and response limits explicit. Production UI retry/refresh/reconnect, mobile/LAN,
+stream/interrupt and other route coverage remain separate acceptance gates; this
+step does not activate shipped endpoints or execute providers/tools.
+
+The transport now validates DecisionWrite/CursorWrite fields in schema order,
+preserves Python's defaults/coercions and structured field-error locations, and
+retains oversized integer expectations until revision comparison. Duplicate
+creation, missing records and stale revisions carry their original diagnostic
+features/messages. The shared guidance catalog is embedded at build time.
+Negative-zero revisions normalize to zero; year-zero timestamps are rejected
+before they can enter durable state. Response serialization stops at its byte
+bound, including amplified validation-error lists.
+
+Evidence: 120 Python API cases compare complete normalized response bodies and
+23 final Assistant records. Nine affected storage regressions, seven service
+regressions and nine HTTP tests passed locally; the oracle and Python regeneration
+were rerun for the timestamp/negative-zero boundaries. Cumulative CI selection is
+57 exact Rust / 46 Python tests. Large repeat-string fixture values are encoded
+compactly and expanded under test bounds. JSON syntax, content-type/method edge
+cases, unusual validation-guidance ordering, CORS, diagnostic persistence,
+remaining routes and production journey gates still require integration evidence.

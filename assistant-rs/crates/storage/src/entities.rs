@@ -56,6 +56,10 @@ pub enum Error {
     NotFound,
     #[error("assistant record revision or identity conflicts; reload the current record")]
     Conflict,
+    #[error("entity already exists: {0}")]
+    AlreadyExists(String),
+    #[error("revision conflict: expected {expected}, found {found}")]
+    RevisionConflict { expected: i64, found: i64 },
     #[error("stored assistant envelope and payload disagree")]
     CorruptEnvelope,
     #[error("invalid assistant storage configuration or query bounds")]
@@ -800,7 +804,10 @@ async fn apply_transaction(
                 sqlx::query("INSERT INTO entities (id, kind, engagement_id, revision, payload, chat_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
                     .bind(p["id"].as_str()).bind(record.kind().as_str()).bind(p["engagement_id"].as_str())
                     .bind(record_revision(&record)?).bind(serde_json::to_string(p)?).bind(session_projection(&record))
-                    .bind(sql_time(&p["created_at"])?).bind(sql_time(&p["updated_at"])?).execute(&mut *tx).await?;
+                    .bind(sql_time(&p["created_at"])?).bind(sql_time(&p["updated_at"])?).execute(&mut *tx).await.map_err(|error| match Error::from(error) {
+                        Error::Conflict => Error::AlreadyExists(p["id"].as_str().unwrap_or_default().into()),
+                        error => error,
+                    })?;
                 update_search(&mut tx, &record).await?;
                 changed.push(Some(record));
             }
@@ -818,7 +825,10 @@ async fn apply_transaction(
                     .ok_or(Error::NotFound)?;
                 let current = decode_row(row)?;
                 if record_revision(&current)? != expected_revision {
-                    return Err(Error::Conflict);
+                    return Err(Error::RevisionConflict {
+                        expected: expected_revision,
+                        found: record_revision(&current)?,
+                    });
                 }
                 let mut payload = current.into_payload();
                 payload
