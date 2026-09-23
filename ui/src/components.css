@@ -315,6 +315,7 @@ textarea { border-radius: var(--radius-control); }
 .session-layout.chat.inspector-open .session-inspector { display: block; }
 .chat-scroll { padding: 30px max(24px, calc((100% - var(--chat-reading-track)) / 2)); }
 .chat-message { width: 100%; max-width: var(--chat-reading-track); margin-inline: auto; margin-bottom: 28px; grid-template-columns: minmax(0, 1fr); }
+.chat-message.render-contained { content-visibility: auto; contain-intrinsic-size: auto var(--chat-message-intrinsic-size, 240px); }
 .chat-message:has(.assistant-code-block, .tool-call, pre, table) { max-width: 100%; }
 .chat-message.assistant,
 .chat-message.operator { border-color: transparent; background: transparent; }
