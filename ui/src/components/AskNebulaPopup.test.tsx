@@ -62,6 +62,29 @@ describe("Ask Nebula popup", () => {
     expect(api.discardTemporaryChat).toHaveBeenCalledWith("popup");
   });
 
+  it("copies each completed assistant response exactly", async () => {
+    const api = fixture(); const user = userEvent.setup(); const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+    await user.type(screen.getByRole("textbox"), "Explain this");
+    await user.click(screen.getByRole("button", { name: "Ask question" }));
+    await user.click(await screen.findByRole("button", { name: "Copy response" }));
+    expect(writeText).toHaveBeenCalledExactlyOnceWith("A separate answer");
+    expect(screen.getByRole("status")).toHaveTextContent("Assistant response copied exactly.");
+  });
+
+  it("keeps a response selectable when clipboard access fails", async () => {
+    const api = fixture(); const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
+    Object.defineProperty(document, "execCommand", { configurable: true, value: vi.fn().mockReturnValue(false) });
+    render(<AskNebulaPopup api={api as unknown as ApiClient} snapshot={snapshot} context={context} onClose={() => {}} />);
+    await user.type(screen.getByRole("textbox"), "Explain this");
+    await user.click(screen.getByRole("button", { name: "Ask question" }));
+    await user.click(await screen.findByRole("button", { name: "Copy response" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Select the text and copy it manually");
+    expect(screen.getByText("A separate answer")).toBeVisible();
+  });
+
   it("discards a branch that finishes opening after the popup closes", async () => {
     const api = fixture(); let resolve!: (session: unknown) => void;
     api.createTemporaryChat.mockReturnValue(new Promise(done => { resolve = done; }));
