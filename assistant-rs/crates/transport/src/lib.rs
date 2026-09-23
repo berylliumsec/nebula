@@ -85,6 +85,32 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
         .route("/api/v1/chat-sessions/{entity_id}", get(catalog_session))
         .route("/api/v1/chat-messages", get(catalog_messages))
         .route("/api/v1/chat-messages/{entity_id}", get(catalog_message))
+        .route("/api/v1/chat-goals", get(other_catalog))
+        .route("/api/v1/chat-goals/{entity_id}", get(other_catalog_record))
+        .route("/api/v1/chat-goal-usage-charges", get(other_catalog))
+        .route(
+            "/api/v1/chat-goal-usage-charges/{entity_id}",
+            get(other_catalog_record),
+        )
+        .route("/api/v1/chat-schedules", get(other_catalog))
+        .route(
+            "/api/v1/chat-schedules/{entity_id}",
+            get(other_catalog_record),
+        )
+        .route("/api/v1/chat-subagents", get(other_catalog))
+        .route(
+            "/api/v1/chat-subagents/{entity_id}",
+            get(other_catalog_record),
+        )
+        .route("/api/v1/chat/sessions/{session_id}/goal", get(session_goal))
+        .route(
+            "/api/v1/chat/sessions/{session_id}/goal/children",
+            get(goal_children),
+        )
+        .route(
+            "/api/v1/chat/sessions/{session_id}/schedule",
+            get(session_schedule),
+        )
         .route("/api/v1/chat/sessions/{session_id}/catch-up", get(catch_up))
         .route("/api/v1/chat/session-activity", get(session_activity))
         .route("/api/v1/chat/sessions/{session_id}/queue", get(saved_queue))
@@ -135,10 +161,15 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
 async fn boundary(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
     let id = format!("req_{}", uuid::Uuid::new_v4().simple());
     let operation = header(request.headers(), "x-nebula-operation-id");
+    let feature = route_feature(request.uri().path());
     request.extensions_mut().insert(RequestId(id.clone()));
     let permit = match state.requests.clone().try_acquire_owned() {
         Ok(p) => p,
-        Err(_) => return ApiError::capacity().response(&id, operation.as_deref()),
+        Err(_) => {
+            return ApiError::capacity()
+                .for_feature(feature)
+                .response(&id, operation.as_deref());
+        }
     };
     let budget = match state
         .response_bytes
@@ -146,7 +177,11 @@ async fn boundary(State(state): State<AppState>, mut request: Request, next: Nex
         .try_acquire_many_owned(MAX_RESPONSE_BYTES as u32)
     {
         Ok(p) => p,
-        Err(_) => return ApiError::capacity().response(&id, operation.as_deref()),
+        Err(_) => {
+            return ApiError::capacity()
+                .for_feature(feature)
+                .response(&id, operation.as_deref());
+        }
     };
     let deadline = state.config.request_timeout;
     let outcome = tokio::time::timeout(deadline, async {
@@ -165,7 +200,9 @@ async fn boundary(State(state): State<AppState>, mut request: Request, next: Nex
                 request.extensions_mut().insert(principal);
                 next.run(request).await
             }
-            Err(error) => error.response(&id, operation.as_deref()),
+            Err(error) => error
+                .for_feature(feature)
+                .response(&id, operation.as_deref()),
         }
     })
     .await;
@@ -174,6 +211,7 @@ async fn boundary(State(state): State<AppState>, mut request: Request, next: Nex
             504,
             "Assistant request deadline exceeded; inspect durable state before retrying a mutation",
         )
+        .for_feature(feature)
         .response(&id, operation.as_deref())
     });
     response.headers_mut().insert(
@@ -303,6 +341,67 @@ async fn write_bookmark(
 }
 async fn catalog_sessions(State(state): State<AppState>, request: Request) -> Response {
     catalog(state, CatalogKind::Sessions, request).await
+}
+fn other_catalog_kind(path: &str) -> Option<CatalogKind> {
+    match path.strip_prefix("/api/v1/")?.split('/').next()? {
+        "chat-goals" => Some(CatalogKind::Goals),
+        "chat-goal-usage-charges" => Some(CatalogKind::GoalUsageCharges),
+        "chat-schedules" => Some(CatalogKind::Schedules),
+        "chat-subagents" => Some(CatalogKind::Subagents),
+        _ => None,
+    }
+}
+fn route_feature(path: &str) -> &'static str {
+    // These generated catalogs have no chat feature tag in the Python API.
+    if other_catalog_kind(path).is_some() {
+        "api"
+    } else {
+        "chat"
+    }
+}
+async fn other_catalog(State(state): State<AppState>, request: Request) -> Response {
+    let kind = other_catalog_kind(request.uri().path()).expect("mounted catalog route");
+    catalog(state, kind, request).await
+}
+async fn other_catalog_record(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response {
+    let kind = other_catalog_kind(request.uri().path()).expect("mounted catalog route");
+    let result = state
+        .services
+        .catalog_record(kind, &id)
+        .await
+        .map(|r| r.into_payload());
+    reply(request, result)
+}
+async fn session_goal(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let result = state
+        .services
+        .session_goal(&session, (state.config.clock)())
+        .await;
+    reply(request, result)
+}
+async fn goal_children(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let result = state.services.goal_children(&session).await;
+    reply(request, result)
+}
+async fn session_schedule(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let result = state.services.session_schedule(&session).await;
+    reply(request, result)
 }
 async fn catalog_messages(State(state): State<AppState>, request: Request) -> Response {
     catalog(state, CatalogKind::Messages, request).await
@@ -461,12 +560,13 @@ fn api_reply(parts: &axum::http::request::Parts, result: Result<Value, ApiError>
         .get::<RequestId>()
         .map_or("", |r| r.0.as_str());
     let operation = header(&parts.headers, "x-nebula-operation-id");
+    let feature = route_feature(parts.uri.path());
     match result {
         Ok(value)=>match json_bytes(&value) {
             Ok(bytes) if bytes.len()<=MAX_RESPONSE_BYTES => ([("content-type","application/json")],bytes).into_response(),
-            _=>ApiError::http(413,"Assistant response exceeds its configured limit; inspect retained records with pagination").response(id,operation.as_deref()),
+            _=>ApiError::http(413,"Assistant response exceeds its configured limit; inspect retained records with pagination").for_feature(feature).response(id,operation.as_deref()),
         },
-        Err(error)=>error.response(id,operation.as_deref()),
+        Err(error)=>error.for_feature(feature).response(id,operation.as_deref()),
     }
 }
 

@@ -31,7 +31,7 @@ describes the remaining evidence, not tests already run against a Rust assistant
 | [Edit in place](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=78-39): edit, resend, expand replaced history | Old messages remain retained but are excluded from current transcript/context | Record/reference preservation and retraction predicate ported; rewind transaction, retry and UI pending |
 | [Elapsed time](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=81-128): stream, stop, inspect usage | Durable elapsed and approval-wait time remain distinct from tokens | Stored timing fields preserved; producer timing and UI pending |
 | [Compact controls](https://www.figma.com/design/d7kSLlFfaUiDLE2GybUNqE?node-id=16-2): search, bookmark, catch up | Core messages/bookmarks/cursors are authoritative; pending actions stay visible | Rust transcript/search/bookmark services and authenticated HTTP are implemented with a 112-case Python navigation oracle; cursor HTTP has isolated authentication/durability evidence. Catch-up and turn-summary reads have 78-case differential HTTP evidence, including acknowledgment without hiding pending actions. Shipped integration and production UI parity pending |
-| [Session details](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-77): goal, limits, skills, checkpoints, fork | Durable goals and lineage; frozen permissions; restore cannot overwrite newer edits | Goal/lineage record validation only; service and helper integrations pending |
+| [Session details](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-77): goal, limits, skills, checkpoints, fork | Durable goals and lineage; frozen permissions; restore cannot overwrite newer edits | Goal/child/schedule and raw catalog reads have a 153-case Python HTTP oracle; response-only live elapsed preserves saved usage and lineage. Mutations, execution, remaining dependencies and production UI pending |
 | [Subagents](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=21-2): inspect, wait, approve, stop | Children retain parent identity; waits release execution capacity; pending approval is visible | Record checks and isolated queue policy exist; durable admission, delivery and execution pending |
 | [Nested chats](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=120-85): select child, open parent | Sidebar and banner preserve the parent/child relationship after refresh | Canonical IDs retained; snapshot projection and UI integration pending |
 | [Peer messaging](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=124-113): enable, discover, send, receive | Explicit opt-in, same project, one durable message/transcript entry, no idle-peer wake-up | Record endpoint/delivery invariants ported; transactional delivery and authorization pending |
@@ -55,6 +55,15 @@ conflict detection and pending recovery markers; an absent queue remains unsaved
 These reads support main-chat, nested-chat and recovery displays but do not
 implement queue dispatch, receipt reconciliation or production UI acceptance.
 Malformed hook-schema error details still have a documented parity gap.
+
+Goal and child-goal reads now preserve response-only active-time calculation,
+stored child elapsed, lineage, counters and claims. Schedule reads retain saved
+configuration even when the provider no longer exists. The 153-case retained-plan
+oracle also covers raw goal/usage/schedule/subagent catalogs and error namespaces.
+No new Figma visit or browser run is implied by this increment. Existing UI
+`ProviderGoalPanel.activeSeconds` adds active time already included by the GET,
+and `ProviderGoalChildren` hides child-read errors as an empty list. These are
+unresolved production-journey blockers, not behaviors proved correct by API parity.
 
 ## Resolve conflicting design generations
 

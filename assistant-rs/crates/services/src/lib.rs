@@ -5,6 +5,7 @@ pub mod catchup;
 pub mod context;
 pub mod generated;
 pub mod navigation;
+pub mod plans;
 pub mod results;
 pub mod status;
 mod unicode_casefold;
@@ -28,6 +29,8 @@ pub enum Error {
     NotFound(&'static str),
     #[error("{0}")]
     StorageNotFound(&'static str),
+    #[error("{0}")]
+    RetainedNotFound(String),
     #[error("{0}")]
     Conflict(&'static str),
     #[error("{0}")]

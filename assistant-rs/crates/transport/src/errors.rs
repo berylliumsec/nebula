@@ -24,6 +24,17 @@ pub(crate) struct ApiError {
     exception: String,
 }
 impl ApiError {
+    pub(crate) fn for_feature(mut self, feature: &'static str) -> Self {
+        // Keep errors already classified by another authority (for example a
+        // storage uniqueness conflict). Only the default route context changes.
+        if self.feature == "chat" {
+            self.feature = feature;
+            if let Some(suffix) = self.code.strip_prefix("chat.") {
+                self.code = format!("{feature}.{suffix}");
+            }
+        }
+        self
+    }
     pub(crate) fn http(status: u16, detail: impl Into<String>) -> Self {
         let detail = detail.into();
         Self {
@@ -144,7 +155,7 @@ impl ApiError {
             ServiceError::EntityNotFound { .. } => {
                 Self::named(404, error.to_string(), "chat.not_found_error", "chat")
             }
-            ServiceError::StorageNotFound(_) => {
+            ServiceError::StorageNotFound(_) | ServiceError::RetainedNotFound(_) => {
                 Self::named(404, error.to_string(), "chat.not_found_error", "chat")
             }
             ServiceError::Conflict(_) | ServiceError::RevisionConflict { .. } => {
@@ -173,7 +184,7 @@ impl ApiError {
         if let Some(operation) = operation_id.filter(|s| !s.is_empty() && !unhandled) {
             value["operation_id"] = operation.into();
         }
-        let bytes=match crate::json_bytes(&value) { Ok(bytes)=>bytes,Err(_)=>return Self::http(413,"Assistant validation response exceeds its configured limit; send a smaller request").response(request_id,None) };
+        let bytes=match crate::json_bytes(&value) { Ok(bytes)=>bytes,Err(_)=>return Self::http(413,"Assistant validation response exceeds its configured limit; send a smaller request").for_feature(self.feature).response(request_id,None) };
         let mut response = Response::builder()
             .status(StatusCode::from_u16(self.status).expect("static HTTP status"))
             .header("content-type", "application/json")

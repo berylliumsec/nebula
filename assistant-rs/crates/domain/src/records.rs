@@ -122,10 +122,18 @@ impl StoredAssistantRecord {
         let schemas = SCHEMAS.as_ref().map_err(|_| RecordError::Schema)?;
         let schema = &schemas["entities"][kind.as_str()];
         fill_defaults(schema, schema, &mut payload);
-        // Entity hydration normalizes its base timestamps to UTC. Other model
-        // timestamps (notably device read cursors) retain their recorded offset.
+        // Entity and Schedule have UTC field validators. Other timestamps
+        // (notably goals and device read cursors) retain their recorded offset.
         // Keep decode() itself lossless for canonical-contract round trips.
-        for field in ["created_at", "updated_at"] {
+        let timestamp_fields: &[&str] = if kind == AssistantKind::Schedule {
+            &["created_at", "updated_at", "next_run_at", "last_run_at"]
+        } else {
+            &["created_at", "updated_at"]
+        };
+        for &field in timestamp_fields {
+            if field == "last_run_at" && payload[field].is_null() {
+                continue;
+            }
             let time = aware(&payload[field])?;
             payload[field] = time
                 .with_timezone(&Utc)

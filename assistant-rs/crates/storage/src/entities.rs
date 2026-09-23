@@ -36,6 +36,8 @@ mod results;
 pub use results::ResultsSnapshot;
 mod status;
 pub use status::{ActivitySnapshot, QueueSnapshot, TurnHooksSnapshot};
+mod plans;
+pub use plans::{GoalChildrenSnapshot, SessionPlansSnapshot};
 
 const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MUTATIONS: usize = 64;
@@ -518,8 +520,15 @@ impl SqliteAssistantStore {
         &self,
         query: GeneratedListQuery,
     ) -> Result<Vec<StoredAssistantRecord>> {
-        if !matches!(query.kind, AssistantKind::Session | AssistantKind::Message)
-            || !(1..=1000).contains(&query.limit)
+        if !matches!(
+            query.kind,
+            AssistantKind::Session
+                | AssistantKind::Message
+                | AssistantKind::Goal
+                | AssistantKind::GoalUsageCharge
+                | AssistantKind::Schedule
+                | AssistantKind::Subagent
+        ) || !(1..=1000).contains(&query.limit)
             || query.offset > i64::MAX as u64
         {
             return Err(Error::InvalidBounds);

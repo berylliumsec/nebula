@@ -8,12 +8,20 @@ use nebula_assistant_storage::entities::GeneratedListQuery;
 pub enum CatalogKind {
     Sessions,
     Messages,
+    Goals,
+    GoalUsageCharges,
+    Schedules,
+    Subagents,
 }
 impl CatalogKind {
     fn kind(self) -> AssistantKind {
         match self {
             Self::Sessions => AssistantKind::Session,
             Self::Messages => AssistantKind::Message,
+            Self::Goals => AssistantKind::Goal,
+            Self::GoalUsageCharges => AssistantKind::GoalUsageCharge,
+            Self::Schedules => AssistantKind::Schedule,
+            Self::Subagents => AssistantKind::Subagent,
         }
     }
 }

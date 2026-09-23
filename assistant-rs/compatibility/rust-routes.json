@@ -92,6 +92,61 @@
       "method": "GET",
       "path": "/api/v1/chat/turns/{turn_id}/hooks",
       "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{session_id}/goal",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{session_id}/goal/children",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{session_id}/schedule",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat-goals",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat-goals/{entity_id}",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat-goal-usage-charges",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat-goal-usage-charges/{entity_id}",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat-schedules",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat-schedules/{entity_id}",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat-subagents",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat-subagents/{entity_id}",
+      "status": "experimental"
     }
   ],
   "evidence": [
@@ -103,7 +158,8 @@
     "python-catchup.json: 78 catch-up, summary and device-cursor comparisons",
     "python-results.json: 110 retained Results, context-source, artifact-preview and query comparisons",
     "python-status.json: 40 activity, saved queue and retained hook read/error comparisons",
-    "nebula-assistant-transport/http: fifteen exact integration tests passed locally"
+    "python-plans.json: 153 fixed-clock goal, child, schedule and raw catalog read/error comparisons; all70 retained records unchanged",
+    "nebula-assistant-transport/http: sixteen exact integration tests passed locally"
   ],
   "remaining_gates": [
     "JSON syntax, content-type and method edge cases",
@@ -113,6 +169,8 @@
     "Production desktop, mobile, LAN, reconnect and device journeys",
     "Whole-Assistant route coverage and performance acceptance",
     "Full shared project schema validation and production search-load measurements",
-    "Malformed hook schemas: Rust sanitizes failure rather than returning the exact Python 422 validation detail"
+    "Malformed hook schemas: Rust sanitizes failure rather than returning the exact Python 422 validation detail",
+    "Malformed session-linked goal/schedule schemas: Rust sanitizes failure rather than exact Python422 validation detail",
+    "Goal UI elapsed-time double counting and child-read failure visibility"
   ]
 }

@@ -16,11 +16,13 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
 - `nebula-assistant-services`: saved-context mutations, active decision snapshots,
   revision history, atomic project promotion, per-device read cursors, transcript
   navigation, project message search, durable bookmarks, conversation catalogs,
-  catch-up, retained Results/context-source reads, activity, saved queues and hook summaries. Source
+  catch-up, retained Results/context-source reads, activity, saved queues, hook
+  summaries, goals, child goals and schedules. Source
   and session revisions are rechecked inside the bounded writer transaction.
 - `nebula-assistant-transport`: experimental Axum routes for saved-context GET/PUT
   and read-cursor PUT, transcript/search GET, bookmark GET/PUT, conversation
-  catalogs, catch-up/summary and Results/context-source GET, with
+  catalogs, catch-up/summary, Results/context-source, activity, saved queue,
+  hook-summary, goal/children and schedule GET, with
   bearer/paired-device authentication. No shipped entry
   point mounts this router yet. Typed request coercion and error envelopes have
   Python-oracle coverage; complete route and production parity are open.
@@ -224,4 +226,16 @@ validation detail; complete malformed-record error parity remains open.
 
 ```sh
 PYTHONPATH=src python -m scripts.capture_assistant_status --output assistant-rs/compatibility/python-status.json
+```
+
+Goal responses add observed active time without changing saved elapsed time,
+usage, claims or revisions. Child-goal and raw catalog reads retain stored elapsed
+values. Goal ambiguity remains a conflict; duplicate schedules return the oldest
+after validating every candidate. Schedule run timestamps hydrate to UTC without
+rewriting storage. Generated goal, usage-charge, schedule and subagent catalogs
+retain their API error namespace and return complete bounded pages. These routes
+do not start, pause, resume or execute goals, schedules or children.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_plans --output assistant-rs/compatibility/python-plans.json
 ```

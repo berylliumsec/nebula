@@ -1033,6 +1033,16 @@ async fn python_status_http_oracle_preserves_activity_queues_and_hook_receipts()
 }
 
 #[tokio::test]
+async fn python_plans_http_oracle_preserves_goals_schedules_catalogs_and_saved_state() {
+    read_oracle(
+        serde_json::from_str(include_str!("../../../compatibility/python-plans.json")).unwrap(),
+        153,
+        catchup_now,
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn catalog_http_does_not_end_ui_pagination_at_the_internal_page_byte_budget() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("nebula.db");

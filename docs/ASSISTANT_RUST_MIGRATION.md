@@ -30,7 +30,7 @@ Branch: `codex/rust-core-rewrite`.
 
 All product journeys remain required and unverified for Rust. Browser/device/LAN
 matrices from the product-quality skill remain mandatory before activating the
-replacement. The experimental Rust router has eighteen Assistant handlers; shipped
+replacement. The experimental Rust router has twenty-nine Assistant handlers; shipped
 routes, UI, provider and harness execution have not switched to Rust.
 
 ## Development boundaries
@@ -517,3 +517,53 @@ passed in 6.10 seconds; the cumulative Python selection collects 51 tests. Raw-r
 envelope, projection-watermark and ephemeral-queue assertions passed before and
 after reopening. Cumulative CI now selects 95 exact Rust tests and 51 Python checks;
 no browser, execution, migration or performance gate is inferred from these runs.
+
+
+## Goal, schedule and retained catalog read contract
+
+Journey: select a conversation, inspect its saved goal and child goals, refresh
+active-time display, and recover the same durable goal/schedule state after reopen.
+The current UI consumes custom goal and children reads; schedule and raw catalog
+APIs remain supported client contracts without an identified production UI entry.
+Core records own objective, status, budgets, counters, lineage and scheduling data.
+Only the custom goal response accrues observed active time; reads must not write
+usage, claims, revisions, timestamps, schedules or dispatch state.
+
+Preserve all session-matching goal/schedule candidates before cardinality checks,
+legacy cross-project references, missing-parent children as an empty list, global
+child-goal validation/order, and oldest-schedule selection when duplicates exist.
+Raw generated goal/usage/schedule/subagent catalogs preserve full records and saved
+elapsed values, with the source API error namespace. Schedule hydration normalizes
+next/last run timestamps to UTC; optional goal timestamps retain source offsets.
+Bound complete snapshots and pages explicitly without partial-success truncation.
+
+Planned evidence: fixed-clock isolated Python HTTP capture, immutable hydration
+regressions, bounded storage snapshots and complete catalog pages, service raw-row
+purity/reopen checks, exact HTTP/auth/error comparisons, and focused existing
+regressions affected by shared decode and routing changes. No lifespan, providers,
+goal/schedule runners, model calls or child dispatch will run in these fixtures.
+Create/update/start/pause/cancel, child creation, execution and production UI gates
+remain required parts of the complete rewrite and are not proved by these reads.
+Detailed Pydantic failures for malformed session-linked records remain a known
+parity gap. Existing UI live-time double counting and hidden child-read errors
+must be resolved before the goal journey can pass production acceptance.
+
+Implemented as eleven additional experimental routes: custom goal/children and
+schedule GETs plus list/get for goals, usage charges, schedules and subagents.
+Session candidates and global child validation share a 10,000-row / 16-MiB read
+budget; expanded responses are bounded separately. Reads preserve oldest-schedule
+selection, stored child elapsed and raw catalog values. UTC schedule hydration
+never rewrites retained bytes. Catalog error envelopes retain the `api` feature;
+explicitly classified storage errors keep their own feature and guidance.
+
+Evidence: `python-plans.json` captures 153 requests at a fixed observation clock,
+including 110 service comparisons, and retains all 70 Assistant records unchanged.
+All 41 selected local Rust tests passed: eight new tests, fifteen existing HTTP,
+seven record-decoder, nine entity-store and two complete-catalog regressions.
+The Python plan-capture and Python/Rust storage-handoff checks both passed. New
+tests cover complete reads beyond 1,000 rows, global unrelated-record validation,
+aggregate read limits, response expansion, microsecond clocks, stale providers,
+unchanged claims/counters/watermarks and reopen. Independent review caught and
+corrected a shared error-feature regression before execution. No selected test
+failed. Cumulative CI selection is 103 exact Rust tests and 52 Python checks;
+production integration, malformed-record error detail and performance remain open.
