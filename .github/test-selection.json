@@ -1,28 +1,24 @@
 {
-  "change_digest": "6a557047d02e9d03e6c3acc552b29c711549faa5bed4faaa66e5dbeab36bbe01",
-  "reviewed_by": "Codex focused review for Nebula Phosphor icon-pack integration",
-  "reason": "The change replaces all 167 production Lucide glyph exports through one checksum-verified Phosphor compatibility registry while preserving existing component props, accessible names, CSS classes, refs, events, theme colors, animation classes, and unique SVG definition IDs. Two focused component cases validate the adapter contract and regular/light selection. Eight dedicated Playwright executions traverse every primary workspace in desktop 1440, compact 1024, Chromium 320/390/430, and WebKit 320/390/430 projects, validating that every visible Lucide-class glyph is mapped, nonempty, sized, and free of duplicate definition IDs.",
-  "exclusions": "Full suites are not approved and are excluded. Backend APIs, persistence, provider and harness execution, terminals, native Tauri packaging, OS app identity icons, Nebula's N monogram/favicon, and unrelated interaction journeys are unchanged. Python and native selections are empty because this is a web-only generated icon registry and focused UI acceptance change. Real-Core state testing is not selected because Core state and API behavior are unchanged; the production build and post-merge live asset identity are verified separately.",
+  "change_digest": "560e6f222e1bf646dc803acffe6319166d40cb3d2bb29fb7a2dafe222c5756ac",
+  "reviewed_by": "Codex focused review for restart-recovery backpressure",
+  "reason": "The change limits only automatically recovered provider turns so a Core restart cannot schedule an unbounded backlog of large routing histories on the API event loop. Four focused recovery cases cover safe goal recovery, multiple interrupted causes, the new concurrency bound and slot handoff, and automatic retry after a transient recovery failure.",
+  "exclusions": "Full suites are not approved and are excluded. Normal operator-started provider turns, harness execution, queue ordering, HTTP response contracts, storage schema, frontend rendering, native packaging, and browser interaction code are unchanged. Frontend, native, and Playwright selections are empty because this is a Core-internal recovery scheduler change; the production real-Core and LAN response path will be measured separately after deployment.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 2,
+    "python": 4,
+    "frontend": 0,
     "native": 0,
-    "playwright": 8
+    "playwright": 0
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": ["ui/src/icons/icons.test.tsx"],
+  "python": [
+    "tests/v3/test_chat.py::test_core_startup_auto_resumes_running_goal_with_unknown_effect",
+    "tests/v3/test_chat.py::test_core_update_auto_resumes_uncertain_and_crashed_turns",
+    "tests/v3/test_chat.py::test_core_restart_recovery_bounds_concurrent_provider_turns",
+    "tests/v3/test_chat.py::test_core_restart_recovery_retries_without_operator_action"
+  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:icon-pack/desktop",
-    "entry:icon-pack/compact",
-    "entry:icon-pack/mobile-chromium-small",
-    "entry:icon-pack/mobile-chromium-ledger-390",
-    "entry:icon-pack/mobile-chromium-wide",
-    "entry:icon-pack/mobile-webkit-small",
-    "entry:icon-pack/mobile-webkit",
-    "entry:icon-pack/mobile-webkit-wide"
-  ]
+  "playwright": []
 }

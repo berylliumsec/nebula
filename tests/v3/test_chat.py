@@ -134,6 +134,34 @@ class WaitingRecoveryProvider(FakeProvider):
         await asyncio.Event().wait()
 
 
+class CountingRecoveryProvider(FakeProvider):
+    def __init__(self, provider_id: str) -> None:
+        super().__init__(provider_id, local=True)
+        self.active = 0
+        self.started = 0
+        self.maximum_active = 0
+        self.changed = asyncio.Event()
+
+    async def stream(self, request: ModelRequest):
+        del request
+        self.active += 1
+        self.started += 1
+        self.maximum_active = max(self.maximum_active, self.active)
+        self.changed.set()
+        try:
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            await asyncio.Event().wait()
+        finally:
+            self.active -= 1
+            self.changed.set()
+
+    async def wait_until_started(self, count: int) -> None:
+        async with asyncio.timeout(2):
+            while self.started < count:
+                self.changed.clear()
+                await self.changed.wait()
+
+
 class ContextRejectingProvider(FakeProvider):
     def __init__(self, provider_id: str, *, reject_attempts: int = 1) -> None:
         super().__init__(provider_id, local=False)
@@ -4017,6 +4045,76 @@ def test_core_update_auto_resumes_uncertain_and_crashed_turns(tmp_path):
             turn.status == ChatTurnStatus.ROUTING
             for turn in store.list_entities(ChatTurn)
         )
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_core_restart_recovery_bounds_concurrent_provider_turns(tmp_path):
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "bounded-auto-resume.db")
+        engagement = store.create(Engagement(name="Bounded recovery"))
+        profile = store.create(_profile(local=True))
+        provider = CountingRecoveryProvider(profile.id)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        for index in range(4):
+            session = store.create(
+                ChatSession(
+                    engagement_id=engagement.id,
+                    title=f"Recovered conversation {index}",
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                )
+            )
+            store.create(
+                ChatTurn(
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                    status=ChatTurnStatus.INTERRUPTED,
+                    request_snapshot={
+                        "model_request": ModelRequest(
+                            model="model-a",
+                            messages=[{"role": "user", "content": "Continue."}],
+                        ).model_dump(mode="json"),
+                        "context_usage": {},
+                        "recovery": {
+                            "required": True,
+                            "cause": "core_restart",
+                            "unknown_tool_call_ids": [],
+                            "unknown_hook_execution_ids": [],
+                        },
+                    },
+                )
+            )
+
+        await service.startup()
+        resumed = service.resume_turns_stopped_by_core()
+        assert len(resumed) == 4
+        await provider.wait_until_started(2)
+        await asyncio.sleep(0.05)
+        assert provider.started == 2
+        assert provider.maximum_active == 2
+
+        manual = await service.prepare_async(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                messages=[{"role": "user", "content": "Operator priority."}],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+        manual_id = service.start_provider_turn(manual)
+        await provider.wait_until_started(3)
+        assert provider.active == 3
+        assert provider.maximum_active == 3
+        await service.stop_provider_turn(manual_id)
+
+        await service.stop_provider_turn(resumed[0])
+        await provider.wait_until_started(4)
+        assert provider.active == 2
         await service.shutdown()
 
     asyncio.run(scenario())
