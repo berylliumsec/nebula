@@ -4343,6 +4343,13 @@ reloadTest("assistant upgrade restores paused provider supervisor thinking and p
   await expect(reply).toContainText("I have dispatched the command.");
   await expect(reply.getByLabel("Thinking")).toBeVisible();
   await expect(reply.getByLabel("Thinking")).toContainText("Check the returned evidence before continuing.");
+
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+  const runtime = page.getByRole("combobox", { name: "Chat runtime", exact: true });
+  await expect(runtime).toBeEnabled();
+  await runtime.selectOption("harness");
+  await expect(page.getByRole("combobox", { name: "Chat harness", exact: true })).toBeEnabled();
 });
 
 reloadTest("assistant upgrade replaces a callback wait when its turn finishes between polls", async ({ page }) => {

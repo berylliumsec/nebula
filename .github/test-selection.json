@@ -1,29 +1,23 @@
 {
-  "change_digest": "a23a5ff5a4b68b19a9c1673dd8469c378b1c6d6b64e0a536229472160aadfa17",
-  "reviewed_by": "Codex focused review for truthful subagent restart recovery and bounded sidebar labels",
-  "reason": "The diff maps interrupted recoverable turns to operator attention, bounds long sidebar labels, and turns one side-effect-free completion-hook rejection into explicit model feedback. Focused cases cover successful repair, safe refusal with a durable decision note, activity state, sidebar grouping, responsive geometry, and a production real-Core hierarchy journey.",
-  "exclusions": "Unrelated Python, frontend, Playwright, and native suites are excluded. Live third-party provider execution and physical-device workflows are not required to prove the normalized Core retry contract, durable outcome, or bounded sidebar geometry and are not claimed.",
-  "expected_tests": {"python": 5, "frontend": 5, "native": 0, "playwright": 8},
+  "change_digest": "e6545f053c3c43e05eff16ebb75df97519adf03774d7b3b59d9673b7c2ad5752",
+  "reviewed_by": "Codex focused review for new-chat runtime reset",
+  "reason": "The diff clears callback and interrupted-recovery state when the operator detaches into a new chat. The selected paused-provider recovery journey restores a waiting callback, starts a new chat, and proves Runtime and Harness are enabled across the permanent desktop and mobile browser profiles.",
+  "exclusions": "No Core, Python, or native behavior changed. Unrelated frontend and Playwright journeys and all full suites are excluded. The selected mock deliberately controls the otherwise timing-dependent waiting-callback state; live deployment health and build identity are verified separately.",
+  "expected_tests": {"python": 0, "frontend": 0, "native": 0, "playwright": 8},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_chat_api.py::test_chat_session_activity_reports_core_owned_turn_state",
-    "tests/v3/test_native_hook_turn_ends.py::test_required_completion_hook_feedback_reaches_model_and_rechecks_answer",
-    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_routes_again_with_completion_hook_feedback",
-    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_preserves_model_decision_when_completion_hook_still_blocks",
-    "tests/v3/test_turn_outcome_history.py::test_failed_turn_saves_an_outcome_note_so_the_next_request_alternates"
-  ],
-  "frontend": ["ui/src/pages/conversationSidebar.test.ts"],
+  "python": [],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:subagent-sidebar/desktop",
-    "entry:subagent-sidebar/mobile-chromium-small",
-    "entry:subagent-sidebar/mobile-chromium-ledger-390",
-    "entry:subagent-sidebar/mobile-chromium-wide",
-    "entry:subagent-sidebar/mobile-webkit-small",
-    "entry:subagent-sidebar/mobile-webkit",
-    "entry:subagent-sidebar/mobile-webkit-wide",
-    "entry:subagent-sidebar/assistant-real-desktop"
+    "entry:paused-supervisor-recovery/desktop",
+    "entry:paused-supervisor-recovery/compact",
+    "entry:paused-supervisor-recovery/mobile-chromium-small",
+    "entry:paused-supervisor-recovery/mobile-chromium-ledger-390",
+    "entry:paused-supervisor-recovery/mobile-chromium-wide",
+    "entry:paused-supervisor-recovery/mobile-webkit-small",
+    "entry:paused-supervisor-recovery/mobile-webkit",
+    "entry:paused-supervisor-recovery/mobile-webkit-wide"
   ]
 }
