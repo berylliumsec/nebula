@@ -20,7 +20,7 @@ fn expected_payload(row: &Value) -> Value {
 #[test]
 fn shared_dependency_records_preserve_python_fields_and_reject_incoherent_state() {
     let fixture = fixture();
-    for kind in Kind::ALL {
+    for kind in [Kind::Approval, Kind::HarnessInteraction, Kind::HarnessTurn] {
         let rows: Vec<_> = fixture["dependency_records"]
             .as_array()
             .unwrap()
@@ -77,6 +77,7 @@ fn shared_dependency_records_preserve_python_fields_and_reject_incoherent_state(
                 p["contains_secret"] = true.into();
                 p["response"] = json!({"secret":"must-not-persist"});
             }
+            Kind::ToolCall | Kind::Artifact => unreachable!("covered by Results dependency tests"),
         }
         assert!(StoredDependency::decode(kind, &serde_json::to_vec(&p).unwrap()).is_err());
     }

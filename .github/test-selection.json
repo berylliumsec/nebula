@@ -1,14 +1,14 @@
 {
-  "change_digest": "eb249cc5d1b6f0f5376f41a7f7ed77790453a4704b62060993c6596d288b8376",
-  "reviewed_by": "Codex focused Assistant catalog and catch-up review with independent storage, services and Python oracle agents",
-  "reason": "Cumulative Assistant-only rewrite selection: 78 exact Rust tests and 49 Python tests across six listed files. Current increment adds 12 exact Rust tests covering immutable shared dependency codecs, complete generated catalog pages, bounded catch-up snapshots, pending-action projections, 64 catalog / 76 catch-up Python HTTP comparisons, paired-device ownership, clock boundaries, reopen, and 1001-session UI pagination. Local selection is the 12 new cases plus 10 existing HTTP, 7 context, 9 entity storage and 7 domain record regressions (45) because cursor clock injection, shared pagination validation and persisted base timestamp normalization changed those paths. Local Python selection: 8 existing contract regenerations, 2 new read-oracle regenerations, 1 Python-Rust-Python storage handoff (11); CI retains earlier exact feature/policy checks. Rust compilation/collection limit 600 seconds per command; execution 120 seconds per exact test. Local Python execution bounded to 300 seconds. No full suites. After review, rebased onto d2d1ba62e3ad96c966a6612f1a446f6798e96c37; only unrelated upstream UI queue-control files changed, and the final PR diff has no UI changes. Exact Assistant implementation and local tested sources were preserved.",
-  "exclusions": "Thirteen experimental Assistant route handlers only; no shipped listener, UI, other product area, desktop-native or launch changes. Production desktop/mobile/LAN/device journeys, stream/reconnect, providers/harnesses, durable admission/recovery, remaining route parity, historical/PostgreSQL/checkpoint migration and whole-Assistant performance remain incomplete. Read limits are explicit compatibility extensions; Figma inspection is design evidence. No live service/database, provider calls, real tools or full suites.",
+  "change_digest": "219cde7ffab7eb3bbb7291f4365b3e5f35257e4579d256fb2704d85df4e50e4b",
+  "reviewed_by": "Codex Assistant retained Results review with independent storage, projection and Python oracle agents",
+  "reason": "Cumulative Assistant-only port: 87 exact Rust tests and 50 Python tests across seven feature/policy files. Current increment adds nine Rust tests for readonly ToolCall/Artifact codecs; complete Results/context source snapshots; aggregate row/byte limits; 110 Python HTTP and retained-record comparisons; safe bounded artifact file reads; deterministic timeout/admission recovery; and projection expansion. Catch-up oracle now has 78 cases, retaining all earlier cases. Local selection is the nine new tests plus 35 affected regressions: 13 HTTP, two shared-dependency, two storage/three service catch-up, four storage/four service navigation and seven context tests (44 total). These cover shared HTTP oracle/config wiring, new dependency variants and the removal of inappropriate entity-ID validation from retained session project filters. Local Python selects two read-contract oracle checks and one Results oracle check (3). Collect each exact Rust test before execution; compilation/collection600seconds percommand, execution120seconds pertest; Python300seconds. No full suites.",
+  "exclusions": "Fifteen experimental Assistant HTTP route handlers only. No shipped launch path, production UI, other product areas or desktop-native changes. Browser/device/LAN/reconnect, complete route parity, providers/harnesses, durable admission/recovery, historical/PostgreSQL/checkpoint migration, packaging and whole-Assistant performance remain open. File previews only inspect harmless retained bytes; no commands, live databases/services, external sources or document SDK. Read/resource limits and refusal of symlink/nonregular artifacts are explicit compatibility extensions. No full suites.",
   "expected_tests": {
-    "python": 49,
+    "python": 50,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 78
+    "assistant_rust": 87
   },
   "python_versions": [
     "3.12"
@@ -21,7 +21,8 @@
     "tests/test_test_selection.py",
     "tests/test_assistant_storage_interop.py",
     "tests/test_assistant_navigation_contract.py",
-    "tests/test_assistant_read_contracts.py"
+    "tests/test_assistant_read_contracts.py",
+    "tests/test_assistant_results_contract.py"
   ],
   "frontend": [],
   "native": [],
@@ -104,6 +105,15 @@
     "nebula-assistant-services/catchup::acknowledging_catchup_keeps_pending_actions_and_other_device_history",
     "nebula-assistant-transport/http::python_catalog_http_oracle_preserves_complete_arrays_and_record_shapes",
     "nebula-assistant-transport/http::python_catchup_http_oracle_preserves_pending_actions_and_device_cursors",
-    "nebula-assistant-transport/http::catalog_http_does_not_end_ui_pagination_at_the_internal_page_byte_budget"
+    "nebula-assistant-transport/http::catalog_http_does_not_end_ui_pagination_at_the_internal_page_byte_budget",
+    "nebula-assistant-domain/results_dependencies::retained_result_dependencies_preserve_python_records_and_reject_invalid_envelopes",
+    "nebula-assistant-storage/results::retained_results_snapshot_preserves_storage_paging_scopes_and_reference_order",
+    "nebula-assistant-storage/results::retained_results_budget_covers_dependencies_and_releases_readers_without_partial_pages",
+    "nebula-assistant-storage/results::retained_results_row_budget_and_dependency_envelopes_fail_closed",
+    "nebula-assistant-services/results::python_results_oracle_preserves_projection_order_and_retained_records",
+    "nebula-assistant-services/results::expanded_result_limits_preserve_retained_sources",
+    "nebula-assistant-services/results::artifact_preview_enforces_digest_paths_and_bounded_regular_files",
+    "nebula-assistant-services/results::preview_timeout_retains_blocking_admission_until_work_finishes",
+    "nebula-assistant-transport/http::python_results_http_oracle_preserves_outputs_context_and_reopened_records"
   ]
 }

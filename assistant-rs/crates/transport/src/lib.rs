@@ -19,6 +19,7 @@ use errors::ApiError;
 use futures_util::StreamExt;
 use nebula_assistant_services::{
     AssistantRecords, Error as ServiceError,
+    artifact_preview::ArtifactPreview,
     context::{CursorWrite, DecisionWrite},
     generated::CatalogKind,
     navigation::BookmarkWrite,
@@ -37,6 +38,7 @@ pub struct HttpConfig {
     pub body_bytes: usize,
     pub request_timeout: std::time::Duration,
     pub clock: fn() -> DateTime<Utc>,
+    pub artifacts: Option<ArtifactPreview>,
 }
 impl HttpConfig {
     pub fn new(authentication: Authentication) -> Self {
@@ -47,6 +49,7 @@ impl HttpConfig {
             body_bytes: 1024 * 1024,
             request_timeout: std::time::Duration::from_secs(30),
             clock: Utc::now,
+            artifacts: None,
         }
     }
 }
@@ -83,6 +86,14 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
         .route("/api/v1/chat-messages", get(catalog_messages))
         .route("/api/v1/chat-messages/{entity_id}", get(catalog_message))
         .route("/api/v1/chat/sessions/{session_id}/catch-up", get(catch_up))
+        .route(
+            "/api/v1/chat/sessions/{session_id}/results",
+            get(read_results),
+        )
+        .route(
+            "/api/v1/chat/sessions/{session_id}/context-sources",
+            get(read_context_sources),
+        )
         .route(
             "/api/v1/chat/sessions/{session_id}/turns/{turn_id}/summary",
             get(turn_summary),
@@ -357,6 +368,38 @@ async fn turn_summary(
 ) -> Response {
     let result = state.services.turn_summary(&session, &turn).await;
     reply(request, result)
+}
+async fn read_results(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let (parts, _) = request.into_parts();
+    let result = match validation::results(parts.uri.query()) {
+        Ok(query) => state
+            .services
+            .results(&session, query, state.config.artifacts.as_ref())
+            .await
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
+}
+async fn read_context_sources(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let (parts, _) = request.into_parts();
+    let result = match validation::context_offset(parts.uri.query()) {
+        Ok(offset) => state
+            .services
+            .context_sources(&session, offset)
+            .await
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
 }
 async fn decode<T: validation::RequestModel>(body: Body, limit: usize) -> Result<T, ApiError> {
     let bytes = to_bytes(body, limit)

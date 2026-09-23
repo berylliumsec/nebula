@@ -32,6 +32,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 mod catchup;
 pub use catchup::{CatchupSnapshot, PendingSnapshot};
+mod results;
+pub use results::ResultsSnapshot;
 
 const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MUTATIONS: usize = 64;
@@ -596,7 +598,6 @@ impl SqliteAssistantStore {
         project_id: &str,
     ) -> Result<Vec<StoredAssistantRecord>> {
         validate_id(session_id)?;
-        validate_id(project_id)?;
         let _permit = self.read_permit()?;
         let mut query = QueryBuilder::<Sqlite>::new(SELECT_RECORD);
         query
@@ -667,7 +668,6 @@ impl SqliteAssistantStore {
         active_only: bool,
     ) -> Result<Vec<StoredAssistantRecord>> {
         validate_id(session_id)?;
-        validate_id(project_id)?;
         let _permit = self.read_permit()?;
         let query = format!(
             "{SELECT_RECORD} WHERE kind = 'chat_decisions' AND engagement_id = ? AND (chat_session_id = ? OR json_extract(payload, '$.scope') = 'project') AND (? = 0 OR json_extract(payload, '$.status') = 'active') ORDER BY created_at, id LIMIT 10001"

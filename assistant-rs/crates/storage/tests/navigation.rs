@@ -241,6 +241,35 @@ async fn navigation_history_and_bookmarks_read_past_one_thousand_with_exact_sequ
             .any(|record| record.payload()["active"] == false)
     );
     assert!(!ids(&marks).contains(&"other-project"));
+    // Session-owned collections filter by the retained project string. That
+    // reference need not satisfy the separately validated Entity.id contract.
+    for (index, project) in [String::new(), "β".repeat(201)].into_iter().enumerate() {
+        let session = format!("legacy-scope-{index}");
+        let mark = format!("legacy-mark-{index}");
+        let local_decision = format!("legacy-decision-{index}");
+        let project_decision = format!("legacy-project-decision-{index}");
+        store.apply(vec![
+            Mutation::Create(entity(Kind::Session, &session, json!({"engagement_id":project}))),
+            Mutation::Create(entity(Kind::Bookmark, &mark, json!({"engagement_id":project,"session_id":session,"active":false}))),
+            Mutation::Create(entity(Kind::Bookmark, &format!("wrong-mark-{index}"), json!({"engagement_id":"other","session_id":session}))),
+            Mutation::Create(entity(Kind::Decision, &local_decision, json!({"engagement_id":project,"session_id":session,"scope":"conversation","status":"active"}))),
+            Mutation::Create(entity(Kind::Decision, &project_decision, json!({"engagement_id":project,"session_id":"different","scope":"project","status":"active"}))),
+            Mutation::Create(entity(Kind::Decision, &format!("wrong-session-decision-{index}"), json!({"engagement_id":project,"session_id":"different","scope":"conversation","status":"active"}))),
+            Mutation::Create(entity(Kind::Decision, &format!("wrong-project-decision-{index}"), json!({"engagement_id":"other","session_id":session,"scope":"project","status":"active"}))),
+        ]).await.unwrap();
+        let marks = store.bookmarks(&session, &project).await.unwrap();
+        assert_eq!(ids(&marks), [&mark]);
+        assert_eq!(marks[0].payload()["active"], false);
+        for active_only in [false, true] {
+            assert_eq!(
+                ids(&store
+                    .decisions(&session, &project, active_only)
+                    .await
+                    .unwrap()),
+                [&local_decision, &project_decision]
+            );
+        }
+    }
     connection.close().await.unwrap();
     store.shutdown().await.unwrap();
     let store = SqliteAssistantStore::open(&path, Config::default())

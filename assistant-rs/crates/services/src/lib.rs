@@ -1,9 +1,11 @@
 //! Assistant application services. Transport authentication is a separate boundary:
 //! never expose these methods directly to an unauthenticated caller.
+pub mod artifact_preview;
 pub mod catchup;
 pub mod context;
 pub mod generated;
 pub mod navigation;
+pub mod results;
 mod unicode_casefold;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -15,6 +17,10 @@ use serde_json::{Value, json};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("{0}")]
+    Unavailable(&'static str),
+    #[error("{0}")]
+    Timeout(&'static str),
     #[error("{0}")]
     Invalid(&'static str),
     #[error("{0}")]

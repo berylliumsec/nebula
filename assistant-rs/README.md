@@ -15,10 +15,12 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
   waits release execution slots while retaining session ownership. No execution.
 - `nebula-assistant-services`: saved-context mutations, active decision snapshots,
   revision history, atomic project promotion, per-device read cursors, transcript
-  navigation, project message search and durable bookmarks. Source
+  navigation, project message search, durable bookmarks, conversation catalogs,
+  catch-up and retained Results/context-source reads. Source
   and session revisions are rechecked inside the bounded writer transaction.
 - `nebula-assistant-transport`: experimental Axum routes for saved-context GET/PUT
-  and read-cursor PUT, transcript/search GET and bookmark GET/PUT, with
+  and read-cursor PUT, transcript/search GET, bookmark GET/PUT, conversation
+  catalogs, catch-up/summary and Results/context-source GET, with
   bearer/paired-device authentication. No shipped entry
   point mounts this router yet. Typed request coercion and error envelopes have
   Python-oracle coverage; complete route and production parity are open.
@@ -181,4 +183,35 @@ including correlated bookmark lookups and sorting; no speedup is claimed.
 
 ```sh
 PYTHONPATH=src python -m scripts.capture_assistant_navigation --output assistant-rs/compatibility/python-navigation.json
+```
+
+Generated conversation/message catalogs return a complete requested page or an
+explicit size error; a short byte-truncated array would incorrectly stop the UI's
+pagination. Catch-up retains pending actions independently of the device cursor.
+Its read-only snapshot includes dependency records, source messages and predecessors
+under one aggregate 10,000-row / 16-MiB budget. Base entity timestamps normalize to
+UTC during hydration; optional cursor timestamps preserve legacy offset semantics.
+
+Results/context-source reads preserve stored-message offsets before role/retraction
+filtering. They inspect immutable ToolCall/Artifact dependencies and retain output
+ordering, null fields, policy text and opaque context metadata. Retained project
+filters are session values, not newly validated project identities. Missing diff
+files leave other results visible. The captured oracles use isolated state only.
+
+`HttpConfig.artifacts` optionally supplies a read-only `ArtifactPreview`. The host
+configures an existing root, concurrency and deadline; requests cannot select it.
+Previews use directory-relative Unix handles, reject symlinks/non-regular files,
+and read at most 8,192 bytes per diff after the database snapshot commits. A timed
+out or cancelled caller cannot release a blocking reader's admission prematurely.
+Symlink rejection and resource limits are explicit extensions to legacy behavior;
+previewing does not verify the entire blob hash. Non-Unix construction fails closed.
+The current installer release target remains Linux x86_64; packaging and production
+acceptance of this library remain incomplete.
+
+Regenerate the retained-read oracles from the repository root:
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_catalog --output assistant-rs/compatibility/python-catalog.json
+PYTHONPATH=src python -m scripts.capture_assistant_catchup --output assistant-rs/compatibility/python-catchup.json
+PYTHONPATH=src python -m scripts.capture_assistant_results --output assistant-rs/compatibility/python-results.json
 ```

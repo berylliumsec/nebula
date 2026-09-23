@@ -1,4 +1,4 @@
-//! Immutable shared records consumed by Assistant pending-action projections.
+//! Immutable shared records consumed by Assistant retained read projections.
 //! These contracts grant no mutation, approval, dispatch, or execution capability.
 use crate::records::{MAX_RECORD_BYTES, RecordError, fill_defaults, require_canonical_fields};
 use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
@@ -11,14 +11,24 @@ pub enum DependencyKind {
     Approval,
     HarnessInteraction,
     HarnessTurn,
+    ToolCall,
+    Artifact,
 }
 impl DependencyKind {
-    pub const ALL: [Self; 3] = [Self::Approval, Self::HarnessInteraction, Self::HarnessTurn];
+    pub const ALL: [Self; 5] = [
+        Self::Approval,
+        Self::HarnessInteraction,
+        Self::HarnessTurn,
+        Self::ToolCall,
+        Self::Artifact,
+    ];
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Approval => "approvals",
             Self::HarnessInteraction => "harness_interactions",
             Self::HarnessTurn => "harness_turns",
+            Self::ToolCall => "tool_calls",
+            Self::Artifact => "artifacts",
         }
     }
 }
@@ -35,7 +45,14 @@ static SCHEMAS: LazyLock<Result<Value, RecordError>> = LazyLock::new(|| {
     let fixture: Value =
         serde_json::from_str(include_str!("../../../compatibility/python-catchup.json"))
             .map_err(|_| RecordError::Schema)?;
-    Ok(fixture["dependency_schemas"].clone())
+    let results: Value =
+        serde_json::from_str(include_str!("../../../compatibility/python-results.json"))
+            .map_err(|_| RecordError::Schema)?;
+    let mut schemas = fixture["dependency_schemas"].clone();
+    for kind in [DependencyKind::ToolCall, DependencyKind::Artifact] {
+        schemas[kind.as_str()] = results["dependency_schemas"][kind.as_str()].clone();
+    }
+    Ok(schemas)
 });
 static VALIDATORS: LazyLock<Result<HashMap<DependencyKind, Validator>, RecordError>> =
     LazyLock::new(|| {
@@ -165,7 +182,7 @@ impl StoredDependency {
                     ));
                 }
             }
-            DependencyKind::Approval => {}
+            DependencyKind::Approval | DependencyKind::ToolCall | DependencyKind::Artifact => {}
         }
         Ok(Self { kind, payload: p })
     }

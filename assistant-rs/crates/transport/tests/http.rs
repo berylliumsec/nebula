@@ -8,6 +8,7 @@ use nebula_assistant_domain::{
     auth::PairedDevice,
     records::{AssistantKind as Kind, StoredAssistantRecord},
 };
+use nebula_assistant_services::artifact_preview::ArtifactPreview;
 use nebula_assistant_storage::entities::{Config, Mutation, SqliteAssistantStore};
 use nebula_assistant_transport::{Authentication, HttpConfig, router};
 use serde_json::{Value, json};
@@ -849,6 +850,32 @@ async fn read_oracle(oracle: Value, expected_cases: usize, observed_clock: fn() 
     }
     let mut options = config();
     options.clock = observed_clock;
+    let previews = if let Some(blobs) = oracle["artifact_blobs"].as_array() {
+        let root = temp.path().join("artifacts");
+        std::fs::create_dir_all(&root).unwrap();
+        for blob in blobs {
+            let relative = Path::new(blob["storage_path"].as_str().unwrap());
+            assert!(!relative.is_absolute());
+            assert!(
+                relative
+                    .components()
+                    .all(|c| matches!(c, std::path::Component::Normal(_)))
+            );
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let hex = blob["hex"].as_str().unwrap();
+            assert_eq!(hex.len() % 2, 0);
+            let bytes: Vec<_> = (0..hex.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                .collect();
+            std::fs::write(path, bytes).unwrap();
+        }
+        Some(ArtifactPreview::new(&root, 4, Duration::from_secs(5)).unwrap())
+    } else {
+        None
+    };
+    options.artifacts = previews.clone();
     let mut app = router(store.clone(), options.clone()).unwrap();
     for case in oracle["cases"].as_array().unwrap() {
         if case["action"] == "reopen" {
@@ -857,6 +884,14 @@ async fn read_oracle(oracle: Value, expected_cases: usize, observed_clock: fn() 
             store = SqliteAssistantStore::open(&path, Config::default())
                 .await
                 .unwrap();
+            app = router(store.clone(), options.clone()).unwrap();
+        }
+        if previews.is_some() {
+            options.artifacts = if case["artifacts_enabled"].as_bool().unwrap_or(true) {
+                previews.clone()
+            } else {
+                None
+            };
             app = router(store.clone(), options.clone()).unwrap();
         }
         let mut input = request(
@@ -949,7 +984,17 @@ async fn python_catalog_http_oracle_preserves_complete_arrays_and_record_shapes(
 async fn python_catchup_http_oracle_preserves_pending_actions_and_device_cursors() {
     read_oracle(
         serde_json::from_str(include_str!("../../../compatibility/python-catchup.json")).unwrap(),
-        76,
+        78,
+        catchup_now,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn python_results_http_oracle_preserves_outputs_context_and_reopened_records() {
+    read_oracle(
+        serde_json::from_str(include_str!("../../../compatibility/python-results.json")).unwrap(),
+        110,
         catchup_now,
     )
     .await;

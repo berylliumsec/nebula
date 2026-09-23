@@ -122,6 +122,8 @@ impl ApiError {
     }
     pub(crate) fn service(error: ServiceError) -> Self {
         match error {
+            ServiceError::Unavailable(detail) => Self::http(503, detail),
+            ServiceError::Timeout(detail) => Self::http(504, detail),
             ServiceError::Invalid(detail) => Self::http(422, detail),
             ServiceError::NotFound(detail) => Self::http(404, detail),
             ServiceError::EntityNotFound { .. } => {

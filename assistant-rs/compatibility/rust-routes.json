@@ -67,6 +67,16 @@
       "method": "GET",
       "path": "/api/v1/chat/sessions/{session_id}/turns/{turn_id}/summary",
       "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{session_id}/results",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{session_id}/context-sources",
+      "status": "experimental"
     }
   ],
   "evidence": [
@@ -75,8 +85,9 @@
     "python-http.json: 120 request, error and persistence comparisons",
     "python-navigation.json: 112 transcript, search and bookmark comparisons",
     "python-catalog.json: 64 generated catalog/read comparisons",
-    "python-catchup.json: 76 catch-up, summary and device-cursor comparisons",
-    "nebula-assistant-transport/http: thirteen exact integration tests passed locally"
+    "python-catchup.json: 78 catch-up, summary and device-cursor comparisons",
+    "python-results.json: 110 retained Results, context-source, artifact-preview and query comparisons",
+    "nebula-assistant-transport/http: fourteen exact integration tests passed locally"
   ],
   "remaining_gates": [
     "JSON syntax, content-type and method edge cases",

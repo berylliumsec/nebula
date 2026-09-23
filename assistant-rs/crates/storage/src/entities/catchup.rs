@@ -65,7 +65,6 @@ impl SqliteAssistantStore {
         through: DateTime<Utc>,
     ) -> Result<CatchupSnapshot> {
         validate_id(session_id)?;
-        validate_id(project_id)?;
         let _permit = self.read_permit()?;
         let mut tx = self.readers.begin().await?;
         let mut budget = Budget::default();

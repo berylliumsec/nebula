@@ -4,6 +4,7 @@ use crate::ApiError;
 use nebula_assistant_services::context::{CursorWrite, DecisionWrite};
 use nebula_assistant_services::generated::GeneratedListRequest;
 use nebula_assistant_services::navigation::{BookmarkWrite, SearchRequest};
+use nebula_assistant_services::results::ResultsQuery;
 use serde_json::{Map, Value, json};
 use speedate::{Date, DateTime, DateTimeConfig, MicrosecondsPrecisionOverflowBehavior, TimeConfig};
 use strum::EnumMessage;
@@ -420,6 +421,33 @@ pub(crate) fn catchup_device(query: Option<&str>) -> Result<String, ApiError> {
         .as_str()
         .expect("validated device")
         .into())
+}
+
+pub(crate) fn results(query: Option<&str>) -> Result<ResultsQuery, ApiError> {
+    let fields = query_fields(query)?;
+    let mut output = Map::new();
+    let mut errors = Vec::new();
+    pagination(&fields, &mut output, &mut errors, 40, 100, i64::MAX as u64)?;
+    if !errors.is_empty() {
+        return Err(query_errors(errors));
+    }
+    Ok(ResultsQuery {
+        offset: output["offset"].as_u64().expect("validated offset"),
+        limit: output["limit"].as_u64().expect("validated limit") as u32,
+    })
+}
+
+pub(crate) fn context_offset(query: Option<&str>) -> Result<u64, ApiError> {
+    let mut fields = query_fields(query)?;
+    // This route accepts only offset; a supplied limit is an ignored query key.
+    fields.retain(|name, _| name == "offset");
+    let mut output = Map::new();
+    let mut errors = Vec::new();
+    pagination(&fields, &mut output, &mut errors, 40, 40, i64::MAX as u64)?;
+    if !errors.is_empty() {
+        return Err(query_errors(errors));
+    }
+    Ok(output["offset"].as_u64().expect("validated offset"))
 }
 
 fn pagination(

@@ -1234,6 +1234,7 @@ dependencies = [
  "chrono",
  "nebula-assistant-domain",
  "nebula-assistant-storage",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",

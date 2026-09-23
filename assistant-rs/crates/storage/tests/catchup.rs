@@ -166,6 +166,23 @@ async fn catchup_snapshot_preserves_distinct_history_and_pending_scopes_without_
             .await,
         Err(Error::CorruptEnvelope)
     ));
+    // Engagement references are retained strings, not Entity.id values. Empty
+    // and long historical references remain readable without project records.
+    for (index, project) in [String::new(), "p".repeat(201)].into_iter().enumerate() {
+        let session_id = format!("legacy-project-{index}");
+        let turn_id = format!("legacy-turn-{index}");
+        store.apply(vec![
+            Mutation::Create(record(Kind::Session, &session_id, json!({"engagement_id":project}))),
+            Mutation::Create(record(Kind::Turn, &turn_id, json!({"engagement_id":project,"session_id":session_id,"final_message_id":null}))),
+        ]).await.unwrap();
+        let snapshot = store
+            .catchup_snapshot(&session_id, &project, None, at("2026-09-23T13:00:00Z"))
+            .await
+            .unwrap();
+        assert_eq!(snapshot.turns.len(), 1);
+        assert_eq!(snapshot.pending.turns.len(), 1);
+        assert_eq!(snapshot.turns[0].payload()["id"], turn_id);
+    }
     raw.close().await.unwrap();
     store.shutdown().await.unwrap();
 }

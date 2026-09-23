@@ -72,11 +72,11 @@ def initial_catchup():
         id="project", name="Catch-up", created_at=BASE, updated_at=BASE
     )
 
-    def session(identity, *, cursor=True, cursor_through=BASE):
+    def session(identity, *, cursor=True, cursor_through=BASE, project="project"):
         records.append(
             ChatSession(
                 id=identity,
-                engagement_id="project",
+                engagement_id=project,
                 title=f"Catch-up {identity}",
                 provider_profile_id="fixture-provider",
                 model="fixture-model",
@@ -88,7 +88,7 @@ def initial_catchup():
             records.append(
                 ChatReadCursor(
                     id=cursor_id(identity, "reader"),
-                    engagement_id="project",
+                    engagement_id=project,
                     session_id=identity,
                     device_id="reader",
                     through_at=cursor_through,
@@ -599,6 +599,24 @@ def initial_catchup():
     question("question-shared", "harness-shared")
     question("question-answered", "harness-active", status="answered")
     question("question-wrong-project", "harness-active", engagement_id="other-project")
+    for identity, project_id in [("empty-project", ""), ("long-project", "β" * 201)]:
+        session(identity, project=project_id)
+        message(
+            f"{identity}-answer",
+            identity,
+            1,
+            "assistant",
+            "Retained result for a historical project scope",
+            engagement_id=project_id,
+        )
+        message(
+            f"{identity}-wrong-project",
+            identity,
+            2,
+            "assistant",
+            "This other project must remain outside the selected scope",
+            engagement_id="other-project",
+        )
     dependencies.append(
         PairedDeviceSession(
             id="paired",

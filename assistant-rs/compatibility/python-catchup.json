@@ -3442,6 +3442,50 @@
       "body": null,
       "expected": {
         "body": {
+          "initialized": true,
+          "items": [],
+          "pending": [],
+          "revision": 1,
+          "through_at": "2030-01-01T12:00:00+00:00",
+          "truncated": false
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "projection-empty-project",
+      "path": "/api/v1/chat/sessions/empty-project/catch-up?device_id=reader",
+      "service": {
+        "device_id": "reader",
+        "kind": "catch_up",
+        "session_id": "empty-project"
+      }
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "initialized": true,
+          "items": [],
+          "pending": [],
+          "revision": 1,
+          "through_at": "2030-01-01T12:00:00+00:00",
+          "truncated": false
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "projection-long-project",
+      "path": "/api/v1/chat/sessions/long-project/catch-up?device_id=reader",
+      "service": {
+        "device_id": "reader",
+        "kind": "catch_up",
+        "session_id": "long-project"
+      }
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
           "initialized": false,
           "items": [],
           "pending": [],
@@ -5724,6 +5768,25 @@
       "payload": {
         "backend": "provider",
         "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "empty-project",
+        "metadata": {},
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catch-up empty-project",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
         "engagement_id": "project",
         "forked_from_message_id": null,
         "harness_profile_id": null,
@@ -6115,6 +6178,25 @@
         "provider_profile_id": "fixture-provider",
         "revision": 1,
         "title": "Catch-up greeting-9",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "βββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββ",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "long-project",
+        "metadata": {},
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catch-up long-project",
         "updated_at": "2020-01-01T00:00:00Z"
       }
     },
@@ -6777,6 +6859,58 @@
       "payload": {
         "approval_wait_ms": null,
         "citations": [],
+        "content": "Retained result for a historical project scope",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "",
+        "finish_reason": null,
+        "id": "empty-project-answer",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 1,
+        "session_id": "empty-project",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:01Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "This other project must remain outside the selected scope",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "other-project",
+        "finish_reason": null,
+        "id": "empty-project-wrong-project",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 2,
+        "session_id": "empty-project",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:01Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
         "content": "Summarize the retained note",
         "content_blocks": [],
         "created_at": "2020-01-01T00:00:01Z",
@@ -7287,6 +7421,58 @@
         "role": "user",
         "sequence": 1,
         "session_id": "greeting-9",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:01Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Retained result for a historical project scope",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "βββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββ",
+        "finish_reason": null,
+        "id": "long-project-answer",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 1,
+        "session_id": "long-project",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:01Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "This other project must remain outside the selected scope",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "other-project",
+        "finish_reason": null,
+        "id": "long-project-wrong-project",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 2,
+        "session_id": "long-project",
         "source_message_id": null,
         "updated_at": "2020-01-01T00:00:01Z",
         "usage": null
@@ -22580,6 +22766,19 @@
       "payload": {
         "created_at": "2020-01-01T00:00:00Z",
         "device_id": "reader",
+        "engagement_id": "βββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββ",
+        "id": "chat-read-dc54cdbfa7ea8ef9de53b02d0385163964caad470573f0129d61c5eeb263e9f2",
+        "revision": 1,
+        "session_id": "long-project",
+        "through_at": "2020-01-01T00:00:00Z",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "2020-01-01T00:00:00Z",
+        "device_id": "reader",
         "engagement_id": "project",
         "id": "chat-read-dcb2242b65f768c9ca1f44571eaea979f7eaad249173c4165ce7d83f524d6619",
         "revision": 1,
@@ -22612,6 +22811,19 @@
         "session_id": "pending",
         "through_at": "2030-01-01T12:00:00Z",
         "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "2020-01-01T00:00:00Z",
+        "device_id": "reader",
+        "engagement_id": "",
+        "id": "chat-read-f05f804a538b7d75f30701b47784f9d17c079176ba15462d37c5361f6dc1f05c",
+        "revision": 1,
+        "session_id": "empty-project",
+        "through_at": "2020-01-01T00:00:00Z",
+        "updated_at": "2020-01-01T00:00:00Z"
       }
     },
     {
@@ -39581,6 +39793,174 @@
           "output_tokens": 0,
           "total_tokens": 0
         }
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "empty-project",
+        "metadata": {},
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catch-up empty-project",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "2020-01-01T00:00:00Z",
+        "device_id": "reader",
+        "engagement_id": "",
+        "id": "chat-read-f05f804a538b7d75f30701b47784f9d17c079176ba15462d37c5361f6dc1f05c",
+        "revision": 1,
+        "session_id": "empty-project",
+        "through_at": "2020-01-01T00:00:00Z",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Retained result for a historical project scope",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "",
+        "finish_reason": null,
+        "id": "empty-project-answer",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 1,
+        "session_id": "empty-project",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:01Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "This other project must remain outside the selected scope",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "other-project",
+        "finish_reason": null,
+        "id": "empty-project-wrong-project",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 2,
+        "session_id": "empty-project",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:01Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "βββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββ",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "long-project",
+        "metadata": {},
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catch-up long-project",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "2020-01-01T00:00:00Z",
+        "device_id": "reader",
+        "engagement_id": "βββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββ",
+        "id": "chat-read-dc54cdbfa7ea8ef9de53b02d0385163964caad470573f0129d61c5eeb263e9f2",
+        "revision": 1,
+        "session_id": "long-project",
+        "through_at": "2020-01-01T00:00:00Z",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Retained result for a historical project scope",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "βββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββ",
+        "finish_reason": null,
+        "id": "long-project-answer",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 1,
+        "session_id": "long-project",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:01Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "This other project must remain outside the selected scope",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "other-project",
+        "finish_reason": null,
+        "id": "long-project-wrong-project",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 2,
+        "session_id": "long-project",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:01Z",
+        "usage": null
       }
     }
   ],

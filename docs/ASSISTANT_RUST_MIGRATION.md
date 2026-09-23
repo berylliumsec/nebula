@@ -30,7 +30,7 @@ Branch: `codex/rust-core-rewrite`.
 
 All product journeys remain required and unverified for Rust. Browser/device/LAN
 matrices from the product-quality skill remain mandatory before activating the
-replacement. The experimental Rust router has thirteen Assistant handlers; shipped
+replacement. The experimental Rust router has fifteen Assistant handlers; shipped
 routes, UI, provider and harness execution have not switched to Rust.
 
 ## Development boundaries
@@ -404,3 +404,63 @@ Cumulative CI selection: 78 exact Rust tests and 49 collected Python tests. Ship
 browser/device/LAN acceptance and whole-Assistant performance gates remain
 incomplete. These queries retain legacy query shapes; bounded allocation alone is
 not evidence of a throughput improvement.
+
+## Retained Results and context-source read contract
+
+Journey: open the selected conversation's Results drawer, page retained outputs,
+follow a source message, review a bounded recorded file-diff preview, and add an
+excerpt to the existing unsent context pack. The separate context-sources API
+reports retained attachments/decisions and the current policy display; it has no
+standalone production UI consumer. These projections never execute a tool, fetch
+an external source, or synthesize evidence from model claims.
+
+Authorities: the existing session/project identity, stored message sequence and
+retraction markers, retained ToolCall/ChatTurn association, and project-owned
+Artifact records. Offsets count stored messages before filtering; preserve output
+ordering, null fields, opaque context metadata and exact policy strings. A missing
+or mismatched diff blob yields its existing unavailable-preview text while other
+results remain visible. File previews read at most 8,192 bytes from the configured
+digest-addressed artifact store, with bounded blocking work outside SQL snapshots.
+Complete response expansion is bounded explicitly; never silently drop outputs.
+
+Planned evidence: an isolated Python HTTP oracle, immutable dependency codecs,
+bounded SQL snapshot tests, exact fence/citation/tool association cases, artifact
+path/preview tests, recorded-context policy variants, HTTP validation and database
+reopen. No Core lifespan, provider calls, external commands, or live state. Shared
+result producers, source-document extraction and artifact download APIs remain
+separate dependencies. Production desktop/mobile Chromium/WebKit, LAN-origin,
+refresh/reconnect, source navigation, draft preservation and physical-device gates
+remain required before claiming the complete Results journey.
+
+Implemented: Results and context-source GET routes, immutable ToolCall/Artifact
+codecs, and a complete bounded snapshot before file I/O. Projections retain
+Python output order, raw-message cursors, null values, context metadata and policy
+strings. Calls are indexed once by their retained turn's final-message reference;
+legacy cross-session references are preserved rather than silently re-scoped.
+The shared 10,000-row / 16-MiB snapshot includes dependencies and lookahead rows.
+Expanded output has its own row and encoded-byte checks and fails as a whole.
+
+Artifact previews use directory-relative Unix handles and an existing host-owned
+root. They refuse symlinks and non-regular files; each read is capped at 8 KiB.
+The blocking admission permit survives caller cancellation or timeout until the
+read finishes. Missing files retain the existing fallback text. Symlink refusal,
+capacity/deadline errors and resource bounds are explicit compatibility extensions.
+No entire-blob hash verification is claimed. Current Linux x86_64 packaging is
+unchanged; this library has not passed packaging or production gates.
+
+The new oracle covers 110 HTTP cases, 133 retained Assistant records, 30 shared
+dependencies and ten harmless blobs. Catch-up now has 78 cases with 606 final
+Assistant records, adding empty and overlong historical project scopes. Retained
+project values are not entity IDs: catch-up, bookmarks, decisions and Results now
+keep those values while still applying exact project filters.
+
+Local validation: all 44 selected Rust tests passed (nine new and 35 affected),
+plus three selected Python oracle checks. The Rust fixtures initially contained
+an invalid decision scope, an extra turn field, zero-based message sequences and
+oversized message text; these were corrected to canonical values, using opaque
+metadata for aggregate-byte tests. The implementation was unchanged on these
+retries. Tests cover raw record purity, unchanged projection watermarks, reopen,
+large collections, explicit expansion failure, bounded file paths and deterministic
+preview timeout/admission recovery. This is library/isolated-HTTP evidence only.
+Cumulative CI selection is 87 exact Rust tests and 50 Python tests. The production
+Results journey and all whole-Assistant performance gates remain incomplete.
