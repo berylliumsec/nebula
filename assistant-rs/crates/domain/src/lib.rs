@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+pub mod records;
+
 pub const MAX_EVENT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]

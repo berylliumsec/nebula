@@ -68,3 +68,10 @@ def test_saved_inventory_is_scoped_and_does_not_claim_parity():
     assert "/api/v1/chat/completions" in paths
     assert "/api/v1/chat-sessions" in paths
     assert all(kind.startswith("chat_") for kind in contract["entities"])
+
+
+def test_stored_record_oracle_matches_current_python_models():
+    from scripts.capture_assistant_records import collect_records
+
+    path = Path(__file__).parents[1] / "assistant-rs/compatibility/python-records.json"
+    assert collect_records() == json.loads(path.read_text())

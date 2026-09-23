@@ -1,14 +1,14 @@
 {
-  "change_digest": "09a287343f6faa7016715c6bba73126d7d94939a266e09289ecf9a5052333f69",
-  "reviewed_by": "Codex focused review for assistant-only Rust development foundations",
-  "reason": "Assistant stream journal correctness (commit/reopen, contention, idempotency, replay bounds, process exit, ownership, cancellation) and fair scheduling (project/parent fairness, session FIFO, waits, bounded admission and cleanup). Python selection covers the assistant contract projection and exact-test receipt/runner policy, including existing guard regressions. Three CLI cases verify new fixture/replay behavior, truthful journal-only measurements, bounded inputs and no Core server mode.",
-  "exclusions": "The shipped assistant routes, UI, providers, harnesses, credentials, database, package entry points and every other product area are unchanged. The new Rust workspace is an isolated laboratory, not a replacement. Full suites, production/browser/LAN/device tests, provider calls, real tools and live service/database access are excluded; their required assistant migration gates remain pending. No desktop-native tests are selected because its separate Rust workspace is unchanged.",
+  "change_digest": "852d436e305ec03badc0b11dbe934e614dcf33024167527bb8698a12686e6b67",
+  "reviewed_by": "Codex focused review for Assistant Rust journal, scheduler and canonical persisted record contracts",
+  "reason": "Assistant stream journal correctness (commit/reopen, contention, idempotency, replay bounds, process exit, ownership, cancellation) and fair scheduling (project/parent fairness, session FIFO, waits, bounded admission and cleanup). Python selection covers the assistant contract projection and exact-test receipt/runner policy, including existing guard regressions. Three CLI cases verify new fixture/replay behavior, truthful journal-only measurements, bounded inputs and no Core server mode. Canonical persisted-record port: six exact Rust tests compare 147 Python-oracle cases across 13 kinds, retention/retraction, missing identity fields, errors without payload disclosure, byte bounds and concurrent readers. Python contract tests regenerate the oracle against current schemas. The locked JSON representation now preserves arbitrary precision integers; existing focused journal/scheduler/CLI selections remain in CI to cover the cumulative PR.",
+  "exclusions": "The shipped assistant routes, UI, providers, harnesses, credentials, database, package entry points and every other product area are unchanged. The new Rust workspace is an isolated laboratory, not a replacement. Full suites, production/browser/LAN/device tests, provider calls, real tools and live service/database access are excluded; their required assistant migration gates remain pending. No desktop-native tests are selected because its separate Rust workspace is unchanged. Figma inspection is design review only and is not production or prototype clickthrough evidence. Canonical record validation does not provide request coercion, historical default migration, service authorization or executable route parity.",
   "expected_tests": {
-    "python": 40,
+    "python": 41,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 24
+    "assistant_rust": 30
   },
   "python_versions": [
     "3.12"
@@ -47,6 +47,12 @@
     "nebula-assistant-storage/journal::one_hundred_viewers_follow_only_their_own_turn",
     "nebula-assistant-lab/cli::fixture_replay_is_durable_and_does_not_overwrite_existing_output",
     "nebula-assistant-lab/cli::measurement_reports_only_verified_journal_work",
-    "nebula-assistant-lab/cli::laboratory_cannot_be_started_as_core_or_with_unbounded_work"
+    "nebula-assistant-lab/cli::laboratory_cannot_be_started_as_core_or_with_unbounded_work",
+    "nebula-assistant-domain/records::canonical_python_records_round_trip_without_losing_metadata",
+    "nebula-assistant-domain/records::corrupt_records_match_python_rejection_cases",
+    "nebula-assistant-domain/records::retracted_history_remains_present_but_is_not_current",
+    "nebula-assistant-domain/records::omitted_factory_fields_are_not_invented_on_read",
+    "nebula-assistant-domain/records::malformed_or_oversized_records_fail_without_echoing_content",
+    "nebula-assistant-domain/records::shared_validators_accept_concurrent_readers"
   ]
 }

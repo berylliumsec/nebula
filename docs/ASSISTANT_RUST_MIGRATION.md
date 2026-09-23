@@ -50,7 +50,8 @@ It uses temporary storage. An inventory is not evidence that routes were ported.
 
 ## Remaining work and release gates
 
-Pending: assistant entity/validation parity, authenticated API/stream integration,
+Pending: assistant request validation and historical record normalization,
+authenticated API/stream integration,
 provider and harness adapters, persistent admission and ownership, goals,
 follow-ups, collaboration, safe recovery, historical migrations, PostgreSQL,
 helper RPC, binary packaging and production UI acceptance. Python remains the
@@ -88,3 +89,35 @@ This sample ran on the shared development host, without the agreed CPU/memory
 isolation or a Python comparator. It is not a sustained-load, provider, API,
 event-delivery, or whole-assistant result. No production UI, LAN, mobile browser,
 physical device, PostgreSQL, full-scale fixture, or 60-minute soak was tested.
+
+## Canonical record port and Figma review (continuation)
+
+`nebula-assistant-domain::records` now implements immutable validation for every
+captured assistant entity kind. It preserves metadata, large JSON integers,
+lineage, archived/retracted history, timing, read cursors, bookmarks, claims and
+delivery state. Schema checks are compiled once; cross-field checks are explicit
+Rust code. This does not execute, resume, or authorize an agent.
+
+The oracle generator constructs records using the existing Python models and
+asserts that their schemas still match the captured baseline. Its 147 cases
+contain 52 accepted canonical records and 95 rejected mutations. Six selected
+Rust checks cover that corpus, retracted-message interpretation, missing identity
+fields, privacy-preserving errors, byte limits and concurrent readers. The
+Python selection also regenerates the corpus to detect oracle drift.
+
+The contract is canonical `model_dump(mode="json")` output, not arbitrary API
+inputs. Missing historical fields still require an explicit migration. All 85
+inventoried assistant routes remain unported; the records module has no HTTP
+listener and is not wired into shipped Core. There is still no Rust assistant
+production journey or whole-assistant performance evidence.
+
+The requested [Figma journey review](ASSISTANT_RUST_FIGMA_REVIEW.md) inspected live
+Assistant designs, including desktop/mobile exports, and records superseded
+recovery and concurrency designs. The committed review receipt explicitly marks
+production workflow, prototype clickthrough, and Rust journey parity unverified.
+
+Continuation validation: all six selected record tests passed, including all 147
+oracle cases; all four selected Python contract tests passed. Workspace Clippy
+with warnings denied and formatting passed. The cumulative CI selection is 30
+exact Rust tests plus 41 Python tests. The earlier journal measurement belongs to
+its recorded binary hash; no performance claim was made for this continuation.

@@ -1,0 +1,334 @@
+//! Read-only contracts for canonical Python-persisted assistant records.
+//!
+//! This is deliberately separate from request validation: records have already
+//! received Pydantic defaults/coercion. Nothing here creates identities, fills
+//! missing historical fields, runs work, or repairs records on read. Unknown
+//! fields and incompatible records are reported, never silently dropped.
+
+use std::{collections::HashMap, sync::LazyLock};
+
+use chrono::{DateTime, FixedOffset, NaiveDateTime};
+use jsonschema::Validator;
+use serde_json::Value;
+
+pub const MAX_RECORD_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum AssistantKind {
+    Session,
+    Message,
+    ReadCursor,
+    Bookmark,
+    Decision,
+    Queue,
+    Goal,
+    GoalUsageCharge,
+    Turn,
+    Subagent,
+    SubagentMessage,
+    AgentMessage,
+    Schedule,
+}
+
+impl AssistantKind {
+    pub const ALL: [Self; 13] = [
+        Self::Session,
+        Self::Message,
+        Self::ReadCursor,
+        Self::Bookmark,
+        Self::Decision,
+        Self::Queue,
+        Self::Goal,
+        Self::GoalUsageCharge,
+        Self::Turn,
+        Self::Subagent,
+        Self::SubagentMessage,
+        Self::AgentMessage,
+        Self::Schedule,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Session => "chat_sessions",
+            Self::Message => "chat_messages",
+            Self::ReadCursor => "chat_read_cursors",
+            Self::Bookmark => "chat_bookmarks",
+            Self::Decision => "chat_decisions",
+            Self::Queue => "chat_queues",
+            Self::Goal => "chat_goals",
+            Self::GoalUsageCharge => "chat_goal_usage_charges",
+            Self::Turn => "chat_turns",
+            Self::Subagent => "chat_subagents",
+            Self::SubagentMessage => "chat_subagent_messages",
+            Self::AgentMessage => "chat_agent_messages",
+            Self::Schedule => "chat_schedules",
+        }
+    }
+}
+
+impl TryFrom<&str> for AssistantKind {
+    type Error = RecordError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.as_str() == value)
+            .ok_or(RecordError::UnknownKind)
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum RecordError {
+    #[error("unsupported assistant record kind")]
+    UnknownKind,
+    #[error(
+        "assistant record exceeds the 16 MiB read limit; retain the original record for migration review"
+    )]
+    TooLarge,
+    #[error("assistant record contains invalid JSON")]
+    Json,
+    #[error("embedded assistant schema could not be compiled")]
+    Schema,
+    // Never interpolate the payload or JSON-schema error: metadata can contain
+    // sensitive transcript or credential material.
+    #[error("assistant record does not match the canonical {0} storage schema")]
+    Shape(&'static str),
+    #[error("assistant record violates a persisted invariant: {0}")]
+    Invariant(&'static str),
+}
+
+/// A validated, immutable record. Opaque metadata is retained as JSON values;
+/// these payloads must never be treated as authorization or execution commands.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredAssistantRecord {
+    kind: AssistantKind,
+    payload: Value,
+}
+
+impl StoredAssistantRecord {
+    pub fn decode(kind: AssistantKind, bytes: &[u8]) -> Result<Self, RecordError> {
+        if bytes.len() > MAX_RECORD_BYTES {
+            return Err(RecordError::TooLarge);
+        }
+        let payload: Value = serde_json::from_slice(bytes).map_err(|_| RecordError::Json)?;
+        let validators = VALIDATORS.as_ref().map_err(|_| RecordError::Schema)?;
+        if !validators
+            .get(&kind)
+            .ok_or(RecordError::Schema)?
+            .is_valid(&payload)
+        {
+            return Err(RecordError::Shape(kind.as_str()));
+        }
+        validate_invariants(kind, &payload)?;
+        Ok(Self { kind, payload })
+    }
+
+    pub fn kind(&self) -> AssistantKind {
+        self.kind
+    }
+    pub fn payload(&self) -> &Value {
+        &self.payload
+    }
+    pub fn into_payload(self) -> Value {
+        self.payload
+    }
+
+    /// Match `message_is_replaced`: retracted messages remain stored and can be
+    /// inspected, but must be excluded from the current transcript/context.
+    pub fn is_replaced_message(&self) -> bool {
+        self.kind == AssistantKind::Message && truthy(&self.payload["metadata"]["retracted_at"])
+    }
+}
+
+fn truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64().is_none_or(|value| value != 0.0),
+        Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+    }
+}
+
+fn recorded_datetime(value: &str) -> bool {
+    // Most optional model timestamps permit naive datetimes in the Python
+    // baseline. Entity and schedule timestamps require awareness separately.
+    DateTime::parse_from_rfc3339(value).is_ok()
+        || NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S%.f").is_ok()
+}
+
+fn require_canonical_fields(schema: &mut Value) {
+    // A model_dump(mode="json") record includes every field, including nulls
+    // and factory defaults. Do not invent UUIDs/times during a migration read.
+    if schema.get("additionalProperties") == Some(&Value::Bool(false))
+        && let Some(properties) = schema.get("properties").and_then(Value::as_object)
+    {
+        schema["required"] = Value::Array(properties.keys().cloned().map(Value::String).collect());
+    }
+    match schema {
+        Value::Object(properties) => {
+            for value in properties.values_mut() {
+                require_canonical_fields(value);
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                require_canonical_fields(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+static VALIDATORS: LazyLock<Result<HashMap<AssistantKind, Validator>, RecordError>> =
+    LazyLock::new(|| {
+        let inventory: Value =
+            serde_json::from_str(include_str!("../../../compatibility/python-assistant.json"))
+                .map_err(|_| RecordError::Schema)?;
+        AssistantKind::ALL
+            .into_iter()
+            .map(|kind| {
+                let mut schema = inventory["entities"][kind.as_str()].clone();
+                if !schema.is_object() {
+                    return Err(RecordError::Schema);
+                }
+                require_canonical_fields(&mut schema);
+                let validator = jsonschema::draft202012::options()
+                    .with_format("date-time", recorded_datetime)
+                    .should_validate_formats(true)
+                    .build(&schema)
+                    .map_err(|_| RecordError::Schema)?;
+                Ok((kind, validator))
+            })
+            .collect()
+    });
+
+fn aware(value: &Value) -> Result<DateTime<FixedOffset>, RecordError> {
+    value
+        .as_str()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .ok_or(RecordError::Invariant("timestamp must include a timezone"))
+}
+
+fn require(condition: bool, invariant: &'static str) -> Result<(), RecordError> {
+    if condition {
+        Ok(())
+    } else {
+        Err(RecordError::Invariant(invariant))
+    }
+}
+
+fn claim_is_atomic(payload: &Value) -> bool {
+    let count = [
+        "execution_owner_id",
+        "execution_claim_id",
+        "execution_claimed_at",
+    ]
+    .into_iter()
+    .filter(|key| !payload[key].is_null())
+    .count();
+    count == 0 || count == 3
+}
+
+fn validate_invariants(kind: AssistantKind, p: &Value) -> Result<(), RecordError> {
+    require(
+        aware(&p["updated_at"])? >= aware(&p["created_at"])?,
+        "updated_at precedes created_at",
+    )?;
+    match kind {
+        AssistantKind::Session => {
+            let coherent = if p["backend"] == "provider" {
+                truthy(&p["provider_profile_id"])
+                    && p["harness_profile_id"].is_null()
+                    && p["harness_session_id"].is_null()
+            } else {
+                truthy(&p["harness_profile_id"])
+                    && truthy(&p["harness_session_id"])
+                    && p["provider_profile_id"].is_null()
+            };
+            require(coherent, "session backend binding is incoherent")?;
+        }
+        AssistantKind::Message => {
+            require(
+                p["role"] != "user"
+                    || p["content"]
+                        .as_str()
+                        .is_some_and(|value| !value.trim().is_empty()),
+                "user messages require content",
+            )?;
+            for block in p["content_blocks"].as_array().ok_or(RecordError::Schema)? {
+                let coherent = match block["type"].as_str() {
+                    Some("text" | "code") => !block["text"].is_null(),
+                    Some("image" | "artifact") => truthy(&block["artifact_id"]),
+                    Some("activity") => truthy(&block["activity_id"]),
+                    _ => true,
+                };
+                require(coherent, "content block is missing its required reference")?;
+            }
+        }
+        AssistantKind::Goal => {
+            require(
+                p["status"] != "blocked" || truthy(&p["blocked_reason"]),
+                "blocked goals require a reason",
+            )?;
+            require(
+                p["status"] != "completed"
+                    || (truthy(&p["completion_summary"]) && truthy(&p["completion_evidence"])),
+                "completed goals require a summary and evidence",
+            )?;
+            require(
+                claim_is_atomic(p),
+                "goal execution ownership must be recorded atomically",
+            )?;
+        }
+        AssistantKind::Turn => {
+            require(
+                if p["backend"] == "provider" {
+                    truthy(&p["provider_profile_id"])
+                } else {
+                    p["provider_profile_id"].is_null()
+                },
+                "turn backend binding is incoherent",
+            )?;
+            require(
+                claim_is_atomic(p),
+                "turn execution ownership must be recorded atomically",
+            )?;
+        }
+        AssistantKind::Subagent => {
+            require(
+                (p["status"] == "running") == p["finished_at"].is_null(),
+                "finished_at is required exactly for finished subagents",
+            )?;
+        }
+        AssistantKind::SubagentMessage => {
+            require(
+                p["awaiting_reply"] != true || p["expects_reply"] == true,
+                "only a question can await a reply",
+            )?;
+            require(
+                p["expects_reply"] != true || p["direction"] == "to_parent",
+                "only a subagent asks its parent a question",
+            )?;
+        }
+        AssistantKind::AgentMessage => {
+            require(
+                p["sender_session_id"] != p["recipient_session_id"],
+                "agent messages require different sender and recipient",
+            )?;
+            require(
+                (p["status"] == "pending") == p["delivered_at"].is_null(),
+                "delivered_at is required exactly for terminal agent messages",
+            )?;
+        }
+        AssistantKind::Schedule => {
+            aware(&p["next_run_at"])?;
+            if !p["last_run_at"].is_null() {
+                aware(&p["last_run_at"])?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}

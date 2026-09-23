@@ -1,0 +1,1093 @@
+{
+  "format": "nebula.assistant-figma-review/v1",
+  "inspected_on": "2026-09-23",
+  "file_key": "tVEa0PXZaa7H4ZLflwgcb7",
+  "inspection": "Read live page/frame identities, text labels, and descendant prototype reactions through Figma Plugin API; visually inspected desktop 4:73 and mobile 7:113 exports.",
+  "production_workflow_exercised": false,
+  "prototype_clickthrough_exercised": false,
+  "rust_journey_parity_verified": false,
+  "pages": [
+    {
+      "id": "4:17",
+      "name": "Desktop",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-17",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "4:69",
+          "name": "01 · Settings / OpenRouter",
+          "width": 1440,
+          "height": 960,
+          "text_node_count": 24,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "4:73",
+          "name": "02 · Workbench Chat / Harness improvements",
+          "width": 1440,
+          "height": 1121,
+          "text_node_count": 42,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "4:77",
+          "name": "03 · Workbench Chat / Session details",
+          "width": 1440,
+          "height": 1180,
+          "text_node_count": 37,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "16:21",
+          "name": "04 · Existing Add model provider dialog / OpenRouter",
+          "width": 560,
+          "height": 619,
+          "text_node_count": 14,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "16:96",
+          "name": "05 · Existing Assistant settings / harness improvements",
+          "width": 560,
+          "height": 543,
+          "text_node_count": 12,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "4:18",
+      "name": "Mobile",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-18",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "7:112",
+          "name": "Mobile · Session · 390",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 15,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "7:113",
+          "name": "Mobile · Session · 320",
+          "width": 320,
+          "height": 844,
+          "text_node_count": 15,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "7:114",
+          "name": "Mobile · Setup · 390",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 11,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "7:115",
+          "name": "Mobile · Details · 390",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 9,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "4:19",
+      "name": "Action states",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-19",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "7:2",
+          "name": "Start a goal",
+          "width": 560,
+          "height": 615,
+          "text_node_count": 14,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "7:3",
+          "name": "Choose a model",
+          "width": 560,
+          "height": 414,
+          "text_node_count": 10,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "7:4",
+          "name": "Choose a skill",
+          "width": 560,
+          "height": 393,
+          "text_node_count": 8,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "7:5",
+          "name": "Restart recovery",
+          "width": 560,
+          "height": 286,
+          "text_node_count": 6,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "7:6",
+          "name": "Budget reached",
+          "width": 560,
+          "height": 237,
+          "text_node_count": 5,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "7:7",
+          "name": "Provider unavailable",
+          "width": 560,
+          "height": 257,
+          "text_node_count": 5,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "7:8",
+          "name": "Restore conflict",
+          "width": 560,
+          "height": 237,
+          "text_node_count": 5,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "7:9",
+          "name": "Question",
+          "width": 560,
+          "height": 237,
+          "text_node_count": 5,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "9:31",
+          "name": "Plan or execute",
+          "width": 560,
+          "height": 391,
+          "text_node_count": 7,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "21:2",
+      "name": "Subagents",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=21-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "22:2",
+          "name": "S1 · Desktop · Subagents pane open",
+          "width": 1440,
+          "height": 960,
+          "text_node_count": 76,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "25:2",
+          "name": "S3 · Mobile 390 · Subagents sheet",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 14,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "124:7",
+          "name": "A1 · Desktop · Agent messaging enabled",
+          "width": 1440,
+          "height": 960,
+          "text_node_count": 25,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "124:46",
+          "name": "A2 · Desktop · Active peer message delivered",
+          "width": 1440,
+          "height": 960,
+          "text_node_count": 27,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "124:87",
+          "name": "A3 · Mobile 390 · Peer message next turn",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 14,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "124:113",
+          "name": "A4 · Agent messaging lifecycle and boundaries",
+          "width": 1870,
+          "height": 350,
+          "text_node_count": 24,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "52:2",
+      "name": "Archive chats",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=52-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "52:3",
+          "name": "A1 · Archived conversation open · notice above composer",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 23,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "52:141",
+          "name": "A2 · After sending · conversation returns to Today, notice gone",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 21,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "77:2",
+      "name": "Edit in place",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=77-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "78:2",
+          "name": "B1 · Editing a sent message in place",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 27,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "78:39",
+          "name": "B2 · After resend · same conversation",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 25,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "78:76",
+          "name": "B3 · Replaced messages expanded",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 30,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "81:2",
+      "name": "Turn elapsed time",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=81-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "81:3",
+          "name": "E1 · Turn running · live elapsed",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 17,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "81:128",
+          "name": "E2 · Turn complete · elapsed beside tokens",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 19,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "81:158",
+          "name": "E3 · Usage expanded · stopped turn",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 19,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "97:2",
+      "name": "Agent view panel",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=97-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "97:3",
+          "name": "A1 · Desktop · Agent view floating",
+          "width": 1440,
+          "height": 960,
+          "text_node_count": 70,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "99:111",
+          "name": "A2 · Desktop · Agent view minimized",
+          "width": 1440,
+          "height": 960,
+          "text_node_count": 44,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "99:275",
+          "name": "A3 · Desktop · Agent view docked in conversation details",
+          "width": 1440,
+          "height": 960,
+          "text_node_count": 75,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "99:508",
+          "name": "A4 · Mobile 390 · Agent view sheet",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 32,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "100:2",
+          "name": "A5 · Behaviour notes",
+          "width": 1440,
+          "height": 407,
+          "text_node_count": 19,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "108:2",
+      "name": "Harness provider subagents",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=108-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "108:3",
+          "name": "H1 · Assistant settings · Harness runtime · provider subagents",
+          "width": 1060,
+          "height": 662,
+          "text_node_count": 36,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "108:215",
+          "name": "H2 · Desktop · Codex chat · provider subagents pane open",
+          "width": 1440,
+          "height": 960,
+          "text_node_count": 76,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "108:397",
+          "name": "H3 · Mobile 390 · Codex chat · Subagents sheet",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 14,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "108:446",
+          "name": "H2/H3 notes",
+          "width": 300,
+          "height": 441,
+          "text_node_count": 6,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "114:2",
+      "name": "Subagent limits",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=114-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "114:3",
+          "name": "L1 · Assistant settings · Harness runtime · no subagent limit",
+          "width": 1060,
+          "height": 732,
+          "text_node_count": 39,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "115:100",
+          "name": "L2 · Assistant settings · Provider runtime · limit set",
+          "width": 1060,
+          "height": 599,
+          "text_node_count": 31,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "115:295",
+          "name": "L3 · Subagents pane · status line with and without a limit",
+          "width": 1180,
+          "height": 512,
+          "text_node_count": 38,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "120:2",
+      "name": "Subagent chats in list",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=120-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "120:3",
+          "name": "L1 · Parent chat · subagents collapsed under it",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 20,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "120:44",
+          "name": "L2 · Expanded · each subagent marked and indented",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 25,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "120:85",
+          "name": "L3 · Subagent chat open · parent expanded, banner names the parent",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 29,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "31:2",
+      "name": "Aesthetic pass",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=31-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "31:6",
+          "name": "Before · Workbench",
+          "width": 1440,
+          "height": 900,
+          "text_node_count": 0,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "31:10",
+          "name": "Before · Findings",
+          "width": 1440,
+          "height": 900,
+          "text_node_count": 0,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "31:14",
+          "name": "Before · Mobile",
+          "width": 390,
+          "height": 664,
+          "text_node_count": 0,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "32:5",
+          "name": "Before · Zero Light · Workbench",
+          "width": 1440,
+          "height": 900,
+          "text_node_count": 0,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "32:9",
+          "name": "Before · Dark · Workbench",
+          "width": 1440,
+          "height": 900,
+          "text_node_count": 0,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "32:13",
+          "name": "Before · Light · Workbench",
+          "width": 1440,
+          "height": 900,
+          "text_node_count": 0,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "35:2",
+          "name": "After · Zero Dark · Workbench",
+          "width": 1440,
+          "height": 900,
+          "text_node_count": 39,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "35:221",
+          "name": "After · Zero Light · Workbench",
+          "width": 1440,
+          "height": 900,
+          "text_node_count": 39,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "36:2",
+          "name": "After · Dark · Workbench",
+          "width": 1440,
+          "height": 900,
+          "text_node_count": 41,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "36:218",
+          "name": "After · Light · Workbench",
+          "width": 1440,
+          "height": 900,
+          "text_node_count": 41,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "37:2",
+          "name": "After · Findings",
+          "width": 1440,
+          "height": 900,
+          "text_node_count": 39,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "37:141",
+          "name": "After · Mobile",
+          "width": 390,
+          "height": 664,
+          "text_node_count": 15,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "38:2",
+          "name": "Tweak sheet",
+          "width": 980,
+          "height": 1387,
+          "text_node_count": 44,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "44:2",
+      "name": "Chat side terminal",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=44-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "44:3",
+          "name": "T1 · Desktop · Terminal beside chat",
+          "width": 1440,
+          "height": 900,
+          "text_node_count": 25,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "44:88",
+          "name": "T2 · Mobile 390 · Terminal sheet",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 9,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "45:2",
+      "name": "Tool suggestions",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=45-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "46:2",
+          "name": "J1 · Settings · TypeSafe key",
+          "width": 1180,
+          "height": 440,
+          "text_node_count": 24,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "46:151",
+          "name": "J2 · Project policy · Tool suggestions opt-in",
+          "width": 1180,
+          "height": 368,
+          "text_node_count": 20,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "46:195",
+          "name": "J3 · Chat · Suggestion chip",
+          "width": 820,
+          "height": 571,
+          "text_node_count": 25,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "46:239",
+          "name": "J4 · Mobile 390 · Suggestion chip",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 14,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "50:2",
+      "name": "MCP import",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=50-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "50:3",
+          "name": "J1 · Settings › Automation › MCP servers · entry point",
+          "width": 1180,
+          "height": 438,
+          "text_node_count": 25,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "51:2",
+          "name": "J2 · Import dialog · paste or choose a file",
+          "width": 1260,
+          "height": 774,
+          "text_node_count": 36,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "51:78",
+          "name": "J3 · Import dialog · preview",
+          "width": 1260,
+          "height": 826,
+          "text_node_count": 59,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "51:189",
+          "name": "J4 · After import · servers listed for review",
+          "width": 1180,
+          "height": 470,
+          "text_node_count": 36,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "51:268",
+          "name": "J5 · Mobile 390 · Preview sheet",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 32,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "74:2",
+      "name": "MCP import defaults",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=74-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "74:3",
+          "name": "K1 · Import preview · after-import choices",
+          "width": 1260,
+          "height": 999,
+          "text_node_count": 73,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "55:2",
+      "name": "Environments",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=55-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "55:3",
+          "name": "E1 · Settings › Environments · hosts from ~/.ssh/config",
+          "width": 1180,
+          "height": 761,
+          "text_node_count": 60,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "55:245",
+          "name": "E2 · Host details · Research Mac",
+          "width": 1180,
+          "height": 768,
+          "text_node_count": 60,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "57:2",
+          "name": "E3 · Chat · run on an environment",
+          "width": 1180,
+          "height": 655,
+          "text_node_count": 48,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "64:2",
+      "name": "iPhone shell",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=64-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "64:3",
+          "name": "Page header",
+          "width": 900,
+          "height": 74,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "64:6",
+          "name": "01 · Chat",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 24,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "64:140",
+          "name": "Caption · 01 · Chat",
+          "width": 390,
+          "height": 103,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "65:2",
+          "name": "02 · Drawer",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 45,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "65:214",
+          "name": "Caption · 02 · Drawer",
+          "width": 390,
+          "height": 103,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "66:2",
+          "name": "03 · Terminal",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 27,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "66:117",
+          "name": "Caption · 03 · Terminal",
+          "width": 390,
+          "height": 103,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "67:2",
+          "name": "04 · Terminal + Ask",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 35,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "67:154",
+          "name": "Caption · 04",
+          "width": 390,
+          "height": 103,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "68:2",
+          "name": "05 · Activity",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 27,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "68:132",
+          "name": "Caption · 05",
+          "width": 390,
+          "height": 103,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "69:2",
+          "name": "06 · More",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 23,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "69:144",
+          "name": "Caption · 06",
+          "width": 390,
+          "height": 103,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "70:2",
+          "name": "07 · Settings",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 24,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "70:127",
+          "name": "Caption · 07",
+          "width": 390,
+          "height": 103,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:4",
+          "name": "08 · Connect (native)",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 10,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:56",
+          "name": "Caption · 08 · Connect (native)",
+          "width": 390,
+          "height": 103,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:59",
+          "name": "09 · Offline (native)",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 7,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:101",
+          "name": "Caption · 09 · Offline (native)",
+          "width": 390,
+          "height": 103,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:104",
+          "name": "Today header",
+          "width": 956,
+          "height": 60,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:107",
+          "name": "Today · Chat",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 0,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:108",
+          "name": "Caption · Today · Chat",
+          "width": 390,
+          "height": 84,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:111",
+          "name": "Today · Terminal",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 0,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:112",
+          "name": "Caption · Today · Terminal",
+          "width": 390,
+          "height": 84,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:115",
+          "name": "Today · More sheet",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 0,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:116",
+          "name": "Caption · Today · More sheet",
+          "width": 390,
+          "height": 84,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:119",
+          "name": "Today · Sidebar",
+          "width": 390,
+          "height": 844,
+          "text_node_count": 0,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "71:120",
+          "name": "Caption · Today · Sidebar",
+          "width": 390,
+          "height": 65,
+          "text_node_count": 2,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "83:2",
+      "name": "Web search",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=83-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "83:3",
+          "name": "W1 · Settings · Web search runtime",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 31,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "83:5",
+          "name": "W2 · Project policy · opt-in and disclosure",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 13,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "83:7",
+          "name": "W3 · Transcript · search chip and refusal",
+          "width": 1080,
+          "height": 620,
+          "text_node_count": 30,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "101:2",
+      "name": "Always-send MCP servers",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=101-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "101:3",
+          "name": "M1 · Provider runtime · on-demand active",
+          "width": 1060,
+          "height": 577,
+          "text_node_count": 29,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "102:50",
+          "name": "M2 · Provider runtime · on-demand tools off",
+          "width": 1060,
+          "height": 577,
+          "text_node_count": 29,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "103:2",
+          "name": "Before · MCP servers today",
+          "width": 1060,
+          "height": 347,
+          "text_node_count": 19,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    },
+    {
+      "id": "107:2",
+      "name": "MCP server description",
+      "url": "https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=107-2",
+      "flow_starting_points": [],
+      "frames": [
+        {
+          "id": "107:3",
+          "name": "D1 · Edit MCP server · Description under Name",
+          "width": 980,
+          "height": 1087,
+          "text_node_count": 34,
+          "inspected_descendant_reaction_count": 0
+        },
+        {
+          "id": "107:10",
+          "name": "D2 · Settings › MCP servers · with and without a description",
+          "width": 1140,
+          "height": 600,
+          "text_node_count": 57,
+          "inspected_descendant_reaction_count": 0
+        }
+      ]
+    }
+  ],
+  "conflicts": [
+    {
+      "node": "7:5",
+      "topic": "Recovery",
+      "older_design": "Manual reconciliation and Resume goal",
+      "current_authority": "docs/design/execution-recovery-lifecycle.md; current ChatService recovery",
+      "required_behavior": "Adopt durable receipts, retain explicit uncertainty, and preserve current automatic safe recovery."
+    },
+    {
+      "node": "108:446",
+      "topic": "Subagent limits",
+      "older_design": "3 concurrent and 6 per response",
+      "current_design_node": "114:3",
+      "required_behavior": "Preserve optional per-conversation limit; empty is no operator cap. Distinguish it from host admission/execution limits."
+    },
+    {
+      "node": "124:113",
+      "topic": "Main-agent messaging",
+      "required_behavior": "Opt-in, same project, durable transcript, idempotent delivery, no automatic wake-up of idle peers."
+    },
+    {
+      "node": "78:39",
+      "topic": "Edit in place",
+      "required_behavior": "Retain replaced messages and their identity; exclude retracted messages from current model context."
+    }
+  ]
+}
