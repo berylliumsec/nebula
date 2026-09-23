@@ -19,7 +19,7 @@ def decisions_for(store, session_id, project_id):
                 EntityRow.kind == "chat_decisions",
                 EntityRow.engagement_id == project_id,
                 or_(
-                    EntityRow.payload["session_id"].as_string() == session_id,
+                    EntityRow.chat_session_id == session_id,
                     EntityRow.payload["scope"].as_string() == "project",
                 ),
             )
@@ -133,7 +133,7 @@ def decisions_router(store):
                         select(EntityRow.payload["sequence"].as_integer())
                         .where(
                             EntityRow.kind == "chat_messages",
-                            EntityRow.payload["session_id"].as_string() == session_id,
+                            EntityRow.chat_session_id == session_id,
                         )
                         .order_by(EntityRow.payload["sequence"].as_integer().desc())
                         .limit(1)

@@ -1,13 +1,13 @@
 {
-  "change_digest": "8212c1bfd0d5ecd1ffca73b5a9796a5856cdf7933f65f93f63b263058b4554b0",
-  "reviewed_by": "Codex focused review for LAN connection resilience",
-  "reason": "The branch confirms transient Core health failures before replacing the workspace, preserves the current project route during reconnect, preserves immediate browser-offline handling, classifies response-body aborts as cancellations, and uses origin-neutral startup copy. Seven collected frontend cases cover probe timing, confirmation, recovery, stale responses, and cancellation diagnostics. Thirty-three manifest contract cases validate the new impact mapping. Three catalogued browser journeys verify draft preservation, confirmed loss, and automatic recovery on desktop Chromium, mobile Chromium, and mobile WebKit.",
-  "exclusions": "Full suites and unrelated backend, provider, harness, terminal, project, native, and desktop-shell workflows are excluded. No Python browser runtime is needed for the manifest contract tests. The selected browser journey uses the production UI bundle with controlled Core responses; authenticated non-loopback real-Core verification remains a separate deployment acceptance step because the fix changes browser connection policy rather than a Core endpoint.",
+  "change_digest": "8838ee61e326582d20ea5d77a4ce5e5c055704e6e8d53fc21e0bf7722b47cbcd",
+  "reviewed_by": "Codex focused review for chat-switch performance",
+  "reason": "The branch adds and maintains an indexed chat-session projection, moves blocking chat-selection reads to FastAPI's threadpool, compresses and times non-streaming chat reads, commits authoritative history independently from pending-turn restoration, and avoids mounting collapsed reasoning or repeatedly scanning render records. Twenty-three selected Python cases cover SQLite and PostgreSQL migration paths, projection writes, query-plan use, ordering/replacement semantics, event-loop isolation, gzip/SSE/timing behavior, state/queue/decision/catch-up/results/checkpoint/delete integrations, and the pre-existing session projection. Eight collected frontend cases cover preview-cache behavior, lazy reasoning, and render grouping. Nine permanent Playwright entries exercise the exact conversation-switch journey across desktop, compact, emulated Chromium/WebKit mobile profiles, and real Core.",
+  "exclusions": "Full suites are not approved and are excluded. Unrelated provider inference, harness execution, missions, browser tooling, terminals, reports, native desktop, packaging, and Rust workflows are excluded. Transcript pagination, full virtualization, polling replacement, database PRAGMA changes, and worker-count changes are out of scope. Native tests are empty because no Rust or Tauri source changes. The physical-phone gate cannot be represented in CI and must be reported separately; the permanent mobile projects are emulated. PostgreSQL migration coverage remains conditional on NEBULA_TEST_POSTGRES_URL; SQLite migration coverage is selected locally and in CI.",
   "expected_tests": {
-    "python": 33,
-    "frontend": 7,
+    "python": 23,
+    "frontend": 8,
     "native": 0,
-    "playwright": 3
+    "playwright": 9
   },
   "python_versions": [
     "3.12"
@@ -15,16 +15,34 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/test_playwright_impact.py"
+    "tests/v3/test_chat_session_lookup_migration.py",
+    "tests/v3/test_migrations.py::test_postgresql_upgrade_downgrade_and_immutable_operation_events",
+    "tests/v3/test_chat_switch_performance.py",
+    "tests/v3/test_session_record_lookups.py",
+    "tests/v3/test_session_projection_migration.py",
+    "tests/v3/test_session_state.py::test_snapshot_distinguishes_decision_from_progress",
+    "tests/v3/test_chat_queue.py::test_revision_idempotency_order_and_import",
+    "tests/v3/test_chat_decisions.py::test_explicit_revision_provenance_and_project_promotion",
+    "tests/v3/test_chat_catchup.py::test_greeting_has_no_catchup_but_recorded_outputs_and_failures_do",
+    "tests/v3/test_chat_workspace.py::test_results_pages_are_complete_after_an_in_place_edit",
+    "tests/v3/test_storage.py::test_delete_chat_session_removes_native_checkpoints_and_hook_executions",
+    "tests/v3/test_native_checkpoints.py::test_checkpoint_http_capture_uses_json_body"
   ],
   "frontend": [
-    "ui/src/api/clientCancellation.test.ts",
-    "ui/src/state/useCoreConnectionMonitor.test.tsx"
+    "ui/src/components/HarnessThinking.test.tsx",
+    "ui/src/pages/chatPreviewCache.test.ts",
+    "ui/src/pages/chatRenderGroups.test.ts"
   ],
   "native": [],
   "playwright": [
-    "entry:core-connection-resilience/desktop",
-    "entry:core-connection-resilience/mobile-chromium",
-    "entry:core-connection-resilience/mobile-webkit"
+    "entry:conversation-switch-performance/desktop",
+    "entry:conversation-switch-performance/compact",
+    "entry:conversation-switch-performance/mobile-chromium-small",
+    "entry:conversation-switch-performance/mobile-chromium-ledger-390",
+    "entry:conversation-switch-performance/mobile-chromium-wide",
+    "entry:conversation-switch-performance/mobile-webkit-small",
+    "entry:conversation-switch-performance/mobile-webkit",
+    "entry:conversation-switch-performance/mobile-webkit-wide",
+    "entry:conversation-switch-performance/assistant-real-desktop"
   ]
 }

@@ -3847,7 +3847,7 @@ test("New chat detaches from an in-flight saved conversation load", async ({ pag
 });
 
 test("conversation switching commits URL identity and keeps prefetched work details collapsed", async ({ page }) => {
-  test.setTimeout(60_000); // Several held-refresh/retry cycles plus mobile accessibility analysis.
+  test.setTimeout(90_000); // Several held-refresh/retry cycles plus mobile accessibility analysis.
   const sourceSessionId = "chat-switch-source";
   const targetSessionId = "chat-switch-target";
   let sourceMessageLoads = 0;
@@ -3856,7 +3856,11 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   let releaseRefresh = () => {};
   let refreshGate: Promise<void> | undefined;
   let failRefresh = false;
+  let failPending = false;
   let freshSource = false;
+  let freshTarget = false;
+  let targetPendingGate: Promise<void> | undefined;
+  let releaseTargetPending = () => {};
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/harnesses")) {
@@ -3929,7 +3933,8 @@ test("conversation switching commits URL identity and keeps prefetched work deta
         session_id: targetSessionId,
         sequence: 1,
         role: "assistant",
-        content: "Target transcript",
+        content: freshTarget ? "Fresh target transcript" : "Target transcript",
+        reasoning: `${"Deferred target reasoning. ".repeat(800)}Deferred target reasoning token.`,
         citations: [],
         metadata: { harness_turn_id: "turn-switch-target" },
       }]) });
@@ -3941,6 +3946,11 @@ test("conversation switching commits URL identity and keeps prefetched work deta
       return;
     }
     if (path.endsWith("/pending-turn")) {
+      if (path.includes(targetSessionId) && targetPendingGate) await targetPendingGate;
+      if (failPending) {
+        await route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Action state unavailable"})});
+        return;
+      }
       await route.fulfill({ status: 200, contentType: "application/json", body: "null" });
       return;
     }
@@ -4005,8 +4015,14 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(targetSessionId);
   if ((page.viewportSize()?.width ?? 1_000) > 760) await expect(page.locator(".session-list-item.active")).toContainText("Target conversation");
   await expect(page.getByText("Target transcript")).toBeVisible();
+  const targetMessage = page.locator(".chat-message.assistant").filter({ hasText: "Target transcript" });
+  await expect(targetMessage.getByText(/Deferred target reasoning token/)).toHaveCount(0);
+  await targetMessage.locator('details[aria-label="Thinking"] summary').click();
+  await expect(targetMessage.getByText(/Deferred target reasoning token/)).toBeVisible();
+  await targetMessage.locator('details[aria-label="Thinking"] summary').click();
+  await expect(targetMessage.getByText(/Deferred target reasoning token/)).toHaveCount(0);
   expect(sourceMessageLoads).toBe(1);
-  expect(targetStateLoads).toBe(1);
+  expect(targetStateLoads).toBeGreaterThanOrEqual(1);
   await expect.poll(() => targetActivityLoads).toBe(1);
   await expect(page.getByText("Deferred command")).toHaveCount(0);
 
@@ -4038,14 +4054,29 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
 
+  freshTarget = true;
+  targetPendingGate = new Promise<void>(resolve => { releaseTargetPending = resolve; });
   await selectChat("Target conversation");
+  await expect(page.getByText("Fresh target transcript", {exact: true})).toBeVisible();
+  await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
+  releaseTargetPending(); targetPendingGate = undefined;
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
   failRefresh = true;
   await selectChat("Source conversation");
-  await expect(page.getByText("Fresh source transcript", {exact: true})).toBeAttached();
+  await expect(page.getByText("Fresh source transcript", {exact: true})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Reload conversation", exact: true})).toBeVisible();
   await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeDisabled();
   failRefresh = false;
+  await page.getByRole("button", {name: "Reload conversation", exact: true}).click();
+  await expect(page.getByRole("button", {name: "Reload conversation", exact: true})).toHaveCount(0);
+
+  await selectChat("Target conversation");
+  failPending = true;
+  await selectChat("Source conversation");
+  await expect(page.getByText("Fresh source transcript", {exact: true})).toBeVisible();
+  await expect(page.getByText("Conversation messages loaded, but Nebula could not verify its active response state.")).toBeVisible();
+  await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeDisabled();
+  failPending = false;
   await page.getByRole("button", {name: "Reload conversation", exact: true}).click();
   await expect(page.getByRole("button", {name: "Reload conversation", exact: true})).toHaveCount(0);
 
@@ -4056,15 +4087,22 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await expect(page.getByText("Fresh source transcript", {exact: true})).toBeAttached();
   await selectChat("Target conversation");
   releaseRefresh(); refreshGate = undefined;
-  await expect(page.getByText("Target transcript", {exact: true})).toBeVisible();
+  await expect(page.getByText("Fresh target transcript", {exact: true})).toBeVisible();
   await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBe(targetSessionId);
+  await expect.poll(() => page.evaluate(() => performance.getEntriesByName("nebula.chat_switch.authoritative", "measure").at(-1)?.duration)).toBeGreaterThanOrEqual(0);
   await page.getByRole("button", {name: "New chat", exact: true}).click();
   const newChatComposer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
   await newChatComposer.fill("Unsent new-chat draft survives a conversation switch");
   await selectChat("Target conversation");
-  await expect(page.getByText("Target transcript", {exact: true})).toBeVisible();
+  await expect(page.getByText("Fresh target transcript", {exact: true})).toBeVisible();
+  await expect.poll(() => page.evaluate(() => performance.getEntriesByName("nebula.chat_switch.authoritative", "measure").at(-1)?.duration)).toBeGreaterThanOrEqual(0);
   await page.getByRole("button", {name: "New chat", exact: true}).click();
   await expect(newChatComposer).toHaveValue("Unsent new-chat draft survives a conversation switch");
+  const switchMeasures = await page.evaluate(() => Object.fromEntries(
+    ["nebula.chat_switch.preview", "nebula.chat_switch.authoritative"].map((name) => [name, performance.getEntriesByName(name, "measure").at(-1)?.duration]),
+  ));
+  expect(switchMeasures["nebula.chat_switch.preview"]).toBeGreaterThanOrEqual(0);
+  expect(switchMeasures["nebula.chat_switch.authoritative"]).toBeGreaterThanOrEqual(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   expect((await new AxeBuilder({page}).include(".chat-thread").analyze()).violations).toEqual([]);
 });

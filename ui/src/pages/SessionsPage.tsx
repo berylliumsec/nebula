@@ -39,7 +39,7 @@ import { useCompactLayout } from "../hooks/useCompactLayout";
 import { MobileMorePanel } from "../components/MobileMorePanel";
 import { MobileDrawerFooter, MobileDrawerProject } from "../components/MobileDrawerChrome";
 import { MobileApprovals } from "../components/MobileApprovals";
-import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, startTransition, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
 import {useComposerAutosize} from "./useComposerAutosize";
 import { createPortal } from "react-dom";
 import {
@@ -94,6 +94,7 @@ import {
 } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
 import { ChatPreviewCache } from "./chatPreviewCache";
+import { groupByAssistantId } from "./chatRenderGroups";
 import { Link, useSearchParams, type NavigateOptions } from "react-router-dom";
 import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime, providerDefaultModel } from "../api/runtimeDefaults";
@@ -232,6 +233,32 @@ interface ToolLifecycleCard extends NativeActivitySource {
 
 interface ChatScrollTraceWindow extends Window {
   __NEBULA_CHAT_SCROLL_TRACE__?: () => string;
+}
+
+type ChatSwitchMeasure = {
+  generation: number;
+  sessionId: string;
+  phase: "preview" | "authoritative";
+  expectedMessageIds: string[];
+};
+
+const CHAT_SWITCH_START_MARK = "nebula.chat_switch.start";
+
+function beginChatSwitchMeasure() {
+  if (typeof performance === "undefined" || typeof performance.mark !== "function") return;
+  performance.clearMarks(CHAT_SWITCH_START_MARK);
+  performance.clearMarks("nebula.chat_switch.preview.commit");
+  performance.clearMarks("nebula.chat_switch.authoritative.commit");
+  performance.clearMeasures("nebula.chat_switch.preview");
+  performance.clearMeasures("nebula.chat_switch.authoritative");
+  performance.mark(CHAT_SWITCH_START_MARK);
+}
+
+function finishChatSwitchMeasure(phase: ChatSwitchMeasure["phase"]) {
+  if (typeof performance === "undefined" || typeof performance.mark !== "function") return;
+  const commitMark = `nebula.chat_switch.${phase}.commit`;
+  performance.mark(commitMark);
+  performance.measure(`nebula.chat_switch.${phase}`, CHAT_SWITCH_START_MARK, commitMark);
 }
 
 function attachChatScrollTrace(viewport: HTMLDivElement) {
@@ -895,6 +922,7 @@ export function SessionsPage() {
     [subagentState.subagents],
   );
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [messageIntrinsicSizes, setMessageIntrinsicSizes] = useState<Map<string, number>>(() => new Map());
   const [sessionReadReady, setSessionReadReady] = useState(true);
   const chatPreviews = useMemo(() => new ChatPreviewCache<{
     messages: ConversationMessage[];
@@ -1011,6 +1039,7 @@ export function SessionsPage() {
   const explicitNewConversationRef = useRef(false);
   const pendingSessionNavigationRef = useRef<string | undefined>(undefined);
   const sessionSelectionGenerationRef = useRef(0);
+  const chatSwitchMeasuresRef = useRef<ChatSwitchMeasure[]>([]);
   const reconciledTerminalHarnessTurnsRef = useRef(new Set<string>());
   const reconcilingTerminalHarnessTurnsRef = useRef(new Set<string>());
   const sessionLoadAbortRef = useRef<AbortController | undefined>(undefined);
@@ -1081,7 +1110,7 @@ export function SessionsPage() {
       observer.disconnect();
       if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame);
     };
-  }, [conversationOpen, messages, sending, sessionId, view]);
+  }, [conversationOpen, loadingHistory, messages, sending, sessionId, view]);
   useEffect(() => {
     if (!import.meta.env.DEV || (view !== "chat" && view !== "browser") || !conversationOpen || !chatViewportRef.current) return;
     return attachChatScrollTrace(chatViewportRef.current);
@@ -1090,6 +1119,31 @@ export function SessionsPage() {
     () => new Map(messages.map((message) => [message.runtimeId ?? message.id, message])),
     [messages],
   );
+  useLayoutEffect(() => {
+    const sizes = new Map<string, number>();
+    for (const message of messages) {
+      const element = document.getElementById(`chat-message-${message.id}`);
+      if (element) sizes.set(message.id, Math.max(1, Math.ceil(element.getBoundingClientRect().height)));
+    }
+    setMessageIntrinsicSizes(sizes);
+  }, [messages, sessionId]);
+  const activityItemsByAssistantId = useMemo(
+    () => groupByAssistantId(activityItems.filter(shouldShowActivityItem)),
+    [activityItems],
+  );
+  const toolCardsByAssistantId = useMemo(
+    () => groupByAssistantId(toolCards),
+    [toolCards],
+  );
+  useLayoutEffect(() => {
+    const ids = new Set(messages.map((message) => message.id));
+    chatSwitchMeasuresRef.current = chatSwitchMeasuresRef.current.filter((measure) => {
+      if (measure.generation !== sessionSelectionGenerationRef.current || measure.sessionId !== sessionId) return false;
+      if (!measure.expectedMessageIds.every((id) => ids.has(id))) return true;
+      finishChatSwitchMeasure(measure.phase);
+      return false;
+    });
+  }, [messages, sessionId]);
   const activeDraftStorageKey = engagement
     ? chatDraftStorageKey(engagement.id, sessionId || undefined)
     : "";
@@ -2632,6 +2686,16 @@ export function SessionsPage() {
     setSessionReadReady(Boolean(preview));
     const selectionGeneration = sessionSelectionGenerationRef.current + 1;
     sessionSelectionGenerationRef.current = selectionGeneration;
+    const measureSwitch = id !== sessionId;
+    if (measureSwitch) {
+      beginChatSwitchMeasure();
+      chatSwitchMeasuresRef.current = [{
+        generation: selectionGeneration,
+        sessionId: id,
+        phase: "preview",
+        expectedMessageIds: (preserveTranscript ? messages : preview?.messages ?? []).map((message) => message.id),
+      }];
+    }
     setApprovalDecisionBusy(false);
     const selectionIsCurrent = () => sessionSelectionGenerationRef.current === selectionGeneration;
     sessionLoadAbortRef.current?.abort();
@@ -2681,22 +2745,18 @@ export function SessionsPage() {
         setSelectedHookIds(summary.hookIds);
       }
     }
+    let authoritativeHistoryLoaded = false;
     try {
-      const [history, pendingTurn] = await Promise.all([
-        api.listChatMessages(id, loadController.signal, {includeReplaced: true}),
-        api.getPendingChatTurn(id, loadController.signal).catch((caughtError) => {
-          if (loadController.signal.aborted) return undefined;
-          void logCaughtDiagnostic("interface.sessions_page.caught_failure_08", "A handled interface operation failed.", caughtError, "sessions_page");
-          throw caughtError;
-        }),
-      ]);
+      const pendingTurnResult = api.getPendingChatTurn(id, loadController.signal).then(
+        (turn) => ({turn} as const),
+        (error: unknown) => ({error} as const),
+      );
+      const history = await api.listChatMessages(id, loadController.signal, {includeReplaced: true});
       if (!selectionIsCurrent()) return;
       const replacedHistory = history.filter((message) => message.replacedAt);
       const activeHistory = history.filter((message) => !message.replacedAt);
-      setReplacedMessages(replacedHistory);
       const recoveredHistory = await recoverHarnessHistory(activeHistory.map(persistedMessage), turnId => api.getHarnessTurn(turnId, loadController.signal));
       if (!selectionIsCurrent()) return;
-      setMessages(recoveredHistory);
       const restoredToolCards: ToolLifecycleCard[] = activeHistory.flatMap((message) => message.role === "assistant"
         ? (message.toolResults ?? []).map((result) => ({
             assistantId: message.id,
@@ -2711,7 +2771,28 @@ export function SessionsPage() {
             receipt: result.receipt,
           }))
         : []);
-      setToolCards(restoredToolCards);
+      if (measureSwitch) {
+        chatSwitchMeasuresRef.current.push({
+          generation: selectionGeneration,
+          sessionId: id,
+          phase: "authoritative",
+          expectedMessageIds: recoveredHistory.map((message) => message.id),
+        });
+      }
+      startTransition(() => {
+        setReplacedMessages(replacedHistory);
+        setMessages(recoveredHistory);
+        setToolCards(restoredToolCards);
+      });
+      authoritativeHistoryLoaded = true;
+      const pendingResult = await pendingTurnResult;
+      if ("error" in pendingResult) {
+        if (!loadController.signal.aborted) {
+          void logCaughtDiagnostic("interface.sessions_page.caught_failure_08", "A handled interface operation failed.", pendingResult.error, "sessions_page");
+        }
+        throw pendingResult.error;
+      }
+      const pendingTurn = pendingResult.turn;
       // Restore the exact durable request, independently of the workspace catalog cache.
       // useSessionState owns the authoritative snapshot. Avoid issuing a second
       // state read here; the durable turn already carries the approval identity
@@ -2724,7 +2805,6 @@ export function SessionsPage() {
       const approval = approvalRecord?.status === "pending" ? approvalRecord : undefined;
       const decisionRecorded = approvalRecord && !approval && pendingTurn?.status === "waiting_approval";
       if (decisionRecorded) setResolvedApproval({ id: approvalRecord.id, status: approvalRecord.status, turnId: pendingTurn.id, harnessTurnId: pendingTurn.harnessTurnId });
-      setLoadingHistory(false);
       if (summary?.backend === "provider") {
         const hookLoader = pendingTurn
           ? api.listChatHookExecutions(pendingTurn.id, loadController.signal)
@@ -2921,13 +3001,15 @@ export function SessionsPage() {
     } catch (error) {
       if (!selectionIsCurrent() || loadController.signal.aborted) return;
       setSessionReadReady(false);
-      if (error instanceof ApiError && [401, 403, 404].includes(error.status)) {
+      if (!authoritativeHistoryLoaded || (error instanceof ApiError && [401, 403, 404].includes(error.status))) {
         chatPreviews.delete(id);
         setMessages([]);
         setToolCards([]);
       }
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_10", "A handled interface operation failed.", error, "sessions_page");
-      setChatError(error instanceof Error ? error.message : "Could not load the selected conversation.");
+      setChatError(authoritativeHistoryLoaded
+        ? "Conversation messages loaded, but Nebula could not verify its active response state. Reload this conversation before sending or approving work."
+        : error instanceof Error ? error.message : "Could not load the selected conversation.");
     } finally {
       if (selectionIsCurrent()) {
         if (sessionLoadAbortRef.current === loadController) sessionLoadAbortRef.current = undefined;
@@ -4683,11 +4765,11 @@ export function SessionsPage() {
                     : 0;
                   const pendingReplacement = Boolean(messageEdit && !editing && message.durable && (message.sequence ?? 0) > (messageEdit.sequence ?? 0));
                   const messageReplacements = anchoredReplacements.get(message.id) ?? [];
-                  const messageActivityItems = activityItems.filter((item) => item.assistantId === message.id && shouldShowActivityItem(item));
+                  const messageActivityItems = activityItemsByAssistantId.get(message.id) ?? [];
                   const commentaryItems = messageActivityItems
                     .map((item) => ({ key: item.key, text: item.streams.commentary?.trim() }))
                     .filter((item): item is { key: string; text: string } => Boolean(item.text));
-                  const messageToolCards = toolCards.filter((card) => card.assistantId === message.id);
+                  const messageToolCards = toolCardsByAssistantId.get(message.id) ?? [];
                   const historicalTurnId = (message.durable || message.recoveredHarnessTurn) && message.role === "assistant" ? message.harnessTurnId : undefined;
                   const historicalState = historicalTurnId ? historicalActivityState[historicalTurnId] : undefined;
                   const historicalError = historicalTurnId ? historicalActivityErrors[historicalTurnId] : undefined;
@@ -4698,15 +4780,17 @@ export function SessionsPage() {
                       : historicalTurnId
                         ? activityLedgerFromHarness("Work summary", message.state, [])
                         : undefined;
+                  const messageIntrinsicSize = messageIntrinsicSizes.get(message.id);
                   return (
                   <article
-                    className={`chat-message ${message.role === "user" ? "operator" : agentMessage ? "agent-message" : "assistant"}${editing ? " editing" : ""}${pendingReplacement ? " pending-replacement" : ""}`}
+                    className={`chat-message ${message.role === "user" ? "operator" : agentMessage ? "agent-message" : "assistant"}${!loadingHistory && messageIntrinsicSize !== undefined ? " render-contained" : ""}${editing ? " editing" : ""}${pendingReplacement ? " pending-replacement" : ""}`}
                     id={`chat-message-${message.id}`}
                     data-sequence={message.sequence}
                     data-selection-source-kind={message.role === "assistant" ? "assistant_message" : "chat_message"}
                     data-selection-source-id={message.id}
                     data-selection-source-label={message.role === "assistant" ? "Assistant response" : agentMessage ? "Agent message" : "Chat message"}
                     key={message.runtimeId ?? message.id}
+                    style={messageIntrinsicSize === undefined ? undefined : {"--chat-message-intrinsic-size": `${messageIntrinsicSize}px`} as CSSProperties}
                     tabIndex={-1}
                   >
                     <div className="chat-message-body">

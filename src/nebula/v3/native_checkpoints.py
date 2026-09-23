@@ -203,13 +203,7 @@ class NativeCheckpointService:
         self.workspace_resolver = workspace_resolver
 
     def list_for_session(self, session_id: str) -> list[NativeCheckpoint]:
-        items: list[NativeCheckpoint] = []
-        offset = 0
-        while page := self.store.list_entities(
-            NativeCheckpoint, offset=offset, limit=1_000
-        ):
-            items.extend(item for item in page if item.chat_session_id == session_id)
-            offset += len(page)
+        items = self.store.list_session_entities(NativeCheckpoint, session_id)
         return sorted(items, key=lambda item: item.created_at, reverse=True)
 
     def capture(

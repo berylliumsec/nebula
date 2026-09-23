@@ -44,9 +44,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from pydantic import Field, SecretStr, ValidationError, model_validator
 from starlette.background import BackgroundTask
+from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.cors import CORSMiddleware
-from starlette.types import Scope
+from starlette.middleware.gzip import GZipMiddleware
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import chat as chat_runtime
 from .artifacts import ArtifactStore, ArtifactStoreError
@@ -596,6 +598,37 @@ CUSTOM_RESOURCES = {
 }
 
 API_PREFIX = "/api/v1"
+
+
+class ChatServerTimingMiddleware:
+    """Expose bounded application time for non-streaming chat reads."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        timed = (
+            scope["type"] == "http"
+            and scope.get("method") == "GET"
+            and str(scope.get("path", "")).startswith(f"{API_PREFIX}/chat/")
+        )
+        if not timed:
+            await self.app(scope, receive, send)
+            return
+        started = time.perf_counter()
+
+        async def send_with_timing(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                content_type = headers.get("content-type", "").casefold()
+                if "text/event-stream" not in content_type:
+                    elapsed_ms = (time.perf_counter() - started) * 1_000
+                    headers.append("Server-Timing", f"app;dur={elapsed_ms:.1f}")
+            await send(message)
+
+        await self.app(scope, receive, send_with_timing)
+
+
 # Output room for the capability probe. Thinking models (Claude Fable 5.1
 # always thinks, Opus 5 by default, DeepSeek and GLM reasoning routes) spend it
 # before their one call, even when asked not to, and Anthropic's smallest
@@ -2173,8 +2206,12 @@ def create_app(
             "X-Nebula-Operation-ID",
             "X-Nebula-Sensitive-Data-Acknowledged",
         ],
-        expose_headers=["X-Request-ID"],
+        expose_headers=["X-Request-ID", "Server-Timing"],
     )
+    app.add_middleware(GZipMiddleware, minimum_size=1_024, compresslevel=1)
+    # Added last so timing includes FastAPI serialization and the inner gzip
+    # middleware's initial response work without instrumenting streaming bodies.
+    app.add_middleware(ChatServerTimingMiddleware)
 
     route_feature_by_tag = {
         "administration": "storage",
@@ -9598,7 +9635,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def get_pending_chat_turn(session_id: str) -> ChatTurnSummary | None:
+    def get_pending_chat_turn(session_id: str) -> ChatTurnSummary | None:
         service = chat_service()
         turn = service.pending_turn(session_id)
         if turn is None:
@@ -9664,7 +9701,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_chat_hook_executions(
+    def list_chat_hook_executions(
         turn_id: str,
     ) -> list[NativeHookExecutionSummary]:
         return [
@@ -9694,7 +9731,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_session_hook_executions(
+    def list_session_hook_executions(
         session_id: str,
     ) -> list[NativeHookExecutionSummary]:
         return [
@@ -9723,9 +9760,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_chat_subagents(
-        session_id: str, response: Response
-    ) -> dict[str, Any]:
+    def list_chat_subagents(session_id: str, response: Response) -> dict[str, Any]:
         store.get(ChatSession, session_id)
         response.headers["Cache-Control"] = "no-store"
         subagents = chat_service().subagents
@@ -9970,7 +10005,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_chat_session_activity(
+    def list_chat_session_activity(
         engagement_id: str,
     ) -> list[ChatSessionActivity]:
         activity: list[ChatSessionActivity] = []
@@ -10010,7 +10045,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def list_chat_session_messages(
+    def list_chat_session_messages(
         session_id: str, include_replaced: bool = False
     ) -> list[ChatMessage]:
         return chat_service().session_messages(
@@ -10023,7 +10058,7 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    async def get_chat_session_context(session_id: str) -> ContextStatus:
+    def get_chat_session_context(session_id: str) -> ContextStatus:
         session = store.get(ChatSession, session_id)
         if session.backend == ChatBackend.HARNESS:
             return ContextStatus(
