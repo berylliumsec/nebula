@@ -1939,6 +1939,71 @@ def test_cancelled_provider_turn_emits_cancelled_hook_and_stays_bounded(tmp_path
     asyncio.run(scenario())
 
 
+def test_active_provider_turn_is_named_before_terminal_completion(
+    tmp_path, monkeypatch
+):
+    class BlockingProvider(FakeProvider):
+        def __init__(self, provider_id: str, *, local: bool) -> None:
+            super().__init__(provider_id, local=local)
+            self.turn_started = asyncio.Event()
+
+        async def stream(self, request: ModelRequest):
+            self.requests.append(request)
+            self.turn_started.set()
+            yield ModelStreamEvent(type=StreamEventType.STARTED)
+            await asyncio.Event().wait()
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "chat-early-naming.db")
+        engagement = store.create(Engagement(id="eng-early-name", name="Naming"))
+        profile = store.create(_profile(local=True))
+        provider = BlockingProvider(profile.id, local=True)
+        monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+        service = ChatService(store)
+        prepared = await service.prepare_async(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "Trace automatic conversation naming end to end.",
+                    }
+                ],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+
+        turn_id = service.start_provider_turn(prepared)
+        await asyncio.wait_for(provider.turn_started.wait(), 2)
+        for _ in range(20):
+            session = store.get(ChatSession, prepared.session.id)
+            if session.metadata.get("initial_title_state") == "generated":
+                break
+            await asyncio.sleep(0.01)
+
+        session = store.get(ChatSession, prepared.session.id)
+        turn = store.get(ChatTurn, turn_id)
+        naming_request = next(
+            request
+            for request in provider.requests
+            if request.metadata.get("operation") == "conversation_naming"
+        )
+        assert session.title == "Relevant HTTPS Port"
+        assert session.metadata["initial_title_state"] == "generated"
+        assert turn.status == ChatTurnStatus.ROUTING
+        assert "Trace automatic conversation naming end to end." in (
+            naming_request.messages[0].content
+        )
+        assert "Assistant response:\n" in naming_request.messages[0].content
+
+        await service.stop_provider_turn(turn_id)
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("turn_is_goal_linked", [True, False])
 def test_cancelled_turn_pauses_the_session_goal_even_when_created_late(
     tmp_path, turn_is_goal_linked
@@ -3196,6 +3261,7 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
         # operator can return to, so it has to round-trip as one.
         "reasoning_effort": None,
         "allow_subagents": False,
+        "allow_agent_messaging": False,
         "max_active_subagents": None,
     }
     assert [message.sequence for message in service.session_messages(session.id)] == [
@@ -3258,6 +3324,7 @@ def test_existing_session_cursor_and_messages_roll_back_together(tmp_path, monke
         # operator can return to, so it has to round-trip as one.
         "reasoning_effort": None,
         "allow_subagents": False,
+        "allow_agent_messaging": False,
         "max_active_subagents": None,
     }
     assert [message.sequence for message in service.session_messages(session.id)] == [

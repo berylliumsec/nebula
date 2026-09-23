@@ -51,14 +51,14 @@ describe("reconcileListedSessions", () => {
 describe("hasRecentPendingTitle", () => {
   const now = Date.parse("2026-09-22T11:30:00Z");
 
-  it("follows a completed provider reply until optional naming settles", () => {
-    const pending = session("chat", 2, { messageCount: 2, initialTitleState: "pending", updatedAt: "2026-09-22T11:29:30Z" });
+  it("follows a durable first message until optional naming settles", () => {
+    const pending = session("chat", 2, { messageCount: 1, initialTitleState: "pending", updatedAt: "2026-09-22T11:29:30Z" });
     expect(hasRecentPendingTitle([pending], now)).toBe(true);
     expect(hasRecentPendingTitle([{ ...pending, title: "A useful name", initialTitleState: "generated" }], now)).toBe(false);
   });
 
-  it("does not poll an active first message or an abandoned naming task", () => {
-    expect(hasRecentPendingTitle([session("chat", 1, { messageCount: 1 })], now)).toBe(false);
+  it("does not poll an empty conversation or an abandoned naming task", () => {
+    expect(hasRecentPendingTitle([session("chat", 1, { messageCount: 0 })], now)).toBe(false);
     expect(hasRecentPendingTitle([session("chat", 2, { messageCount: 2, initialTitleState: "pending", updatedAt: "2026-09-22T11:20:00Z" })], now)).toBe(false);
   });
 });

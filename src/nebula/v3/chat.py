@@ -1457,6 +1457,7 @@ class ChatService:
         self.worker_id = worker_id or f"core-worker-{uuid4()}"
         self._active_provider_turns: dict[str, _ActiveProviderTurn] = {}
         self._naming_tasks: set[asyncio.Task[Any]] = set()
+        self._naming_sessions: set[str] = set()
         self.subagents = SubagentService(store, self)
         self.agent_messages = AgentMessageService(store)
         self.shutting_down = False
@@ -1468,7 +1469,12 @@ class ChatService:
             "skill selection requires an available project workspace"
         )
 
-    def start_optional_naming(self, coroutine: Any) -> None:
+    def start_optional_naming(
+        self, coroutine: Any, *, session_id: str | None = None
+    ) -> None:
+        if session_id is not None and session_id in self._naming_sessions:
+            coroutine.close()
+            return
         task = create_diagnostic_task(
             coroutine,
             feature="chat",
@@ -1477,7 +1483,32 @@ class ChatService:
             name="nebula-conversation-naming",
         )
         self._naming_tasks.add(task)
-        task.add_done_callback(self._naming_tasks.discard)
+        if session_id is not None:
+            self._naming_sessions.add(session_id)
+
+        def naming_finished(completed: asyncio.Task[Any]) -> None:
+            self._naming_tasks.discard(completed)
+            if session_id is not None:
+                self._naming_sessions.discard(session_id)
+
+        task.add_done_callback(naming_finished)
+
+    def _start_initial_naming(
+        self, prepared: PreparedChat, assistant_response: str = ""
+    ) -> None:
+        """Name a durable first turn without waiting for that turn to finish."""
+
+        session_id = self._session_id(prepared)
+        if not session_id:
+            return
+        try:
+            self.store.get(ChatSession, session_id)
+        except NotFoundError:  # diagnostic-expected: a pending new session is not durable until completion persistence
+            return
+        self.start_optional_naming(
+            self._name_initial_session(prepared, assistant_response),
+            session_id=session_id,
+        )
 
     async def startup(self) -> None:
         """Pause turns orphaned by restart without replaying uncertain effects."""
@@ -2354,6 +2385,7 @@ class ChatService:
         ended: tuple[str, str] | None = None
         frame: tuple[str, dict[str, Any]] | None = None
         failure: BaseException | None = None
+        self._start_initial_naming(prepared)
         try:
             try:
                 replay_saved = bool(prepared.inputs_persisted and prepared.turn)
@@ -3791,6 +3823,7 @@ class ChatService:
 
     async def _complete_claimed(self, prepared: PreparedChat) -> ChatCompletionResponse:
         self._claim_execution(prepared)
+        self._start_initial_naming(prepared)
         await self._run_native_hooks(prepared, "chat.turn.started")
         if prepared.tools_enabled:
             completed: ChatCompletionResponse | None = None
@@ -3813,9 +3846,7 @@ class ChatService:
         response = await self._completion_hook_feedback(prepared, request, response)
         completion = self._completion(prepared, response)
         self._persist(prepared, completion)
-        self.start_optional_naming(
-            self._name_initial_session(prepared, completion.message.content)
-        )
+        self._start_initial_naming(prepared, completion.message.content)
         self._complete_turn(prepared, completion)
         self._release_execution(prepared)
         return completion
@@ -4640,9 +4671,7 @@ class ChatService:
                         },
                     )
                 self._persist(prepared, completion)
-                self.start_optional_naming(
-                    self._name_initial_session(prepared, completion.message.content)
-                )
+                self._start_initial_naming(prepared, completion.message.content)
                 self._complete_turn(prepared, completion)
                 self._release_execution(prepared)
                 payload = completion.model_dump(mode="json")
@@ -5527,11 +5556,7 @@ class ChatService:
                             )
                         self._persist(prepared, completion)
                         turn = prepared.turn or turn
-                        self.start_optional_naming(
-                            self._name_initial_session(
-                                prepared, completion.message.content
-                            )
-                        )
+                        self._start_initial_naming(prepared, completion.message.content)
                         turn = self.store.update(
                             ChatTurn,
                             turn.id,
@@ -5694,9 +5719,7 @@ class ChatService:
         )
         self._persist(prepared, completion)
         turn = prepared.turn or turn
-        self.start_optional_naming(
-            self._name_initial_session(prepared, completion.message.content)
-        )
+        self._start_initial_naming(prepared, completion.message.content)
         prepared.turn = self.store.update(
             ChatTurn,
             turn.id,
