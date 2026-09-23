@@ -1,5 +1,5 @@
 {
-  "change_digest": "c51e15598f53a8c68ad381ab7b5f3f06671264fb1bc85bc8fa9ab636621fd0d6",
+  "change_digest": "c510684d8f8494002ecb404f002d9fb9ec6c2fa21530564a092cac51f0bdf3c7",
   "reviewed_by": "Codex focused review for provider credential recovery",
   "reason": "The branch adds bounded systemd service credentials, typed locked-vault failures, a native Linux Secret Service unlock command, provider configuration UI, and chat preflight recovery. Twenty-seven collected credential backend/API cases, ten focused frontend cases, one exact native reference-boundary case, and six catalogued provider-settings browser cases cover the changed boundaries without expanding to unrelated suites.",
   "exclusions": "Full suites and unrelated provider, harness, browser-control, and project workflows are excluded. The selected Playwright journey covers desktop Chromium plus 390px Chromium and WebKit provider settings; the native Secret Service prompt itself requires an interactive Linux desktop and is verified separately through the exact native boundary test and manual host workflow. LAN-origin execution is excluded because credential status and recovery use the same Core API on all HTTP origins and native unlock is deliberately unavailable to browsers.",

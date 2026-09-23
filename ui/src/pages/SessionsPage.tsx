@@ -3554,6 +3554,7 @@ export function SessionsPage() {
     try {
       await prepareProviderCredential(api, providerRuntime?.credentialRef);
     } catch (credentialError) {
+      // diagnostic-expected: preflight failures are rendered inline and stop submission.
       const detail = credentialError instanceof Error
         ? credentialError.message
         : "The provider credential is unavailable on the Nebula Core host.";

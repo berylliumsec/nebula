@@ -365,6 +365,7 @@ class CredentialStore:
                 | getattr(os, "O_NOFOLLOW", 0),
             )
         except (FileNotFoundError, NotADirectoryError, OSError):
+            # diagnostic-expected: inaccessible service credentials are unavailable.
             return None
         try:
             item_stat = os.fstat(descriptor)
@@ -383,6 +384,7 @@ class CredentialStore:
                 remaining -= len(chunk)
             raw = b"".join(chunks)
         except OSError:
+            # diagnostic-expected: unreadable service credentials are unavailable.
             return None
         finally:
             os.close(descriptor)
@@ -397,6 +399,7 @@ class CredentialStore:
         try:
             return raw.decode("utf-8")
         except UnicodeDecodeError:
+            # diagnostic-expected: non-text service credentials are unavailable.
             return None
 
     def _secret_service_collection(self, connection: object) -> Any:
