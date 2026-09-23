@@ -13,6 +13,25 @@ from pathlib import Path
 PLAN = ".github/test-selection.json"
 
 
+def assistant_rust_target(value: str) -> tuple[str, str, str]:
+    """Resolve one exact integration test inside the isolated assistant workspace."""
+    match = re.fullmatch(
+        r"(nebula-assistant-(domain|storage|runtime|lab))/"
+        r"([a-z][a-z0-9_]*)::([A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*)",
+        value,
+    )
+    if not match:
+        raise ValueError(
+            "Assistant Rust tests require package/target::exact_test names."
+        )
+    package, crate, target, test = match.groups()
+    if not Path(f"assistant-rs/crates/{crate}/tests/{target}.rs").is_file():
+        raise ValueError(
+            "Assistant Rust test target does not exist in its allowlisted crate."
+        )
+    return package, target, test
+
+
 def change_digest(baseline: str, candidate: str) -> str:
     revisions = [baseline] if candidate == "WORKTREE" else [baseline, candidate]
     # core.abbrev is pinned because git scales the `index <old>..<new>` hash length to
@@ -62,6 +81,20 @@ def validate(plan: dict, digest: str) -> dict:
             raise ValueError(
                 f"Coverage review required: {field} must explain this selection."
             )
+    assistant = plan.get("assistant_rust", [])
+    if not isinstance(assistant, list) or any(
+        not isinstance(v, str) for v in assistant
+    ):
+        raise ValueError("assistant_rust must be an explicit list of exact tests.")
+    if len(assistant) != len(set(assistant)):
+        raise ValueError("Duplicate assistant_rust selections")
+    assistant_count = plan["expected_tests"].get("assistant_rust", 0)
+    if type(assistant_count) is not int or assistant_count != len(assistant):
+        raise ValueError(
+            "Assistant Rust count must equal the number of exact selected tests."
+        )
+    for target in assistant:
+        assistant_rust_target(target)
     for kind in ("python", "frontend", "playwright", "native"):
         values = plan.get(kind)
         if not isinstance(values, list) or any(
@@ -144,6 +177,7 @@ def main() -> int:
             "frontend": [],
             "native": [],
             "playwright": [],
+            "assistant_rust": [],
         }
         if args.output:
             args.output.write_text(json.dumps(blocked, indent=2) + "\n")

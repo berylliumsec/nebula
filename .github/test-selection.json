@@ -1,31 +1,52 @@
 {
-  "change_digest": "a535777eb44fb40d7d587fc962a7a786e736c1d85f3714c761338ddbbe12847f",
-  "reviewed_by": "Codex focused review for accessible follow-up queue controls",
-  "reason": "The change moves the durable follow-up queue out of the bounded goal/subagent context scroller so expanding a queued item immediately exposes its Core-backed controls. The selected component checks retain the queue disclosure contract; the exact mocked journey now stacks an active goal, active subagent and queued messages and verifies visible pause, edit and clear controls across the permanent desktop and mobile viewport matrix; the dedicated production-LAN real-Core journey proves paused enqueue, edit, refresh persistence and removal against durable Core state.",
-  "exclusions": "Full suites are not approved and are excluded. Backend Python, Rust/native code, storage schema, queue dispatch semantics, provider routing and unrelated interface journeys are unchanged. The shared Playwright config and impact catalog changes only enroll the exact follow-up-queue regression in the missing permanent 1024, 320, 390 and 430 px projects; those eight catalogued entries plus one isolated real-Core entry are the reviewed browser boundary.",
+  "change_digest": "09a287343f6faa7016715c6bba73126d7d94939a266e09289ecf9a5052333f69",
+  "reviewed_by": "Codex focused review for assistant-only Rust development foundations",
+  "reason": "Assistant stream journal correctness (commit/reopen, contention, idempotency, replay bounds, process exit, ownership, cancellation) and fair scheduling (project/parent fairness, session FIFO, waits, bounded admission and cleanup). Python selection covers the assistant contract projection and exact-test receipt/runner policy, including existing guard regressions. Three CLI cases verify new fixture/replay behavior, truthful journal-only measurements, bounded inputs and no Core server mode.",
+  "exclusions": "The shipped assistant routes, UI, providers, harnesses, credentials, database, package entry points and every other product area are unchanged. The new Rust workspace is an isolated laboratory, not a replacement. Full suites, production/browser/LAN/device tests, provider calls, real tools and live service/database access are excluded; their required assistant migration gates remain pending. No desktop-native tests are selected because its separate Rust workspace is unchanged.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 3,
+    "python": 40,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 0,
+    "assistant_rust": 24
   },
-  "python_versions": ["3.12"],
-  "python_browser": false,
-  "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/components/ChatQueuePanel.test.tsx"
+  "python_versions": [
+    "3.12"
   ],
+  "python_browser": false,
+  "python_node": true,
+  "python": [
+    "tests/test_assistant_rust_selection.py",
+    "tests/test_assistant_contract.py",
+    "tests/test_test_selection.py"
+  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant-queue-reconciliation/desktop",
-    "entry:assistant-queue-reconciliation/compact",
-    "entry:assistant-queue-reconciliation/mobile-chromium-small",
-    "entry:assistant-queue-reconciliation/mobile-chromium-ledger-390",
-    "entry:assistant-queue-reconciliation/mobile-chromium-wide",
-    "entry:assistant-queue-reconciliation/mobile-webkit-small",
-    "entry:assistant-queue-reconciliation/mobile-webkit",
-    "entry:assistant-queue-reconciliation/mobile-webkit-wide",
-    "entry:assistant-queue-core/assistant-real-desktop"
+  "playwright": [],
+  "assistant_rust": [
+    "nebula-assistant-storage/journal::committed_events_survive_reopen_and_idempotent_retries",
+    "nebula-assistant-storage/journal::conflicting_key_rolls_back_without_consuming_a_sequence",
+    "nebula-assistant-storage/journal::concurrent_appenders_produce_contiguous_unique_sequences",
+    "nebula-assistant-storage/journal::lagged_viewer_replays_all_events_without_a_live_buffer",
+    "nebula-assistant-storage/journal::replay_then_wait_cannot_miss_the_next_commit",
+    "nebula-assistant-storage/journal::non_laboratory_database_is_rejected_without_changes",
+    "nebula-assistant-storage/journal::ownership_and_append_only_constraints_are_enforced",
+    "nebula-assistant-storage/journal::admission_is_bounded_and_rejected_writes_are_not_committed",
+    "nebula-assistant-storage/journal::replay_byte_budget_and_payload_limit_bound_memory",
+    "nebula-assistant-storage/journal::disconnected_append_caller_can_resolve_outcome_by_idempotency",
+    "nebula-assistant-storage/journal::process_exit_after_commit_preserves_acknowledged_events",
+    "nebula-assistant-runtime/fairness::projects_and_parent_groups_both_make_progress",
+    "nebula-assistant-runtime/fairness::waiting_parent_releases_capacity_but_retains_session_ownership",
+    "nebula-assistant-runtime/fairness::skipping_busy_sessions_does_not_reorder_their_followups",
+    "nebula-assistant-runtime/fairness::duplicate_admission_is_idempotent_and_does_not_bypass_capacity",
+    "nebula-assistant-runtime/fairness::parked_work_always_fits_its_reserved_capacity",
+    "nebula-assistant-runtime/fairness::cancellation_prunes_indices_and_releases_waiting_session",
+    "nebula-assistant-runtime/fairness::invalid_transitions_cannot_duplicate_execution_slots",
+    "nebula-assistant-runtime/fairness::one_hundred_sessions_progress_under_a_small_execution_limit",
+    "nebula-assistant-storage/journal::viewer_admission_is_bounded_and_drop_releases_capacity",
+    "nebula-assistant-storage/journal::one_hundred_viewers_follow_only_their_own_turn",
+    "nebula-assistant-lab/cli::fixture_replay_is_durable_and_does_not_overwrite_existing_output",
+    "nebula-assistant-lab/cli::measurement_reports_only_verified_journal_work",
+    "nebula-assistant-lab/cli::laboratory_cannot_be_started_as_core_or_with_unbounded_work"
   ]
 }

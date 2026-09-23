@@ -49,6 +49,15 @@ Existing branch-protection Python check names remain present: unselected version
 only report their omission without installing or executing tests. Invalid selection
 makes these checks fail, so skipped test layers cannot hide a missing review.
 
+The isolated Rust assistant workspace uses the optional `assistant_rust` layer,
+separate from desktop `native` tests. Each selection is
+`nebula-assistant-<crate>/<integration_target>::exact_test_name`; package and target
+must exist in the allowlisted assistant workspace. `expected_tests.assistant_rust`
+must equal the number of unique selections. The runner collects each exact test
+and requires exactly one executed, non-ignored test. Omitted/empty selections run
+nothing. Use `python -m scripts.run_assistant_rust_tests --baseline origin/main`
+with `--candidate WORKTREE` before commit and `--list` for collection only.
+
 Focused local examples:
 
 ```sh
