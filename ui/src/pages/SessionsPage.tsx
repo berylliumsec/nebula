@@ -4936,7 +4936,6 @@ export function SessionsPage() {
                   else next.set("drawer", "subagents");
                 })}
               />}
-              {sessionId && <ChatQueuePanel key={sessionId} queue={coreQueue} onRefreshConversation={() => void reloadActiveConversation()} />}
               {showHarnessStatusRail && harnessActivity && <HarnessStatusRail activity={harnessActivity} pendingRequests={pendingHarnessRequests} authoritativeStatus={authoritativeState?.detail} />}
                 {assistantDrafts.length > 0 && <section className="chat-context-pack" aria-label="Selected context pack">
                   <header><div><strong>Context pack</strong><small>{assistantDrafts.length} selection{assistantDrafts.length === 1 ? "" : "s"} · {assistantDrafts.reduce((total, item) => total + item.text.length, 0).toLocaleString()} characters</small></div><button className="button quiet" type="button" onClick={clearAssistantDrafts}>Clear all</button></header>
@@ -4952,6 +4951,7 @@ export function SessionsPage() {
                 </section>}
                 {pendingImages.length > 0 && <div className="chat-image-attachments" role="list" aria-label="Image attachments">{pendingImages.map((image, index) => <div role="listitem" key={`${image.block.artifactId}-${index}`}><img src={image.previewUrl} alt={image.filename} /><button className="icon-button subtle" type="button" aria-label={`Remove ${image.filename}`} onClick={() => removePendingImage(index)}><X size={14} /></button></div>)}</div>}
               </div>
+                {sessionId && <ChatQueuePanel key={sessionId} queue={coreQueue} onRefreshConversation={() => void reloadActiveConversation()} />}
                 <label className="sr-only" htmlFor="analyst-message">Message the analyst assistant</label>
                 <div className="chat-composer-input" role="combobox" aria-label="Skill suggestions" aria-autocomplete="list" aria-expanded={Boolean(skillToken)} aria-controls={skillToken ? "harness-skill-menu" : undefined} aria-activedescendant={skillToken && matchingHarnessSkills.length ? `harness-skill-option-${skillMenuIndex}` : undefined}>
                   <textarea ref={composerRef} id="analyst-message" data-guide="composer" data-selection-actions-disabled="true" value={draft} disabled={!engagement || !runtimeReady || (loadingHistory && !sessionReadReady)} placeholder={!engagement ? "Create or select a project to chat…" : canSteerCurrentHarness ? "Add guidance while the harness works…" : canStopAndSend ? "Queue a follow-up or send it now…" : queueMode ? "Queue the next message while this response finishes…" : runtimeReady ? "Ask about this project…" : "Add a model or harness in Settings…"} rows={1} onFocus={() => setAssistantSettingsOpen(false)} onPaste={pasteComposerImages} onKeyDown={onComposerKeyDown} onChange={(event) => updateComposerDraft(event.target.value, event.target.selectionStart ?? event.target.value.length)} />

@@ -2610,6 +2610,47 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });
 
+test("assistant upgrade real Core keeps queued controls reachable and durable", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const provider = await (await api.post("providers", {data: {name: "Queue acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}})).json() as {id: string};
+    const response = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Start a durable conversation"}], include_knowledge: false, stream: false}});
+    expect(response.ok(), await response.text()).toBe(true);
+    const chat = await response.json() as {session_id: string};
+    const url = `${core.origin}/?view=chat&session=${chat.session_id}#token=${encodeURIComponent(core.token)}`;
+    await page.goto(url);
+    const composer = page.getByRole("textbox", {name: "Message the analyst assistant"});
+    await expect(composer).toBeEditable({timeout: 20_000});
+    await composer.fill("Queue this follow-up for review");
+    await page.getByRole("button", {name: "Queue for later", exact: true}).click();
+
+    const queue = page.getByRole("region", {name: "Core follow-up queue"});
+    await expect(queue).toContainText("1 follow-up · Paused");
+    expect(await queue.evaluate(element => element.parentElement?.classList.contains("chat-composer"))).toBe(true);
+    await queue.locator("summary").click();
+    const resume = queue.getByRole("button", {name: "Resume queue", exact: true});
+    await expect(resume).toBeVisible();
+    await expect(resume).toBeInViewport();
+    await queue.getByRole("button", {name: "Edit queued message 1", exact: true}).click();
+    await queue.getByRole("textbox", {name: "Edit queued text"}).fill("Edited durable follow-up");
+    await queue.getByRole("button", {name: "Save queued edit", exact: true}).click();
+    await expect(queue).toContainText("Edited durable follow-up");
+
+    await page.goto(url);
+    await expect(queue).toContainText("Edited durable follow-up");
+    await queue.locator("summary").click();
+    await queue.getByRole("button", {name: "Remove", exact: true}).click();
+    await expect(queue).toHaveCount(0);
+    const durable = await (await api.get(`chat/sessions/${chat.session_id}/queue`)).json() as {items: Array<{status: string; request: {messages: Array<{content: string}>}}>};
+    expect(durable.items).toEqual([expect.objectContaining({status: "cancelled", request: expect.objectContaining({messages: [expect.objectContaining({content: "Edited durable follow-up"})]})})]);
+    await testInfo.attach("queue-controls-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId: chat.session_id}), contentType: "application/json"});
+  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+});
+
 test("assistant upgrade foundation production LAN reads durable conversation", async ({ page }, testInfo) => {
   // WebKit's production-LAN pass can spend more than a minute covering the
   // complete durable-conversation lifecycle on shared CI runners.

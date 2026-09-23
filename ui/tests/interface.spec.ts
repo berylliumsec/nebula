@@ -3247,7 +3247,12 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
 });
 
 test("assistant follow-up queue delegates ordered provider messages to Core", async ({ page }, testInfo) => {
-  test.skip(!["desktop", "narrow", "mobile-chromium-small", "mobile-webkit"].includes(testInfo.project.name), "Covered by the permanent desktop and mobile assistant queue projects.");
+  test.setTimeout(60_000);
+  test.skip(![
+    "desktop", "compact",
+    "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide",
+    "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide",
+  ].includes(testInfo.project.name), "Covered by the permanent desktop and mobile assistant queue projects.");
   const provider = {
     ...entity,
     id: "provider-follow-up-queue",
@@ -3262,6 +3267,46 @@ test("assistant follow-up queue delegates ordered provider messages to Core", as
     privacy: { local_only: true, permits_sensitive_data: true },
     metadata: { default_model: "queue-test-model" },
   };
+  const activeGoal = {
+    ...entity,
+    id: "queue-goal",
+    engagement_id: "scratch-project",
+    session_id: "queue-session",
+    objective: "Keep queued work manageable while the current goal runs",
+    completion_criteria: ["The current response finishes"],
+    plan: ["Finish the current response", "Continue with queued work"],
+    current_step: 1,
+    status: "running",
+    usage: { input_tokens: 1200, output_tokens: 300, total_tokens: 1500 },
+    elapsed_seconds: 30,
+    children_started: 1,
+    linked_turn_ids: [],
+    completion_evidence: [],
+    skill_snapshots: [],
+  };
+  const activeSubagent = {
+    id: "queue-subagent",
+    name: "Review queued context",
+    task: "Check the queued context before the next turn.",
+    status: "running",
+    parent_session_id: "queue-session",
+    parent_turn_id: "queue-turn-1",
+    parent_backend: "provider",
+    child_session_id: "queue-child-session",
+    child_turn_id: "queue-child-turn",
+    provider_profile_id: provider.id,
+    model: "queue-test-model",
+    step_count: 1,
+    recent_steps: [],
+    usage: { input_tokens: 200, output_tokens: 40, total_tokens: 240 },
+    started_at: "2026-07-12T10:00:00Z",
+    elapsed_seconds: 30,
+    result: "",
+  };
+  await page.route("**/api/v1/chat/sessions/*/goal", route => route.fulfill({ json: activeGoal }));
+  await page.route("**/api/v1/chat/sessions/*/subagents", route => route.fulfill({
+    json: { session_id: "queue-session", subagents: [activeSubagent] },
+  }));
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -3340,10 +3385,20 @@ test("assistant follow-up queue delegates ordered provider messages to Core", as
   await expect(queueComposer).toHaveValue("");
   await queueComposer.fill("Second queued follow-up.");
   await queueComposer.press("Enter");
-  await expect(page.getByRole("region", { name: "Core follow-up queue" }).locator("li")).toHaveCount(2);
+  await expect(page.getByRole("region", { name: "Core follow-up queue" }).locator("li")).toHaveCount(2, { timeout: 10_000 });
   await expect(page.getByRole("region", { name: "Core follow-up queue" })).toContainText("First queued follow-up.");
   await expect(page.getByRole("region", { name: "Core follow-up queue" })).toContainText("Second queued follow-up.");
   const queue = page.getByRole("region", { name: "Core follow-up queue" });
+  const composerSurface = page.locator(".chat-composer");
+  await expect(composerSurface.getByRole("region", { name: "Conversation goal" })).toBeVisible();
+  await expect(composerSurface.getByRole("status", { name: "Subagents" })).toBeVisible();
+  expect(await queue.evaluate(element => element.parentElement?.classList.contains("chat-composer"))).toBe(true);
+  await queue.locator("summary").click();
+  const pauseQueue = queue.getByRole("button", { name: "Pause queue" });
+  await expect(pauseQueue).toBeVisible();
+  await expect(pauseQueue).toBeInViewport();
+  await expect(queue.getByRole("button", { name: "Clear queue" })).toBeVisible();
+  await expect(queue.getByRole("button", { name: "Edit queued message 1" })).toBeVisible();
   const queueGeometry = await queue.evaluate((element) => ({
     scrollWidth: element.scrollWidth,
     clientWidth: element.clientWidth,
@@ -3362,13 +3417,13 @@ test("assistant follow-up queue delegates ordered provider messages to Core", as
   durable.queue.items[0].status = "sending";
   durable.queue.items[0].turn_id = "accepted-follow-up-turn";
   durable.queue.revision += 1;
-  await expect(queue.locator("li")).toHaveCount(1, {timeout: 5_000});
+  await expect(queue.locator("li")).toHaveCount(1, {timeout: 10_000});
   await expect(queue).not.toContainText("First queued follow-up.");
   await expect(queue).toContainText("Second queued follow-up.");
 
   durable.queue.items[0].status = "needs_review";
   durable.queue.revision += 1;
-  await expect(queue.locator("li")).toHaveCount(2, {timeout: 5_000});
+  await expect(queue.locator("li")).toHaveCount(2, {timeout: 10_000});
   await expect(queue).toContainText("First queued follow-up.");
   await expect(queue).toContainText("Needs attention");
 });

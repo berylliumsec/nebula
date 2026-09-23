@@ -1,24 +1,31 @@
 {
-  "change_digest": "560e6f222e1bf646dc803acffe6319166d40cb3d2bb29fb7a2dafe222c5756ac",
-  "reviewed_by": "Codex focused review for restart-recovery backpressure",
-  "reason": "The change limits only automatically recovered provider turns so a Core restart cannot schedule an unbounded backlog of large routing histories on the API event loop. Four focused recovery cases cover safe goal recovery, multiple interrupted causes, the new concurrency bound and slot handoff, and automatic retry after a transient recovery failure.",
-  "exclusions": "Full suites are not approved and are excluded. Normal operator-started provider turns, harness execution, queue ordering, HTTP response contracts, storage schema, frontend rendering, native packaging, and browser interaction code are unchanged. Frontend, native, and Playwright selections are empty because this is a Core-internal recovery scheduler change; the production real-Core and LAN response path will be measured separately after deployment.",
+  "change_digest": "a535777eb44fb40d7d587fc962a7a786e736c1d85f3714c761338ddbbe12847f",
+  "reviewed_by": "Codex focused review for accessible follow-up queue controls",
+  "reason": "The change moves the durable follow-up queue out of the bounded goal/subagent context scroller so expanding a queued item immediately exposes its Core-backed controls. The selected component checks retain the queue disclosure contract; the exact mocked journey now stacks an active goal, active subagent and queued messages and verifies visible pause, edit and clear controls across the permanent desktop and mobile viewport matrix; the dedicated production-LAN real-Core journey proves paused enqueue, edit, refresh persistence and removal against durable Core state.",
+  "exclusions": "Full suites are not approved and are excluded. Backend Python, Rust/native code, storage schema, queue dispatch semantics, provider routing and unrelated interface journeys are unchanged. The shared Playwright config and impact catalog changes only enroll the exact follow-up-queue regression in the missing permanent 1024, 320, 390 and 430 px projects; those eight catalogued entries plus one isolated real-Core entry are the reviewed browser boundary.",
   "expected_tests": {
-    "python": 4,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 3,
     "native": 0,
-    "playwright": 0
+    "playwright": 9
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_chat.py::test_core_startup_auto_resumes_running_goal_with_unknown_effect",
-    "tests/v3/test_chat.py::test_core_update_auto_resumes_uncertain_and_crashed_turns",
-    "tests/v3/test_chat.py::test_core_restart_recovery_bounds_concurrent_provider_turns",
-    "tests/v3/test_chat.py::test_core_restart_recovery_retries_without_operator_action"
+  "python": [],
+  "frontend": [
+    "ui/src/components/ChatQueuePanel.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:assistant-queue-reconciliation/desktop",
+    "entry:assistant-queue-reconciliation/compact",
+    "entry:assistant-queue-reconciliation/mobile-chromium-small",
+    "entry:assistant-queue-reconciliation/mobile-chromium-ledger-390",
+    "entry:assistant-queue-reconciliation/mobile-chromium-wide",
+    "entry:assistant-queue-reconciliation/mobile-webkit-small",
+    "entry:assistant-queue-reconciliation/mobile-webkit",
+    "entry:assistant-queue-reconciliation/mobile-webkit-wide",
+    "entry:assistant-queue-core/assistant-real-desktop"
+  ]
 }
