@@ -141,6 +141,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [upstreamDirectoryReload, setUpstreamDirectoryReload] = useState(0);
   const upstreamDirectoryLoaded = useRef(false);
   const [credentialEnv, setCredentialEnv] = useState("");
+  const [credentialSystemd, setCredentialSystemd] = useState("");
   const [credentialSecret, setCredentialSecret] = useState("");
   const [sessionCredential, setSessionCredential] = useState(false);
   const [vertexProject, setVertexProject] = useState("");
@@ -336,6 +337,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setUpstreamProviderIds([]);
     setUpstreamQuery("");
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
+    setCredentialSystemd("");
     setCredentialSecret("");
     setSessionCredential(false);
     setVertexProject("");
@@ -364,6 +366,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setUpstreamProviderIds([]);
     setUpstreamQuery("");
     setCredentialEnv("");
+    setCredentialSystemd("");
     setCredentialSecret("");
     setSessionCredential(false);
     setVertexProject("");
@@ -396,6 +399,9 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setUpstreamProviderIds(stringList(provider.options?.openrouter_providers));
     setUpstreamQuery("");
     setCredentialEnv(provider.credentialEnv ?? "");
+    setCredentialSystemd(provider.credentialRef?.startsWith("systemd:")
+      ? provider.credentialRef.slice("systemd:".length)
+      : "");
     setCredentialSecret("");
     setSessionCredential(provider.credentialRef?.startsWith("session:") ?? false);
     setVertexProject(providerOption(provider, "project"));
@@ -424,6 +430,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setUpstreamProviderIds([]);
     setUpstreamQuery("");
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
+    setCredentialSystemd("");
     setCredentialSecret("");
     setSessionCredential(false);
     setVertexProject("");
@@ -445,6 +452,10 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     }
     if (providerType === "vertex" && (!vertexProject.trim() || !vertexLocation.trim())) {
       setFormValidationError("Vertex profiles require a Google Cloud project and location.");
+      return;
+    }
+    if (credentialEnv.trim() && credentialSystemd.trim()) {
+      setFormValidationError("Choose either an environment variable or a systemd service credential.");
       return;
     }
     const modelAllowlist = selectedModelIds;
@@ -489,7 +500,11 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
         );
         createdCredentialRef = credential.reference;
       }
+      const serviceCredentialRef = credentialSystemd.trim()
+        ? `systemd:${credentialSystemd.trim()}`
+        : undefined;
       const credentialRef = createdCredentialRef
+        ?? serviceCredentialRef
         ?? (credentialEnv ? undefined : editingProvider?.credentialRef)
         ?? undefined;
       if (editingProvider) {
@@ -890,12 +905,13 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
               <p className="provider-dialog-note" id="provider-output-help">Leave blank to size each reply from the model: its published output limit, up to 32,000 tokens and a quarter of the context window, or 2,048 when the limit is unknown. A value here caps every reply.</p>
               {dialogProviderType === "vertex" && <div className="resource-form-grid"><label>Google Cloud project<input required value={vertexProject} placeholder="my-security-project" onChange={(event) => setVertexProject(event.target.value)} /></label><label>Vertex location<input required value={vertexLocation} placeholder="us-central1" onChange={(event) => setVertexLocation(event.target.value)} /></label></div>}
               {dialogProviderType === "bedrock" && <label>AWS region<input value={awsRegion} placeholder="Uses the ambient AWS region when blank" onChange={(event) => setAwsRegion(event.target.value)} /></label>}
-              <label>Credential environment variable<input value={credentialEnv} pattern="[A-Za-z_][A-Za-z0-9_]*" placeholder={dialogLocal ? "Optional for authenticated local gateways" : "For example, OPENAI_API_KEY"} autoCapitalize="none" spellCheck={false} onChange={(event) => setCredentialEnv(event.target.value)} /></label>
+              <label>Credential environment variable<input value={credentialEnv} pattern="[A-Za-z_][A-Za-z0-9_]*" placeholder={dialogLocal ? "Optional for authenticated local gateways" : "For example, OPENAI_API_KEY"} autoCapitalize="none" spellCheck={false} onChange={(event) => { setCredentialEnv(event.target.value); if (event.target.value) setCredentialSystemd(""); }} /></label>
+              <label>systemd service credential<input value={credentialSystemd} pattern="[A-Za-z0-9_.-]{1,128}" placeholder="For unattended Core services" autoCapitalize="none" spellCheck={false} onChange={(event) => { setCredentialSystemd(event.target.value); if (event.target.value) setCredentialEnv(""); }} /><small>Core reads this name only from systemd’s protected credentials directory.</small></label>
               {!dialogLocal && <label className="provider-consent"><input type="checkbox" checked={permitsSensitiveData} onChange={(event) => { setPermitsSensitiveData(event.target.checked); if (!event.target.checked) setAutoShareToolResults(false); }} /><span><strong>Allow project and document data</strong><small>Automatically permit bounded excerpts for knowledge-enabled requests. Local-only items remain blocked.</small></span></label>}
               {!dialogLocal && permitsSensitiveData && <label className="provider-consent"><input type="checkbox" checked={autoShareToolResults} onChange={(event) => setAutoShareToolResults(event.target.checked)} /><span><strong>Share tool results without asking each turn</strong><small>Standing consent for bounded tool inputs and results. Canonical output stays local and risky calls still require approval.</small></span></label>}
             </div>
             </details>
-            <p className="provider-dialog-note">{dialogLocal ? "Local-only profile. Nebula will not route it to a cloud fallback." : credentialSecret ? sessionCredential || !vault.available ? "The credential will remain only in Core memory for this session." : "The credential will be stored in the operating-system vault; only an opaque reference is saved." : credentialEnv ? `Core will resolve env:${credentialEnv}; the secret value is never saved in this profile.` : editingProvider?.credentialRef ? "The current write-only credential reference will be retained." : "Ambient provider credentials remain available for supported services."}</p>
+            <p className="provider-dialog-note">{dialogLocal ? "Local-only profile. Nebula will not route it to a cloud fallback." : credentialSecret ? sessionCredential || !vault.available ? "The credential will remain only in Core memory for this session." : "The credential will be stored in the operating-system vault; only an opaque reference is saved." : credentialSystemd ? `Core will resolve systemd:${credentialSystemd} from its protected service credentials.` : credentialEnv ? `Core will resolve env:${credentialEnv}; the secret value is never saved in this profile.` : editingProvider?.credentialRef ? "The current write-only credential reference will be retained." : "Ambient provider credentials remain available for supported services."}</p>
             {selected?.notes && <p className="provider-dialog-note">{selected.notes}</p>}
             <p className="provider-dialog-note">Saving performs only liveness and model discovery. Tool calling is verified later, when you enable automation.</p>
             {formError && <DiagnosticErrorNotice error={formError} fallback="The form could not be saved." compact />}
@@ -929,4 +945,3 @@ function TextSizeControl() {
 function stringList(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "") : [];
 }
-

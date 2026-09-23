@@ -40,6 +40,7 @@ tokio = { version = "1.52.0", features = ["io-util", "macros", "net", "rt", "syn
 tower-service = "0.3.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+dbus-secret-service = "4.1.0"
 keyring = { version = "3.6.3", default-features = false, features = ["sync-secret-service"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

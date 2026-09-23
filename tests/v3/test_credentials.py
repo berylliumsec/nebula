@@ -11,8 +11,9 @@ from nebula.v3.credentials import (
     CredentialError,
     CredentialStore,
     CredentialUnavailableError,
+    CredentialVaultLockedError,
 )
-from nebula.v3.domain import ProviderProfile
+from nebula.v3.domain import Engagement, ProviderProfile
 from nebula.v3.providers import ProviderError, provider_from_profile
 from nebula.v3.storage import NebulaStore
 
@@ -80,6 +81,50 @@ def test_unavailable_vault_fails_closed_and_environment_is_external(monkeypatch)
     assert os.environ["NEBULA_TEST_KEY"] == "environment-secret"
 
 
+def test_systemd_service_credential_is_bounded_and_external(tmp_path, monkeypatch):
+    credential_dir = tmp_path / "credentials"
+    credential_dir.mkdir()
+    (credential_dir / "openrouter-api-key").write_text("service-secret\n")
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credential_dir))
+    store = CredentialStore(None)
+    store.keyring_backend = None
+
+    status = store.status("systemd:openrouter-api-key")
+    assert status.model_dump() == {
+        "reference": "systemd:openrouter-api-key",
+        "persistence": "systemd",
+        "available": True,
+        "state": "available",
+    }
+    assert (
+        store.resolve("systemd:openrouter-api-key").get_secret_value()
+        == "service-secret"
+    )
+    with pytest.raises(CredentialError, match="managed outside Nebula"):
+        store.delete("systemd:openrouter-api-key")
+
+
+def test_systemd_service_credential_rejects_missing_symlink_and_oversize(
+    tmp_path, monkeypatch
+):
+    credential_dir = tmp_path / "credentials"
+    credential_dir.mkdir()
+    outside = tmp_path / "outside"
+    outside.write_text("must-not-resolve")
+    (credential_dir / "linked").symlink_to(outside)
+    (credential_dir / "oversized").write_bytes(b"x" * 16_385)
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(credential_dir))
+    store = CredentialStore(None)
+    store.keyring_backend = None
+
+    for reference in ("systemd:missing", "systemd:linked", "systemd:oversized"):
+        status = store.status(reference)
+        assert status.available is False
+        assert status.state == "service_credential_missing"
+    with pytest.raises(ValueError, match="invalid credential reference"):
+        store.status("systemd:../outside")
+
+
 def test_system_vault_backend_load_failure_fails_closed(monkeypatch):
     def unavailable_backend():
         raise RuntimeError("OS vault service is unavailable")
@@ -116,6 +161,19 @@ def test_provider_vault_reference_requires_and_uses_resolver():
 
     resolved = provider_from_profile(profile, lambda _ref: SecretStr("resolved-secret"))
     assert resolved.config.resolve_api_key().get_secret_value() == "resolved-secret"
+
+
+def test_provider_systemd_reference_uses_the_bounded_credential_resolver():
+    profile = ProviderProfile(
+        name="Unattended cloud",
+        provider_type="openai",
+        secret_ref="systemd:openai-api-key",
+        model_allowlist=["gpt-test"],
+    )
+
+    resolved = provider_from_profile(profile, lambda _ref: SecretStr("service-secret"))
+
+    assert resolved.config.resolve_api_key().get_secret_value() == "service-secret"
 
 
 def test_credential_api_is_write_only_and_persists_only_opaque_reference(tmp_path):
@@ -207,6 +265,11 @@ def test_locked_linux_vault_is_reported_and_not_offered(monkeypatch):
         store.create(CredentialCreateRequest(secret=SecretStr("secret")))
     with pytest.raises(CredentialUnavailableError, match="vault is locked"):
         store.delete("vault:" + "a" * 32)
+    locked = store.status("vault:" + "a" * 32)
+    assert locked.state == "locked"
+    assert locked.available is False
+    with pytest.raises(CredentialVaultLockedError, match="unlock it"):
+        store.resolve("vault:" + "a" * 32)
 
     # Session storage stays open while the host vault is locked.
     session = store.create(
@@ -252,6 +315,45 @@ def test_vault_status_endpoint_reports_the_lock_state(tmp_path, monkeypatch):
         assert refused.status_code == 503
         assert "locked" in refused.json()["detail"]
         assert "never-persist-this" not in refused.text
+
+
+def test_locked_provider_credential_is_a_typed_retryable_503(tmp_path, monkeypatch):
+    credential_store = _fake_secret_service(monkeypatch, locked=True)
+    store = NebulaStore(tmp_path / "locked-provider.db")
+    engagement = store.create(Engagement(id="locked-project", name="Locked project"))
+    provider = store.create(
+        ProviderProfile(
+            id="locked-provider",
+            name="Locked provider",
+            provider_type="openai",
+            secret_ref="vault:" + "a" * 32,
+            model_allowlist=["gpt-test"],
+            metadata={"default_model": "gpt-test"},
+        )
+    )
+    client = TestClient(
+        create_app(
+            store,
+            auth_token="test-token",
+            credential_store=credential_store,
+        )
+    )
+
+    with client:
+        response = client.post(
+            "/api/v1/chat/completions",
+            headers={"Authorization": "Bearer test-token"},
+            json={
+                "engagement_id": engagement.id,
+                "provider_id": provider.id,
+                "messages": [{"role": "user", "content": "Hello"}],
+            },
+        )
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "provider_credential_locked"
+    assert response.json()["retryable"] is True
+    assert "vault is locked" in response.json()["detail"]
 
 
 @pytest.mark.parametrize(

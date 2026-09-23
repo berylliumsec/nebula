@@ -1,19 +1,32 @@
 {
-  "change_digest": "f5ec9bc86bfe7c50b255ce59f45ca7803995186d618dde1394509e86d2594c2b",
-  "reviewed_by": "Codex focused review for early conversation naming",
-  "reason": "The diff starts optional naming from durable first-turn input and keeps the conversation list synchronized while naming settles. Focused Core, UI, and real-Core browser tests cover naming before terminal completion, deduplication, durable state, and pending-title refresh.",
-  "exclusions": "No native code or layout styling changed. Unrelated Python/frontend/Playwright tests and full suites are excluded. Physical-device testing is not available and is not claimed.",
-  "expected_tests": {"python": 79, "frontend": 5, "native": 0, "playwright": 4},
-  "python_versions": ["3.12"],
+  "change_digest": "c51e15598f53a8c68ad381ab7b5f3f06671264fb1bc85bc8fa9ab636621fd0d6",
+  "reviewed_by": "Codex focused review for provider credential recovery",
+  "reason": "The branch adds bounded systemd service credentials, typed locked-vault failures, a native Linux Secret Service unlock command, provider configuration UI, and chat preflight recovery. Twenty-seven collected credential backend/API cases, ten focused frontend cases, one exact native reference-boundary case, and six catalogued provider-settings browser cases cover the changed boundaries without expanding to unrelated suites.",
+  "exclusions": "Full suites and unrelated provider, harness, browser-control, and project workflows are excluded. The selected Playwright journey covers desktop Chromium plus 390px Chromium and WebKit provider settings; the native Secret Service prompt itself requires an interactive Linux desktop and is verified separately through the exact native boundary test and manual host workflow. LAN-origin execution is excluded because credential status and recovery use the same Core API on all HTTP origins and native unlock is deliberately unavailable to browsers.",
+  "expected_tests": {
+    "python": 27,
+    "frontend": 10,
+    "native": 1,
+    "playwright": 6
+  },
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
-  "python": ["tests/v3/test_chat.py"],
-  "frontend": ["ui/src/pages/chatSessionList.test.ts"],
-  "native": [],
+  "python": [
+    "tests/v3/test_credentials.py"
+  ],
+  "frontend": [
+    "ui/src/pages/SettingsPage.test.tsx",
+    "ui/src/pages/providerCredentialRecovery.test.ts"
+  ],
+  "native": [
+    "credential_vault::tests::provider_reference_is_bounded_and_opaque"
+  ],
   "playwright": [
-    "entry:early-conversation-naming-core/assistant-real-desktop",
-    "entry:early-conversation-naming-core/assistant-real-compact",
-    "entry:early-conversation-naming-core/assistant-real-chromium-390",
-    "entry:early-conversation-naming-core/assistant-real-webkit-390"
+    "entry:assistant-settings-navigation/desktop",
+    "entry:assistant-settings-navigation/mobile-chromium",
+    "entry:assistant-settings-navigation/mobile-webkit"
   ]
 }

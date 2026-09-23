@@ -2719,10 +2719,12 @@ class ProviderProfile(Entity):
     @classmethod
     def secret_must_be_an_environment_reference(cls, value: str | None) -> str | None:
         if value is not None and not re.fullmatch(
-            r"(?:env:[A-Za-z_][A-Za-z0-9_]*|(?:vault|session):[0-9a-f]{32})",
+            r"(?:env:[A-Za-z_][A-Za-z0-9_]*|systemd:[A-Za-z0-9_.-]{1,128}|(?:vault|session):[0-9a-f]{32})",
             value,
         ):
-            raise ValueError("secret_ref must use env:NAME, vault:ID, or session:ID")
+            raise ValueError(
+                "secret_ref must use env:NAME, systemd:NAME, vault:ID, or session:ID"
+            )
         return value
 
     @field_validator("model_allowlist")

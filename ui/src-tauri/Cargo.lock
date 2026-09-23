@@ -2568,6 +2568,7 @@ version = "3.0.0-alpha.20"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
+ "dbus-secret-service",
  "getrandom 0.4.3",
  "http-body-util",
  "hudsucker",

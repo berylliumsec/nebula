@@ -3,6 +3,7 @@
 mod browser;
 mod browser_proxy;
 mod core_connection;
+mod credential_vault;
 mod diagnostics;
 mod release;
 mod sidecar;
@@ -169,6 +170,7 @@ fn build_app() -> tauri::App<Wry> {
             clear_remote_backend,
             use_local_backend,
             desktop_device_id,
+            credential_vault::unlock_provider_credential,
             resolve_backend_connection,
             release_info,
             check_for_update,

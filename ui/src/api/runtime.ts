@@ -57,6 +57,13 @@ export async function desktopDeviceId(): Promise<string> {
   return desktopDeviceIdentity;
 }
 
+export async function unlockProviderCredential(reference: string): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error("Unlock the credential vault on the Nebula Core host, then retry.");
+  }
+  await invoke("unlock_provider_credential", { reference });
+}
+
 function consumeBrowserFragmentToken(): string | undefined {
   if (typeof window === "undefined") return browserRuntimeToken;
   const fragment = window.location.hash.replace(/^#/, "");

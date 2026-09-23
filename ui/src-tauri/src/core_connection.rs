@@ -69,6 +69,10 @@ fn load(app: &AppHandle) -> Result<StoredConnection, String> {
     }
 }
 
+pub(crate) fn configured_core_is_local(app: &AppHandle) -> Result<bool, String> {
+    Ok(load(app)?.mode != "remote")
+}
+
 fn save(app: &AppHandle, value: &StoredConnection) -> Result<(), String> {
     let path = config_path(app)?;
     let parent = path

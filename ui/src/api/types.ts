@@ -2711,8 +2711,16 @@ export interface SetupControlResponse {
 
 export interface CredentialStatus {
   reference: string;
-  persistence: "environment" | "vault" | "session";
+  persistence: "environment" | "systemd" | "vault" | "session";
   available: boolean;
+  state:
+    | "available"
+    | "locked"
+    | "missing"
+    | "backend_unavailable"
+    | "session_expired"
+    | "environment_missing"
+    | "service_credential_missing";
 }
 
 export type ExecutionLanguage = "bash" | "sh" | "python";

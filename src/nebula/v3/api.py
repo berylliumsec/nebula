@@ -235,6 +235,7 @@ from .credentials import (
     CredentialStatus,
     CredentialStore,
     CredentialUnavailableError,
+    CredentialVaultLockedError,
     VaultState,
 )
 from .vpn import VpnProfileError, parse_openvpn_profile
@@ -439,10 +440,11 @@ from .providers import (
     ModelMessage,
     ModelRequest,
     PROVIDER_CATALOG,
-    ReasoningEffort,
+    ProviderCredentialLockedError,
     ProviderError,
     ProviderFlavor,
     ProviderHealth,
+    ReasoningEffort,
     ProviderQuotaError,
     ProviderRefusalError,
     ProviderResponseError,
@@ -1673,10 +1675,19 @@ def create_app(
     def provider_factory(profile: ProviderProfile):
         try:
             if profile.secret_ref and profile.secret_ref.startswith(
-                ("vault:", "session:")
+                ("systemd:", "vault:", "session:")
             ):
                 return provider_from_profile(profile, credentials.resolve)
             return provider_from_profile(profile)
+        except CredentialVaultLockedError as exc:
+            record_caught_exception(
+                "api",
+                "api.api.caught_failure_003",
+                "A handled api operation raised an exception.",
+                exc,
+                stage="api",
+            )
+            raise ProviderCredentialLockedError(str(exc)) from exc
         except CredentialError as exc:
             record_caught_exception(
                 "api",
@@ -1690,7 +1701,9 @@ def create_app(
     def chat_provider_factory(profile: ProviderProfile):
         # Keep ChatService's provider seam available to embedders, but resolve
         # opaque Core-managed references before a request leaves the process.
-        if profile.secret_ref and profile.secret_ref.startswith(("vault:", "session:")):
+        if profile.secret_ref and profile.secret_ref.startswith(
+            ("systemd:", "vault:", "session:")
+        ):
             return provider_factory(profile)
         return chat_runtime.provider_from_profile(profile)
 
@@ -3130,6 +3143,19 @@ def create_app(
         # Spent quota or billing does not clear by retrying the turn.
         return diagnostic_error_response(
             request, exc, status_code=502, detail=str(exc), retryable=False
+        )
+
+    @app.exception_handler(ProviderCredentialLockedError)
+    async def provider_credential_locked_handler(
+        request: Request, exc: ProviderCredentialLockedError
+    ) -> JSONResponse:
+        return diagnostic_error_response(
+            request,
+            exc,
+            status_code=503,
+            detail=str(exc),
+            code=ProviderCredentialLockedError.code,
+            retryable=True,
         )
 
     @app.exception_handler(ChatError)
