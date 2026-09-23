@@ -120,7 +120,7 @@ export default selectedArgs.includes("tests/chat-reconnection.spec.ts") ? reconn
     ...project,
     // Stabilization journeys must not silently disappear behind older per-screen
     // filters. File/project boundaries still apply, including isolated real Core.
-    ...("grep" in project ? {grep: new RegExp(`stabilization|${project.grep.source}`)} : {}),
+    ...("grep" in project ? {grep: new RegExp(`stabilization|automation callback|${project.grep.source}`)} : {}),
   })),
   webServer: {
     command: testCommand,

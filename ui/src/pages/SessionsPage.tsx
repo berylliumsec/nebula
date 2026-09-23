@@ -32,6 +32,7 @@ import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionLis
 import { groupSidebarConversations } from "./conversationSidebar";
 import { subagentRequestFields } from "./chatSubagentChoice";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
+import { CallbackWaitingStatus } from "../components/CallbackWaitingStatus";
 import { AssistantApprovalDetails } from "../components/AssistantApprovalDetails";
 import { AssistantSetupLinks } from "../components/AssistantSetupLinks";
 import { useCompactLayout } from "../hooks/useCompactLayout";
@@ -4796,14 +4797,7 @@ export function SessionsPage() {
               {stateSyncError && <div className="chat-recovery-notice" role="status"><p>{stateSyncError}</p><button className="icon-button subtle" type="button" aria-label="Retry response status" title="Retry response status" onClick={refreshSessionState}><RefreshCw size={16} aria-hidden="true" /></button></div>}
               {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} pendingActions={authoritativeState?.pending} ready={!loadingHistory} atLatest={!hasNewerMessages} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => updateSearchParams(next => {next.set("turn", id); next.set("drawer", "context");})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
               {runtimeKind === "provider" && hookExecutions.length > 0 && <details className="chat-action-status" data-guide="hook-outcomes" open={Boolean(interruptedRecovery)}><summary>Lifecycle hooks · {hookExecutions.filter(item => item.status === "complete" || item.status === "reconciled").length}/{hookExecutions.length} completed</summary><div role="list" aria-label="Lifecycle hook outcomes">{hookExecutions.map(execution => { const hookName = nativeHooks.find(hook => hook.id === execution.hookId)?.manifest.name ?? execution.hookId; return <div role="listitem" key={execution.id}><strong>{hookName}</strong><small>{execution.eventName.replaceAll(".", " ")} · {execution.status.replaceAll("_", " ")}{execution.sideEffects !== "none" ? ` · ${execution.sideEffects} effects` : ""}</small>{execution.error && <span role="alert">{execution.error}</span>}{execution.status === "interrupted" && execution.lateOutcomeStatus && <small>Later process exit: {execution.lateOutcomeStatus}{execution.lateOutcomeExitCode !== undefined ? ` (code ${execution.lateOutcomeExitCode})` : ""}. {execution.lateOutcomeStatus === "complete" ? "Checking the saved result." : "Effects may be partial; verify before continuing."}</small>}{execution.reconciliation && typeof execution.reconciliation.detail === "string" && <small>{execution.reconciliation.detail}</small>}</div>; })}</div></details>}
-              {waitingCallback && <div className="chat-action-status" role="status">
-                <span>{waitingCallback.summary}</span>
-                {waitingCallback.resultsUrl && <div className="chat-inline-approval-actions">
-                  <code title={waitingCallback.resultsUrl}>{waitingCallback.resultsUrl}</code>
-                  <button className="button quiet" type="button" onClick={() => void navigator.clipboard.writeText(waitingCallback.resultsUrl ?? "")}>Copy results URL</button>
-                  <small>The command received an API key in NEBULA_RESULTS_KEY. POST the result to this LAN URL.</small>
-                </div>}
-              </div>}
+              {waitingCallback && <CallbackWaitingStatus summary={waitingCallback.summary} resultsUrl={waitingCallback.resultsUrl} />}
               {interruptedRecovery && <div className="chat-action-status" role="status">
                 <span>Core is recovering this response automatically. Recorded receipts will be adopted; uncertain effects will not be replayed.</span>
               </div>}
