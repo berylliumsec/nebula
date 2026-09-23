@@ -88,6 +88,17 @@ def turn_outcome_text(turn: ChatTurn) -> str:
                 f"Response failed: {reason or 'the response could not be completed'}"
             )
         ]
+    resolution = turn.request_snapshot.get("completion_hook_resolution")
+    if isinstance(resolution, dict):
+        candidate = _clip(str(resolution.get("candidate") or ""), 3_500)
+        if candidate:
+            lines.extend(
+                [
+                    "Model decision after completion-hook feedback "
+                    "(not accepted as completion):",
+                    candidate,
+                ]
+            )
     steps = [entry for entry in turn.tool_history if isinstance(entry, dict)]
     omitted = max(0, len(steps) - _STEP_LIMIT)
     shown = steps[omitted:]

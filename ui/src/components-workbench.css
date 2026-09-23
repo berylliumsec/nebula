@@ -613,8 +613,8 @@ kbd { font-size: 11px; }
 .session-list-item:hover { background: var(--surface-hover); }
 .session-list-item.active { color: var(--text); background: var(--blue-muted); }
 .session-list-item.renaming { display: block; }
-.session-list-item > .session-select { display: grid; min-width: 0; min-height: 46px; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: center; padding: 7px 9px; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
-.session-list-item > .session-select > span { display: flex; min-width: 0; flex-direction: column; }
+.session-list-item > .session-select { display: grid; min-width: 0; min-height: 46px; overflow: hidden; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: center; padding: 7px 9px; border: 0; color: inherit; background: transparent; text-align: left; cursor: pointer; }
+.session-list-item > .session-select > span { display: flex; min-width: 0; max-width: 100%; overflow: hidden; flex-direction: column; }
 .session-list-item > .session-select > .conversation-activity-marker { display: block; width: 9px; min-width: 9px; height: 9px; justify-self: center; border: 1.5px solid currentColor; border-radius: 50%; opacity: .72; }
 .session-list-item > .session-select > .conversation-activity-marker.working { border-color: var(--blue); background: var(--blue); animation: conversation-working-pulse 2s ease-in-out infinite; }
 .session-list-item > .session-select > .conversation-activity-marker.waiting { border-color: currentColor; border-radius: 2px; background: currentColor; opacity: 1; transform: rotate(45deg) scale(.78); }
