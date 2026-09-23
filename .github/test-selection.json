@@ -1,32 +1,28 @@
 {
-  "change_digest": "9f16db889f24cec6a80ad485106f8dbc8155bea21b4b6ab928156442c6454e44",
-  "reviewed_by": "Codex focused review for subagent restart cross-record recovery",
-  "reason": "The branch makes the child turn's durable restart-recovery state authoritative over the paired ChatSubagent record, repairs terminal writes from an overlapping old Core before automatic resume, fences the resumed record, preserves premature interruption posts as audit history, and emits a distinct deterministic recovered result. Five selected Python cases cover graceful shutdown, live old/new worker overlap, a previously reported false terminal write, waiting-parent recovery, and in-flight parent/child shutdown. Eight Playwright cases cover the existing recovering/approval presentation on desktop and two mobile engines, production Core integration, and a new real-Core restart acceptance seeded at the contradictory durable state.",
-  "exclusions": "Full suites are not approved and are excluded. Unrelated provider inference, harness execution, Missions, browser tooling, terminals, reports, packaging, migrations, storage engines, and native Rust workflows are excluded. Frontend unit tests are empty because no UI implementation changed; the selected Playwright journeys assert the recovering state, error copy, controls, accessibility, reload behavior, desktop, mobile Chromium, mobile WebKit, and the exact zero-click repair through real Core and the production bundle. Native tests are empty because no Rust or Tauri source changed.",
+  "change_digest": "6a557047d02e9d03e6c3acc552b29c711549faa5bed4faaa66e5dbeab36bbe01",
+  "reviewed_by": "Codex focused review for Nebula Phosphor icon-pack integration",
+  "reason": "The change replaces all 167 production Lucide glyph exports through one checksum-verified Phosphor compatibility registry while preserving existing component props, accessible names, CSS classes, refs, events, theme colors, animation classes, and unique SVG definition IDs. Two focused component cases validate the adapter contract and regular/light selection. Eight dedicated Playwright executions traverse every primary workspace in desktop 1440, compact 1024, Chromium 320/390/430, and WebKit 320/390/430 projects, validating that every visible Lucide-class glyph is mapped, nonempty, sized, and free of duplicate definition IDs.",
+  "exclusions": "Full suites are not approved and are excluded. Backend APIs, persistence, provider and harness execution, terminals, native Tauri packaging, OS app identity icons, Nebula's N monogram/favicon, and unrelated interaction journeys are unchanged. Python and native selections are empty because this is a web-only generated icon registry and focused UI acceptance change. Real-Core state testing is not selected because Core state and API behavior are unchanged; the production build and post-merge live asset identity are verified separately.",
   "expected_tests": {
-    "python": 5,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 2,
     "native": 0,
     "playwright": 8
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_chat_subagents.py::test_restart_keeps_recoverable_subagent_round_live",
-    "tests/v3/test_chat_subagents.py::test_restart_repairs_a_late_terminal_child_write_from_the_old_core",
-    "tests/v3/test_chat_subagents.py::test_core_shutdown_preserves_safely_interrupted_subagents_for_restart",
-    "tests/v3/test_chat_subagents.py::test_restart_resumes_a_parent_waiting_on_an_interrupted_subagent",
-    "tests/v3/test_chat_subagents.py::test_core_shutdown_interrupts_an_inflight_parent_tool_turn"
-  ],
-  "frontend": [],
+  "python": [],
+  "frontend": ["ui/src/icons/icons.test.tsx"],
   "native": [],
   "playwright": [
-    "entry:chat-subagents/desktop",
-    "entry:chat-subagents/mobile-chromium",
-    "entry:chat-subagents/mobile-webkit",
-    "entry:chat-subagents-core/real-core"
+    "entry:icon-pack/desktop",
+    "entry:icon-pack/compact",
+    "entry:icon-pack/mobile-chromium-small",
+    "entry:icon-pack/mobile-chromium-ledger-390",
+    "entry:icon-pack/mobile-chromium-wide",
+    "entry:icon-pack/mobile-webkit-small",
+    "entry:icon-pack/mobile-webkit",
+    "entry:icon-pack/mobile-webkit-wide"
   ]
 }
