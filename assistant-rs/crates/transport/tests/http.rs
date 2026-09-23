@@ -773,3 +773,237 @@ async fn python_navigation_http_oracle_preserves_responses_and_reopened_records(
     assert_eq!(actual, expected);
     reopened.shutdown().await.unwrap();
 }
+
+fn catchup_now() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2030-01-01T12:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+async fn read_oracle(oracle: Value, expected_cases: usize, observed_clock: fn() -> DateTime<Utc>) {
+    use nebula_assistant_storage::entities::ListQuery;
+    assert!(oracle.get("capture_pending").is_none());
+    assert_eq!(oracle["cases"].as_array().unwrap().len(), expected_cases);
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("nebula.db");
+    let mut store = setup(&path).await;
+    store
+        .apply(vec![Mutation::Delete {
+            kind: Kind::Session,
+            id: "session".into(),
+            expected_revision: 1,
+        }])
+        .await
+        .unwrap();
+    let mut stamps = std::collections::BTreeSet::new();
+    let mut connection = raw(&path).await;
+    for field in ["projects", "dependency_records", "initial_records"] {
+        for row in oracle[field].as_array().into_iter().flatten() {
+            let p = &row["payload"];
+            for field in ["created_at", "updated_at"] {
+                let original = p[field].as_str().unwrap();
+                stamps.insert(original.to_owned());
+                stamps.insert(
+                    DateTime::parse_from_rfc3339(original)
+                        .unwrap()
+                        .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false),
+                );
+                let utc = DateTime::parse_from_rfc3339(original)
+                    .unwrap()
+                    .with_timezone(&Utc);
+                for z in [false, true] {
+                    stamps.insert(utc.to_rfc3339_opts(
+                        if utc.timestamp_subsec_micros() == 0 {
+                            chrono::SecondsFormat::Secs
+                        } else {
+                            chrono::SecondsFormat::Micros
+                        },
+                        z,
+                    ));
+                }
+            }
+            if field != "initial_records" {
+                sqlx::query("INSERT INTO entities (id,kind,engagement_id,revision,chat_session_id,payload,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET kind=excluded.kind,engagement_id=excluded.engagement_id,revision=excluded.revision,chat_session_id=excluded.chat_session_id,payload=excluded.payload,created_at=excluded.created_at,updated_at=excluded.updated_at")
+                    .bind(p["id"].as_str()).bind(row["kind"].as_str()).bind(p["engagement_id"].as_str())
+                    .bind(p["revision"].as_i64()).bind(p["chat_session_id"].as_str())
+                    .bind(serde_json::to_string(p).unwrap()).bind(sql_time(&p["created_at"]))
+                    .bind(sql_time(&p["updated_at"])).execute(&mut connection).await.unwrap();
+            }
+        }
+    }
+    connection.close().await.unwrap();
+    for batch in oracle["initial_records"].as_array().unwrap().chunks(64) {
+        let mutations = batch
+            .iter()
+            .map(|row| {
+                Mutation::Create(
+                    StoredAssistantRecord::decode(
+                        Kind::try_from(row["kind"].as_str().unwrap()).unwrap(),
+                        &serde_json::to_vec(&row["payload"]).unwrap(),
+                    )
+                    .unwrap(),
+                )
+            })
+            .collect();
+        store.apply(mutations).await.unwrap();
+    }
+    let mut options = config();
+    options.clock = observed_clock;
+    let mut app = router(store.clone(), options.clone()).unwrap();
+    for case in oracle["cases"].as_array().unwrap() {
+        if case["action"] == "reopen" {
+            drop(app);
+            store.shutdown().await.unwrap();
+            store = SqliteAssistantStore::open(&path, Config::default())
+                .await
+                .unwrap();
+            app = router(store.clone(), options.clone()).unwrap();
+        }
+        let mut input = request(
+            case["method"].as_str().unwrap(),
+            case["path"].as_str().unwrap(),
+            case["body"].clone(),
+        );
+        input.headers_mut().insert(
+            "x-nebula-operation-id",
+            HeaderValue::from_static("fixture-operation"),
+        );
+        if let Some(auth) = case["auth"]["headers"].as_object() {
+            input.headers_mut().remove("authorization");
+            for (name, value) in auth {
+                input.headers_mut().insert(
+                    axum::http::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                    HeaderValue::from_str(value.as_str().unwrap()).unwrap(),
+                );
+            }
+        }
+        let response = app.clone().oneshot(input).await.unwrap();
+        let status = response.status().as_u16();
+        let actual = navigation_normalize(value(response).await, &stamps);
+        assert_eq!(
+            json!({"status":status,"body":actual}),
+            case["expected"],
+            "{}",
+            case["name"]
+        );
+    }
+    drop(app);
+    store.shutdown().await.unwrap();
+    let reopened = SqliteAssistantStore::open(&path, Config::default())
+        .await
+        .unwrap();
+    let mut actual = std::collections::BTreeMap::new();
+    for kind in Kind::ALL {
+        let mut offset = 0;
+        loop {
+            let page = reopened
+                .list(ListQuery {
+                    limit: 1000,
+                    offset,
+                    include_temporary: true,
+                    ..ListQuery::new(kind)
+                })
+                .await
+                .unwrap();
+            for row in page.records {
+                let p = navigation_normalize(row.into_payload(), &stamps);
+                actual.insert(
+                    p["id"].as_str().unwrap().to_owned(),
+                    json!({"kind":kind.as_str(),"payload":p}),
+                );
+            }
+            if let Some(next) = page.next_offset {
+                assert!(next > offset);
+                offset = next;
+            } else {
+                break;
+            }
+        }
+    }
+    let expected: std::collections::BTreeMap<_, _> = oracle["final_records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["payload"]["id"].as_str().unwrap().to_owned(),
+                row.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected);
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn python_catalog_http_oracle_preserves_complete_arrays_and_record_shapes() {
+    read_oracle(
+        serde_json::from_str(include_str!("../../../compatibility/python-catalog.json")).unwrap(),
+        64,
+        now,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn python_catchup_http_oracle_preserves_pending_actions_and_device_cursors() {
+    read_oracle(
+        serde_json::from_str(include_str!("../../../compatibility/python-catchup.json")).unwrap(),
+        76,
+        catchup_now,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn catalog_http_does_not_end_ui_pagination_at_the_internal_page_byte_budget() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("nebula.db");
+    let store = setup(&path).await;
+    for first in (0..1001).step_by(64) {
+        let mut records = Vec::new();
+        for index in first..(first + 64).min(1001) {
+            let mut p = fixture()["session"].clone();
+            p["id"] = format!("catalog-{index:04}").into();
+            p["engagement_id"] = "large-catalog".into();
+            p["metadata"] = json!({"retained":"x".repeat(5000)});
+            records.push(Mutation::Create(
+                StoredAssistantRecord::decode(Kind::Session, &serde_json::to_vec(&p).unwrap())
+                    .unwrap(),
+            ));
+        }
+        store.apply(records).await.unwrap();
+    }
+    let app = router(store.clone(), config()).unwrap();
+    let mut ids = Vec::new();
+    loop {
+        let response = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!(
+                    "/api/v1/chat-sessions?engagement_id=large-catalog&limit=1000&offset={}",
+                    ids.len()
+                ),
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = to_bytes(response.into_body(), 16 * 1024 * 1024)
+            .await
+            .unwrap();
+        if ids.is_empty() {
+            assert!(bytes.len() > 4 * 1024 * 1024);
+        }
+        let rows: Vec<Value> = serde_json::from_slice(&bytes).unwrap();
+        ids.extend(rows.iter().map(|r| r["id"].as_str().unwrap().to_owned()));
+        if rows.len() < 1000 {
+            break;
+        }
+    }
+    assert_eq!(ids.len(), 1001);
+    assert_eq!(ids.first().unwrap(), "catalog-0000");
+    assert_eq!(ids.last().unwrap(), "catalog-1000");
+    store.shutdown().await.unwrap();
+}

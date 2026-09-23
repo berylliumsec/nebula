@@ -2,6 +2,7 @@
 //! Unknown fields retain the existing BaseModel behavior: they are ignored.
 use crate::ApiError;
 use nebula_assistant_services::context::{CursorWrite, DecisionWrite};
+use nebula_assistant_services::generated::GeneratedListRequest;
 use nebula_assistant_services::navigation::{BookmarkWrite, SearchRequest};
 use serde_json::{Map, Value, json};
 use speedate::{Date, DateTime, DateTimeConfig, MicrosecondsPrecisionOverflowBehavior, TimeConfig};
@@ -341,9 +342,99 @@ pub(crate) fn search(query: Option<&str>) -> Result<SearchRequest, ApiError> {
             false
         })
     });
-    for (name, default, minimum, maximum) in
-        [("offset", 0_u64, 0_u64, None), ("limit", 50, 1, Some(100))]
-    {
+    pagination(
+        &fields,
+        &mut output,
+        &mut errors,
+        50,
+        100,
+        i64::MAX as u64 - 101,
+    )?;
+    if !errors.is_empty() {
+        return Err(query_errors(errors));
+    }
+    Ok(SearchRequest {
+        q: output["q"].as_str().expect("validated text").into(),
+        session_id: fields
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        bookmarked,
+        offset: output["offset"].as_u64().expect("validated offset"),
+        limit: output["limit"].as_u64().expect("validated limit") as u32,
+    })
+}
+
+pub(crate) fn catalog(query: Option<&str>) -> Result<GeneratedListRequest, ApiError> {
+    let fields = query_fields(query)?;
+    let mut output = Map::new();
+    let mut errors = Vec::new();
+    pagination(
+        &fields,
+        &mut output,
+        &mut errors,
+        100,
+        1000,
+        i64::MAX as u64,
+    )?;
+    if !errors.is_empty() {
+        return Err(query_errors(errors));
+    }
+    Ok(GeneratedListRequest {
+        engagement_id: fields
+            .get("engagement_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        offset: output["offset"].as_u64().expect("validated offset"),
+        limit: output["limit"].as_u64().expect("validated limit") as u32,
+    })
+}
+
+pub(crate) fn catchup_device(query: Option<&str>) -> Result<String, ApiError> {
+    let fields = query_fields(query)?;
+    let mut output = Map::new();
+    let mut errors = Vec::new();
+    if let Some(device) = fields.get("device_id") {
+        string(
+            &mut output,
+            &mut errors,
+            "device_id",
+            device,
+            false,
+            Some(1),
+            Some(200),
+            None,
+        );
+    } else {
+        errors.push(field_error(
+            "missing",
+            "device_id",
+            "Field required",
+            &Value::Null,
+        ));
+    }
+    if !errors.is_empty() {
+        return Err(query_errors(errors));
+    }
+    Ok(output["device_id"]
+        .as_str()
+        .expect("validated device")
+        .into())
+}
+
+fn pagination(
+    fields: &Map<String, Value>,
+    output: &mut Map<String, Value>,
+    errors: &mut Vec<Value>,
+    default_limit: u64,
+    max_limit: u64,
+    max_offset: u64,
+) -> Result<(), ApiError> {
+    let mut unsupported_offset = false;
+    for (name, default, minimum, maximum) in [
+        ("offset", 0_u64, 0_u64, None),
+        ("limit", default_limit, 1, Some(max_limit)),
+    ] {
         let Some(value) = fields.get(name) else {
             output.insert(name.into(), default.into());
             continue;
@@ -368,11 +459,8 @@ pub(crate) fn search(query: Option<&str>) -> Result<SearchRequest, ApiError> {
                         value,
                         Some(json!({"le":max})),
                     ));
-                } else if numeric.is_none_or(|n| n > i64::MAX as u64 - 101) {
-                    return Err(ApiError::http(
-                        422,
-                        "Assistant offset exceeds supported storage bounds",
-                    ));
+                } else if numeric.is_none_or(|n| n > max_offset) {
+                    unsupported_offset = true;
                 } else {
                     output.insert(name.into(), number);
                 }
@@ -380,19 +468,15 @@ pub(crate) fn search(query: Option<&str>) -> Result<SearchRequest, ApiError> {
             Err((kind, message)) => errors.push(field_error(kind, name, message, value)),
         }
     }
-    if !errors.is_empty() {
-        return Err(query_errors(errors));
+    // Model validation precedes the database's narrower integer range. Keep
+    // ordinary field errors authoritative even when the offset cannot be bound.
+    if unsupported_offset && errors.is_empty() {
+        return Err(ApiError::http(
+            422,
+            "Assistant offset exceeds supported storage bounds",
+        ));
     }
-    Ok(SearchRequest {
-        q: output["q"].as_str().expect("validated text").into(),
-        session_id: fields
-            .get("session_id")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        bookmarked,
-        offset: output["offset"].as_u64().expect("validated offset"),
-        limit: output["limit"].as_u64().expect("validated limit") as u32,
-    })
+    Ok(())
 }
 
 fn integer(value: &Value) -> Result<Value, IntegerError> {

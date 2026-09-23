@@ -1,0 +1,4365 @@
+{
+  "cases": [
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "archived",
+            "metadata": {
+              "archived_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog archived β",
+            "updated_at": "2020-01-20T23:59:59Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "session",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog session β",
+            "updated_at": "2020-01-21T00:00:00Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "child",
+            "metadata": {
+              "subagent_id": "child-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog child β",
+            "updated_at": "2020-01-20T23:59:58Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "orphan-child",
+            "metadata": {
+              "subagent_id": "orphan-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "missing",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog orphan-child β",
+            "updated_at": "2020-01-20T23:59:57Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:02Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "empty-marker-child",
+            "metadata": {
+              "subagent_id": ""
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog empty-marker-child β",
+            "updated_at": "2020-01-20T23:59:56Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:02Z",
+            "engagement_id": "other-project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "foreign",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog foreign β",
+            "updated_at": "2020-01-20T23:59:55Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:03Z",
+            "engagement_id": "",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "empty-project",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog empty-project β",
+            "updated_at": "2020-01-20T23:59:54Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:04Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-1",
+            "metadata": {
+              "temporary_assistant": false
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-1 β",
+            "updated_at": "2020-01-20T23:59:52Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:04Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-2",
+            "metadata": {
+              "temporary_assistant": null
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-2 β",
+            "updated_at": "2020-01-20T23:59:51Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:05Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-3",
+            "metadata": {
+              "temporary_assistant": 0
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-3 β",
+            "updated_at": "2020-01-20T23:59:50Z"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-all",
+      "path": "/api/v1/chat-sessions"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "archived",
+            "metadata": {
+              "archived_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog archived β",
+            "updated_at": "2020-01-20T23:59:59Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "session",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog session β",
+            "updated_at": "2020-01-21T00:00:00Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "child",
+            "metadata": {
+              "subagent_id": "child-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog child β",
+            "updated_at": "2020-01-20T23:59:58Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "orphan-child",
+            "metadata": {
+              "subagent_id": "orphan-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "missing",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog orphan-child β",
+            "updated_at": "2020-01-20T23:59:57Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:02Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "empty-marker-child",
+            "metadata": {
+              "subagent_id": ""
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog empty-marker-child β",
+            "updated_at": "2020-01-20T23:59:56Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:04Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-1",
+            "metadata": {
+              "temporary_assistant": false
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-1 β",
+            "updated_at": "2020-01-20T23:59:52Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:04Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-2",
+            "metadata": {
+              "temporary_assistant": null
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-2 β",
+            "updated_at": "2020-01-20T23:59:51Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:05Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-3",
+            "metadata": {
+              "temporary_assistant": 0
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-3 β",
+            "updated_at": "2020-01-20T23:59:50Z"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-project",
+      "path": "/api/v1/chat-sessions?engagement_id=project"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:02Z",
+            "engagement_id": "other-project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "foreign",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog foreign β",
+            "updated_at": "2020-01-20T23:59:55Z"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-foreign-project",
+      "path": "/api/v1/chat-sessions?engagement_id=other-project"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-missing-project",
+      "path": "/api/v1/chat-sessions?engagement_id=missing"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:03Z",
+            "engagement_id": "",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "empty-project",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog empty-project β",
+            "updated_at": "2020-01-20T23:59:54Z"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-empty-project",
+      "path": "/api/v1/chat-sessions?engagement_id="
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "archived",
+            "metadata": {
+              "archived_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog archived β",
+            "updated_at": "2020-01-20T23:59:59Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "session",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog session β",
+            "updated_at": "2020-01-21T00:00:00Z"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-first-page",
+      "path": "/api/v1/chat-sessions?limit=2"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "child",
+            "metadata": {
+              "subagent_id": "child-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog child β",
+            "updated_at": "2020-01-20T23:59:58Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "orphan-child",
+            "metadata": {
+              "subagent_id": "orphan-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "missing",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog orphan-child β",
+            "updated_at": "2020-01-20T23:59:57Z"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-second-page",
+      "path": "/api/v1/chat-sessions?offset=2&limit=2"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-beyond-end",
+      "path": "/api/v1/chat-sessions?offset=1000"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "archived",
+            "metadata": {
+              "archived_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog archived β",
+            "updated_at": "2020-01-20T23:59:59Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "session",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog session β",
+            "updated_at": "2020-01-21T00:00:00Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "child",
+            "metadata": {
+              "subagent_id": "child-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog child β",
+            "updated_at": "2020-01-20T23:59:58Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "orphan-child",
+            "metadata": {
+              "subagent_id": "orphan-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "missing",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog orphan-child β",
+            "updated_at": "2020-01-20T23:59:57Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:02Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "empty-marker-child",
+            "metadata": {
+              "subagent_id": ""
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog empty-marker-child β",
+            "updated_at": "2020-01-20T23:59:56Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:02Z",
+            "engagement_id": "other-project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "foreign",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog foreign β",
+            "updated_at": "2020-01-20T23:59:55Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:03Z",
+            "engagement_id": "",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "empty-project",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog empty-project β",
+            "updated_at": "2020-01-20T23:59:54Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:04Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-1",
+            "metadata": {
+              "temporary_assistant": false
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-1 β",
+            "updated_at": "2020-01-20T23:59:52Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:04Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-2",
+            "metadata": {
+              "temporary_assistant": null
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-2 β",
+            "updated_at": "2020-01-20T23:59:51Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:05Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-3",
+            "metadata": {
+              "temporary_assistant": 0
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-3 β",
+            "updated_at": "2020-01-20T23:59:50Z"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-ignored-filters",
+      "path": "/api/v1/chat-sessions?session_id=missing&include_temporary=true&archived=false&newest_first=true&status=missing"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "archived",
+            "metadata": {
+              "archived_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog archived β",
+            "updated_at": "2020-01-20T23:59:59Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "session",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog session β",
+            "updated_at": "2020-01-21T00:00:00Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "child",
+            "metadata": {
+              "subagent_id": "child-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog child β",
+            "updated_at": "2020-01-20T23:59:58Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "orphan-child",
+            "metadata": {
+              "subagent_id": "orphan-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "missing",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog orphan-child β",
+            "updated_at": "2020-01-20T23:59:57Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:02Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "empty-marker-child",
+            "metadata": {
+              "subagent_id": ""
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog empty-marker-child β",
+            "updated_at": "2020-01-20T23:59:56Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:04Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-1",
+            "metadata": {
+              "temporary_assistant": false
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-1 β",
+            "updated_at": "2020-01-20T23:59:52Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:04Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-2",
+            "metadata": {
+              "temporary_assistant": null
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-2 β",
+            "updated_at": "2020-01-20T23:59:51Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:05Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-3",
+            "metadata": {
+              "temporary_assistant": 0
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-3 β",
+            "updated_at": "2020-01-20T23:59:50Z"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-duplicate-project",
+      "path": "/api/v1/chat-sessions?engagement_id=missing&engagement_id=project"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "archived",
+            "metadata": {
+              "archived_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog archived β",
+            "updated_at": "2020-01-20T23:59:59Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "session",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog session β",
+            "updated_at": "2020-01-21T00:00:00Z"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-duplicate-limit",
+      "path": "/api/v1/chat-sessions?limit=bad&limit=2"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "session",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog session β",
+            "updated_at": "2020-01-21T00:00:00Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "child",
+            "metadata": {
+              "subagent_id": "child-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog child β",
+            "updated_at": "2020-01-20T23:59:58Z"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-coerced-integer",
+      "path": "/api/v1/chat-sessions?offset=%2B1.0&limit=+02+"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "archived",
+            "metadata": {
+              "archived_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog archived β",
+            "updated_at": "2020-01-20T23:59:59Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:00Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "session",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog session β",
+            "updated_at": "2020-01-21T00:00:00Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "child",
+            "metadata": {
+              "subagent_id": "child-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog child β",
+            "updated_at": "2020-01-20T23:59:58Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:01Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "orphan-child",
+            "metadata": {
+              "subagent_id": "orphan-link"
+            },
+            "model": "fixture-model",
+            "parent_session_id": "missing",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog orphan-child β",
+            "updated_at": "2020-01-20T23:59:57Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:02Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "empty-marker-child",
+            "metadata": {
+              "subagent_id": ""
+            },
+            "model": "fixture-model",
+            "parent_session_id": "session",
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog empty-marker-child β",
+            "updated_at": "2020-01-20T23:59:56Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:02Z",
+            "engagement_id": "other-project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "foreign",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog foreign β",
+            "updated_at": "2020-01-20T23:59:55Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:03Z",
+            "engagement_id": "",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "empty-project",
+            "metadata": {},
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog empty-project β",
+            "updated_at": "2020-01-20T23:59:54Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:04Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-1",
+            "metadata": {
+              "temporary_assistant": false
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-1 β",
+            "updated_at": "2020-01-20T23:59:52Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:04Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-2",
+            "metadata": {
+              "temporary_assistant": null
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-2 β",
+            "updated_at": "2020-01-20T23:59:51Z"
+          },
+          {
+            "backend": "provider",
+            "created_at": "2020-01-01T00:00:05Z",
+            "engagement_id": "project",
+            "forked_from_message_id": null,
+            "harness_profile_id": null,
+            "harness_session_id": null,
+            "id": "temporary-3",
+            "metadata": {
+              "temporary_assistant": 0
+            },
+            "model": "fixture-model",
+            "parent_session_id": null,
+            "provider_profile_id": "fixture-provider",
+            "revision": 1,
+            "title": "Catalog temporary-3 β",
+            "updated_at": "2020-01-20T23:59:50Z"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-underscore-integer",
+      "path": "/api/v1/chat-sessions?limit=1_0"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 1
+              },
+              "input": "0",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be greater than or equal to 1",
+              "type": "greater_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-sessions-limit-zero",
+      "path": "/api/v1/chat-sessions?limit=0"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "le": 1000
+              },
+              "input": "1001",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be less than or equal to 1000",
+              "type": "less_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-sessions-limit-high",
+      "path": "/api/v1/chat-sessions?limit=1001"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 1
+              },
+              "input": "-1",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be greater than or equal to 1",
+              "type": "greater_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-sessions-limit-negative",
+      "path": "/api/v1/chat-sessions?limit=-1"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "1.5",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "type": "int_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the response and the affected operation did not complete.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "A required component returned a response that does not match the supported Nebula protocol.",
+          "reason_code": "protocol_invalid",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.protocol_invalid",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-sessions-limit-fraction",
+      "path": "/api/v1/chat-sessions?limit=1.5"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "true",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "type": "int_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the response and the affected operation did not complete.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "A required component returned a response that does not match the supported Nebula protocol.",
+          "reason_code": "protocol_invalid",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.protocol_invalid",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-sessions-limit-bool",
+      "path": "/api/v1/chat-sessions?limit=true"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "type": "int_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the response and the affected operation did not complete.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "A required component returned a response that does not match the supported Nebula protocol.",
+          "reason_code": "protocol_invalid",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.protocol_invalid",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-sessions-limit-empty",
+      "path": "/api/v1/chat-sessions?limit="
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 0
+              },
+              "input": "-1",
+              "loc": [
+                "query",
+                "offset"
+              ],
+              "msg": "Input should be greater than or equal to 0",
+              "type": "greater_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-sessions-offset-negative",
+      "path": "/api/v1/chat-sessions?offset=-1"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "bad",
+              "loc": [
+                "query",
+                "offset"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "type": "int_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the response and the affected operation did not complete.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "A required component returned a response that does not match the supported Nebula protocol.",
+          "reason_code": "protocol_invalid",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.protocol_invalid",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-sessions-offset-invalid",
+      "path": "/api/v1/chat-sessions?offset=bad"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 0
+              },
+              "input": "-1",
+              "loc": [
+                "query",
+                "offset"
+              ],
+              "msg": "Input should be greater than or equal to 0",
+              "type": "greater_than_equal"
+            },
+            {
+              "ctx": {
+                "ge": 1
+              },
+              "input": "0",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be greater than or equal to 1",
+              "type": "greater_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-sessions-multiple-errors",
+      "path": "/api/v1/chat-sessions?offset=-1&limit=0"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 20,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:00Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical replaced β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "replaced",
+            "metadata": {
+              "retracted_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 19,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:01Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical orphan β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "orphan",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 18,
+            "session_id": "missing",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:02Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical temporary-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "temporary-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 17,
+            "session_id": "temporary-0",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:03Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical empty-project-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:02Z",
+            "elapsed_ms": null,
+            "engagement_id": "",
+            "finish_reason": null,
+            "id": "empty-project-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 15,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:05Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical foreign-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:02Z",
+            "elapsed_ms": null,
+            "engagement_id": "other-project",
+            "finish_reason": null,
+            "id": "foreign-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 16,
+            "session_id": "foreign",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:04Z",
+            "usage": null
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-all",
+      "path": "/api/v1/chat-messages"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 20,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:00Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical replaced β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "replaced",
+            "metadata": {
+              "retracted_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 19,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:01Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical orphan β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "orphan",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 18,
+            "session_id": "missing",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:02Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical temporary-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "temporary-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 17,
+            "session_id": "temporary-0",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:03Z",
+            "usage": null
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-project",
+      "path": "/api/v1/chat-messages?engagement_id=project"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical foreign-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:02Z",
+            "elapsed_ms": null,
+            "engagement_id": "other-project",
+            "finish_reason": null,
+            "id": "foreign-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 16,
+            "session_id": "foreign",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:04Z",
+            "usage": null
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-foreign-project",
+      "path": "/api/v1/chat-messages?engagement_id=other-project"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-missing-project",
+      "path": "/api/v1/chat-messages?engagement_id=missing"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical empty-project-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:02Z",
+            "elapsed_ms": null,
+            "engagement_id": "",
+            "finish_reason": null,
+            "id": "empty-project-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 15,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:05Z",
+            "usage": null
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-empty-project",
+      "path": "/api/v1/chat-messages?engagement_id="
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 20,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:00Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical replaced β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "replaced",
+            "metadata": {
+              "retracted_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 19,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:01Z",
+            "usage": null
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-first-page",
+      "path": "/api/v1/chat-messages?limit=2"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical orphan β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "orphan",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 18,
+            "session_id": "missing",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:02Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical temporary-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "temporary-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 17,
+            "session_id": "temporary-0",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:03Z",
+            "usage": null
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-second-page",
+      "path": "/api/v1/chat-messages?offset=2&limit=2"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-beyond-end",
+      "path": "/api/v1/chat-messages?offset=1000"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 20,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:00Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical replaced β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "replaced",
+            "metadata": {
+              "retracted_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 19,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:01Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical orphan β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "orphan",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 18,
+            "session_id": "missing",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:02Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical temporary-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "temporary-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 17,
+            "session_id": "temporary-0",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:03Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical empty-project-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:02Z",
+            "elapsed_ms": null,
+            "engagement_id": "",
+            "finish_reason": null,
+            "id": "empty-project-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 15,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:05Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical foreign-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:02Z",
+            "elapsed_ms": null,
+            "engagement_id": "other-project",
+            "finish_reason": null,
+            "id": "foreign-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 16,
+            "session_id": "foreign",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:04Z",
+            "usage": null
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-ignored-filters",
+      "path": "/api/v1/chat-messages?session_id=missing&include_temporary=true&archived=false&newest_first=true&status=missing"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 20,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:00Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical replaced β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "replaced",
+            "metadata": {
+              "retracted_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 19,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:01Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical orphan β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "orphan",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 18,
+            "session_id": "missing",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:02Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical temporary-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "temporary-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 17,
+            "session_id": "temporary-0",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:03Z",
+            "usage": null
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-duplicate-project",
+      "path": "/api/v1/chat-messages?engagement_id=missing&engagement_id=project"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 20,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:00Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical replaced β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "replaced",
+            "metadata": {
+              "retracted_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 19,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:01Z",
+            "usage": null
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-duplicate-limit",
+      "path": "/api/v1/chat-messages?limit=bad&limit=2"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical replaced β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "replaced",
+            "metadata": {
+              "retracted_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 19,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:01Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical orphan β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "orphan",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 18,
+            "session_id": "missing",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:02Z",
+            "usage": null
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-coerced-integer",
+      "path": "/api/v1/chat-messages?offset=%2B1.0&limit=+02+"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 20,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:00Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical replaced β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:00Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "replaced",
+            "metadata": {
+              "retracted_at": "2020-01-01T00:00:00+00:00"
+            },
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 19,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:01Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical orphan β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "orphan",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 18,
+            "session_id": "missing",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:02Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical temporary-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:01Z",
+            "elapsed_ms": null,
+            "engagement_id": "project",
+            "finish_reason": null,
+            "id": "temporary-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 17,
+            "session_id": "temporary-0",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:03Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical empty-project-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:02Z",
+            "elapsed_ms": null,
+            "engagement_id": "",
+            "finish_reason": null,
+            "id": "empty-project-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 15,
+            "session_id": "session",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:05Z",
+            "usage": null
+          },
+          {
+            "approval_wait_ms": null,
+            "citations": [],
+            "content": "Canonical foreign-message β",
+            "content_blocks": [],
+            "created_at": "2020-01-01T00:00:02Z",
+            "elapsed_ms": null,
+            "engagement_id": "other-project",
+            "finish_reason": null,
+            "id": "foreign-message",
+            "metadata": {},
+            "model": null,
+            "provider_profile_id": null,
+            "provider_request_id": null,
+            "reasoning": "",
+            "revision": 1,
+            "role": "assistant",
+            "sequence": 16,
+            "session_id": "foreign",
+            "source_message_id": null,
+            "updated_at": "2020-01-02T00:00:04Z",
+            "usage": null
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-underscore-integer",
+      "path": "/api/v1/chat-messages?limit=1_0"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 1
+              },
+              "input": "0",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be greater than or equal to 1",
+              "type": "greater_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-messages-limit-zero",
+      "path": "/api/v1/chat-messages?limit=0"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "le": 1000
+              },
+              "input": "1001",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be less than or equal to 1000",
+              "type": "less_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-messages-limit-high",
+      "path": "/api/v1/chat-messages?limit=1001"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 1
+              },
+              "input": "-1",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be greater than or equal to 1",
+              "type": "greater_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-messages-limit-negative",
+      "path": "/api/v1/chat-messages?limit=-1"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "1.5",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "type": "int_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the response and the affected operation did not complete.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "A required component returned a response that does not match the supported Nebula protocol.",
+          "reason_code": "protocol_invalid",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.protocol_invalid",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-messages-limit-fraction",
+      "path": "/api/v1/chat-messages?limit=1.5"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "true",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "type": "int_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the response and the affected operation did not complete.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "A required component returned a response that does not match the supported Nebula protocol.",
+          "reason_code": "protocol_invalid",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.protocol_invalid",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-messages-limit-bool",
+      "path": "/api/v1/chat-messages?limit=true"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "type": "int_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the response and the affected operation did not complete.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "A required component returned a response that does not match the supported Nebula protocol.",
+          "reason_code": "protocol_invalid",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.protocol_invalid",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-messages-limit-empty",
+      "path": "/api/v1/chat-messages?limit="
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 0
+              },
+              "input": "-1",
+              "loc": [
+                "query",
+                "offset"
+              ],
+              "msg": "Input should be greater than or equal to 0",
+              "type": "greater_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-messages-offset-negative",
+      "path": "/api/v1/chat-messages?offset=-1"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "bad",
+              "loc": [
+                "query",
+                "offset"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "type": "int_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the response and the affected operation did not complete.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "A required component returned a response that does not match the supported Nebula protocol.",
+          "reason_code": "protocol_invalid",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.protocol_invalid",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-messages-offset-invalid",
+      "path": "/api/v1/chat-messages?offset=bad"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 0
+              },
+              "input": "-1",
+              "loc": [
+                "query",
+                "offset"
+              ],
+              "msg": "Input should be greater than or equal to 0",
+              "type": "greater_than_equal"
+            },
+            {
+              "ctx": {
+                "ge": 1
+              },
+              "input": "0",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be greater than or equal to 1",
+              "type": "greater_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-messages-multiple-errors",
+      "path": "/api/v1/chat-messages?offset=-1&limit=0"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "backend": "provider",
+          "created_at": "2020-01-01T00:00:00Z",
+          "engagement_id": "project",
+          "forked_from_message_id": null,
+          "harness_profile_id": null,
+          "harness_session_id": null,
+          "id": "session",
+          "metadata": {},
+          "model": "fixture-model",
+          "parent_session_id": null,
+          "provider_profile_id": "fixture-provider",
+          "revision": 1,
+          "title": "Catalog session β",
+          "updated_at": "2020-01-21T00:00:00Z"
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-get-0",
+      "path": "/api/v1/chat-sessions/session"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "backend": "provider",
+          "created_at": "2020-01-01T00:00:00Z",
+          "engagement_id": "project",
+          "forked_from_message_id": null,
+          "harness_profile_id": null,
+          "harness_session_id": null,
+          "id": "archived",
+          "metadata": {
+            "archived_at": "2020-01-01T00:00:00+00:00"
+          },
+          "model": "fixture-model",
+          "parent_session_id": null,
+          "provider_profile_id": "fixture-provider",
+          "revision": 1,
+          "title": "Catalog archived β",
+          "updated_at": "2020-01-20T23:59:59Z"
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-get-1",
+      "path": "/api/v1/chat-sessions/archived"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "backend": "provider",
+          "created_at": "2020-01-01T00:00:01Z",
+          "engagement_id": "project",
+          "forked_from_message_id": null,
+          "harness_profile_id": null,
+          "harness_session_id": null,
+          "id": "child",
+          "metadata": {
+            "subagent_id": "child-link"
+          },
+          "model": "fixture-model",
+          "parent_session_id": "session",
+          "provider_profile_id": "fixture-provider",
+          "revision": 1,
+          "title": "Catalog child β",
+          "updated_at": "2020-01-20T23:59:58Z"
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-get-2",
+      "path": "/api/v1/chat-sessions/child"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "backend": "provider",
+          "created_at": "2020-01-01T00:00:01Z",
+          "engagement_id": "project",
+          "forked_from_message_id": null,
+          "harness_profile_id": null,
+          "harness_session_id": null,
+          "id": "orphan-child",
+          "metadata": {
+            "subagent_id": "orphan-link"
+          },
+          "model": "fixture-model",
+          "parent_session_id": "missing",
+          "provider_profile_id": "fixture-provider",
+          "revision": 1,
+          "title": "Catalog orphan-child β",
+          "updated_at": "2020-01-20T23:59:57Z"
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-get-3",
+      "path": "/api/v1/chat-sessions/orphan-child"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "backend": "provider",
+          "created_at": "2020-01-01T00:00:03Z",
+          "engagement_id": "project",
+          "forked_from_message_id": null,
+          "harness_profile_id": null,
+          "harness_session_id": null,
+          "id": "temporary-0",
+          "metadata": {
+            "temporary_assistant": true
+          },
+          "model": "fixture-model",
+          "parent_session_id": null,
+          "provider_profile_id": "fixture-provider",
+          "revision": 1,
+          "title": "Catalog temporary-0 β",
+          "updated_at": "2020-01-20T23:59:53Z"
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-get-4",
+      "path": "/api/v1/chat-sessions/temporary-0"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "backend": "provider",
+          "created_at": "2020-01-01T00:00:06Z",
+          "engagement_id": "project",
+          "forked_from_message_id": null,
+          "harness_profile_id": null,
+          "harness_session_id": null,
+          "id": "temporary-5",
+          "metadata": {
+            "temporary_assistant": "false"
+          },
+          "model": "fixture-model",
+          "parent_session_id": null,
+          "provider_profile_id": "fixture-provider",
+          "revision": 1,
+          "title": "Catalog temporary-5 β",
+          "updated_at": "2020-01-20T23:59:48Z"
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-get-5",
+      "path": "/api/v1/chat-sessions/temporary-5"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_sessions entity not found: missing",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_sessions entity not found: missing",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "GET",
+      "name": "chat-sessions-get-6",
+      "path": "/api/v1/chat-sessions/missing"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_sessions entity not found: message",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_sessions entity not found: message",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "GET",
+      "name": "chat-sessions-get-7",
+      "path": "/api/v1/chat-sessions/message"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_sessions entity not found: βββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββ",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_sessions entity not found: βββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββ",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "GET",
+      "name": "chat-sessions-get-8",
+      "path": "/api/v1/chat-sessions/%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "backend": "provider",
+          "created_at": "2020-01-01T00:00:00Z",
+          "engagement_id": "project",
+          "forked_from_message_id": null,
+          "harness_profile_id": null,
+          "harness_session_id": null,
+          "id": "session",
+          "metadata": {},
+          "model": "fixture-model",
+          "parent_session_id": null,
+          "provider_profile_id": "fixture-provider",
+          "revision": 1,
+          "title": "Catalog session β",
+          "updated_at": "2020-01-21T00:00:00Z"
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-sessions-get-ignored-query",
+      "path": "/api/v1/chat-sessions/session?engagement_id=missing&limit=bad"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "approval_wait_ms": null,
+          "citations": [],
+          "content": "Canonical message β",
+          "content_blocks": [],
+          "created_at": "2020-01-01T00:00:00Z",
+          "elapsed_ms": null,
+          "engagement_id": "project",
+          "finish_reason": null,
+          "id": "message",
+          "metadata": {},
+          "model": null,
+          "provider_profile_id": null,
+          "provider_request_id": null,
+          "reasoning": "",
+          "revision": 1,
+          "role": "assistant",
+          "sequence": 20,
+          "session_id": "session",
+          "source_message_id": null,
+          "updated_at": "2020-01-02T00:00:00Z",
+          "usage": null
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-get-0",
+      "path": "/api/v1/chat-messages/message"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "approval_wait_ms": null,
+          "citations": [],
+          "content": "Canonical replaced β",
+          "content_blocks": [],
+          "created_at": "2020-01-01T00:00:00Z",
+          "elapsed_ms": null,
+          "engagement_id": "project",
+          "finish_reason": null,
+          "id": "replaced",
+          "metadata": {
+            "retracted_at": "2020-01-01T00:00:00+00:00"
+          },
+          "model": null,
+          "provider_profile_id": null,
+          "provider_request_id": null,
+          "reasoning": "",
+          "revision": 1,
+          "role": "assistant",
+          "sequence": 19,
+          "session_id": "session",
+          "source_message_id": null,
+          "updated_at": "2020-01-02T00:00:01Z",
+          "usage": null
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-get-1",
+      "path": "/api/v1/chat-messages/replaced"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "approval_wait_ms": null,
+          "citations": [],
+          "content": "Canonical orphan β",
+          "content_blocks": [],
+          "created_at": "2020-01-01T00:00:01Z",
+          "elapsed_ms": null,
+          "engagement_id": "project",
+          "finish_reason": null,
+          "id": "orphan",
+          "metadata": {},
+          "model": null,
+          "provider_profile_id": null,
+          "provider_request_id": null,
+          "reasoning": "",
+          "revision": 1,
+          "role": "assistant",
+          "sequence": 18,
+          "session_id": "missing",
+          "source_message_id": null,
+          "updated_at": "2020-01-02T00:00:02Z",
+          "usage": null
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-get-2",
+      "path": "/api/v1/chat-messages/orphan"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "approval_wait_ms": null,
+          "citations": [],
+          "content": "Canonical temporary-message β",
+          "content_blocks": [],
+          "created_at": "2020-01-01T00:00:01Z",
+          "elapsed_ms": null,
+          "engagement_id": "project",
+          "finish_reason": null,
+          "id": "temporary-message",
+          "metadata": {},
+          "model": null,
+          "provider_profile_id": null,
+          "provider_request_id": null,
+          "reasoning": "",
+          "revision": 1,
+          "role": "assistant",
+          "sequence": 17,
+          "session_id": "temporary-0",
+          "source_message_id": null,
+          "updated_at": "2020-01-02T00:00:03Z",
+          "usage": null
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-get-3",
+      "path": "/api/v1/chat-messages/temporary-message"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "approval_wait_ms": null,
+          "citations": [],
+          "content": "Canonical foreign-message β",
+          "content_blocks": [],
+          "created_at": "2020-01-01T00:00:02Z",
+          "elapsed_ms": null,
+          "engagement_id": "other-project",
+          "finish_reason": null,
+          "id": "foreign-message",
+          "metadata": {},
+          "model": null,
+          "provider_profile_id": null,
+          "provider_request_id": null,
+          "reasoning": "",
+          "revision": 1,
+          "role": "assistant",
+          "sequence": 16,
+          "session_id": "foreign",
+          "source_message_id": null,
+          "updated_at": "2020-01-02T00:00:04Z",
+          "usage": null
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-get-4",
+      "path": "/api/v1/chat-messages/foreign-message"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_messages entity not found: missing",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_messages entity not found: missing",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "GET",
+      "name": "chat-messages-get-5",
+      "path": "/api/v1/chat-messages/missing"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_messages entity not found: session",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_messages entity not found: session",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "GET",
+      "name": "chat-messages-get-6",
+      "path": "/api/v1/chat-messages/session"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_messages entity not found: βββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββ",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_messages entity not found: βββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββββ",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "GET",
+      "name": "chat-messages-get-7",
+      "path": "/api/v1/chat-messages/%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2%CE%B2"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "approval_wait_ms": null,
+          "citations": [],
+          "content": "Canonical message β",
+          "content_blocks": [],
+          "created_at": "2020-01-01T00:00:00Z",
+          "elapsed_ms": null,
+          "engagement_id": "project",
+          "finish_reason": null,
+          "id": "message",
+          "metadata": {},
+          "model": null,
+          "provider_profile_id": null,
+          "provider_request_id": null,
+          "reasoning": "",
+          "revision": 1,
+          "role": "assistant",
+          "sequence": 20,
+          "session_id": "session",
+          "source_message_id": null,
+          "updated_at": "2020-01-02T00:00:00Z",
+          "usage": null
+        },
+        "status": 200
+      },
+      "method": "GET",
+      "name": "chat-messages-get-ignored-query",
+      "path": "/api/v1/chat-messages/message?engagement_id=missing&limit=bad"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 1
+              },
+              "input": "0",
+              "loc": [
+                "query",
+                "limit"
+              ],
+              "msg": "Input should be greater than or equal to 1",
+              "type": "greater_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "GET",
+      "name": "chat-sessions-overrange-offset-invalid-limit",
+      "path": "/api/v1/chat-sessions?offset=9223372036854775808&limit=0"
+    }
+  ],
+  "final_records": [
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "archived",
+        "metadata": {
+          "archived_at": "2020-01-01T00:00:00+00:00"
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog archived β",
+        "updated_at": "2020-01-20T23:59:59Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "session",
+        "metadata": {},
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog session β",
+        "updated_at": "2020-01-21T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:01Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "child",
+        "metadata": {
+          "subagent_id": "child-link"
+        },
+        "model": "fixture-model",
+        "parent_session_id": "session",
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog child β",
+        "updated_at": "2020-01-20T23:59:58Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:01Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "orphan-child",
+        "metadata": {
+          "subagent_id": "orphan-link"
+        },
+        "model": "fixture-model",
+        "parent_session_id": "missing",
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog orphan-child β",
+        "updated_at": "2020-01-20T23:59:57Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:02Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "empty-marker-child",
+        "metadata": {
+          "subagent_id": ""
+        },
+        "model": "fixture-model",
+        "parent_session_id": "session",
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog empty-marker-child β",
+        "updated_at": "2020-01-20T23:59:56Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:02Z",
+        "engagement_id": "other-project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "foreign",
+        "metadata": {},
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog foreign β",
+        "updated_at": "2020-01-20T23:59:55Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:03Z",
+        "engagement_id": "",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "empty-project",
+        "metadata": {},
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog empty-project β",
+        "updated_at": "2020-01-20T23:59:54Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:03Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-0",
+        "metadata": {
+          "temporary_assistant": true
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-0 β",
+        "updated_at": "2020-01-20T23:59:53Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:04Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-1",
+        "metadata": {
+          "temporary_assistant": false
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-1 β",
+        "updated_at": "2020-01-20T23:59:52Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:04Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-2",
+        "metadata": {
+          "temporary_assistant": null
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-2 β",
+        "updated_at": "2020-01-20T23:59:51Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:05Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-3",
+        "metadata": {
+          "temporary_assistant": 0
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-3 β",
+        "updated_at": "2020-01-20T23:59:50Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:05Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-4",
+        "metadata": {
+          "temporary_assistant": 1
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-4 β",
+        "updated_at": "2020-01-20T23:59:49Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:06Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-5",
+        "metadata": {
+          "temporary_assistant": "false"
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-5 β",
+        "updated_at": "2020-01-20T23:59:48Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:06Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-6",
+        "metadata": {
+          "temporary_assistant": ""
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-6 β",
+        "updated_at": "2020-01-20T23:59:47Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:07Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-7",
+        "metadata": {
+          "temporary_assistant": {}
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-7 β",
+        "updated_at": "2020-01-20T23:59:46Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:07Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-8",
+        "metadata": {
+          "temporary_assistant": []
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-8 β",
+        "updated_at": "2020-01-20T23:59:45Z"
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical message β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:00Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "message",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 20,
+        "session_id": "session",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:00Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical replaced β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:00Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "replaced",
+        "metadata": {
+          "retracted_at": "2020-01-01T00:00:00+00:00"
+        },
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 19,
+        "session_id": "session",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:01Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical orphan β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "orphan",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 18,
+        "session_id": "missing",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:02Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical temporary-message β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "temporary-message",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 17,
+        "session_id": "temporary-0",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:03Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical empty-project-message β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:02Z",
+        "elapsed_ms": null,
+        "engagement_id": "",
+        "finish_reason": null,
+        "id": "empty-project-message",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 15,
+        "session_id": "session",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:05Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical foreign-message β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:02Z",
+        "elapsed_ms": null,
+        "engagement_id": "other-project",
+        "finish_reason": null,
+        "id": "foreign-message",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 16,
+        "session_id": "foreign",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:04Z",
+        "usage": null
+      }
+    }
+  ],
+  "format": "nebula.assistant-catalog-oracle/v1",
+  "initial_records": [
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "session",
+        "metadata": {},
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog session β",
+        "updated_at": "2020-01-21T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "archived",
+        "metadata": {
+          "archived_at": "2020-01-01T00:00:00+00:00"
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog archived β",
+        "updated_at": "2020-01-20T23:59:59Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:01Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "child",
+        "metadata": {
+          "subagent_id": "child-link"
+        },
+        "model": "fixture-model",
+        "parent_session_id": "session",
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog child β",
+        "updated_at": "2020-01-20T23:59:58Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:01Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "orphan-child",
+        "metadata": {
+          "subagent_id": "orphan-link"
+        },
+        "model": "fixture-model",
+        "parent_session_id": "missing",
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog orphan-child β",
+        "updated_at": "2020-01-20T23:59:57Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:02Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "empty-marker-child",
+        "metadata": {
+          "subagent_id": ""
+        },
+        "model": "fixture-model",
+        "parent_session_id": "session",
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog empty-marker-child β",
+        "updated_at": "2020-01-20T23:59:56Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:02Z",
+        "engagement_id": "other-project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "foreign",
+        "metadata": {},
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog foreign β",
+        "updated_at": "2020-01-20T23:59:55Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:03Z",
+        "engagement_id": "",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "empty-project",
+        "metadata": {},
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog empty-project β",
+        "updated_at": "2020-01-20T23:59:54Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:03Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-0",
+        "metadata": {
+          "temporary_assistant": true
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-0 β",
+        "updated_at": "2020-01-20T23:59:53Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:04Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-1",
+        "metadata": {
+          "temporary_assistant": false
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-1 β",
+        "updated_at": "2020-01-20T23:59:52Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:04Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-2",
+        "metadata": {
+          "temporary_assistant": null
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-2 β",
+        "updated_at": "2020-01-20T23:59:51Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:05Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-3",
+        "metadata": {
+          "temporary_assistant": 0
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-3 β",
+        "updated_at": "2020-01-20T23:59:50Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:05Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-4",
+        "metadata": {
+          "temporary_assistant": 1
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-4 β",
+        "updated_at": "2020-01-20T23:59:49Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:06Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-5",
+        "metadata": {
+          "temporary_assistant": "false"
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-5 β",
+        "updated_at": "2020-01-20T23:59:48Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:06Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-6",
+        "metadata": {
+          "temporary_assistant": ""
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-6 β",
+        "updated_at": "2020-01-20T23:59:47Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:07Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-7",
+        "metadata": {
+          "temporary_assistant": {}
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-7 β",
+        "updated_at": "2020-01-20T23:59:46Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:07Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "temporary-8",
+        "metadata": {
+          "temporary_assistant": []
+        },
+        "model": "fixture-model",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "Catalog temporary-8 β",
+        "updated_at": "2020-01-20T23:59:45Z"
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical message β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:00Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "message",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 20,
+        "session_id": "session",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:00Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical replaced β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:00Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "replaced",
+        "metadata": {
+          "retracted_at": "2020-01-01T00:00:00+00:00"
+        },
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 19,
+        "session_id": "session",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:01Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical orphan β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "orphan",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 18,
+        "session_id": "missing",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:02Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical temporary-message β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:01Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "temporary-message",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 17,
+        "session_id": "temporary-0",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:03Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical foreign-message β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:02Z",
+        "elapsed_ms": null,
+        "engagement_id": "other-project",
+        "finish_reason": null,
+        "id": "foreign-message",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 16,
+        "session_id": "foreign",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:04Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Canonical empty-project-message β",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:02Z",
+        "elapsed_ms": null,
+        "engagement_id": "",
+        "finish_reason": null,
+        "id": "empty-project-message",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "assistant",
+        "sequence": 15,
+        "session_id": "session",
+        "source_message_id": null,
+        "updated_at": "2020-01-02T00:00:05Z",
+        "usage": null
+      }
+    }
+  ],
+  "projects": [
+    {
+      "kind": "engagements",
+      "payload": {
+        "client_name": null,
+        "created_at": "2020-01-01T00:00:00Z",
+        "description": "",
+        "id": "project",
+        "metadata": {},
+        "name": "Catalog",
+        "owner_id": null,
+        "revision": 1,
+        "scope_policy_id": null,
+        "status": "draft",
+        "tags": [],
+        "updated_at": "2020-01-01T00:00:00Z",
+        "workspace_path": null
+      }
+    }
+  ],
+  "source_sha256": {
+    "src/nebula/v3/api.py": "064e0fd6840d45d9e5b9b8ad4d3be2a422638277091baefdf2164fee896b9fcb",
+    "src/nebula/v3/diagnostic_guidance.py": "78819bc545a9f26b5eabc30ee29908d5e1503556330ad5642b4a828a8a4d95be",
+    "src/nebula/v3/domain.py": "37c393be699b94a229192972ef5623e00bd8359b8e60e15b361d2903155f1cd8",
+    "src/nebula/v3/relations.py": "1df9a73df5d88ab7d3d590b26939c9a7d65d7b122b21fc4505c6abdf410472a2",
+    "src/nebula/v3/storage.py": "551685e63f310546b1e7b97921c16d6a3227284cfc3eba0c54f5898c3a50b362"
+  }
+}

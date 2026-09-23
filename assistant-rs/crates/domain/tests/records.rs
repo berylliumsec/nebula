@@ -136,6 +136,34 @@ fn legacy_defaults_match_python_without_inventing_identity() {
         )
         .unwrap();
         assert_eq!(normalized.payload(), &case["normalized"], "{kind:?}");
+        let mut offset_payload = case["normalized"].clone();
+        for field in ["created_at", "updated_at"] {
+            offset_payload[field] =
+                chrono::DateTime::parse_from_rfc3339(offset_payload[field].as_str().unwrap())
+                    .unwrap()
+                    .with_timezone(&chrono::FixedOffset::east_opt(7200).unwrap())
+                    .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false)
+                    .into();
+        }
+        let mut expected = case["normalized"].clone();
+        if kind == AssistantKind::ReadCursor {
+            let through = json!("2026-09-23T14:00:00+02:00");
+            offset_payload["through_at"] = through.clone();
+            expected["through_at"] = through;
+        }
+        let bytes = serde_json::to_vec(&offset_payload).unwrap();
+        assert_eq!(
+            StoredAssistantRecord::decode(kind, &bytes)
+                .unwrap()
+                .payload(),
+            &offset_payload
+        );
+        assert_eq!(
+            StoredAssistantRecord::decode_persisted(kind, &bytes)
+                .unwrap()
+                .payload(),
+            &expected
+        );
         for field in ["id", "revision", "created_at", "updated_at"] {
             let mut missing = case["payload"].clone();
             missing.as_object_mut().unwrap().remove(field);

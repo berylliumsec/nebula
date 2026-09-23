@@ -7,7 +7,7 @@
 
 use std::{collections::HashMap, sync::LazyLock};
 
-use chrono::{DateTime, FixedOffset, NaiveDateTime};
+use chrono::{DateTime, FixedOffset, NaiveDateTime, SecondsFormat, Utc};
 use jsonschema::Validator;
 use serde_json::Value;
 
@@ -122,6 +122,23 @@ impl StoredAssistantRecord {
         let schemas = SCHEMAS.as_ref().map_err(|_| RecordError::Schema)?;
         let schema = &schemas["entities"][kind.as_str()];
         fill_defaults(schema, schema, &mut payload);
+        // Entity hydration normalizes its base timestamps to UTC. Other model
+        // timestamps (notably device read cursors) retain their recorded offset.
+        // Keep decode() itself lossless for canonical-contract round trips.
+        for field in ["created_at", "updated_at"] {
+            let time = aware(&payload[field])?;
+            payload[field] = time
+                .with_timezone(&Utc)
+                .to_rfc3339_opts(
+                    if time.timestamp_subsec_micros() == 0 {
+                        SecondsFormat::Secs
+                    } else {
+                        SecondsFormat::Micros
+                    },
+                    true,
+                )
+                .into();
+        }
         Self::decode(
             kind,
             &serde_json::to_vec(&payload).map_err(|_| RecordError::Json)?,

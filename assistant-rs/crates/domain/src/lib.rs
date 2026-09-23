@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub mod auth;
+pub mod dependencies;
 pub mod records;
 
 pub const MAX_EVENT_BYTES: usize = 1024 * 1024;

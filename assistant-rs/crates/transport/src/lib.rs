@@ -20,6 +20,7 @@ use futures_util::StreamExt;
 use nebula_assistant_services::{
     AssistantRecords, Error as ServiceError,
     context::{CursorWrite, DecisionWrite},
+    generated::CatalogKind,
     navigation::BookmarkWrite,
 };
 use nebula_assistant_storage::entities::SqliteAssistantStore;
@@ -77,6 +78,15 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
         config,
     };
     Ok(Router::new()
+        .route("/api/v1/chat-sessions", get(catalog_sessions))
+        .route("/api/v1/chat-sessions/{entity_id}", get(catalog_session))
+        .route("/api/v1/chat-messages", get(catalog_messages))
+        .route("/api/v1/chat-messages/{entity_id}", get(catalog_message))
+        .route("/api/v1/chat/sessions/{session_id}/catch-up", get(catch_up))
+        .route(
+            "/api/v1/chat/sessions/{session_id}/turns/{turn_id}/summary",
+            get(turn_summary),
+        )
         .route(
             "/api/v1/chat/sessions/{session_id}/decisions",
             get(read_decisions),
@@ -207,7 +217,7 @@ async fn advance_cursor(
     let result = match decode::<CursorWrite>(body, state.config.body_bytes).await {
         Ok(value) => state
             .services
-            .advance_cursor(&session, value, device)
+            .advance_cursor_at(&session, value, device, (state.config.clock)())
             .await
             .map(|r| r.into_payload())
             .map_err(ApiError::service),
@@ -276,6 +286,77 @@ async fn write_bookmark(
         Err(error) => Err(error),
     };
     api_reply(&parts, result)
+}
+async fn catalog_sessions(State(state): State<AppState>, request: Request) -> Response {
+    catalog(state, CatalogKind::Sessions, request).await
+}
+async fn catalog_messages(State(state): State<AppState>, request: Request) -> Response {
+    catalog(state, CatalogKind::Messages, request).await
+}
+async fn catalog(state: AppState, kind: CatalogKind, request: Request) -> Response {
+    let (parts, _) = request.into_parts();
+    let result = match validation::catalog(parts.uri.query()) {
+        Ok(query) => state
+            .services
+            .catalog(kind, query)
+            .await
+            .map(|rows| Value::Array(rows.into_iter().map(|r| r.into_payload()).collect()))
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
+}
+async fn catalog_session(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response {
+    let result = state
+        .services
+        .catalog_record(CatalogKind::Sessions, &id)
+        .await
+        .map(|r| r.into_payload());
+    reply(request, result)
+}
+async fn catalog_message(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    request: Request,
+) -> Response {
+    let result = state
+        .services
+        .catalog_record(CatalogKind::Messages, &id)
+        .await
+        .map(|r| r.into_payload());
+    reply(request, result)
+}
+async fn catch_up(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let (parts, _) = request.into_parts();
+    let device = parts
+        .extensions
+        .get::<Principal>()
+        .and_then(|p| p.device_id.as_deref());
+    let records = AssistantRecords::with_clock(state.store, state.config.clock);
+    let result = match validation::catchup_device(parts.uri.query()) {
+        Ok(supplied) => records
+            .catch_up(&session, &supplied, device)
+            .await
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
+}
+async fn turn_summary(
+    State(state): State<AppState>,
+    Path((session, turn)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    let result = state.services.turn_summary(&session, &turn).await;
+    reply(request, result)
 }
 async fn decode<T: validation::RequestModel>(body: Body, limit: usize) -> Result<T, ApiError> {
     let bytes = to_bytes(body, limit)

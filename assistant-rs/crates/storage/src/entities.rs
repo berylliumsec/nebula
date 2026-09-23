@@ -30,6 +30,9 @@ use sqlx::{
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
+mod catchup;
+pub use catchup::{CatchupSnapshot, PendingSnapshot};
+
 const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MUTATIONS: usize = 64;
 const SELECT_RECORD: &str = "SELECT id, kind, engagement_id, revision, chat_session_id, created_at, updated_at, length(CAST(payload AS BLOB)) AS payload_bytes, CASE WHEN length(CAST(payload AS BLOB)) <= 16777216 THEN payload ELSE NULL END AS payload FROM entities";
@@ -202,6 +205,14 @@ pub struct NavigationQuery {
     pub session_id: Option<String>,
     pub text: String,
     pub bookmarked: bool,
+    pub offset: u64,
+    pub limit: u32,
+}
+
+/// Existing generated read-only catalog routes return an array, not a cursor.
+pub struct GeneratedListQuery {
+    pub kind: AssistantKind,
+    pub engagement_id: Option<String>,
     pub offset: u64,
     pub limit: u32,
 }
@@ -497,6 +508,34 @@ impl SqliteAssistantStore {
             records,
             next_offset: None,
         })
+    }
+
+    pub async fn list_complete_page(
+        &self,
+        query: GeneratedListQuery,
+    ) -> Result<Vec<StoredAssistantRecord>> {
+        if !matches!(query.kind, AssistantKind::Session | AssistantKind::Message)
+            || !(1..=1000).contains(&query.limit)
+            || query.offset > i64::MAX as u64
+        {
+            return Err(Error::InvalidBounds);
+        }
+        let _permit = self.read_permit()?;
+        let mut sql = QueryBuilder::<Sqlite>::new(SELECT_RECORD);
+        sql.push(" WHERE kind = ").push_bind(query.kind.as_str());
+        if let Some(project) = &query.engagement_id {
+            sql.push(" AND engagement_id = ").push_bind(project);
+        }
+        if query.kind == AssistantKind::Session {
+            sql.push(
+                " AND coalesce(json_extract(payload, '$.metadata.temporary_assistant'), 0) IS 0",
+            );
+        }
+        sql.push(" ORDER BY created_at, id LIMIT ")
+            .push_bind(i64::from(query.limit))
+            .push(" OFFSET ")
+            .push_bind(query.offset as i64);
+        complete_records(&mut sql, &self.readers, query.limit as usize).await
     }
 
     pub async fn latest_message_sequence(&self, session_id: &str) -> Result<i64> {

@@ -302,6 +302,19 @@ impl AssistantRecords {
         body: CursorWrite,
         authenticated_device: Option<&str>,
     ) -> Result<StoredAssistantRecord> {
+        self.advance_cursor_at(session_id, body, authenticated_device, (self.clock)())
+            .await
+    }
+
+    /// The host supplies its observation clock; request data never controls it.
+    /// Record creation keeps its own factory clock, matching the legacy service.
+    pub async fn advance_cursor_at(
+        &self,
+        session_id: &str,
+        body: CursorWrite,
+        authenticated_device: Option<&str>,
+        observed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<StoredAssistantRecord> {
         if body.expected_revision.is_negative() {
             return Err(Error::Invalid("Expected revision must be non-negative"));
         }
@@ -310,7 +323,7 @@ impl AssistantRecords {
         let identity = cursor_id(session_id, owner);
         let through = DateTime::parse_from_rfc3339(&body.through_at)
             .map_err(|_| Error::Invalid("Read cursor must use a recorded server timestamp"))?;
-        if through > (self.clock)() {
+        if through > observed_at {
             return Err(Error::Invalid(
                 "Read cursor must use a recorded server timestamp",
             ));

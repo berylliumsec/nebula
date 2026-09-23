@@ -1,14 +1,14 @@
 {
-  "change_digest": "9fbb6460e925b03a77607abefc09ed0c8eec94425e7e22d4a569f4c2f53ba55d",
-  "reviewed_by": "Codex focused Assistant navigation review with independent storage, services and oracle agents",
-  "reason": "Cumulative Assistant-only port: exact Rust tests cover the durable journal, bounded fair queue, fixture CLI, 13 persisted record contracts, current-schema SQLite transactions, saved context/read cursors, paired-device authentication and bounded HTTP. The new navigation layer adds four storage tests for literal/scoped search, stored-row pagination, exact sequence ordering, complete reads past 1000 rows and 10k/16MiB bounds; four service tests for Unicode excerpts, durable inactive/reactivated bookmarks and timestamps, concurrent revision winners and queued session/message guards; one HTTP differential test compares 112 Python cases and 30 records after an actual database reopen. Existing nine HTTP tests cover shared validation/authentication/resource-limit regressions. Local navigation run: these 18 exact Rust tests and nine entity-store regressions for the shared one-row SQLite prefetch bound (27 total) plus the single Python navigation-oracle regeneration test. Cumulative CI: 66 exact Rust and 47 collected Python tests across the five explicitly listed feature/policy files. Rust collection/build limit 600 seconds per command, execution 120 seconds per exact test; Python local selected run 300 seconds; no full suites. Frozen Unicode 15 casefold mappings are generated with CPython3.12; existing Python-to-Rust-to-Python interoperability remains selected.",
-  "exclusions": "No shipped listener or launch path changes. Seven experimental Assistant routes only. Remaining route/JSON syntax/content-type/method parity, CORS, diagnostics, streaming/reconnect, providers/harnesses, durable scheduling/recovery, historical/PostgreSQL/checkpoint migration, production desktop/mobile/LAN/device and performance gates remain incomplete. Figma inspection is design evidence only. New search retains legacy query costs and shared project lookup validates identity only. No live data/service, provider calls, real tools, other product areas, desktop-native changes or full suites.",
+  "change_digest": "eb249cc5d1b6f0f5376f41a7f7ed77790453a4704b62060993c6596d288b8376",
+  "reviewed_by": "Codex focused Assistant catalog and catch-up review with independent storage, services and Python oracle agents",
+  "reason": "Cumulative Assistant-only rewrite selection: 78 exact Rust tests and 49 Python tests across six listed files. Current increment adds 12 exact Rust tests covering immutable shared dependency codecs, complete generated catalog pages, bounded catch-up snapshots, pending-action projections, 64 catalog / 76 catch-up Python HTTP comparisons, paired-device ownership, clock boundaries, reopen, and 1001-session UI pagination. Local selection is the 12 new cases plus 10 existing HTTP, 7 context, 9 entity storage and 7 domain record regressions (45) because cursor clock injection, shared pagination validation and persisted base timestamp normalization changed those paths. Local Python selection: 8 existing contract regenerations, 2 new read-oracle regenerations, 1 Python-Rust-Python storage handoff (11); CI retains earlier exact feature/policy checks. Rust compilation/collection limit 600 seconds per command; execution 120 seconds per exact test. Local Python execution bounded to 300 seconds. No full suites. After review, rebased onto d2d1ba62e3ad96c966a6612f1a446f6798e96c37; only unrelated upstream UI queue-control files changed, and the final PR diff has no UI changes. Exact Assistant implementation and local tested sources were preserved.",
+  "exclusions": "Thirteen experimental Assistant route handlers only; no shipped listener, UI, other product area, desktop-native or launch changes. Production desktop/mobile/LAN/device journeys, stream/reconnect, providers/harnesses, durable admission/recovery, remaining route parity, historical/PostgreSQL/checkpoint migration and whole-Assistant performance remain incomplete. Read limits are explicit compatibility extensions; Figma inspection is design evidence. No live service/database, provider calls, real tools or full suites.",
   "expected_tests": {
-    "python": 47,
+    "python": 49,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 66
+    "assistant_rust": 78
   },
   "python_versions": [
     "3.12"
@@ -20,7 +20,8 @@
     "tests/test_assistant_contract.py",
     "tests/test_test_selection.py",
     "tests/test_assistant_storage_interop.py",
-    "tests/test_assistant_navigation_contract.py"
+    "tests/test_assistant_navigation_contract.py",
+    "tests/test_assistant_read_contracts.py"
   ],
   "frontend": [],
   "native": [],
@@ -91,6 +92,18 @@
     "nebula-assistant-services/navigation::bookmark_mutations_retain_identity_and_inactive_revision_after_reopen",
     "nebula-assistant-services/navigation::concurrent_bookmark_writes_have_one_revision_winner",
     "nebula-assistant-services/navigation::bookmark_write_rechecks_session_and_message_inside_writer",
-    "nebula-assistant-transport/http::python_navigation_http_oracle_preserves_responses_and_reopened_records"
+    "nebula-assistant-transport/http::python_navigation_http_oracle_preserves_responses_and_reopened_records",
+    "nebula-assistant-domain/dependencies::shared_dependency_records_preserve_python_fields_and_reject_incoherent_state",
+    "nebula-assistant-domain/dependencies::shared_dependency_debug_redacts_payload_and_terminal_resolution_is_exact",
+    "nebula-assistant-storage/catalog::generated_catalog_filters_before_paging_and_does_not_read_a_lookahead",
+    "nebula-assistant-storage/catalog::generated_catalog_refuses_oversized_arrays_instead_of_silently_shortening_them",
+    "nebula-assistant-storage/catchup::catchup_snapshot_preserves_distinct_history_and_pending_scopes_without_writes",
+    "nebula-assistant-storage/catchup::catchup_snapshot_budget_is_shared_across_components_and_releases_its_reader",
+    "nebula-assistant-services/catchup::python_catchup_oracle_matches_projection_and_cursor_transitions",
+    "nebula-assistant-services/catchup::clock_expiry_and_secret_notices_are_pure_reads_without_watermarks",
+    "nebula-assistant-services/catchup::acknowledging_catchup_keeps_pending_actions_and_other_device_history",
+    "nebula-assistant-transport/http::python_catalog_http_oracle_preserves_complete_arrays_and_record_shapes",
+    "nebula-assistant-transport/http::python_catchup_http_oracle_preserves_pending_actions_and_device_cursors",
+    "nebula-assistant-transport/http::catalog_http_does_not_end_ui_pagination_at_the_internal_page_byte_budget"
   ]
 }

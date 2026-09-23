@@ -10,7 +10,10 @@ provider/harness integration, follow-ups, subagents, and restart recovery.
 Whole-Core migration, missions, browser research, reporting, and other workbench
 areas are excluded. Shared changes are limited to focused build/test wiring.
 
-Baseline: `b5bab4372871a0fa3fe91968c95d73903796ab56`, verified against origin/main.
+Compatibility capture baseline: `b5bab4372871a0fa3fe91968c95d73903796ab56`.
+Current integration base: `d2d1ba62e3ad96c966a6612f1a446f6798e96c37`, freshly
+verified against origin/main. The intervening queue-controls change affects only
+UI files and its test receipt; the Assistant Python/Rust sources are unchanged.
 Branch: `codex/rust-core-rewrite`.
 
 ## Operator acceptance contract
@@ -27,7 +30,7 @@ Branch: `codex/rust-core-rewrite`.
 
 All product journeys remain required and unverified for Rust. Browser/device/LAN
 matrices from the product-quality skill remain mandatory before activating the
-replacement. The experimental Rust router has three Assistant handlers; shipped
+replacement. The experimental Rust router has thirteen Assistant handlers; shipped
 routes, UI, provider and harness execution have not switched to Rust.
 
 ## Development boundaries
@@ -337,3 +340,67 @@ Remaining Assistant dependencies include the shared structured-results GET/list
 routes used by Figma's Agent view (97:3); that panel does not use the separate
 chat Results drawer endpoint. Their read contracts require acceptance mapping,
 while shared result producers and deletion remain outside this Assistant rewrite.
+
+## Conversation catalog and catch-up contract
+
+Journey: discover a saved conversation in the Assistant sidebar, select its URL,
+refresh the catalog, review unseen results or failures, inspect a response summary,
+and acknowledge activity while pending approvals or questions remain visible.
+This extends the inspected main chat (4:73), archive (52:3), nested chat (120:85)
+and compact controls (16:2) Figma journeys. Durable entities own catalog membership,
+revisions, transcripts and pending requests; the device cursor owns only what was
+read. The URL and existing UI own selection and presentation. No read may execute
+work, resolve an approval, or advance the connection-state watermark.
+
+Catalog invariants: generated session/message list endpoints retain their bare
+array shape, creation-time ordering, project filter and fixed pagination. Session
+lists exclude temporary records before paging but include archived/subagent
+records for existing UI filtering. Raw message lists retain replaced, orphan and
+temporary-session messages. An oversized requested page must fail explicitly;
+returning a short byte-truncated array would make the UI stop fetching too early.
+
+Catch-up invariants: pending actions stay visible before initialization and after
+acknowledgment. Only active owning turns and unexpired pending requests contribute;
+terminal harness receipts suppress stale owners and secret prompts are redacted.
+Paired-device identity overrides the supplied cursor owner after query validation.
+Preserve strict timestamp comparisons, source-message fallbacks, candidate limits
+before retraction filtering, greeting suppression, ordering and truncation flags.
+Shared Approval/HarnessInteraction/HarnessTurn records are read dependencies only.
+
+Lifecycle coverage: discovery, selection data, refresh/reopen, empty state, unseen
+results/failures, acknowledgment and invalid/stale request recovery are required in
+isolated differential HTTP and storage/service tests. Request revocation reuses
+authentication tests. Creating sessions, streaming, interrupting, branching,
+deleting and actual approval execution remain separate rewrite gates. Required
+production desktop/mobile Chromium/WebKit, LAN, reconnect, keyboard/touch and
+physical-device evidence remain outstanding until a shipped Rust-backed workflow
+can exercise them. Python fixtures never enter Core lifespan or access providers.
+
+Implemented: generated conversation/message list and get routes, catch-up and turn
+summary reads. Requested catalog pages return complete arrays up to 16 MiB;
+oversized pages fail rather than ending UI pagination early. Catch-up reads one
+bounded SQLite snapshot with an aggregate 10,000-row / 16-MiB budget, including
+source messages, predecessors and pending dependencies. Shared dependencies are
+validated by immutable Rust codecs; these reads never write projection watermarks
+or resolve approvals/questions. No provider or model call is involved.
+
+Python hydration normalizes base entity timestamps to UTC. Persisted Assistant
+and dependency decoders now do the same while retaining optional timestamp offsets.
+Catch-up deliberately preserves SQLite's legacy wall-clock binding of an offset
+read cursor; instant comparisons for failures and pending notices remain aware.
+This documents compatibility behavior, not a change to the legacy time semantics.
+Normal query validation precedes rejection of offsets outside SQLite's range.
+
+Local validation: all 45 selected Rust tests passed (33 affected regressions and
+12 new catalog/catch-up cases), plus 11 selected Python checks. One dependency
+assertion was updated to the Python UTC expectation after the raw-offset fixture
+was added; the implementation was unchanged on that retry. The HTTP oracles
+compare 64 catalog cases with 22 final records and 76 catch-up cases with 598 final
+Assistant records after reopening the database. Shared dependency bytes and state
+projection watermarks remain unchanged in pure-read tests. Cursor creation times
+remain immutable and updates nondecreasing without response normalization.
+
+Cumulative CI selection: 78 exact Rust tests and 49 collected Python tests. Shipping,
+browser/device/LAN acceptance and whole-Assistant performance gates remain
+incomplete. These queries retain legacy query shapes; bounded allocation alone is
+not evidence of a throughput improvement.

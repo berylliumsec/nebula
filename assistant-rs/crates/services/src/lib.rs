@@ -1,6 +1,8 @@
 //! Assistant application services. Transport authentication is a separate boundary:
 //! never expose these methods directly to an unauthenticated caller.
+pub mod catchup;
 pub mod context;
+pub mod generated;
 pub mod navigation;
 mod unicode_casefold;
 
