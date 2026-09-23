@@ -1266,6 +1266,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
+ "form_urlencoded",
  "futures-util",
  "http-body-util",
  "nebula-assistant-domain",

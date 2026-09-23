@@ -14,10 +14,12 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
 - `nebula-assistant-runtime`: fair project/parent/session queue selection;
   waits release execution slots while retaining session ownership. No execution.
 - `nebula-assistant-services`: saved-context mutations, active decision snapshots,
-  revision history, atomic project promotion, and per-device read cursors. Source
+  revision history, atomic project promotion, per-device read cursors, transcript
+  navigation, project message search and durable bookmarks. Source
   and session revisions are rechecked inside the bounded writer transaction.
 - `nebula-assistant-transport`: experimental Axum routes for saved-context GET/PUT
-  and read-cursor PUT, with bearer/paired-device authentication. No shipped entry
+  and read-cursor PUT, transcript/search GET and bookmark GET/PUT, with
+  bearer/paired-device authentication. No shipped entry
   point mounts this router yet. Typed request coercion and error envelopes have
   Python-oracle coverage; complete route and production parity are open.
 - `nebula-assistant-lab`: fixture generation, replay and journal measurements.
@@ -153,4 +155,30 @@ of every malformed-input or production UI behavior.
 
 ```sh
 PYTHONPATH=src python -m scripts.capture_assistant_http --output assistant-rs/compatibility/python-http.json
+```
+
+`python-navigation.json` captures 112 transcript, project-search and bookmark
+requests against disposable Python Core state, including literal wildcard queries,
+Unicode excerpts, replaced-message paging, temporary sessions, inactive bookmarks,
+duplicate submissions and stale revisions. The Rust HTTP comparison reopens the
+database before comparing all 30 final records. Dedicated service tests retain
+raw bookmark timestamps and check competing and queued writes. Full case folding
+uses a generated Unicode 15.0 table from CPython 3.12; runtime is entirely Rust.
+The services crate retains the [Unicode data notice](crates/services/LICENSE-UNICODE.txt)
+and declares its combined code/data licenses in Cargo metadata.
+
+Complete transcripts and bookmark collections use the same 10,000-row / 16 MiB
+explicit bounds as saved context. Search reads at most 101 stored candidates and
+fails oversized pages rather than changing the cursor or truncating history.
+Query strings are bounded at 64 KiB; offsets beyond SQLite's representable range
+receive an actionable 422. These resource bounds extend Python's behavior.
+Reader prefetch is one row per connection, so SQLx cannot queue its default 50
+large payloads ahead of the collection byte checks. Invalid missing identities
+retain named 404 responses rather than becoming retryable storage failures.
+Shared project lookup currently checks identity/kind only; full Engagement schema
+validation remains outside this port. Search keeps the legacy query costs,
+including correlated bookmark lookups and sorting; no speedup is claimed.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_navigation --output assistant-rs/compatibility/python-navigation.json
 ```

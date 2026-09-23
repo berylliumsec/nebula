@@ -20,6 +20,7 @@ use futures_util::StreamExt;
 use nebula_assistant_services::{
     AssistantRecords, Error as ServiceError,
     context::{CursorWrite, DecisionWrite},
+    navigation::BookmarkWrite,
 };
 use nebula_assistant_storage::entities::SqliteAssistantStore;
 use serde_json::Value;
@@ -87,6 +88,22 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
         .route(
             "/api/v1/chat/sessions/{session_id}/read-cursor",
             put(advance_cursor),
+        )
+        .route(
+            "/api/v1/chat/projects/{project_id}/search",
+            get(search_messages),
+        )
+        .route(
+            "/api/v1/chat/sessions/{session_id}/messages",
+            get(read_messages),
+        )
+        .route(
+            "/api/v1/chat/sessions/{session_id}/bookmarks",
+            get(read_bookmarks),
+        )
+        .route(
+            "/api/v1/chat/sessions/{session_id}/bookmarks/{message_id}",
+            put(write_bookmark),
         )
         .route_layer(middleware::from_fn_with_state(state.clone(), boundary))
         .with_state(state))
@@ -191,6 +208,68 @@ async fn advance_cursor(
         Ok(value) => state
             .services
             .advance_cursor(&session, value, device)
+            .await
+            .map(|r| r.into_payload())
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
+}
+async fn search_messages(
+    State(state): State<AppState>,
+    Path(project): Path<String>,
+    request: Request,
+) -> Response {
+    let (parts, _) = request.into_parts();
+    let result = match validation::search(parts.uri.query()) {
+        Ok(query) => state
+            .services
+            .search_messages(&project, query)
+            .await
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
+}
+async fn read_messages(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let (parts, _) = request.into_parts();
+    let result = match validation::include_replaced(parts.uri.query()) {
+        Ok(include) => state
+            .services
+            .session_messages(&session, include)
+            .await
+            .map(|rows| Value::Array(rows.into_iter().map(|r| r.into_payload()).collect()))
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
+}
+async fn read_bookmarks(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let result = state
+        .services
+        .bookmarks(&session)
+        .await
+        .map(|rows| Value::Array(rows.into_iter().map(|r| r.into_payload()).collect()));
+    reply(request, result)
+}
+async fn write_bookmark(
+    State(state): State<AppState>,
+    Path((session, message)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    let (parts, body) = request.into_parts();
+    let result = match decode::<BookmarkWrite>(body, state.config.body_bytes).await {
+        Ok(value) => state
+            .services
+            .set_bookmark(&session, &message, value)
             .await
             .map(|r| r.into_payload())
             .map_err(ApiError::service),

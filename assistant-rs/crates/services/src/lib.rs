@@ -1,6 +1,8 @@
 //! Assistant application services. Transport authentication is a separate boundary:
 //! never expose these methods directly to an unauthenticated caller.
 pub mod context;
+pub mod navigation;
+mod unicode_casefold;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use nebula_assistant_domain::records::{AssistantKind, RecordError, StoredAssistantRecord};
@@ -15,6 +17,8 @@ pub enum Error {
     Invalid(&'static str),
     #[error("{0}")]
     NotFound(&'static str),
+    #[error("{0}")]
+    StorageNotFound(&'static str),
     #[error("{0}")]
     Conflict(&'static str),
     #[error("{kind} entity not found: {id}")]
@@ -48,6 +52,14 @@ impl AssistantRecords {
         Self { store, clock }
     }
     async fn get(&self, kind: AssistantKind, id: &str) -> Result<StoredAssistantRecord> {
+        // Canonical identities cannot have this shape, so the Python lookup
+        // result is a missing entity, not a retryable storage-capacity failure.
+        if id.is_empty() || id.chars().count() > 200 {
+            return Err(Error::EntityNotFound {
+                kind: kind.as_str(),
+                id: id.into(),
+            });
+        }
         self.store.get(kind, id).await.map_err(|error| match error {
             StorageError::NotFound => Error::EntityNotFound {
                 kind: kind.as_str(),

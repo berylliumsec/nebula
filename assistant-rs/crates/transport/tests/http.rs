@@ -623,3 +623,153 @@ async fn validation_error_amplification_cannot_exceed_response_budget() {
     value(response).await;
     store.shutdown().await.unwrap();
 }
+
+fn navigation_normalize(mut value: Value, stamps: &std::collections::BTreeSet<String>) -> Value {
+    match &mut value {
+        Value::Object(fields) => {
+            for (key, item) in fields {
+                if ["request_id", "error_id"].contains(&key.as_str())
+                    || (["created_at", "updated_at"].contains(&key.as_str())
+                        && item.as_str().is_none_or(|s| !stamps.contains(s)))
+                {
+                    *item = "<generated>".into();
+                } else {
+                    *item = navigation_normalize(item.take(), stamps);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                *item = navigation_normalize(item.take(), stamps);
+            }
+        }
+        _ => {}
+    }
+    value
+}
+
+#[tokio::test]
+async fn python_navigation_http_oracle_preserves_responses_and_reopened_records() {
+    use nebula_assistant_storage::entities::ListQuery;
+    let oracle: Value = serde_json::from_str(include_str!(
+        "../../../compatibility/python-navigation.json"
+    ))
+    .unwrap();
+    assert_eq!(oracle["cases"].as_array().unwrap().len(), 112);
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("nebula.db");
+    let store = setup(&path).await;
+    store
+        .apply(vec![Mutation::Delete {
+            kind: Kind::Session,
+            id: "session".into(),
+            expected_revision: 1,
+        }])
+        .await
+        .unwrap();
+    let mut stamps = std::collections::BTreeSet::new();
+    let mut connection = raw(&path).await;
+    for row in oracle["projects"].as_array().unwrap() {
+        let p = &row["payload"];
+        sqlx::query("INSERT INTO entities (id,kind,revision,payload,created_at,updated_at) VALUES (?,?,?,?,?,?)")
+            .bind(p["id"].as_str()).bind(row["kind"].as_str()).bind(p["revision"].as_i64())
+            .bind(serde_json::to_string(p).unwrap()).bind(sql_time(&p["created_at"]))
+            .bind(sql_time(&p["updated_at"])).execute(&mut connection).await.unwrap();
+        for field in ["created_at", "updated_at"] {
+            stamps.insert(p[field].as_str().unwrap().to_owned());
+        }
+    }
+    connection.close().await.unwrap();
+    let mut initial = Vec::new();
+    for row in oracle["initial_records"].as_array().unwrap() {
+        for field in ["created_at", "updated_at"] {
+            stamps.insert(row["payload"][field].as_str().unwrap().to_owned());
+        }
+        initial.push(Mutation::Create(
+            StoredAssistantRecord::decode(
+                Kind::try_from(row["kind"].as_str().unwrap()).unwrap(),
+                &serde_json::to_vec(&row["payload"]).unwrap(),
+            )
+            .unwrap(),
+        ));
+    }
+    // FastAPI's untyped search dictionaries use datetime.isoformat (+00:00),
+    // while Pydantic entity responses use Z. Both are fixed fixture timestamps.
+    for stamp in stamps.clone() {
+        if let Some(prefix) = stamp.strip_suffix('Z') {
+            stamps.insert(format!("{prefix}+00:00"));
+        }
+    }
+    store.apply(initial).await.unwrap();
+    let app = router(store.clone(), config()).unwrap();
+    for case in oracle["cases"].as_array().unwrap() {
+        let mut input = request(
+            case["method"].as_str().unwrap(),
+            case["path"].as_str().unwrap(),
+            case["body"].clone(),
+        );
+        input.headers_mut().insert(
+            "x-nebula-operation-id",
+            HeaderValue::from_static("fixture-operation"),
+        );
+        let response = app.clone().oneshot(input).await.unwrap();
+        let status = response.status().as_u16();
+        let actual = navigation_normalize(value(response).await, &stamps);
+        assert_eq!(
+            json!({"status":status,"body":actual}),
+            case["expected"],
+            "{}",
+            case["name"]
+        );
+    }
+    // Storage bounds are explicit extensions: no wrapping offset or retryable
+    // database failure for a query SQLite cannot represent.
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/chat/projects/project/search?offset=9223372036854775807",
+            Value::Null,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 422);
+    assert_eq!(value(response).await["retryable"], false);
+    drop(app);
+    store.shutdown().await.unwrap();
+    let reopened = SqliteAssistantStore::open(&path, Config::default())
+        .await
+        .unwrap();
+    let mut actual = std::collections::BTreeMap::new();
+    for kind in [Kind::Session, Kind::Message, Kind::Bookmark] {
+        let page = reopened
+            .list(ListQuery {
+                limit: 1000,
+                include_temporary: true,
+                ..ListQuery::new(kind)
+            })
+            .await
+            .unwrap();
+        assert!(page.next_offset.is_none());
+        for row in page.records {
+            let p = navigation_normalize(row.into_payload(), &stamps);
+            actual.insert(
+                p["id"].as_str().unwrap().to_owned(),
+                json!({"kind":kind.as_str(),"payload":p}),
+            );
+        }
+    }
+    let expected: std::collections::BTreeMap<_, _> = oracle["final_records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["payload"]["id"].as_str().unwrap().to_owned(),
+                row.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected);
+    reopened.shutdown().await.unwrap();
+}

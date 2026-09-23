@@ -17,13 +17,34 @@
       "method": "PUT",
       "path": "/api/v1/chat/sessions/{session_id}/read-cursor",
       "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/projects/{project_id}/search",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{session_id}/messages",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{session_id}/bookmarks",
+      "status": "experimental"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/chat/sessions/{session_id}/bookmarks/{message_id}",
+      "status": "experimental"
     }
   ],
   "evidence": [
     "python-auth.json: 33 middleware comparisons with identical initial records",
     "python-context.json: 27 saved-context and cursor transitions",
     "python-http.json: 120 request, error and persistence comparisons",
-    "nebula-assistant-transport/http: nine exact integration tests"
+    "python-navigation.json: 112 transcript, search and bookmark comparisons",
+    "nebula-assistant-transport/http: ten exact integration tests"
   ],
   "remaining_gates": [
     "JSON syntax, content-type and method edge cases",
@@ -31,6 +52,7 @@
     "CORS and durable diagnostics integration",
     "Shipped listener and lifecycle integration",
     "Production desktop, mobile, LAN, reconnect and device journeys",
-    "Whole-Assistant route coverage and performance acceptance"
+    "Whole-Assistant route coverage and performance acceptance",
+    "Full shared project schema validation and production search-load measurements"
   ]
 }

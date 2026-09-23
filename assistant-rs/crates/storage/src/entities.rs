@@ -45,7 +45,7 @@ pub enum Error {
     #[error("assistant storage admission is full; retry after capacity becomes available")]
     Capacity,
     #[error(
-        "saved context exceeds 10,000 records or 16 MiB; use paginated record access to inspect the retained history"
+        "Assistant collection exceeds 10,000 records or 16 MiB; use paginated record access to inspect the retained history"
     )]
     ReadLimit,
     #[error(
@@ -193,6 +193,17 @@ pub struct Page {
     /// A first record larger than the page budget is returned alone, so reads
     /// always make progress; the per-record 16 MiB bound still applies.
     pub next_offset: Option<u64>,
+}
+
+/// Candidate search over canonical messages. The service supplies Python-stripped
+/// text and filters retracted messages only after this stored-row page is formed.
+pub struct NavigationQuery {
+    pub project_id: String,
+    pub session_id: Option<String>,
+    pub text: String,
+    pub bookmarked: bool,
+    pub offset: u64,
+    pub limit: u32,
 }
 
 #[derive(Debug)]
@@ -495,6 +506,119 @@ impl SqliteAssistantStore {
             .bind(session_id).fetch_one(&self.readers).await?)
     }
 
+    /// Read-only shared project identity dependency. Project schema ownership and
+    /// mutation stay outside Assistant; this does not decode an Engagement model.
+    pub async fn project_exists(&self, project_id: &str) -> Result<bool> {
+        validate_id(project_id)?;
+        let _permit = self.read_permit()?;
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM entities WHERE kind = 'engagements' AND id = ?)",
+        )
+        .bind(project_id)
+        .fetch_one(&self.readers)
+        .await?)
+    }
+
+    /// Complete, bounded transcript snapshot, including retracted messages.
+    /// Sorting exact integer sequences in Rust avoids SQLite converting large
+    /// Python integers to imprecise REAL values during JSON extraction.
+    pub async fn session_messages(&self, session_id: &str) -> Result<Vec<StoredAssistantRecord>> {
+        validate_id(session_id)?;
+        let _permit = self.read_permit()?;
+        let mut query = QueryBuilder::<Sqlite>::new(SELECT_RECORD);
+        query
+            .push(" WHERE kind = 'chat_messages' AND chat_session_id = ")
+            .push_bind(session_id)
+            .push(" ORDER BY created_at, id LIMIT 10001");
+        let records = complete_records(&mut query, &self.readers, 10000).await?;
+        let mut keyed = Vec::with_capacity(records.len());
+        for record in records {
+            let sequence = record.payload()["sequence"]
+                .as_number()
+                .ok_or(Error::CorruptEnvelope)?
+                .to_string();
+            if !sequence.bytes().all(|c| c.is_ascii_digit()) {
+                return Err(Error::CorruptEnvelope);
+            }
+            keyed.push((sequence, record));
+        }
+        // Stable sorting preserves the SQL (created_at, id) order for ties.
+        keyed.sort_by(|(left, _), (right, _)| {
+            left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+        });
+        Ok(keyed.into_iter().map(|(_, record)| record).collect())
+    }
+
+    /// Inactive marks remain visible so clients can retain their saved revision.
+    /// Match the Python collection query, which does not specify an order.
+    pub async fn bookmarks(
+        &self,
+        session_id: &str,
+        project_id: &str,
+    ) -> Result<Vec<StoredAssistantRecord>> {
+        validate_id(session_id)?;
+        validate_id(project_id)?;
+        let _permit = self.read_permit()?;
+        let mut query = QueryBuilder::<Sqlite>::new(SELECT_RECORD);
+        query
+            .push(" WHERE kind = 'chat_bookmarks' AND engagement_id = ")
+            .push_bind(project_id)
+            .push(" AND chat_session_id = ")
+            .push_bind(session_id)
+            .push(" LIMIT 10001");
+        complete_records(&mut query, &self.readers, 10000).await
+    }
+
+    /// The page cursor counts stored candidates before retracted-message
+    /// filtering. Byte exhaustion fails the whole page; it cannot change offsets
+    /// or silently hide retained messages.
+    pub async fn search_messages(&self, query: NavigationQuery) -> Result<Page> {
+        validate_id(&query.project_id)?;
+        if !(1..=100).contains(&query.limit)
+            || query.text.chars().count() > 512
+            || query.offset > (i64::MAX - 101) as u64
+        {
+            return Err(Error::InvalidBounds);
+        }
+        let _permit = self.read_permit()?;
+        let mut sql = QueryBuilder::<Sqlite>::new(SELECT_RECORD);
+        sql.push(" WHERE kind = 'chat_messages' AND engagement_id = ")
+            .push_bind(&query.project_id)
+            .push(" AND EXISTS (SELECT 1 FROM entities AS visible_chat WHERE visible_chat.kind = 'chat_sessions' AND visible_chat.id = entities.chat_session_id AND coalesce(json_extract(visible_chat.payload, '$.metadata.temporary_assistant'), 0) IS 0)");
+        if let Some(session) = query.session_id.as_deref().filter(|id| !id.is_empty()) {
+            validate_id(session)?;
+            sql.push(" AND chat_session_id = ").push_bind(session);
+        }
+        if !query.text.is_empty() {
+            let escaped = query
+                .text
+                .replace('/', "//")
+                .replace('%', "/%")
+                .replace('_', "/_");
+            sql.push(" AND lower(json_extract(payload, '$.content')) LIKE '%' || lower(")
+                .push_bind(escaped)
+                .push(") || '%' ESCAPE '/'");
+        }
+        if query.bookmarked {
+            sql.push(" AND EXISTS (SELECT 1 FROM entities AS mark WHERE mark.kind = 'chat_bookmarks' AND mark.engagement_id = ")
+                .push_bind(&query.project_id)
+                .push(" AND json_extract(mark.payload, '$.message_id') = entities.id AND json_extract(mark.payload, '$.active') IS 1)");
+        }
+        sql.push(" ORDER BY created_at, id LIMIT ")
+            .push_bind(i64::from(query.limit) + 1)
+            .push(" OFFSET ")
+            .push_bind(query.offset as i64);
+        let mut records =
+            complete_records(&mut sql, &self.readers, query.limit as usize + 1).await?;
+        let next_offset =
+            (records.len() > query.limit as usize).then_some(query.offset + u64::from(query.limit));
+        records.truncate(query.limit as usize);
+        Ok(Page {
+            records,
+            next_offset,
+        })
+    }
+
     /// One SQLite statement/snapshot, so a concurrent promotion cannot fall
     /// between pages. Never return a silently incomplete context collection.
     pub async fn decisions(
@@ -545,12 +669,38 @@ impl SqliteAssistantStore {
     }
 }
 
+async fn complete_records(
+    query: &mut QueryBuilder<'_, Sqlite>,
+    readers: &SqlitePool,
+    limit: usize,
+) -> Result<Vec<StoredAssistantRecord>> {
+    let statement = query.build();
+    let mut rows = statement.fetch(readers);
+    let mut records = Vec::new();
+    let mut bytes = 0usize;
+    while let Some(row) = rows.try_next().await? {
+        let size: i64 = row.try_get("payload_bytes")?;
+        if size < 0 || size as u64 > MAX_RECORD_BYTES as u64 {
+            return Err(RecordError::TooLarge.into());
+        }
+        bytes += size as usize;
+        if records.len() == limit || bytes > 16 * 1024 * 1024 {
+            return Err(Error::ReadLimit);
+        }
+        records.push(decode_row(row)?);
+    }
+    Ok(records)
+}
+
 fn read_options(path: &Path) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
         .filename(path)
         .read_only(true)
         .foreign_keys(true)
         .busy_timeout(Duration::from_secs(5))
+        // SQLx otherwise prefetches 50 rows, each potentially 16 MiB, before
+        // our collection byte accounting can stop the stream.
+        .row_buffer_size(1)
         .pragma("query_only", "ON")
 }
 

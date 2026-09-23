@@ -14,16 +14,16 @@ use sha2::{Digest, Sha256};
 #[serde(transparent)]
 pub struct Revision(serde_json::Number);
 impl Revision {
-    fn is_zero(&self) -> bool {
+    pub(crate) fn is_zero(&self) -> bool {
         self.0.as_i64() == Some(0)
     }
-    fn is_negative(&self) -> bool {
+    pub(crate) fn is_negative(&self) -> bool {
         self.0.to_string().starts_with('-')
     }
-    fn matches(&self, value: &Value) -> bool {
+    pub(crate) fn matches(&self, value: &Value) -> bool {
         value.as_number() == Some(&self.0)
     }
-    fn as_i64(&self) -> Option<i64> {
+    pub(crate) fn as_i64(&self) -> Option<i64> {
         self.0.as_i64()
     }
 }

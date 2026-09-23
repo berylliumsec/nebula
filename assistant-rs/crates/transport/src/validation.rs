@@ -2,18 +2,28 @@
 //! Unknown fields retain the existing BaseModel behavior: they are ignored.
 use crate::ApiError;
 use nebula_assistant_services::context::{CursorWrite, DecisionWrite};
+use nebula_assistant_services::navigation::{BookmarkWrite, SearchRequest};
 use serde_json::{Map, Value, json};
 use speedate::{Date, DateTime, DateTimeConfig, MicrosecondsPrecisionOverflowBehavior, TimeConfig};
 use strum::EnumMessage;
 
 pub(crate) trait RequestModel: serde::de::DeserializeOwned {
-    const CURSOR: bool;
+    const MODEL: BodyModel;
+}
+#[derive(PartialEq)]
+pub(crate) enum BodyModel {
+    Cursor,
+    Decision,
+    Bookmark,
 }
 impl RequestModel for CursorWrite {
-    const CURSOR: bool = true;
+    const MODEL: BodyModel = BodyModel::Cursor;
 }
 impl RequestModel for DecisionWrite {
-    const CURSOR: bool = false;
+    const MODEL: BodyModel = BodyModel::Decision;
+}
+impl RequestModel for BookmarkWrite {
+    const MODEL: BodyModel = BodyModel::Bookmark;
 }
 
 fn error(
@@ -58,6 +68,18 @@ pub(crate) fn validate<T: RequestModel>(input: Value) -> Result<T, ApiError> {
     };
     let mut output = Map::new();
     let mut errors = Vec::new();
+    if T::MODEL == BodyModel::Bookmark {
+        if let Some(value) = fields.get("active") {
+            match boolean(value) {
+                Ok(active) => {
+                    output.insert("active".into(), active.into());
+                }
+                Err((kind, message)) => errors.push(field_error(kind, "active", message, value)),
+            }
+        } else {
+            errors.push(field_error("missing", "active", "Field required", &input));
+        }
+    }
     let mut required = |name: &str| {
         if let Some(value) = fields.get(name) {
             Some(value)
@@ -83,7 +105,7 @@ pub(crate) fn validate<T: RequestModel>(input: Value) -> Result<T, ApiError> {
             }
         }
     }
-    if T::CURSOR {
+    if T::MODEL == BodyModel::Cursor {
         if let Some(value) = fields.get("through_at") {
             match datetime(value) {
                 Ok(stamp) => {
@@ -134,7 +156,7 @@ pub(crate) fn validate<T: RequestModel>(input: Value) -> Result<T, ApiError> {
                 &input,
             ));
         }
-    } else {
+    } else if T::MODEL == BodyModel::Decision {
         for (name, nullable, max, pattern) in [
             (
                 "action",
@@ -237,6 +259,142 @@ fn string(
 }
 
 type IntegerError = (&'static str, &'static str);
+
+fn boolean(value: &Value) -> Result<bool, IntegerError> {
+    match value {
+        Value::Bool(value) => return Ok(*value),
+        Value::Number(number) => {
+            if number.as_f64() == Some(1.0) {
+                return Ok(true);
+            }
+            if number.as_f64() == Some(0.0) {
+                return Ok(false);
+            }
+            if number
+                .as_f64()
+                .is_none_or(|n| !n.is_finite() || n.fract() != 0.0)
+            {
+                return Err(("bool_type", "Input should be a valid boolean"));
+            }
+        }
+        Value::String(text) => match text.to_ascii_lowercase().as_str() {
+            "1" | "true" | "t" | "yes" | "y" | "on" => return Ok(true),
+            "0" | "false" | "f" | "no" | "n" | "off" => return Ok(false),
+            _ => {}
+        },
+        _ => return Err(("bool_type", "Input should be a valid boolean")),
+    }
+    Err((
+        "bool_parsing",
+        "Input should be a valid boolean, unable to interpret input",
+    ))
+}
+
+// Starlette scalar query parameters use the last repeated value and decode
+// form-style '+' and invalid UTF-8 the same way as form_urlencoded.
+fn query_fields(query: Option<&str>) -> Result<Map<String, Value>, ApiError> {
+    let query = query.unwrap_or_default();
+    if query.len() > 65536 {
+        return Err(ApiError::http(
+            414,
+            "Assistant query exceeds its configured limit",
+        ));
+    }
+    Ok(form_urlencoded::parse(query.as_bytes())
+        .map(|(key, value)| (key.into_owned(), Value::String(value.into_owned())))
+        .collect())
+}
+fn query_errors(mut errors: Vec<Value>) -> ApiError {
+    for error in &mut errors {
+        error["loc"][0] = "query".into();
+    }
+    ApiError::validation(errors)
+}
+
+pub(crate) fn include_replaced(query: Option<&str>) -> Result<bool, ApiError> {
+    let fields = query_fields(query)?;
+    fields.get("include_replaced").map_or(Ok(false), |value| {
+        boolean(value).map_err(|(kind, message)| {
+            query_errors(vec![field_error(kind, "include_replaced", message, value)])
+        })
+    })
+}
+
+pub(crate) fn search(query: Option<&str>) -> Result<SearchRequest, ApiError> {
+    let fields = query_fields(query)?;
+    let mut output = Map::new();
+    let mut errors = Vec::new();
+    let q = fields.get("q").cloned().unwrap_or_else(|| json!(""));
+    string(
+        &mut output,
+        &mut errors,
+        "q",
+        &q,
+        false,
+        None,
+        Some(512),
+        None,
+    );
+    let bookmarked = fields.get("bookmarked").is_some_and(|value| {
+        boolean(value).unwrap_or_else(|(kind, message)| {
+            errors.push(field_error(kind, "bookmarked", message, value));
+            false
+        })
+    });
+    for (name, default, minimum, maximum) in
+        [("offset", 0_u64, 0_u64, None), ("limit", 50, 1, Some(100))]
+    {
+        let Some(value) = fields.get(name) else {
+            output.insert(name.into(), default.into());
+            continue;
+        };
+        match integer(value) {
+            Ok(number) => {
+                let nonnegative = !number.to_string().starts_with('-');
+                let numeric = number.as_u64();
+                if !nonnegative || numeric.is_some_and(|n| n < minimum) {
+                    errors.push(error(
+                        "greater_than_equal",
+                        Some(name),
+                        format!("Input should be greater than or equal to {minimum}"),
+                        value,
+                        Some(json!({"ge":minimum})),
+                    ));
+                } else if let Some(max) = maximum.filter(|max| numeric.is_none_or(|n| n > *max)) {
+                    errors.push(error(
+                        "less_than_equal",
+                        Some(name),
+                        format!("Input should be less than or equal to {max}"),
+                        value,
+                        Some(json!({"le":max})),
+                    ));
+                } else if numeric.is_none_or(|n| n > i64::MAX as u64 - 101) {
+                    return Err(ApiError::http(
+                        422,
+                        "Assistant offset exceeds supported storage bounds",
+                    ));
+                } else {
+                    output.insert(name.into(), number);
+                }
+            }
+            Err((kind, message)) => errors.push(field_error(kind, name, message, value)),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(query_errors(errors));
+    }
+    Ok(SearchRequest {
+        q: output["q"].as_str().expect("validated text").into(),
+        session_id: fields
+            .get("session_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        bookmarked,
+        offset: output["offset"].as_u64().expect("validated offset"),
+        limit: output["limit"].as_u64().expect("validated limit") as u32,
+    })
+}
+
 fn integer(value: &Value) -> Result<Value, IntegerError> {
     const PARSE: IntegerError = (
         "int_parsing",

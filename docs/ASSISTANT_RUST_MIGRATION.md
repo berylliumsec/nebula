@@ -276,3 +276,64 @@ were rerun for the timestamp/negative-zero boundaries. Cumulative CI selection i
 compactly and expanded under test bounds. JSON syntax, content-type/method edge
 cases, unusual validation-guidance ordering, CORS, diagnostic persistence,
 remaining routes and production journey gates still require integration evidence.
+
+## Conversation navigation contract
+
+Journey: open an existing Assistant conversation, read retained messages, search
+the current project, jump to a matching message, bookmark it, refresh, and remove
+the bookmark. This follows the inspected Figma Assistant transcript (4:73) and
+compact search/bookmark controls (16:2), including mobile transcript (7:113).
+Core entity rows own messages, project/session relationships and bookmark
+revisions; URL selection and transient search controls belong to the existing UI.
+
+Required invariants: project boundaries remain authoritative; temporary sessions
+stay out of project search; replaced messages remain retrievable as history but
+do not appear in current transcript/search results. Search pagination counts the
+same stored rows as Python, including replaced rows. Literal wildcard queries,
+Unicode excerpts, ordering and empty pages retain their current meaning.
+Bookmark updates are durable, revision checked and scoped to the selected
+message/session; inactive records survive refresh. Complete reads must either
+return all eligible rows within explicit bounds or an actionable limit error.
+
+Lifecycle coverage for this step: discover/select/read/search, bookmark creation,
+refresh/reopen, remove, invalid input and stale-revision retry are required in
+isolated differential API and storage/service tests. Authentication/revocation
+reuse the selected HTTP regressions. Streaming, interruption, fork and execution
+are unchanged and retain their separate rewrite gates. Production UI navigation,
+reconnect, desktop Chromium, mobile Chromium/WebKit and LAN-origin acceptance
+remain required before claiming the operator journey complete.
+
+Parallel implementation ownership: storage queries, navigation services, and
+Python compatibility capture are separate agent tasks; HTTP integration, receipt
+selection and cross-layer review remain with the primary agent. Only the
+Assistant Rust workspace and its scoped compatibility/validation files change.
+
+Implemented: transcript history GET, project message search GET, and bookmark
+GET/PUT. Literal SQLite matching and stored-row pagination retain legacy behavior;
+complete transcript/bookmark reads reject more than 10,000 rows or 16 MiB rather
+than silently truncating. Search pages retain at most 101 candidates under the
+same byte bound. Full Unicode case folding is generated from CPython 3.12's
+Unicode 15.0 data. Search dictionaries preserve `+00:00` timestamps while typed
+transcript records preserve `Z`, matching the Python responses.
+
+Local evidence: four storage navigation tests, four service navigation tests and
+ten HTTP tests passed, plus Python regeneration of the 112-case navigation oracle.
+The HTTP comparison verifies all 30 final records after database reopen; service
+tests check raw immutable creation times and nondecreasing update times through
+bookmark removal/reactivation, competing writes and queued source/session edits.
+CI selection is 66 exact Rust tests and 47 Python tests. Shared project lookup
+currently validates identity/kind only; its full schema decoder remains a gap.
+The search queries retain legacy sorting/correlated lookup costs, with no speedup
+claim. Query strings above 64 KiB and offsets beyond SQLite's range fail explicitly.
+These limits are deliberate extensions, not silent compatibility claims.
+
+Reader prefetch is limited to one row per SQLite connection before collection
+accounting. Nine existing entity-store regressions are also selected locally for
+this shared reader change, bringing the focused run to 27 Rust tests. Empty and
+overlong nonexistent identities preserve named 404 errors. The six additional
+Python navigation cases cover these failures, including multibyte identifiers.
+
+Remaining Assistant dependencies include the shared structured-results GET/list
+routes used by Figma's Agent view (97:3); that panel does not use the separate
+chat Results drawer endpoint. Their read contracts require acceptance mapping,
+while shared result producers and deletion remain outside this Assistant rewrite.

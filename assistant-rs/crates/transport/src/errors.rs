@@ -127,6 +127,9 @@ impl ApiError {
             ServiceError::EntityNotFound { .. } => {
                 Self::named(404, error.to_string(), "chat.not_found_error", "chat")
             }
+            ServiceError::StorageNotFound(_) => {
+                Self::named(404, error.to_string(), "chat.not_found_error", "chat")
+            }
             ServiceError::Conflict(_) | ServiceError::RevisionConflict { .. } => {
                 Self::named(409, error.to_string(), "chat.conflict_error", "chat")
             }
