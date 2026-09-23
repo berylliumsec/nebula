@@ -1502,6 +1502,23 @@ kbd { font-size: 11px; }
 .chat-context-meter > small { color: var(--muted); font-size: 11px; }
 .chat-context-meter.status-failed > span { background: var(--red-muted); color: var(--red); }
 .chat-action-status { display: flex; min-height: 28px; align-items: center; justify-content: center; gap: 5px; margin: 4px 12px 0; color: var(--green); font-size: 11px; }
+.callback-waiting-status { display: grid; min-width: 0; gap: 10px; margin: 6px 12px 0; padding: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-panel); color: var(--text); background: var(--surface); }
+.callback-waiting-status > header { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.callback-waiting-status > header strong { font-size: 12px; font-weight: var(--weight-semibold); }
+.callback-waiting-status > header small { color: var(--muted); font-size: 11px; }
+.callback-waiting-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--green); }
+.callback-results-endpoint { display: flex; min-width: 0; min-height: 44px; align-items: center; gap: 8px; padding: 0 4px 0 10px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--canvas); }
+.callback-results-endpoint code { min-width: 0; flex: 1 1 auto; overflow: hidden; color: var(--muted-strong); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; user-select: all; }
+.callback-results-endpoint .icon-button { width: 44px; height: 44px; flex: 0 0 44px; color: var(--muted-strong); }
+.callback-copy-error { margin: 0; color: var(--red); font-size: 11px; }
+.callback-waiting-details { color: var(--muted); font-size: 11px; }
+.callback-waiting-details > summary { display: inline-flex; min-height: 32px; align-items: center; gap: 4px; border-radius: var(--radius-control); cursor: pointer; list-style: none; }
+.callback-waiting-details > summary::-webkit-details-marker { display: none; }
+.callback-waiting-details > summary > svg { transition: transform var(--motion-fast) var(--motion-ease); }
+.callback-waiting-details[open] > summary > svg { transform: rotate(90deg); }
+.callback-waiting-details > p { margin: 4px 0 0 18px; color: var(--muted); line-height: 1.5; }
+.callback-waiting-details code { color: var(--muted-strong); }
+.callback-waiting-details > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .chat-recovery-notice { display: grid; gap: 6px; margin: 6px 12px 0; }
 .chat-recovery-notice > .button { justify-self: start; }
 /* An unfinished reply is not a fault: quiet surface, no alarm colour. */

@@ -1381,6 +1381,59 @@ test("assistant context pack preserves the active conversation identity", async 
   await expect(page.getByRole("region", { name: "Selected context pack" })).toBeVisible();
 });
 
+test("automation callback keeps its endpoint compact and accessible", async ({ page }, testInfo) => {
+  const resultsUrl = `http://192.168.1.155:8000/api/v1/automation-processes/${"callback-id-".repeat(8)}/results`;
+  const provider = {
+    ...entity, id: "provider-callback", name: "Callback provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["callback-model"], capabilities: { streaming: true, tools: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "callback-model" },
+  };
+  await page.route(/\/api\/v1\/providers(?:\?|$)/, route => route.fulfill({ json: [provider] }));
+  await page.route(`**/api/v1/providers/${provider.id}/health`, route => route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["callback-model"] } }));
+  let callbackIssued = false;
+  await page.route("**/api/v1/chat/completions", route => {
+    callbackIssued = true;
+    const body = [
+      { type: "started", provider_id: provider.id, model: "callback-model", session_id: "session-1", turn_id: "callback-turn-1" },
+      { type: "tool_started", turn_id: "callback-turn-1", tool_call_id: "tool-callback-1", capability: "automation.command", display_name: "Run automation", arguments: {} },
+      { type: "callback_required", turn_id: "callback-turn-1", tool_call_id: "tool-callback-1", process_id: "callback-process-1", results_url: resultsUrl, summary: "Waiting for results" },
+    ].map(event => `data: ${JSON.stringify(event)}\n\n`).join("");
+    return route.fulfill({ status: 200, contentType: "text/event-stream", body });
+  });
+  await page.route("**/api/v1/chat/sessions/*/pending-turn", route => route.fulfill({ json: callbackIssued ? {
+    ...entity, id: "callback-turn-1", session_id: "session-1", status: "waiting_callback", revision: 1, content: "", reasoning: "",
+    approval_id: null, harness_turn_id: null, tool_call_ids: ["tool-callback-1"], results_url: resultsUrl, process_id: "callback-process-1",
+  } : null }));
+
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  await page.getByRole("button", { name: "New chat", exact: true }).click();
+  await page.getByPlaceholder("Ask about this project…").fill("Run the asynchronous automation");
+  await page.getByRole("button", { name: "Send message" }).click();
+
+  const status = page.getByRole("status", { name: "Waiting for command results" });
+  await expect(status).toBeVisible();
+  await expect(status.getByText("Callback ready")).toBeVisible();
+  await expect(status.locator("details")).not.toHaveAttribute("open");
+  const copy = status.getByRole("button", { name: "Copy results URL" });
+  const geometry = await status.evaluate(element => ({
+    left: element.getBoundingClientRect().left,
+    right: element.getBoundingClientRect().right,
+    viewportWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(geometry.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+  expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+  const copyBox = await copy.boundingBox();
+  expectTouchTarget(copyBox?.width, "copy results URL width");
+  expectTouchTarget(copyBox?.height, "copy results URL height");
+  await status.getByText("How this callback works").click();
+  await expect(status).toContainText("NEBULA_RESULTS_KEY");
+  expect((await new AxeBuilder({ page }).include(".callback-waiting-status").analyze()).violations).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("automation-callback-waiting.png") });
+});
+
 test("editing a sent message replaces its turns inside the same conversation", async ({ page }, testInfo) => {
   const sessionId = "chat-edit-in-place";
   const provider = {
