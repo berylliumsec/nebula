@@ -3707,7 +3707,12 @@ class ChatGoal(Entity):
 
 
 class ChatGoalUsageCharge(Entity):
-    """One idempotent usage debit from a child turn to its parent goal."""
+    """What one child turn has debited to its parent goal so far.
+
+    One row per (goal, child turn). ``usage`` is the turn's usage already
+    charged; each accrual, settle or restart repair charges only the turn's
+    usage beyond it, so no token is debited twice.
+    """
 
     entity_kind: ClassVar[str] = "chat_goal_usage_charges"
     engagement_id: str

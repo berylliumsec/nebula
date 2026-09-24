@@ -10320,7 +10320,7 @@ class HarnessRuntimeService:
             await self._settle_provider_subagents(turn_id)
 
     async def _settle_provider_subagents(self, turn_id: str) -> None:
-        """Stop a stopped turn's children and post finished reports.
+        """Stop a stopped or failed turn's children and post finished reports.
 
         Reports that land while a harness turn runs wait for it to end; this is
         the point where the conversation is idle again.
@@ -10336,6 +10336,7 @@ class HarnessRuntimeService:
                 turn.chat_session_id,
                 turn.chat_turn_id,
                 stopped=turn.status == HarnessTurnStatus.CANCELLED,
+                failed=turn.status == HarnessTurnStatus.FAILED,
             )
         except Exception as exc:
             record_caught_exception(

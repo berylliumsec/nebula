@@ -24,7 +24,9 @@ Static mockups; names, steps and token counts are illustrative.
 - `start_subagent` creates a child `ChatSession` (`parent_session_id`,
   `metadata.subagent_id`) and a `ChatSubagent` record, then runs the child as an
   ordinary background provider turn with the parent's provider, model, command
-  runtime and MCP servers. It returns immediately, so children run in parallel
+  runtime and MCP servers, and exactly the SSH hosts the parent turn was given
+  (none for "Nebula host only"; a later round takes the hosts of the turn that
+  sent its message). It returns immediately, so children run in parallel
   despite one tool call per routing step. There is no limit on how many run
   unless the operator sets "Running at once" (1-100) in Assistant settings;
   `max_active_subagents` then refuses a start at that many and the model is
@@ -41,8 +43,11 @@ Static mockups; names, steps and token counts are illustrative.
 - Once the parent is idle, every finished child is posted to the parent
   conversation as an assistant message with `metadata.kind = "subagent_result"`,
   so later turns remember it. If the parent's goal is running and no children
-  remain, Core continues the goal once, at the conversation's current model
-  and reasoning level.
+  remain, Core continues the goal once with the operator's current turn
+  settings, as every Core-started goal turn does: model, reasoning level,
+  tools, MCP servers, SSH hosts, hooks, subagents and agent messaging. Losing
+  that start to an operator message is not a failure and leaves the goal
+  running.
 - Reasoning level: `start_subagent` and `subagent.start` take an optional
   `reasoning_effort` (`none` to `xhigh`). Unset, a provider parent's child
   uses the conversation's current level (`metadata.reasoning_effort`, which
@@ -56,12 +61,26 @@ Static mockups; names, steps and token counts are illustrative.
   and "never" (full auto-approval) apply to subagents exactly as to the parent.
   Pending child approvals stay on the child turn and are surfaced through the
   list API (`status: "waiting_approval"` with the exact command and rationale);
-  approving and resuming the child turn continues it.
-- Stopping a parent response stops the children it started. Restart marks
+  approving and resuming the child turn continues it. A blocked child belongs
+  to its supervising response; once none runs (it blocks while the parent is
+  idle, or the parent's response ends without acting), it is stopped and its
+  report names the approval it was waiting for.
+- A parent response that fails or is stopped stops the children it started,
+  and each report says why. A completed parent keeps them (they report into
+  the conversation), and so does a failed answer the operator can still
+  retry; a parked or restart-interrupted parent is not ended. Stopping a
+  subagent closes the parent messages it never read, so no new round starts
+  from them, and when Stop returns none of its turns runs. Restart marks
   running children `interrupted` without resuming anything. Deleting a parent
   conversation removes its finished subagent conversations and is refused while
-  a subagent is running.
-- Child token usage is charged to the parent's goal when one exists.
+  a subagent is running. Editing a message in place stops the subagents its
+  retracted replies started; their reports and messages are not posted into
+  the edited conversation.
+- Child token usage is charged to the parent's goal as it accrues, after each
+  provider response of the child. One durable charge per (goal, child turn)
+  records what was debited, so the settle and restart repairs add only the
+  rest. The goal's remaining token budget bounds every child request, and a
+  budget pause stops the goal's running children.
 
 ## Talking both ways
 
