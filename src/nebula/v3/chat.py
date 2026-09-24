@@ -3035,7 +3035,8 @@ class ChatService:
 
         platform = self.automation_tool_platform
         manager = getattr(platform, "manager", None) if platform is not None else None
-        if manager is None:
+        if manager is None or turn.status != ChatTurnStatus.CANCELLED:
+            # A turn that completed before the stop keeps its commands.
             return
         from .automation_runtime import ProcessIORequest
 
