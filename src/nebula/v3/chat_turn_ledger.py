@@ -397,6 +397,37 @@ class ChatTurnLedger:
             rows = {holder.sequence: holder} if holder is not None else {}
             return self._resolved(row.payload, rows)
 
+    def tail(self, turn_id: str, count: int) -> tuple[int, list[dict[str, Any]]] | None:
+        """The step count and last ``count`` steps of ``history``, read
+        without the rest; None when the turn has no ledger rows."""
+
+        with self.database.session() as session:
+            steps = list(
+                session.scalars(
+                    select(ChatTurnStepEventRow.step)
+                    .where(ChatTurnStepEventRow.turn_id == turn_id)
+                    .distinct()
+                    .order_by(ChatTurnStepEventRow.step.desc())
+                    .limit(count)
+                )
+            )
+            if not steps:
+                return None
+            rows = list(
+                session.scalars(
+                    select(ChatTurnStepEventRow)
+                    .where(
+                        ChatTurnStepEventRow.turn_id == turn_id,
+                        ChatTurnStepEventRow.step >= min(steps),
+                    )
+                    .order_by(ChatTurnStepEventRow.sequence)
+                )
+            )
+        latest: dict[int, tuple[int, dict[str, Any]]] = {}
+        for row in rows:
+            latest[row.step] = (row.sequence, dict(row.payload))
+        return max(steps) + 1, [payload for _, payload in sorted(latest.values())]
+
     def tool_call_ids(self, turn: ChatTurn) -> list[str]:
         ids = [
             str(entry["tool_call_id"])

@@ -276,6 +276,12 @@ def test_harness_catalog_send_and_next_turn_delivery(tmp_path):
         assert next_turn.metadata["agent_messages_delivered"] == [
             incoming["message_id"]
         ]
+        # In the prompt, but received only once the vendor accepts it.
+        assert (
+            store.get(ChatAgentMessage, incoming["message_id"]).status
+            == ChatAgentMessageStatus.PENDING
+        )
+        runtime._mark_prompt_context_delivered(next_turn)
         assert (
             store.get(ChatAgentMessage, incoming["message_id"]).status
             == ChatAgentMessageStatus.DELIVERED

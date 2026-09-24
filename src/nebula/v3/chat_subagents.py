@@ -17,6 +17,14 @@ same way reports do. A question the parent cannot answer because its response
 has ended is closed with that reason, so no child waits on an idle
 conversation.
 
+Every delivery fits the bound its receiver reads it under: a provider tool
+result the model-delivery bound, a harness tool result or prompt its own. Only
+news travels (a message not read, a report not received), what does not fit
+waits for the next delivery, and a report or message too long for one result
+reaches a working provider turn in numbered parts. Nothing counts as received
+until it went out whole: a Core-added step once saved, a harness prompt once
+the vendor accepted it.
+
 Every way a subagent ends reaches the parent: a start failure as the tool
 error, and a finished, failed, stopped or interrupted round as a report that
 carries the error, the tool steps that failed, the last step and any message
@@ -34,11 +42,21 @@ received is handed to it at the start of its next turn.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
+import re
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection, Iterable, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Collection,
+    Iterable,
+    Sequence,
+    cast,
+)
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .diagnostics import record_caught_exception
@@ -69,6 +87,7 @@ from .domain import (
 from .providers import REASONING_EFFORTS, ReasoningEffort
 from .runtime_platform import RuntimeToolComponents
 from .storage import ConflictError, NotFoundError
+from .tool_results import MAX_EXCERPT_BYTES, model_result_bytes
 from .tools import InvalidToolArguments, ToolExecutionResult, ToolInvocation, ToolSpec
 
 if TYPE_CHECKING:
@@ -81,6 +100,7 @@ SUBAGENT_LIMIT_CEILING = 100
 RESULT_CHARACTERS = 12_000
 MESSAGE_CHARACTERS = 20_000
 RECENT_STEPS = 4
+FINISHED_STEP_CACHE = 4_096
 # Failed tool steps a report names; the count covers the rest.
 REPORTED_TOOL_FAILURES = 8
 # A harness waits inside one gateway call, which holds every other Nebula tool
@@ -90,6 +110,30 @@ REPORTED_TOOL_FAILURES = 8
 HARNESS_WAIT_DEFAULT_SECONDS = 300
 HARNESS_WAIT_MAX_SECONDS = 600
 HARNESS_REPORT_CONTEXT_CHARACTERS = 40_000
+# Every tool result a provider model receives must fit the model-delivery
+# bound once serialized (tool_results.serialize_model_result); a larger one
+# reaches the model only as a placeholder. Reports and messages are packed to
+# fit, and one too long for a result of its own reaches a working turn in
+# numbered parts, one Core-added step each. Nothing counts as received until
+# it went out whole.
+PROVIDER_RESULT_BYTES = MAX_EXCERPT_BYTES
+# A harness receives subagent results as MCP tool output. Grok cuts a result
+# above 20,000 bytes (its default MCP output cap), so results stay below it;
+# one report or message larger than this on its own still goes whole.
+HARNESS_RESULT_BYTES = 16_000
+# Results Core adds before one provider routing step; the rest arrive before
+# the next one.
+CORE_DELIVERY_RESULTS = 8
+# What a report carries besides its text (error, failed steps, unread
+# messages), so its last part fits one result beside the subagent's status.
+REPORT_DETAIL_BYTES = 4_096
+# The contract a paused parent turn resumes against. Bump it only for a change
+# a paused turn cannot continue with, such as a tool removed or renamed or an
+# argument removed or retyped. Descriptions and new ToolSpec fields leave it
+# alone, so a Core update resumes parents parked in wait_subagents.
+SUBAGENT_TOOLS_CONTRACT = "subagents-v1"
+# Before contract versions the digest hashed every ToolSpec field.
+_LEGACY_SUBAGENT_DIGEST = re.compile(r"subagents-[0-9a-f]{16}")
 SUBAGENT_TOOL_NAMES = frozenset(
     {
         "start_subagent",
@@ -223,14 +267,200 @@ class SubagentWaitPending(Exception):
 
 @dataclass
 class ParentUpdate:
-    """Messages and reports a parent has not received yet."""
+    """Messages and reports a parent has not received yet.
+
+    ``messages`` and ``records`` are what ``views`` carry in full; ``left``
+    counts news that did not fit and still waits, and ``omitted`` subagents
+    without news that were not listed.
+    """
 
     views: list[dict[str, Any]] = field(default_factory=list)
     messages: list[ChatSubagentMessage] = field(default_factory=list)
     records: list[ChatSubagent] = field(default_factory=list)
+    output: dict[str, Any] = field(default_factory=dict)
+    left: int = 0
+    omitted: int = 0
 
     def __bool__(self) -> bool:
         return bool(self.messages or self.records)
+
+
+@dataclass
+class DeliveryItem:
+    """One report or message a receiver has not had, as the view carrying it.
+
+    ``make(text, part, last)`` builds that view for all of ``text`` or for one
+    numbered part of it; only the last part carries the rest of the view.
+    Items of one ``key`` keep their order; views with the same ``merge_key``
+    share one entry of a result.
+    """
+
+    key: str
+    text: str
+    make: Callable[[str, str | None, bool], dict[str, Any]]
+    source: Any = None
+    merge_key: str | None = None
+
+    def view(self) -> dict[str, Any]:
+        return self.make(self.text, None, True)
+
+
+@dataclass
+class PackedResult:
+    views: list[dict[str, Any]]
+    # The items this result completes; a part before the last completes none.
+    delivered: list[DeliveryItem]
+
+
+@dataclass
+class CoreDelivery:
+    """Results Core adds to a working provider turn, one step each.
+
+    ``commit`` records what they carry as received and runs only once every
+    step is saved, so a crash in between delivers again instead of losing it.
+    """
+
+    tool_name: str
+    results: list[tuple[dict[str, Any], str]]
+    commit: Callable[[], None]
+
+
+# Measured in place of a part's real number, so relabelling never grows it.
+_PART_PLACEHOLDER = "999/999"
+
+Render = Callable[[list[dict[str, Any]], bool], dict[str, Any]]
+Fits = Callable[[dict[str, Any]], bool]
+
+
+def provider_result_fits(output: dict[str, Any]) -> bool:
+    return model_result_bytes(output) <= PROVIDER_RESULT_BYTES
+
+
+def harness_result_fits(output: dict[str, Any]) -> bool:
+    return model_result_bytes(output) <= HARNESS_RESULT_BYTES
+
+
+def _merge_view(existing: dict[str, Any], new: dict[str, Any]) -> dict[str, Any]:
+    merged = {**existing, **new}
+    if "messages" in existing or "messages" in new:
+        merged["messages"] = [*existing.get("messages", []), *new.get("messages", [])]
+    return merged
+
+
+def _with_view(
+    keys: list[str | None],
+    views: list[dict[str, Any]],
+    item: DeliveryItem,
+    view: dict[str, Any] | None = None,
+) -> tuple[list[str | None], list[dict[str, Any]]]:
+    view = item.view() if view is None else view
+    if item.merge_key is not None and item.merge_key in keys:
+        index = keys.index(item.merge_key)
+        return keys, [
+            *views[:index],
+            _merge_view(views[index], view),
+            *views[index + 1 :],
+        ]
+    return [*keys, item.merge_key], [*views, view]
+
+
+def _parts(item: DeliveryItem, render: Render, fits: Fits) -> list[dict[str, Any]]:
+    """``item`` in numbered parts that each fit a result on their own.
+
+    Empty when not even an empty part fits, which bounded views rule out.
+    """
+
+    def fit(text: str, last: bool) -> bool:
+        return fits(render([item.make(text, _PART_PLACEHOLDER, last)], True))
+
+    if not fit("", True):
+        return []
+    chunks: list[str] = []
+    rest = item.text
+    while not fit(rest, True):
+        # The longest prefix that fits as a part before the last.
+        low, high, best = 1, len(rest), 0
+        while low <= high:
+            middle = (low + high) // 2
+            if fit(rest[:middle], False):
+                best, low = middle, middle + 1
+            else:
+                high = middle - 1
+        if best == 0:
+            return []
+        chunks.append(rest[:best])
+        rest = rest[best:]
+    chunks.append(rest)
+    return [
+        item.make(chunk, f"{index}/{len(chunks)}", index == len(chunks))
+        for index, chunk in enumerate(chunks, 1)
+    ]
+
+
+def pack_delivery(
+    items: Sequence[DeliveryItem],
+    render: Render,
+    fits: Fits,
+    *,
+    parts: bool = False,
+    force_first: bool = False,
+    max_results: int = 1,
+) -> tuple[list[PackedResult], list[DeliveryItem]]:
+    """Pack ``items``, in order, into results that each fit, and return the
+    results with the items left for later.
+
+    ``render(views, more)`` builds a result, where ``more`` says something was
+    left out; sizes are checked as if it were, so the final result fits too.
+
+    Without ``parts`` one result is built. An item that does not fit waits,
+    with every later item of its key, so one sender's updates keep their
+    order; ``force_first`` admits the first item anyway, for a receiver with
+    no other way to get it. With ``parts`` up to ``max_results`` results are
+    built in strict order, and an item too long for a result of its own goes
+    in numbered parts, one result each; packing never stops inside one.
+    """
+
+    if not parts:
+        keys: list[str | None] = []
+        views: list[dict[str, Any]] = []
+        delivered: list[DeliveryItem] = []
+        left: list[DeliveryItem] = []
+        blocked: set[str] = set()
+        for item in items:
+            if item.key in blocked:
+                left.append(item)
+                continue
+            candidate_keys, candidate = _with_view(keys, views, item)
+            if fits(render(candidate, True)) or (force_first and not delivered):
+                keys, views = candidate_keys, candidate
+                delivered.append(item)
+            else:
+                left.append(item)
+                blocked.add(item.key)
+        return ([PackedResult(views, delivered)] if delivered else []), left
+    results: list[PackedResult] = []
+    queue = list(items)
+    unsplittable: list[DeliveryItem] = []
+    while queue and len(results) < max_results:
+        keys, views, delivered = [], [], []
+        while queue:
+            candidate_keys, candidate = _with_view(keys, views, queue[0])
+            if fits(render(candidate, True)):
+                keys, views = candidate_keys, candidate
+                delivered.append(queue.pop(0))
+                continue
+            if not delivered:
+                item = queue.pop(0)
+                split = _parts(item, render, fits)
+                if not split:
+                    unsplittable.append(item)
+                    continue
+                results.extend(PackedResult([view], []) for view in split[:-1])
+                results.append(PackedResult([split[-1]], [item]))
+            break
+        if delivered:
+            results.append(PackedResult(views, delivered))
+    return results, [*unsplittable, *queue]
 
 
 def is_subagent_session(session: ChatSession) -> bool:
@@ -394,6 +624,11 @@ def _failure_lines(view: dict[str, Any]) -> list[str]:
             "Your message was not delivered "
             f"({message.get('note') or 'no reason recorded'}): {message['content']}"
         )
+    if view.get("undelivered_messages_total"):
+        lines.append(
+            f"{view['undelivered_messages_total']} of your messages were not "
+            "delivered in all."
+        )
     return lines
 
 
@@ -429,16 +664,76 @@ def _view_text(view: dict[str, Any]) -> str:
         if view.get("error"):
             lines.append(f"Error: {view['error']}")
         lines.extend(_failure_lines(view))
+    if view.get("messages_follow"):
+        lines.append(
+            f"{view['messages_follow']} more of its messages did not fit here; "
+            "subagent.list returns them."
+        )
+    if view.get("report_follows"):
+        lines.append("Its report did not fit here; subagent.list returns it.")
     return "\n  ".join(lines)
 
 
-def update_text(update: ParentUpdate) -> str:
-    """A parent update as plain text for a harness."""
+HARNESS_MORE_TEXT = (
+    "More subagent updates did not fit here; subagent.list returns them."
+)
 
-    return _bounded(
-        "\n\n".join(_view_text(view) for view in update.views),
-        HARNESS_REPORT_CONTEXT_CHARACTERS,
+
+def _updates_text(views: list[dict[str, Any]], more: bool) -> str:
+    return "\n\n".join(
+        [*(_view_text(view) for view in views), *([HARNESS_MORE_TEXT] if more else [])]
     )
+
+
+def harness_text_fits(output: dict[str, Any]) -> bool:
+    """Whether a harness prompt or steer update stays within its bound."""
+
+    return (
+        len(_updates_text(output["subagents"], bool(output.get("more"))))
+        <= HARNESS_REPORT_CONTEXT_CHARACTERS
+    )
+
+
+def update_text(update: ParentUpdate) -> str:
+    """A parent update as plain text for a harness.
+
+    Packed to ``HARNESS_REPORT_CONTEXT_CHARACTERS`` already, so nothing it
+    marks as received is cut here.
+    """
+
+    return _updates_text(update.views, bool(update.left or update.omitted))
+
+
+def _count(count: int, noun: str) -> str:
+    return f"{count} {noun}{'' if count == 1 else 's'}"
+
+
+def _has_message_part(view: dict[str, Any]) -> bool:
+    return any("part" in message for message in view.get("messages", []))
+
+
+def _parts_summary(result: PackedResult) -> str:
+    """The summary of a Core step carrying one part of a long item."""
+
+    for view in result.views:
+        label = view.get("report_part")
+        if isinstance(label, str):
+            return f"Part {label} of a subagent report"
+        for message in view.get("messages", [view]):
+            label = message.get("part")
+            if isinstance(label, str):
+                return f"Part {label} of a message"
+    return ""
+
+
+def _update_of(items: Iterable[DeliveryItem]) -> ParentUpdate:
+    update = ParentUpdate()
+    for item in items:
+        if isinstance(item.source, ChatSubagentMessage):
+            update.messages.append(item.source)
+        elif isinstance(item.source, ChatSubagent):
+            update.records.append(item.source)
+    return update
 
 
 class SubagentService:
@@ -453,6 +748,10 @@ class SubagentService:
         # updates itself, so they are not steered into the turn as well.
         self._harness_waits: dict[str, int] = {}
         self._steer_locks: dict[str, asyncio.Lock] = {}
+        # Step counts and last steps of finished rounds, which never change.
+        self._finished_steps: OrderedDict[
+            tuple[str, str, str], tuple[int, list[dict[str, Any]]]
+        ] = OrderedDict()
         # Set by the harness runtime: add text to the running harness turn of
         # a chat. Returns whether the harness took it.
         self.harness_steer: Callable[[str, str], Awaitable[bool]] | None = None
@@ -541,18 +840,68 @@ class SubagentService:
             and record.result_message_id is not None
         )
 
-    def view(self, record: ChatSubagent) -> dict[str, Any]:
-        """Return the operator-facing state, overlaying the live child turn."""
+    def _steps(
+        self, record: ChatSubagent, turn: ChatTurn | None = None
+    ) -> tuple[int, list[dict[str, Any]]]:
+        """The current round's step count and its last ``RECENT_STEPS`` steps.
 
-        turn = self._child_turn(record)
-        history = list(self.chat._turn_history(turn)) if turn is not None else []
+        Read from the end of the ledger, never the whole history: the list
+        polls this for every subagent the conversation ever had. A finished
+        round's steps do not change, so they are kept once read.
+        """
+
+        if not record.child_turn_id:
+            return 0, []
+        # An interrupted round may still be recovering, and so still working.
+        key = (
+            (
+                record.child_turn_id,
+                record.status.value,
+                record.finished_at.isoformat() if record.finished_at else "",
+            )
+            if record.status in CHAT_SUBAGENT_TERMINAL_STATUSES
+            and record.status != ChatSubagentStatus.INTERRUPTED
+            else None
+        )
+        if key is not None and key in self._finished_steps:
+            self._finished_steps.move_to_end(key)
+            return self._finished_steps[key]
+        tail = self.chat.turn_ledger.tail(record.child_turn_id, RECENT_STEPS)
+        if tail is None:
+            # No ledger rows: a turn from before the ledger keeps its steps
+            # on itself, and a turn without tool steps has none.
+            turn = turn or self._child_turn(record)
+            history = self.chat._turn_history(turn) if turn is not None else []
+            tail = (turn.next_step if turn is not None else 0, history[-RECENT_STEPS:])
+        elif turn is not None:
+            tail = (turn.next_step, tail[1])
+        if key is not None:
+            self._finished_steps[key] = tail
+            while len(self._finished_steps) > FINISHED_STEP_CACHE:
+                self._finished_steps.popitem(last=False)
+        return tail
+
+    def view(self, record: ChatSubagent) -> dict[str, Any]:
+        """Return the operator-facing state, overlaying the live child turn.
+
+        Only a running or interrupted round reads its child turn; a finished
+        one is described by the record and the end of its ledger.
+        """
+
+        turn = (
+            self._child_turn(record)
+            if record.status
+            in {ChatSubagentStatus.RUNNING, ChatSubagentStatus.INTERRUPTED}
+            else None
+        )
+        step_count, steps = self._steps(record, turn)
         recent = [
             {
                 "tool": str(entry.get("name") or ""),
                 "detail": _step_detail(entry.get("arguments")),
                 "status": str(entry.get("status") or ""),
             }
-            for entry in history[-RECENT_STEPS:]
+            for entry in steps
         ]
         recovering = turn is not None and restart_recovery_pending(turn)
         state = "recovering" if recovering else record.status.value
@@ -565,7 +914,7 @@ class SubagentService:
                     pending = self.store.get(Approval, turn.approval_id)
                 except NotFoundError:  # diagnostic-expected: approval deleted; the view reports it as pending
                     pending = None
-                pending_entry = history[-1] if history else {}
+                pending_entry = steps[-1] if steps else {}
                 approval = {
                     "id": turn.approval_id,
                     "status": pending.status.value if pending else "pending",
@@ -605,7 +954,7 @@ class SubagentService:
             "child_session_id": record.child_session_id,
             "child_turn_id": record.child_turn_id,
             "rounds": record.rounds,
-            "step_count": turn.next_step if turn is not None else 0,
+            "step_count": step_count,
             "recent_steps": recent,
             "approval": approval,
             "question": question,
@@ -624,55 +973,58 @@ class SubagentService:
             "result_message_id": record.result_message_id,
         }
 
-    def _model_view(
-        self, record: ChatSubagent, *, include_result: bool
-    ) -> dict[str, Any]:
-        """What the parent model sees of one subagent."""
+    def _header(self, record: ChatSubagent) -> dict[str, Any]:
+        """What the parent model sees of one subagent besides its news."""
 
-        turn = self._child_turn(record)
-        history = list(self.chat._turn_history(turn)) if turn is not None else []
         payload: dict[str, Any] = {
             "subagent_id": record.id,
             "name": record.name,
             "status": record.status.value,
-            "steps": turn.next_step if turn is not None else 0,
         }
         if record.rounds > 1:
             payload["round"] = record.rounds
-        if record.status == ChatSubagentStatus.RUNNING:
-            question = self.open_question(record.id)
-            if question is not None:
-                payload["waiting_for"] = "your_reply"
-                payload["question_id"] = question.id
-            elif (
-                turn is not None
-                and turn.status == ChatTurnStatus.WAITING_APPROVAL
-                and history
-            ):
-                payload["waiting_for"] = "operator_approval"
-                payload["approval"] = {
-                    key: value
-                    for key, value in _step_view(history[-1]).items()
-                    if key in {"tool", "detail"}
-                }
-            if history:
-                payload["last_step"] = _step_view(history[-1])
+        if record.status != ChatSubagentStatus.RUNNING:
+            payload["steps"] = self._steps(record)[0]
             return payload
-        if not include_result:
-            return payload
-        payload["report"] = record.result or None
-        payload["error"] = record.error
+        turn = self._child_turn(record)
+        steps, recent = self._steps(record, turn)
+        payload["steps"] = steps
+        question = self.open_question(record.id)
+        if question is not None:
+            payload["waiting_for"] = "your_reply"
+            payload["question_id"] = question.id
+        elif (
+            turn is not None
+            and turn.status == ChatTurnStatus.WAITING_APPROVAL
+            and recent
+        ):
+            payload["waiting_for"] = "operator_approval"
+            payload["approval"] = {
+                key: value
+                for key, value in _step_view(recent[-1]).items()
+                if key in {"tool", "detail"}
+            }
+        if recent:
+            payload["last_step"] = _step_view(recent[-1])
+        return payload
+
+    def _report_details(self, record: ChatSubagent) -> dict[str, Any]:
+        """What a finished round's report carries besides its text.
+
+        Failed steps and unread messages are kept newest first while they fit
+        ``REPORT_DETAIL_BYTES``; the totals count the rest.
+        """
+
+        turn = self._child_turn(record)
+        history = list(self.chat._turn_history(turn)) if turn is not None else []
+        details: dict[str, Any] = {"error": record.error}
         if history and record.status != ChatSubagentStatus.COMPLETED:
-            payload["last_step"] = _step_view(history[-1])
+            details["last_step"] = _step_view(history[-1])
         failures = [
             {**_step_view(entry), "error": _step_error(entry)}
             for entry in history
             if entry.get("status") in _FAILED_STEP_STATUSES
         ]
-        if failures:
-            payload["tool_failures"] = failures[-REPORTED_TOOL_FAILURES:]
-            if len(failures) > REPORTED_TOOL_FAILURES:
-                payload["tool_failures_total"] = len(failures)
         round_started = turn.created_at if turn is not None else record.started_at
         undelivered = [
             {
@@ -687,52 +1039,264 @@ class SubagentService:
             )
             if item.created_at >= round_started
         ]
-        if undelivered:
-            payload["undelivered_messages"] = undelivered
+        for key, found, limit in (
+            ("tool_failures", failures, REPORTED_TOOL_FAILURES),
+            ("undelivered_messages", undelivered, len(undelivered)),
+        ):
+            kept: list[dict[str, Any]] = []
+            for entry in reversed(found[-limit:] if limit else []):
+                if (
+                    model_result_bytes({**details, key: [entry, *kept]})
+                    > REPORT_DETAIL_BYTES
+                ):
+                    break
+                kept.insert(0, entry)
+            if kept:
+                details[key] = kept
+            if len(kept) < len(found):
+                details[f"{key}_total"] = len(found)
+        return details
+
+    def _model_view(
+        self, record: ChatSubagent, *, include_result: bool
+    ) -> dict[str, Any]:
+        """What the parent model sees of one subagent, with its whole report."""
+
+        payload = self._header(record)
+        if include_result and record.status in CHAT_SUBAGENT_TERMINAL_STATUSES:
+            payload["report"] = record.result or None
+            payload.update(self._report_details(record))
         return payload
 
-    def _parent_update(
-        self, records: Iterable[ChatSubagent], *, all_reports: bool, everyone: bool
-    ) -> ParentUpdate:
-        """Views of ``records`` with what the parent has not received.
+    @staticmethod
+    def _message_item(
+        header: dict[str, Any], message: ChatSubagentMessage
+    ) -> DeliveryItem:
+        base = _message_view(message)
 
-        A finished subagent carries its report when ``all_reports`` is set or
-        the parent has not received it; ``everyone`` keeps subagents that have
-        nothing new.
+        def make(text: str, part: str | None, last: bool) -> dict[str, Any]:
+            del last
+            view = {**base, "content": text, **({"part": part} if part else {})}
+            return {**header, "messages": [view]}
+
+        return DeliveryItem(
+            key=header["subagent_id"],
+            merge_key=header["subagent_id"],
+            text=message.content,
+            make=make,
+            source=message,
+        )
+
+    def _report_item(
+        self, header: dict[str, Any], record: ChatSubagent
+    ) -> DeliveryItem:
+        details = self._report_details(record)
+
+        def make(text: str, part: str | None, last: bool) -> dict[str, Any]:
+            view = {**header, "report": text if part else (text or None)}
+            if part:
+                view["report_part"] = part
+            if last:
+                view.update(details)
+            return view
+
+        return DeliveryItem(
+            key=header["subagent_id"],
+            merge_key=header["subagent_id"],
+            text=record.result or "",
+            make=make,
+            source=record,
+        )
+
+    def _news(
+        self, records: Iterable[ChatSubagent], *, everyone: bool
+    ) -> list[tuple[ChatSubagent, dict[str, Any], list[DeliveryItem]]]:
+        """Each subagent with what the parent has not received: messages it
+        has not read and a finished round's report, in that order.
+
+        ``everyone`` keeps subagents without news too. Those with news come
+        first, then running ones, then finished ones.
         """
 
-        update = ParentUpdate()
+        entries: list[tuple[ChatSubagent, dict[str, Any], list[DeliveryItem]]] = []
         for record in records:
-            unreported = (
-                record.status in CHAT_SUBAGENT_TERMINAL_STATUSES
-                and not self._reported(record)
-            )
             pending = self.messages_for(
                 record.id,
                 ChatSubagentMessageDirection.TO_PARENT,
                 ChatSubagentMessageStatus.PENDING,
             )
-            if not (everyone or unreported or pending):
+            unreported = (
+                record.status in CHAT_SUBAGENT_TERMINAL_STATUSES
+                and not self._reported(record)
+            )
+            if not (everyone or pending or unreported):
                 continue
-            view = self._model_view(record, include_result=all_reports or unreported)
-            if pending:
-                view["messages"] = [_message_view(item) for item in pending]
-                update.messages.extend(pending)
-            if record.status in CHAT_SUBAGENT_TERMINAL_STATUSES and "report" in view:
-                update.records.append(record)
-            update.views.append(view)
-        return update
-
-    def pending_update(
-        self, parent_session_id: str, *, everyone: bool = False
-    ) -> ParentUpdate:
-        return self._parent_update(
-            self.for_session(parent_session_id), all_reports=False, everyone=everyone
+            header = self._header(record)
+            items = [self._message_item(header, message) for message in pending]
+            if unreported:
+                items.append(self._report_item(header, record))
+            entries.append((record, header, items))
+        return sorted(
+            entries,
+            key=lambda entry: (
+                0
+                if entry[2]
+                else 1
+                if entry[0].status == ChatSubagentStatus.RUNNING
+                else 2
+            ),
         )
+
+    def _parent_update(
+        self,
+        records: Iterable[ChatSubagent],
+        *,
+        everyone: bool,
+        render: Render,
+        fits: Fits,
+        force_first: bool = False,
+    ) -> ParentUpdate:
+        """What ``records`` have for the parent, packed into one result.
+
+        Only news travels in full; what does not fit is flagged on its
+        subagent (``report_follows``, ``messages_follow``) and waits. With
+        ``everyone`` the subagents without news follow as far as there is
+        room; a finished one says its report was received earlier.
+        """
+
+        entries = self._news(records, everyone=everyone)
+        results, _ = pack_delivery(
+            [item for _, _, items in entries for item in items],
+            render,
+            fits,
+            force_first=force_first,
+        )
+        delivered = list(results[0].delivered) if results else []
+
+        def news_views(done: set[int]) -> list[dict[str, Any]]:
+            views: list[dict[str, Any]] = []
+            for record, header, items in entries:
+                if not items:
+                    continue
+                view = dict(header)
+                for item in items:
+                    if id(item) in done:
+                        view = _merge_view(view, item.view())
+                waiting = [item for item in items if id(item) not in done]
+                messages = sum(1 for item in waiting if item.source is not record)
+                if messages:
+                    view["messages_follow"] = messages
+                if any(item.source is record for item in waiting):
+                    view["report_follows"] = True
+                if len(waiting) < len(items) or everyone:
+                    views.append(view)
+            return views
+
+        # The flags cost a few bytes the packing did not see; give back the
+        # latest item until they fit as well.
+        views = news_views({id(item) for item in delivered})
+        while (
+            delivered
+            and not fits(render(views, True))
+            and not (force_first and len(delivered) == 1)
+        ):
+            delivered.pop()
+            views = news_views({id(item) for item in delivered})
+        omitted = 0
+        for record, header, items in entries:
+            if items:
+                continue
+            view = dict(header)
+            if record.status in CHAT_SUBAGENT_TERMINAL_STATUSES:
+                view["report_received_earlier"] = True
+            if fits(render([*views, view], True)):
+                views.append(view)
+            else:
+                omitted += 1
+        left = sum(len(items) for _, _, items in entries) - len(delivered)
+        return ParentUpdate(
+            views=views,
+            messages=[
+                item.source
+                for item in delivered
+                if isinstance(item.source, ChatSubagentMessage)
+            ],
+            records=[
+                item.source
+                for item in delivered
+                if isinstance(item.source, ChatSubagent)
+            ],
+            output=render(views, bool(left or omitted)),
+            left=left,
+            omitted=omitted,
+        )
+
+    @staticmethod
+    def _more_note(harness: bool) -> str:
+        return (
+            "Some updates did not fit in this result (report_follows, "
+            "messages_follow, or subagents not listed); "
+            + (
+                "call subagent.list to receive them."
+                if harness
+                else "Core delivers them before your next step."
+            )
+        )
+
+    def pending_update(self, parent_session_id: str) -> ParentUpdate:
+        """News a harness parent has not received, packed for its prompt or a
+        steer (``update_text``)."""
+
+        return self._parent_update(
+            self.for_session(parent_session_id),
+            everyone=False,
+            render=lambda views, more: {"subagents": views, "more": more},
+            fits=harness_text_fits,
+            force_first=True,
+        )
+
+    def with_harness_updates(
+        self, parent_session_id: str, result: dict[str, Any]
+    ) -> dict[str, Any]:
+        """``result`` of a harness subagent call, carrying the news the harness
+        has not received as far as the result has room; those are marked."""
+
+        def render(views: list[dict[str, Any]], more: bool) -> dict[str, Any]:
+            return {
+                **result,
+                **({"updates": views} if views else {}),
+                **({"more_updates": self._more_note(True)} if more else {}),
+            }
+
+        update = self._parent_update(
+            self.for_session(parent_session_id),
+            everyone=False,
+            render=render,
+            fits=harness_result_fits,
+        )
+        self.mark_delivered(update)
+        return update.output
 
     def mark_delivered(self, update: ParentUpdate) -> None:
         self._mark_messages(update.messages, ChatSubagentMessageStatus.DELIVERED)
         self.mark_reported(item.id for item in update.records)
+
+    def mark_ids_delivered(
+        self, *, report_ids: Iterable[str], message_ids: Iterable[str]
+    ) -> None:
+        """Record that a harness received the reports and messages its prompt
+        carried, once the vendor accepted that prompt."""
+
+        messages: list[ChatSubagentMessage] = []
+        for message_id in dict.fromkeys(message_ids):
+            try:
+                messages.append(self.store.get(ChatSubagentMessage, message_id))
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: message deleted with its conversation
+                continue
+        self._mark_messages(messages, ChatSubagentMessageStatus.DELIVERED)
+        self.mark_reported(report_ids)
 
     def _mark_messages(
         self,
@@ -1343,34 +1907,97 @@ class SubagentService:
             raise InvalidToolArguments("this subagent round has already ended")
         return record
 
-    def _child_inbox(self, record: ChatSubagent) -> dict[str, Any] | None:
-        pending = self.messages_for(
+    _CHILD_INBOX_NOTE = (
+        "From the assistant that delegated your task. Act on them; they "
+        "take precedence over the original task where they differ."
+    )
+
+    def _child_inbox_items(self, record: ChatSubagent) -> list[DeliveryItem]:
+        items: list[DeliveryItem] = []
+        for message in self.messages_for(
             record.id,
             ChatSubagentMessageDirection.TO_CHILD,
             ChatSubagentMessageStatus.PENDING,
-        )
-        if not pending:
+        ):
+
+            def make(
+                text: str,
+                part: str | None,
+                last: bool,
+                message_id: str = message.id,
+            ) -> dict[str, Any]:
+                del last
+                return {
+                    "message_id": message_id,
+                    "content": text,
+                    **({"part": part} if part else {}),
+                }
+
+            # One key: the parent's messages keep their order.
+            items.append(
+                DeliveryItem(
+                    key="parent", text=message.content, make=make, source=message
+                )
+            )
+        return items
+
+    def _child_render(self, views: list[dict[str, Any]], more: bool) -> dict[str, Any]:
+        output: dict[str, Any] = {"messages": views, "note": self._CHILD_INBOX_NOTE}
+        if more:
+            output["more_messages"] = (
+                "More messages did not fit in this result; Core delivers them "
+                "before your next step."
+            )
+        return output
+
+    def _child_inbox(self, record: ChatSubagent) -> dict[str, Any] | None:
+        """Unread parent messages for a working subagent, as one result that
+        fits; only the messages it carries are marked read."""
+
+        items = self._child_inbox_items(record)
+        if not items:
             return None
-        self._mark_messages(pending, ChatSubagentMessageStatus.DELIVERED)
-        return {
-            "messages": [
-                {"message_id": item.id, "content": item.content} for item in pending
-            ],
-            "note": (
-                "From the assistant that delegated your task. Act on them; they "
-                "take precedence over the original task where they differ."
-            ),
-        }
+        results, left = pack_delivery(items, self._child_render, provider_result_fits)
+        delivered = results[0].delivered if results else []
+        self._mark_messages(
+            [item.source for item in delivered], ChatSubagentMessageStatus.DELIVERED
+        )
+        return self._child_render(results[0].views if results else [], bool(left))
+
+    def _core_results(
+        self,
+        items: list[DeliveryItem],
+        render: Render,
+        summary: Callable[[PackedResult], str],
+    ) -> tuple[list[tuple[dict[str, Any], str]], list[DeliveryItem]]:
+        """``items`` as results Core adds before a routing step, in parts
+        where one is too long, and the items they carry in full."""
+
+        results, left = pack_delivery(
+            items,
+            render,
+            provider_result_fits,
+            parts=True,
+            max_results=CORE_DELIVERY_RESULTS,
+        )
+        return [
+            (
+                render(result.views, bool(left) and index == len(results)),
+                summary(result),
+            )
+            for index, result in enumerate(results, 1)
+        ], [item for result in results for item in result.delivered]
 
     def routing_delivery(
         self, turn: ChatTurn, tool_names: Collection[str]
-    ) -> tuple[str, dict[str, Any], str] | None:
+    ) -> CoreDelivery | None:
         """What a working provider turn must receive before its next step.
 
-        Returns the tool whose result carries it, the result and a summary:
+        Returns the results of the steps Core adds for it:
         ``read_parent_messages`` for a subagent with unread parent messages,
         ``list_subagents`` for a parent with unread subagent messages or
-        reports.
+        reports. Each result fits the model-delivery bound, and one message
+        or report too long for a result arrives in numbered parts.
         """
 
         try:
@@ -1385,35 +2012,73 @@ class SubagentService:
             record = self._for_child_session(session)
             if record is None or record.child_turn_id != turn.id:
                 return None
-            inbox = self._child_inbox(record)
-            if inbox is None:
+            items = self._child_inbox_items(record)
+            if not items:
                 return None
-            count = len(inbox["messages"])
-            return (
+            child_results, delivered = self._core_results(
+                items,
+                self._child_render,
+                lambda result: (
+                    _parts_summary(result)
+                    or _count(len(result.delivered), "message")
+                    + " from the delegating assistant"
+                ),
+            )
+            return CoreDelivery(
                 "read_parent_messages",
-                inbox,
-                f"{count} message{'' if count == 1 else 's'} from the delegating assistant",
+                child_results,
+                lambda: self._mark_messages(
+                    [item.source for item in delivered],
+                    ChatSubagentMessageStatus.DELIVERED,
+                ),
             )
         if "list_subagents" not in tool_names or not self._has_news(session.id):
             return None
-        update = self.pending_update(session.id, everyone=True)
-        self.mark_delivered(update)
-        output: dict[str, Any] = {
-            "delivered_by": "nebula",
-            "note": (
+        entries = self._news(self.for_session(session.id), everyone=False)
+
+        def render(views: list[dict[str, Any]], more: bool) -> dict[str, Any]:
+            note = (
                 "Core delivered this update because your subagents sent messages "
                 "or finished since your last step."
+            )
+            if any("report_part" in view or _has_message_part(view) for view in views):
+                note += (
+                    " A report or message too long for one result arrives in "
+                    "numbered parts (report_part, part) over consecutive results."
+                )
+            output: dict[str, Any] = {
+                "delivered_by": "nebula",
+                "note": note,
+                "subagents": views,
+            }
+            waiting = [
+                view["subagent_id"]
+                for view in views
+                if view.get("waiting_for") == "your_reply"
+            ]
+            if waiting:
+                output["awaiting_your_reply"] = waiting
+            if more:
+                output["more_updates"] = (
+                    "More updates are ready; Core delivers them before your next step."
+                )
+            return output
+
+        parent_results, delivered = self._core_results(
+            [item for _, _, items in entries for item in items],
+            render,
+            lambda result: (
+                _parts_summary(result)
+                or self._update_summary(_update_of(result.delivered))
             ),
-            "subagents": update.views,
-        }
-        waiting = [
-            view["subagent_id"]
-            for view in update.views
-            if view.get("waiting_for") == "your_reply"
-        ]
-        if waiting:
-            output["awaiting_your_reply"] = waiting
-        return "list_subagents", output, self._update_summary(update)
+        )
+        if not parent_results:
+            return None
+        return CoreDelivery(
+            "list_subagents",
+            parent_results,
+            lambda: self.mark_delivered(_update_of(delivered)),
+        )
 
     def _has_news(self, parent_session_id: str) -> bool:
         """Cheaply: does the parent have an unread subagent message or report?"""
@@ -1505,8 +2170,14 @@ class SubagentService:
                     f"unknown subagent ids: {', '.join(missing)}"
                 )
             return [by_id[item] for item in dict.fromkeys(ids)]
+        # With none running, the finished ones whose reports the parent has
+        # not received; a goal parent that never goes idle would otherwise
+        # wait on every child it ever had.
         return self.active(records) or [
-            item for item in records if item.result_message_id is None
+            item
+            for item in records
+            if item.status in CHAT_SUBAGENT_TERMINAL_STATUSES
+            and not self._reported(item)
         ]
 
     def wait_satisfied(self, ids: list[str], mode: str) -> bool:
@@ -1555,6 +2226,8 @@ class SubagentService:
             inbox = self._child_inbox(record)
             if inbox is not None:
                 count = len(inbox["messages"])
+                if not count:
+                    return inbox, "The reply arrives before the next step"
                 return inbox, f"{count} repl{'y' if count == 1 else 'ies'} received"
             return {
                 "reply": None,
@@ -1562,43 +2235,86 @@ class SubagentService:
             }, "No reply"
         ids = [str(item) for item in wait.get("ids") or []]
         output = self.wait_output(ids)
-        received = len(ids) - len(output["still_running"])
+        received = sum(
+            1
+            for view in output["subagents"]
+            if "report" in view and "report_part" not in view
+        )
         summary = f"{received} subagent report{'' if received == 1 else 's'} received"
         if output.get("awaiting_your_reply"):
             summary += "; a subagent is waiting for your reply"
         elif any(view.get("messages") for view in output["subagents"]):
             summary += "; subagent messages received"
+        if output.get("more_updates"):
+            summary += "; more follow"
         return output, summary
 
-    def wait_output(self, ids: list[str]) -> dict[str, Any]:
-        records = [self.get(item) for item in ids]
-        update = self._parent_update(records, all_reports=True, everyone=True)
-        self.mark_delivered(update)
-        output: dict[str, Any] = {
-            "subagents": update.views,
-            "still_running": [
-                item.id
-                for item in records
-                if item.status not in CHAT_SUBAGENT_TERMINAL_STATUSES
-            ],
-        }
-        waiting = [
-            view["subagent_id"]
-            for view in update.views
-            if view.get("waiting_for") == "your_reply"
-        ]
-        if waiting:
-            output["awaiting_your_reply"] = waiting
-            output["note"] = (
-                "These subagents are paused until you answer their question with "
-                "a message; waiting again returns at once while they are."
-            )
-        return output
+    def wait_output(
+        self, ids: list[str], *, harness: bool = False, mark: bool = True
+    ) -> dict[str, Any]:
+        """The result of a satisfied or timed-out wait on ``ids``.
 
-    def list_output(self, parent_session_id: str) -> dict[str, Any]:
-        update = self.pending_update(parent_session_id, everyone=True)
+        It carries each report and message the parent has not received as far
+        as the result has room; a report received earlier is not sent again.
+        ``mark`` is off when nobody is left to read the result.
+        """
+
+        records = [self.get(item) for item in ids]
+        still_running = [
+            item.id
+            for item in records
+            if item.status not in CHAT_SUBAGENT_TERMINAL_STATUSES
+        ]
+
+        def render(views: list[dict[str, Any]], more: bool) -> dict[str, Any]:
+            output: dict[str, Any] = {
+                "subagents": views,
+                "still_running": still_running,
+            }
+            waiting = [
+                view["subagent_id"]
+                for view in views
+                if view.get("waiting_for") == "your_reply"
+            ]
+            if waiting:
+                output["awaiting_your_reply"] = waiting
+                output["note"] = (
+                    "These subagents are paused until you answer their question "
+                    "with a message; waiting again returns at once while they are."
+                )
+            if more:
+                output["more_updates"] = self._more_note(harness)
+            return output
+
+        update = self._parent_update(
+            records,
+            everyone=True,
+            render=render,
+            fits=harness_result_fits if harness else provider_result_fits,
+            force_first=harness,
+        )
+        if mark:
+            self.mark_delivered(update)
+        return update.output
+
+    def list_output(
+        self, parent_session_id: str, *, harness: bool = False
+    ) -> dict[str, Any]:
+        def render(views: list[dict[str, Any]], more: bool) -> dict[str, Any]:
+            return {
+                "subagents": views,
+                **({"more_updates": self._more_note(harness)} if more else {}),
+            }
+
+        update = self._parent_update(
+            self.for_session(parent_session_id),
+            everyone=True,
+            render=render,
+            fits=harness_result_fits if harness else provider_result_fits,
+            force_first=harness,
+        )
         self.mark_delivered(update)
-        return {"subagents": update.views}
+        return update.output
 
     # -- harness parents ---------------------------------------------------
 
@@ -1672,7 +2388,11 @@ class SubagentService:
         *,
         still_waiting: Callable[[], bool],
     ) -> dict[str, Any]:
-        """Wait inside a harness gateway call, bounded, then report."""
+        """Wait inside a harness gateway call, bounded, then report.
+
+        When the harness turn ended during the wait nobody reads the result,
+        so nothing in it counts as received; the next prompt carries it.
+        """
 
         records = self.resolve_wait(parent_session_id, ids)
         if not records:
@@ -1697,7 +2417,7 @@ class SubagentService:
                     asyncio.TimeoutError
                 ):  # diagnostic-expected: poll interval elapsed; re-check the children
                     pass
-            return self.wait_output(resolved)
+            return self.wait_output(resolved, harness=True, mark=still_waiting())
         finally:
             remaining_waits = self._harness_waits.get(parent_session_id, 1) - 1
             if remaining_waits > 0:
@@ -2521,7 +3241,9 @@ class SubagentService:
         parts = [record.result or ("" if record.error else "No report was produced.")]
         if record.error:
             parts.append(f"Error: {record.error}")
-        details = _failure_lines(self._model_view(record, include_result=True))
+        details = _failure_lines(
+            {"status": record.status.value, **self._report_details(record)}
+        )
         if details:
             parts.append("\n".join(details))
         return "\n\n".join(part for part in parts if part)
@@ -2948,13 +3670,6 @@ def subagent_components(
     workspace: Path,
     scope: ScopePolicy | None = None,
 ) -> RuntimeToolComponents:
-    specs = subagent_specs()
-    digest = hashlib.sha256(
-        json.dumps(
-            {name: spec.model_dump(mode="json") for name, spec in specs.items()},
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()
     return RuntimeToolComponents(
         broker=SubagentBroker(service),
         scope=scope
@@ -2963,9 +3678,20 @@ def subagent_components(
             engagement_id=engagement_id,
         ),
         workspace=workspace,
-        specs=specs,
-        runtime_digest=f"subagents-{digest[:16]}",
+        specs=subagent_specs(),
+        # The versioned contract, not a hash of the specs: Nebula's own tools
+        # change with Core, and a parked parent must resume across that.
+        runtime_digest=SUBAGENT_TOOLS_CONTRACT,
     )
+
+
+def contract_digest_segment(segment: str) -> str:
+    """One ``+``-joined segment of a recorded runtime digest, with the
+    subagent tools' pre-version fingerprint read as contract version 1."""
+
+    if _LEGACY_SUBAGENT_DIGEST.fullmatch(segment):
+        return SUBAGENT_TOOLS_CONTRACT
+    return segment
 
 
 def subagent_child_components(
@@ -2995,8 +3721,13 @@ def subagent_child_components(
 
 
 __all__ = [
+    "CoreDelivery",
+    "DeliveryItem",
+    "HARNESS_RESULT_BYTES",
     "HARNESS_WAIT_DEFAULT_SECONDS",
     "HARNESS_WAIT_MAX_SECONDS",
+    "PROVIDER_RESULT_BYTES",
+    "SUBAGENT_TOOLS_CONTRACT",
     "SUBAGENT_CHILD_INSTRUCTIONS",
     "SUBAGENT_CHILD_TOOL_NAMES",
     "SUBAGENT_EFFORT_DESCRIPTION",
@@ -3007,8 +3738,12 @@ __all__ = [
     "SubagentBroker",
     "SubagentService",
     "SubagentWaitPending",
+    "contract_digest_segment",
+    "harness_result_fits",
     "harness_subagent_instructions",
     "is_subagent_session",
+    "pack_delivery",
+    "provider_result_fits",
     "subagent_child_components",
     "subagent_child_specs",
     "subagent_components",

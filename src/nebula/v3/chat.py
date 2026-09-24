@@ -209,6 +209,7 @@ from .chat_subagents import (
     SUBAGENT_LIMIT_CEILING,
     SubagentService,
     SubagentWaitPending,
+    contract_digest_segment as subagent_digest_segment,
     is_subagent_session,
     recoverable_after_core_restart,
     subagent_child_components,
@@ -220,6 +221,7 @@ from .chat_agent_messages import (
     AGENT_MESSAGE_ROUTING_INSTRUCTIONS,
     AgentMessageService,
     agent_message_components,
+    contract_digest_segment as agent_message_digest_segment,
 )
 from .tool_results import (
     TOOL_RESULT_SCHEMA,
@@ -1515,6 +1517,27 @@ def _history_intent(entry: Mapping[str, Any], ledger_event: str) -> dict[str, An
     }
     intent["ledger_event"] = ledger_event
     return intent
+
+
+def _runtime_digest_matches(recorded: object, current: object) -> bool:
+    """Whether a paused turn resumes against the runtime it was recorded with.
+
+    Components join their digests with ``+``. Nebula's own subagent and
+    agent-message tools contribute a contract version; a turn recorded before
+    those versions carries a hash of every ToolSpec field instead, which any
+    Core update could change, so it reads as version 1.
+    """
+
+    if not isinstance(recorded, str) or not isinstance(current, str):
+        return recorded == current
+
+    def segments(value: str) -> list[str]:
+        return [
+            agent_message_digest_segment(subagent_digest_segment(item))
+            for item in value.split("+")
+        ]
+
+    return segments(recorded) == segments(current)
 
 
 def _decoded_result(value: object) -> dict[str, Any] | None:
@@ -5312,22 +5335,26 @@ class ChatService:
                         )
                         break
                     route_deviated = False
-                    # What subagents sent a working parent, or a parent sent a
-                    # working subagent, reaches the model before it routes
-                    # again, as the result of a step Core adds.
-                    delivery = self.subagents.routing_delivery(
-                        turn, {spec.name for spec in available_specs}
-                    )
-                    if delivery is None:
-                        delivery = self.agent_messages.routing_delivery(
-                            turn, {spec.name for spec in available_specs}
-                        )
-                    if delivery is not None:
-                        turn, events = self._subagent_delivery_step(
-                            turn, components, *delivery
-                        )
-                        for delivered in events:
-                            yield delivered
+                    # What subagents sent a working parent, a parent sent a
+                    # working subagent, or peer agents sent, reaches the model
+                    # before it routes again, as the results of steps Core
+                    # adds. It counts as received once every step is saved.
+                    available_names = {spec.name for spec in available_specs}
+                    delivered_events: list[tuple[str, dict[str, Any]]] = []
+                    for delivery in (
+                        self.subagents.routing_delivery(turn, available_names),
+                        self.agent_messages.routing_delivery(turn, available_names),
+                    ):
+                        if delivery is None:
+                            continue
+                        for output, summary in delivery.results:
+                            turn, events = self._subagent_delivery_step(
+                                turn, components, delivery.tool_name, output, summary
+                            )
+                            delivered_events.extend(events)
+                        delivery.commit()
+                    for delivered in delivered_events:
+                        yield delivered
                     routing = prepared.model_request.model_copy(
                         update={
                             "instructions": _CHAT_TOOL_INSTRUCTIONS
@@ -8483,8 +8510,10 @@ class ChatService:
         if (
             components.scope.id != turn.scope_policy_id
             or components.scope.revision != turn.scope_revision
-            or turn.request_snapshot.get("automation_runtime_digest")
-            != getattr(components, "runtime_digest", None)
+            or not _runtime_digest_matches(
+                turn.request_snapshot.get("automation_runtime_digest"),
+                getattr(components, "runtime_digest", None),
+            )
         ):
             raise ChatHistoryConflict(
                 "automation runtime or scope changed while the response was paused"
