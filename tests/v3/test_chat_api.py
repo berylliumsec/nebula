@@ -1400,7 +1400,10 @@ def test_stopping_provider_chat_ends_followers_with_a_cancelled_event(tmp_path):
         remaining = [event async for event in follower]
 
         assert [name for name, _ in remaining] == ["cancelled"]
-        assert remaining[0][1] == {
+        # Every frame names the runtime that numbered it.
+        cancelled = dict(remaining[0][1])
+        assert isinstance(cancelled.pop("epoch"), str)
+        assert cancelled == {
             "type": "cancelled",
             "turn_id": turn_id,
             "detail": "response stopped",
@@ -1689,13 +1692,13 @@ def test_follow_reports_a_turn_that_failed_outside_chat_errors_as_an_error_frame
 
     # The producer stored a storage failure (not a ChatError) as the turn's
     # error; a follower that was attached when it died re-raises it.
-    async def failing_follow(self, turn_id, *, after_sequence=0):
-        del self, turn_id, after_sequence
+    async def failing_follow(self, turn_id, *, after_sequence=0, epoch=None):
+        del self, turn_id, after_sequence, epoch
         raise RuntimeError(detail)
         yield  # pragma: no cover - keeps this an async generator
 
     monkeypatch.setattr(
-        chat_module.ChatService, "has_active_provider_turn", lambda self, turn_id: True
+        chat_module.ChatService, "has_provider_turn_stream", lambda self, turn_id: True
     )
     monkeypatch.setattr(chat_module.ChatService, "follow_provider_turn", failing_follow)
     with TestClient(create_app(store, auth_token="test-token")) as client:
