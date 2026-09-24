@@ -90,6 +90,7 @@ MAX_STACK_FRAMES = 32
 # Errors retained in process for the viewer while the disk copy is the durable
 # one. Sized for days of a flapping dependency without unbounded growth.
 MAX_MEMORY_ERRORS = 2_000
+WRITE_RECOVERY_PROBE_SECONDS = 5.0
 ERROR_MIRROR_PREFIX = "NEBULA_DIAGNOSTIC_ERROR "
 
 _EVENT_CODE = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$")
@@ -466,6 +467,11 @@ class DiagnosticManager:
         self._stop = False
         self._closed = False
         self._degraded = False
+        # Write failures are recoverable per sink. Keep the failed paths until
+        # that exact destination accepts a complete later record; a successful
+        # feature write must not hide a still-broken aggregate errors sink.
+        self._failed_write_paths: set[Path] = set()
+        self._next_write_recovery_probe = 0.0
         self._last_failure: dict[str, Any] | None = None
         # The in-process copy keeps errors readable while a sink is unavailable;
         # disk holds the durable copy, so it is bounded rather than unbounded.
@@ -1094,13 +1100,17 @@ class DiagnosticManager:
                 with self._condition:
                     self._in_flight -= len(batch)
                     self._condition.notify_all()
+            with self._writer_lock:
+                self._probe_failed_write_paths()
 
     def _write_pending(self, pending: _PendingRecord) -> None:
         feature = str(pending.record["feature"])
         path = self.log_dir / FEATURE_FILES[feature]
+        attempted_path = path
         retained = False
         try:
             self._append(path, pending.line)
+            self._failed_write_paths.discard(path)
             if pending.record["level"] in {"ERROR", "CRITICAL"}:
                 if self.desktop_parent:
                     # Desktop validates this complete bounded frame and owns
@@ -1112,7 +1122,10 @@ class DiagnosticManager:
                     )
                     sys.stderr.flush()
                 else:
-                    self._append(self.log_dir / "errors.log", pending.line)
+                    aggregate = self.log_dir / "errors.log"
+                    attempted_path = aggregate
+                    self._append(aggregate, pending.line)
+                    self._failed_write_paths.discard(aggregate)
                 # Retained once every sink accepted it; the emergency path
                 # retains it instead when one did not.
                 self._memory_errors.append(dict(pending.record))
@@ -1120,7 +1133,9 @@ class DiagnosticManager:
             if time.monotonic() - self._last_prune > 300:
                 self._prune()
         except OSError as exc:
-            self._emergency_sink_failure(pending, exc, retained=retained)
+            self._emergency_sink_failure(
+                pending, exc, retained=retained, failed_path=attempted_path
+            )
 
     def _emergency_sink_failure(
         self,
@@ -1128,10 +1143,23 @@ class DiagnosticManager:
         exception: BaseException,
         *,
         retained: bool = False,
+        failed_path: Path | None = None,
     ) -> None:
         """Retain errors and report logger failure through the final safe sink."""
 
-        self._mark_degraded("Local diagnostics storage became unavailable.", exception)
+        if failed_path is None:
+            self._mark_degraded(
+                "Local diagnostics storage became unavailable.", exception
+            )
+        else:
+            if not self._failed_write_paths:
+                self._next_write_recovery_probe = (
+                    time.monotonic() + WRITE_RECOVERY_PROBE_SECONDS
+                )
+            self._failed_write_paths.add(failed_path)
+            self._record_failure(
+                "Local diagnostics storage became unavailable.", exception
+            )
         is_error = pending.record.get("level") in {"ERROR", "CRITICAL"}
         if is_error and not retained:
             self._memory_errors.append(dict(pending.record))
@@ -1196,6 +1224,30 @@ class DiagnosticManager:
             )
             sys.stderr.write(prefix + encoded_failure + "\n")
             sys.stderr.flush()
+
+    def _probe_failed_write_paths(self, *, force: bool = False) -> None:
+        """Recheck failed sinks without waiting for another matching record."""
+
+        if not self._failed_write_paths:
+            return
+        now = time.monotonic()
+        if not force and now < self._next_write_recovery_probe:
+            return
+        self._next_write_recovery_probe = now + WRITE_RECOVERY_PROBE_SECONDS
+        for path in tuple(self._failed_write_paths):
+            try:
+                # Readers explicitly ignore blank lines. Writing one byte proves
+                # that the destination, quota, and rotation path are usable
+                # again without manufacturing a diagnostic incident.
+                self._append(path, b"\n")
+            except OSError as exc:
+                # diagnostic-expected: the failed recovery probe stays degraded
+                # and retains the concrete sink failure for health reporting.
+                self._record_failure(
+                    "Local diagnostics storage remains unavailable.", exc
+                )
+            else:
+                self._failed_write_paths.discard(path)
 
     def _append(self, path: Path, line: bytes) -> None:
         self._rotate_if_needed(path, len(line))
@@ -1285,6 +1337,9 @@ class DiagnosticManager:
 
     def _mark_degraded(self, message: str, exception: BaseException) -> None:
         self._degraded = True
+        self._record_failure(message, exception)
+
+    def _record_failure(self, message: str, exception: BaseException) -> None:
         self._last_failure = {
             "timestamp": _utc_now(),
             "message": message,
@@ -1406,10 +1461,12 @@ class DiagnosticManager:
 
     def status(self) -> dict[str, Any]:
         writable = os.access(self.log_dir, os.W_OK)
+        with self._writer_lock:
+            write_degraded = bool(self._failed_write_paths)
         return {
             "schema": "nebula.diagnostics-status/v1",
-            "writable": writable and not self._degraded,
-            "degraded": self._degraded or not writable,
+            "writable": writable and not self._degraded and not write_degraded,
+            "degraded": self._degraded or write_degraded or not writable,
             # Absolute log/settings paths stay out of this payload: /health and
             # /diagnostics/files answer cookie-paired devices, and the paths
             # reveal the operator's account name and home layout.
