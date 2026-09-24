@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from sqlalchemy import (
     ColumnElement,
+    String,
     and_,
     delete,
     exists,
@@ -159,7 +160,7 @@ def _entity_lookup_fields(entity: Entity) -> dict[str, Any]:
     return {**_automation_lookup_fields(entity), **_chat_lookup_fields(entity)}
 
 
-PayloadFilterValue = str | Sequence[str] | None
+PayloadFilterValue = str | int | Sequence[str] | None
 
 
 def _entity_order(newest_first: bool) -> tuple[Any, Any]:
@@ -868,6 +869,9 @@ class NebulaStore:
         filters: Mapping[str, PayloadFilterValue],
         *,
         engagement_id: str | None = None,
+        automation_run_id: str | None = None,
+        automation_session_id: str | None = None,
+        automation_status: str | Sequence[str] | None = None,
         offset: int = 0,
         limit: int | None = None,
         newest_first: bool = False,
@@ -878,10 +882,13 @@ class NebulaStore:
         reads its first 1,000-row page and filters in Python stops seeing newer
         rows once Core holds that many records of the kind. Each filter names a
         top-level payload field, or ``"metadata.<key>"`` for one metadata
-        entry; a string must equal the field, a sequence lists the accepted
-        values and ``None`` requires the field to be null or absent. Rows come
-        back oldest first unless ``newest_first`` is set, and ``limit=None``
-        returns every match.
+        entry; a string must equal the field, an integer must equal a field
+        the schema types as an integer, a sequence lists the accepted strings
+        and ``None`` requires the field to be null or absent. The keyword
+        arguments match the indexed projections the table maintains for the
+        browser automation kinds; prefer them to the equivalent payload
+        field. Rows come back oldest first unless ``newest_first`` is
+        set, and ``limit=None`` returns every match.
         """
 
         if offset < 0:
@@ -891,11 +898,35 @@ class NebulaStore:
         statement = select(EntityRow).where(EntityRow.kind == model.entity_kind)
         if engagement_id is not None:
             statement = statement.where(EntityRow.engagement_id == engagement_id)
+        if automation_run_id is not None:
+            statement = statement.where(
+                EntityRow.automation_run_id == automation_run_id
+            )
+        if automation_session_id is not None:
+            statement = statement.where(
+                EntityRow.automation_session_id == automation_session_id
+            )
+        if isinstance(automation_status, str):
+            statement = statement.where(
+                EntityRow.automation_status == automation_status
+            )
+        elif automation_status is not None:
+            statuses = list(automation_status)
+            if not statuses:
+                return []
+            statement = statement.where(EntityRow.automation_status.in_(statuses))
         for field, value in filters.items():
             column: Any = EntityRow.payload
             for part in field.split("."):
                 column = column[part]
+            if isinstance(value, bool):
+                raise TypeError(f"boolean payload filters are not supported: {field}")
             column = column.as_string()
+            if isinstance(value, int):
+                # Compare the text form. Casting the field to an integer would
+                # make PostgreSQL fail the query on any non-numeric value.
+                statement = statement.where(column.cast(String) == str(value))
+                continue
             if value is None:
                 statement = statement.where(column.is_(None))
             elif isinstance(value, str):
@@ -910,6 +941,37 @@ class NebulaStore:
             statement = statement.limit(limit)
         with self.database.session() as session:
             return [_row_to_entity(row, model) for row in session.scalars(statement)]
+
+    def list_latest_entities(
+        self,
+        model: type[EntityT],
+        filters: Mapping[str, PayloadFilterValue] | None = None,
+        *,
+        engagement_id: str | None = None,
+        automation_run_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[EntityT]:
+        """Return the newest ``limit`` rows matching ``filters``, oldest first.
+
+        A bounded view of a kind that keeps growing, such as captured traffic
+        or pending intercepts, has to show the latest records. Reading the
+        oldest page instead hides every new row once the kind passes the
+        bound. The window is taken from the newest end and returned in the
+        chronological order the views already render.
+        """
+
+        if not 1 <= limit <= 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        rows = self.find_entities(
+            model,
+            filters or {},
+            engagement_id=engagement_id,
+            automation_run_id=automation_run_id,
+            newest_first=True,
+            limit=limit,
+        )
+        rows.reverse()
+        return rows
 
     def iter_readable_entities(
         self, model: type[EntityT], *, page_size: int = 1000

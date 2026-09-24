@@ -1,4 +1,5 @@
 import asyncio
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -13,9 +14,21 @@ from nebula.v3.browser_automation import (
     BrowserProxyRuleRequest,
 )
 from nebula.v3.browser_tools import BrowserAutomationBroker, autonomous_browser_specs
-from nebula.v3.domain import AgentRun, BrowserCommandStatus, Engagement, ScopePolicy
+from nebula.v3.domain import (
+    AgentRun,
+    BrowserAutomationLease,
+    BrowserAutomationLeaseStatus,
+    BrowserCommand,
+    BrowserCommandStatus,
+    BrowserIdentity,
+    BrowserSession,
+    Engagement,
+    ScopePolicy,
+    utc_now,
+)
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import ToolInvocation
+from tests.v3.row_horizon_fixture import seed_older_copies
 
 
 def _project(store: NebulaStore) -> tuple[Engagement, str]:
@@ -462,3 +475,103 @@ def test_expected_page_url_does_not_bypass_the_lease_target_check(tmp_path):
             ),
             "operator",
         )
+
+
+def _session(store: NebulaStore, project: Engagement) -> BrowserSession:
+    identity = store.create(
+        BrowserIdentity(engagement_id=project.id, name="Test identity")
+    )
+    # A long-lived Project holds a page of older identities.
+    seed_older_copies(store, identity)
+    return store.create(
+        BrowserSession(
+            engagement_id=project.id,
+            name="Test session",
+            identity_id=identity.id,
+            device_owner="desktop-1",
+        )
+    )
+
+
+def test_lease_lookups_reach_records_after_a_page_of_history(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    project, _ = _project(store)
+    run = _run(store, project)
+    service = BrowserAutomationService(store)
+    session = _session(store, project)
+    lease = service.create_lease(
+        run.id,
+        project.id,
+        BrowserAutonomyRequestModel(
+            session_id=session.id, targets=["https://app.example.test/"]
+        ),
+        "operator",
+    )
+    seed_older_copies(
+        store,
+        lease.model_copy(update={"status": BrowserAutomationLeaseStatus.EXPIRED}),
+    )
+    assert service.active_lease_for_run(run.id).id == lease.id
+
+    seed_older_copies(
+        store,
+        BrowserCommand(
+            engagement_id=project.id,
+            run_id=run.id,
+            lease_id=lease.id,
+            session_id=session.id,
+            tab_id="tab-1",
+            kind="browser.navigate",
+            status=BrowserCommandStatus.COMPLETE,
+            expires_at=utc_now() + timedelta(minutes=5),
+        ),
+        vary=lambda index: {"idempotency_key": f"done-{index}"},
+    )
+    request = BrowserCommandCreateRequest(
+        tab_id="tab-1",
+        kind="browser.navigate",
+        arguments={"url": "https://app.example.test/account"},
+        idempotency_key="navigate-account",
+    )
+    command = service.enqueue_command(lease.id, request, "agent")
+    assert service.enqueue_command(lease.id, request, "agent").id == command.id
+    assert service.status(project.id, run.id).commands[-1].id == command.id
+
+    service.revoke_run(run.id, "operator stop", "operator")
+    assert (
+        store.get(BrowserCommand, command.id).status == BrowserCommandStatus.CANCELLED
+    )
+    assert (
+        store.get(BrowserAutomationLease, lease.id).status
+        == BrowserAutomationLeaseStatus.REVOKED
+    )
+
+
+def test_scope_change_revokes_an_active_lease_after_a_page_of_history(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    project, _ = _project(store)
+    run = _run(store, project)
+    service = BrowserAutomationService(store)
+    session = _session(store, project)
+    lease = service.create_lease(
+        run.id,
+        project.id,
+        BrowserAutonomyRequestModel(
+            session_id=session.id, targets=["https://app.example.test/"]
+        ),
+        "operator",
+    )
+    seed_older_copies(
+        store,
+        lease.model_copy(update={"status": BrowserAutomationLeaseStatus.REVOKED}),
+    )
+
+    revoked = service.invalidate_scope_revision(
+        project.id, lease.scope_policy_revision + 1, "operator"
+    )
+
+    assert revoked == 1
+    assert (
+        store.get(BrowserAutomationLease, lease.id).status
+        == BrowserAutomationLeaseStatus.REVOKED
+    )

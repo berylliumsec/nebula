@@ -1222,7 +1222,8 @@ class AutomationRuntimeManager:
 
     async def prepare(self) -> AutomationRuntimeInfo:
         if self.runtime_resolver is not None:
-            engagements = self.store.list_entities(Engagement, limit=1_000)
+            # Only the oldest project is needed to resolve the shared image.
+            engagements = self.store.list_entities(Engagement, limit=1)
             if not engagements:
                 return AutomationRuntimeInfo(
                     configured=True,

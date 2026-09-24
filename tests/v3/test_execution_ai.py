@@ -47,6 +47,7 @@ from nebula.v3.execution_ai import (
 )
 from nebula.v3.providers import ModelResponse, ModelUsage, ProviderError
 from nebula.v3.storage import NebulaStore
+from tests.v3.row_horizon_fixture import seed_older_copies
 
 
 def async_test(function):
@@ -323,6 +324,58 @@ async def test_post_tool_assistant_analyzes_completed_mission_output(tmp_path):
     note = store.get(Observation, result.observation_id)
     assert note.observation_type == "ai_tool_note"
     assert note.metadata["mission_id"] == run.id
+
+
+@async_test
+async def test_mission_analysis_reads_attempts_after_a_page_of_project_history(
+    tmp_path,
+):
+    store, _artifacts, engagement, _execution, profile, _evidence, provider, service = (
+        _fixture(tmp_path)
+    )
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="Review the target",
+            status=RunStatus.COMPLETE,
+        )
+    )
+    attempt = AgentAttempt(
+        engagement_id=engagement.id,
+        run_id=run.id,
+        task_id="task-1",
+        agent_role="researcher",
+        attempt_number=1,
+        status=TaskStatus.COMPLETE,
+        output={"summary": "Port 8443 responded."},
+    )
+    # Earlier missions in the Project already recorded a page of attempts.
+    seed_older_copies(
+        store,
+        attempt.model_copy(
+            update={"run_id": "earlier-mission", "output": {"summary": "old"}}
+        ),
+    )
+    store.create(attempt)
+    provider.response_text = json.dumps(
+        {
+            "title": "Mission note",
+            "summary": "The mission completed.",
+            "observations": ["Port 8443 responded."],
+            "potential_findings": [],
+            "evidence_ids": [],
+            "next_step": None,
+        }
+    )
+
+    draft = await service.generate_mission(
+        run.id, DraftNoteRequest(provider_id=profile.id, model="model-1")
+    )
+    await service._tasks[draft.id]
+
+    sent = provider.requests[-1].messages[0].content
+    assert "Port 8443 responded" in sent
+    assert '"old"' not in sent
 
 
 @async_test

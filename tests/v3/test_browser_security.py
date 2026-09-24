@@ -16,6 +16,7 @@ from nebula.v3.domain import (
     ScopePolicy,
 )
 from nebula.v3.storage import NebulaStore
+from tests.v3.row_horizon_fixture import seed_older_copies
 
 
 def _auth():
@@ -99,6 +100,42 @@ def test_workspace_bootstrap_is_durable_and_idempotent(tmp_path):
     ]
     assert store.count(BrowserIdentity) == 1
     assert store.count(BrowserSession) == 1
+
+
+def test_workspace_bootstrap_stays_idempotent_after_a_page_of_assistant_browsers(
+    tmp_path,
+):
+    store = NebulaStore(tmp_path / "nebula.db")
+    client = TestClient(create_app(store, auth_token="test-token"))
+    project, _ = _project(client, store)
+    first = _workspace(client, project)
+    # The Assistant's own browser profiles are hidden from this workspace; a
+    # page of them must not make the Project look as if it had none.
+    assistant = {"browser_companion_version": 1}
+    identity = BrowserIdentity(
+        engagement_id=project.id, name="Assistant browser", metadata=assistant
+    )
+    seed_older_copies(store, identity)
+    seed_older_copies(
+        store,
+        BrowserSession(
+            engagement_id=project.id,
+            identity_id=identity.id,
+            name="Assistant browser",
+            metadata=assistant,
+        ),
+    )
+
+    second = _workspace(client, project)
+
+    assert [item["id"] for item in second["identities"]] == [
+        item["id"] for item in first["identities"]
+    ]
+    assert [item["id"] for item in second["sessions"]] == [
+        item["id"] for item in first["sessions"]
+    ]
+    assert store.count(BrowserIdentity) == 1_001
+    assert store.count(BrowserSession) == 1_001
 
 
 def test_traffic_is_scope_bound_and_redacts_reusable_secrets(tmp_path):

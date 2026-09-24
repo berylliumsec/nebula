@@ -12,6 +12,7 @@ import hashlib
 import ipaddress
 import json
 import secrets
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any, Literal
 from urllib.parse import urlsplit
@@ -35,7 +36,7 @@ from .domain import (
     utc_now,
 )
 from .policy import PolicyEffect, PolicyEngine, PolicyRequest
-from .storage import ConflictError, NebulaStore
+from .storage import ConflictError, NebulaStore, PayloadFilterValue
 
 
 LEASE_MAX_DURATION_SECONDS = 3_600
@@ -43,6 +44,11 @@ COMMAND_CLAIM_SECONDS = 30
 COMMAND_MAX_ARGUMENT_BYTES = 32_000
 COMMAND_MAX_RESULT_BYTES = 64_000
 RULE_MAX_DURATION_SECONDS = 3_600
+# Commands a desktop can still run; revoking a lease cancels these.
+OPEN_COMMAND_STATUSES = (
+    BrowserCommandStatus.QUEUED.value,
+    BrowserCommandStatus.CLAIMED.value,
+)
 
 DEFAULT_AUTONOMOUS_RISKS = (
     RiskClass.PASSIVE,
@@ -266,12 +272,12 @@ class BrowserAutomationService:
             raise BrowserAutomationRequestError(
                 "autonomous browser tests require an active session"
             )
-        if session.identity_id not in {
-            identity.id
-            for identity in self.store.list_entities(
-                BrowserIdentity, engagement_id=engagement_id, limit=1_000
-            )
-        }:
+        if not self.store.find_entities(
+            BrowserIdentity,
+            {"id": session.identity_id},
+            engagement_id=engagement_id,
+            limit=1,
+        ):
             raise BrowserAutomationRequestError(
                 "browser session identity is unavailable"
             )
@@ -307,12 +313,12 @@ class BrowserAutomationService:
             raise BrowserAutomationRequestError("mission belongs to another Project")
         session = self.validate_autonomy(engagement_id, request)
         scope = self._scope(engagement_id)
-        for existing in self.store.list_entities(
+        for existing in self.store.find_entities(
             BrowserAutomationLease,
+            {},
             engagement_id=engagement_id,
             automation_session_id=session.id,
             automation_status=BrowserAutomationLeaseStatus.ACTIVE.value,
-            limit=1_000,
         ):
             if existing.run_id != run_id and existing.expires_at > utc_now():
                 raise BrowserAutomationRequestError(
@@ -340,31 +346,30 @@ class BrowserAutomationService:
     def status(
         self, engagement_id: str, run_id: str | None = None
     ) -> BrowserAutomationStatus:
-        leases = self.store.list_entities(
+        # A status view shows the latest records of a run or Project; commands
+        # alone can pass 1,000 in one lease.
+        leases = self.store.list_latest_entities(
             BrowserAutomationLease,
             engagement_id=engagement_id,
             automation_run_id=run_id,
-            limit=1_000,
         )
         leases = [self._reconcile_lease(item) for item in leases]
         lease_ids = {item.id for item in leases}
         commands = [
             item
-            for item in self.store.list_entities(
+            for item in self.store.list_latest_entities(
                 BrowserCommand,
                 engagement_id=engagement_id,
                 automation_run_id=run_id,
-                limit=1_000,
             )
             if item.lease_id in lease_ids
         ]
         rules = [
             self._reconcile_rule(item)
-            for item in self.store.list_entities(
+            for item in self.store.list_latest_entities(
                 BrowserProxyRule,
                 engagement_id=engagement_id,
                 automation_run_id=run_id,
-                limit=1_000,
             )
             if item.lease_id in lease_ids
         ]
@@ -372,20 +377,19 @@ class BrowserAutomationService:
 
     def active_lease_for_run(self, run_id: str) -> BrowserAutomationLease:
         run = self.store.get(AgentRun, run_id)
-        leases = [
-            item
-            for item in self.store.list_entities(
-                BrowserAutomationLease,
-                engagement_id=run.engagement_id,
-                automation_run_id=run_id,
-                limit=1_000,
-            )
-        ]
+        leases = self.store.find_entities(
+            BrowserAutomationLease,
+            {},
+            engagement_id=run.engagement_id,
+            automation_run_id=run_id,
+            newest_first=True,
+            limit=1,
+        )
         if not leases:
             raise BrowserAutomationRequestError(
                 "the mission has no browser automation lease"
             )
-        return self._active_lease(leases[-1].id)
+        return self._active_lease(leases[0].id)
 
     def enqueue_command(
         self,
@@ -395,10 +399,11 @@ class BrowserAutomationService:
     ) -> BrowserCommand:
         lease = self._active_lease(lease_id)
         if request.idempotency_key:
-            existing = self._commands_for_lease(lease)
-            for item in existing:
-                if item.idempotency_key == request.idempotency_key:
-                    return item
+            existing = self._commands_for_lease(
+                lease, idempotency_key=request.idempotency_key
+            )
+            if existing:
+                return existing[0]
         risk = (
             RiskClass.CREDENTIAL_USE
             if request.kind in CREDENTIAL_CAPABLE_COMMANDS
@@ -600,11 +605,11 @@ class BrowserAutomationService:
         count = 0
         lease_ids: set[str] = set()
         session_ids: set[str] = set()
-        for lease in self.store.list_entities(
+        for lease in self.store.find_entities(
             BrowserAutomationLease,
+            {},
             engagement_id=run.engagement_id,
             automation_run_id=run_id,
-            limit=1_000,
         ):
             lease_ids.add(lease.id)
             session_ids.add(lease.session_id)
@@ -623,22 +628,20 @@ class BrowserAutomationService:
                     actor_id,
                 )
                 count += 1
-            for command in self._commands_for_lease(lease):
-                if command.status in {
-                    BrowserCommandStatus.QUEUED,
-                    BrowserCommandStatus.CLAIMED,
-                }:
-                    self._update_command(
-                        command,
-                        {"status": BrowserCommandStatus.CANCELLED, "error": reason},
-                        "browser_command.cancelled",
-                        actor_id,
-                    )
-        for rule in self.store.list_entities(
+            for command in self._commands_for_lease(
+                lease, statuses=OPEN_COMMAND_STATUSES
+            ):
+                self._update_command(
+                    command,
+                    {"status": BrowserCommandStatus.CANCELLED, "error": reason},
+                    "browser_command.cancelled",
+                    actor_id,
+                )
+        for rule in self.store.find_entities(
             BrowserProxyRule,
+            {},
             engagement_id=run.engagement_id,
             automation_run_id=run_id,
-            limit=1_000,
         ):
             if rule.lease_id in lease_ids and rule.enabled:
                 self._disable_rule(rule, reason, actor_id)
@@ -699,8 +702,11 @@ class BrowserAutomationService:
         """Revoke every active browser lease pinned to an older scope revision."""
 
         count = 0
-        for lease in self.store.list_entities(
-            BrowserAutomationLease, engagement_id=engagement_id, limit=1_000
+        for lease in self.store.find_entities(
+            BrowserAutomationLease,
+            {},
+            engagement_id=engagement_id,
+            automation_status=BrowserAutomationLeaseStatus.ACTIVE.value,
         ):
             if (
                 lease.status != BrowserAutomationLeaseStatus.ACTIVE
@@ -1034,19 +1040,25 @@ class BrowserAutomationService:
         return lease
 
     def _commands_for_lease(
-        self, lease: BrowserAutomationLease
+        self,
+        lease: BrowserAutomationLease,
+        *,
+        statuses: Sequence[str] | None = None,
+        idempotency_key: str | None = None,
     ) -> list[BrowserCommand]:
-        return [
-            item
-            for item in self.store.list_entities(
-                BrowserCommand,
-                engagement_id=lease.engagement_id,
-                automation_run_id=lease.run_id,
-                automation_session_id=lease.session_id,
-                limit=1_000,
-            )
-            if item.lease_id == lease.id
-        ]
+        """Every command of ``lease``, oldest first, however many it queued."""
+
+        filters: dict[str, PayloadFilterValue] = {"lease_id": lease.id}
+        if idempotency_key is not None:
+            filters["idempotency_key"] = idempotency_key
+        return self.store.find_entities(
+            BrowserCommand,
+            filters,
+            engagement_id=lease.engagement_id,
+            automation_run_id=lease.run_id,
+            automation_session_id=lease.session_id,
+            automation_status=statuses,
+        )
 
     def _require_paired_desktop(
         self, lease: BrowserAutomationLease, device_id: str
@@ -1060,25 +1072,21 @@ class BrowserAutomationService:
     def _disable_lease_dependents(
         self, lease: BrowserAutomationLease, reason: str
     ) -> None:
-        for command in self._commands_for_lease(lease):
-            if command.status in {
-                BrowserCommandStatus.QUEUED,
-                BrowserCommandStatus.CLAIMED,
-            }:
-                self._update_command(
-                    command,
-                    {"status": BrowserCommandStatus.CANCELLED, "error": reason},
-                    "browser_command.cancelled",
-                    "system",
-                )
-        for rule in self.store.list_entities(
+        for command in self._commands_for_lease(lease, statuses=OPEN_COMMAND_STATUSES):
+            self._update_command(
+                command,
+                {"status": BrowserCommandStatus.CANCELLED, "error": reason},
+                "browser_command.cancelled",
+                "system",
+            )
+        for rule in self.store.find_entities(
             BrowserProxyRule,
+            {"lease_id": lease.id},
             engagement_id=lease.engagement_id,
             automation_run_id=lease.run_id,
             automation_session_id=lease.session_id,
-            limit=1_000,
         ):
-            if rule.lease_id == lease.id and rule.enabled:
+            if rule.enabled:
                 self._disable_rule(rule, reason, "system")
 
     def _reconcile_rule(self, rule: BrowserProxyRule) -> BrowserProxyRule:

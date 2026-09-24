@@ -7111,7 +7111,7 @@ def create_app(
     )
     async def list_scope_imports(engagement_id: str) -> list[ScopeImport]:
         store.get(Engagement, engagement_id)
-        return store.list_entities(ScopeImport, engagement_id=engagement_id, limit=1000)
+        return store.list_latest_entities(ScopeImport, engagement_id=engagement_id)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/scope-imports/{{scope_import_id}}",
@@ -7592,9 +7592,8 @@ def create_app(
             parsed = parse_openvpn_profile(
                 request.config, username=request.username, password=request.password
             )
-            if any(
-                item.fingerprint == parsed.fingerprint
-                for item in store.list_entities(VpnProfile, limit=1_000)
+            if store.find_entities(
+                VpnProfile, {"fingerprint": parsed.fingerprint}, limit=1
             ):
                 raise HTTPException(
                     status_code=409, detail="this VPN profile is already saved"

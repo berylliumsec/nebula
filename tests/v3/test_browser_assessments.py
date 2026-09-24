@@ -33,6 +33,7 @@ from nebula.v3.domain import (
     ScopePolicy,
 )
 from nebula.v3.storage import NebulaStore
+from tests.v3.row_horizon_fixture import seed_older_copies
 
 
 AUTH = {"Authorization": "Bearer test-token"}
@@ -417,3 +418,75 @@ def test_stop_and_revoke_do_not_require_managed_chromium(tmp_path):
         BrowserAssessmentStatus.REVOKED
     )
     assert engine.stopped == [second.id]
+
+
+def test_candidates_and_grants_stay_unique_after_a_page_of_history(tmp_path):
+    store = NebulaStore(tmp_path / "nebula.db")
+    client = TestClient(create_app(store, auth_token="test-token"))
+    engagement, _ = project(client, store)
+    browser = BrowserSecurityService(store).workspace(engagement.id)
+    service = BrowserAssessmentService(
+        store, BrowserEngineRegistry([ReadyManagedChromium()])
+    )
+    assessment = asyncio.run(
+        service.create(
+            engagement.id,
+            BrowserAssessmentCreateRequest(
+                name="Portal validation source",
+                objective="Collect candidates inside the frozen portal corridor.",
+                profile=BrowserAssessmentProfile.EXPLORE,
+                session_id=browser.sessions[0].id,
+                identity_ids=[browser.identities[0].id],
+                primary_identity_id=browser.identities[0].id,
+                target_urls=["https://app.example.test/portal"],
+            ),
+            "operator",
+        )
+    )
+    request = BrowserIssueCandidateCreateRequest(
+        assessment_id=assessment.id,
+        rule_id="reflected-input",
+        check_family="xss",
+        title="Reflected input",
+        target_url="https://app.example.test/portal/search?q=marker",
+        insertion_point="query:q",
+        severity="medium",
+    )
+    candidate = service.create_candidate(request, "engine")
+    seed_older_copies(
+        store,
+        candidate,
+        vary=lambda index: {"deduplication_fingerprint": f"{index:064x}"},
+    )
+
+    assert service.create_candidate(request, "engine").id == candidate.id
+    workspace = asyncio.run(service.workspace(engagement.id))
+    assert workspace.candidates[-1].id == candidate.id
+
+    grant = service.grant_validation(
+        candidate.id,
+        BrowserValidationGrantRequest(
+            expected_candidate_revision=candidate.revision,
+            technique="Replay one inert marker.",
+            max_requests=2,
+            duration_seconds=300,
+            idempotency_key="first-grant",
+        ),
+        "operator",
+    )
+    seed_older_copies(
+        store, grant, vary=lambda index: {"candidate_id": f"earlier-{index}"}
+    )
+    queued = store.get(BrowserIssueCandidate, candidate.id)
+    with pytest.raises(BrowserWorkflowError, match="already has an active"):
+        service.grant_validation(
+            candidate.id,
+            BrowserValidationGrantRequest(
+                expected_candidate_revision=queued.revision,
+                technique="A second technique must not overlap.",
+                max_requests=2,
+                duration_seconds=60,
+                idempotency_key="overlapping-grant",
+            ),
+            "operator",
+        )
