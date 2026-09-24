@@ -1,10 +1,10 @@
 {
-  "change_digest": "e75dffcef437460d92c4e73aeee7c6364ab26e95845fbebea83d081f660917b2",
+  "change_digest": "3543704356add5addefdd5b0f08923cf63868e99899c88b563b6c839dd192408",
   "reviewed_by": "Claude focused review for subagent-delivery",
-  "reason": "Subagent and peer-message delivery now packs every result to its bound (8 KiB provider tool results, harness MCP results, harness prompts and steers), sends only unreceived news, splits an oversized report or message into numbered Core-added parts, marks Core steps received after they are saved and harness prompt updates after the vendor accepted the prompt, keeps a long report's conclusion, reads finished children's steps from the ledger tail, lets a harness wait whose turn ended mark nothing, raises Grok's wait cap, and resumes parked turns against subagent/agent-message contract versions instead of full ToolSpec hashes. The new test_subagent_delivery.py covers each of these; the selected nodes of test_chat_subagents.py, test_harness_provider_subagents.py and test_chat_agent_messages.py cover the provider/harness delivery journeys; the selected test_chat.py nodes cover prepare_resume, restart resume and skill-resource digests; the selected test_harnesses.py nodes cover harness stream_turn, handoff and linked retry.",
-  "exclusions": "Full suites are not approved and are excluded. Nodes red on pristine origin/main 4facf4a are excluded with that justification: 14 in test_chat_subagents.py (the #559 admission regression and tool_history projection reads, being fixed by claude/resume-admission), 3 in test_harness_provider_subagents.py (2 depend on the same admission fix; test_operator_limit_reaches_the_harness_and_is_enforced fails on main because the gateway denial no longer carries the limit text), and the remaining test_chat.py/test_harnesses.py nodes, 22 and 5 of which fail identically on main and on this branch. Frontend, Playwright, native Rust/Tauri, missions, provider adapters and the command runtime are unchanged. The real-Core long-report journey was run on a scratch Core separately.",
+  "reason": "Subagent and peer-message delivery now packs every result to its bound (8 KiB provider tool results, harness MCP results, harness prompts and steers), sends only unreceived news, splits an oversized report or message into numbered Core-added parts, marks Core steps received after they are saved and harness prompt updates after the vendor accepted the prompt, keeps a long report's conclusion, reads finished children's steps from the ledger tail, lets a harness wait whose turn ended mark nothing, raises Grok's wait cap, and resumes parked turns against subagent/agent-message contract versions instead of full ToolSpec hashes. The new test_subagent_delivery.py covers each of these; the selected nodes of test_chat_subagents.py, test_harness_provider_subagents.py and test_chat_agent_messages.py cover the provider/harness delivery journeys; the selected test_chat.py nodes cover prepare_resume, restart resume and skill-resource digests; the selected test_harnesses.py nodes cover harness stream_turn, handoff and linked retry; test_turn_prompt_cache.py covers the ledger replay the Core-added delivery steps and the ledger tail read share.",
+  "exclusions": "Full suites are not approved and are excluded. Nodes red on pristine origin/main (eadae6a) are excluded with that justification: 14 in test_chat_subagents.py (the #559 admission regression and tool_history projection reads, being fixed by claude/resume-admission), 3 in test_harness_provider_subagents.py (2 depend on the same admission fix; test_operator_limit_reaches_the_harness_and_is_enforced fails on main because the gateway denial no longer carries the limit text), and the remaining test_chat.py/test_harnesses.py nodes, 22 and 5 of which fail identically on main and on this branch. Frontend, Playwright, native Rust/Tauri, missions, provider adapters and the command runtime are unchanged. The real-Core long-report journey was run on a scratch Core separately.",
   "expected_tests": {
-    "python": 63,
+    "python": 72,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -60,7 +60,8 @@
     "tests/v3/test_harnesses.py::test_nebula_side_failure_mid_stream_interrupts_the_vendor_turn",
     "tests/v3/test_harnesses.py::test_linked_retry_refreshes_current_browser_binding",
     "tests/v3/test_harnesses.py::test_harness_api_chat_mission_handoff_and_catalog",
-    "tests/v3/test_harnesses.py::test_harness_stream_exposes_saved_identity_before_runtime_and_optional_naming"
+    "tests/v3/test_harnesses.py::test_harness_stream_exposes_saved_identity_before_runtime_and_optional_naming",
+    "tests/v3/test_turn_prompt_cache.py"
   ],
   "frontend": [],
   "native": [],
