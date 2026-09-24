@@ -4040,6 +4040,49 @@ class NativeHookExecution(Entity):
         return self
 
 
+class WorkspaceProvenanceObservation(Entity):
+    """One bounded before/after observation used to attribute dirty paths.
+
+    The workspace remains authoritative for file content.  This record is an
+    append-only attribution receipt for lifecycle hooks; it never grants write
+    authority and never hides unobserved repository state.
+    """
+
+    entity_kind: ClassVar[str] = "workspace_provenance_observations"
+    engagement_id: str
+    workspace_root: str = Field(min_length=1, max_length=4_096)
+    scope_kind: Literal["turn", "tool"]
+    scope_id: str = Field(min_length=1, max_length=200)
+    actor_id: str = Field(min_length=1, max_length=200)
+    owner_kind: Literal["chat", "mission", "harness", "api"] = "chat"
+    owner_id: str | None = Field(default=None, max_length=200)
+    chat_session_id: str | None = Field(default=None, max_length=200)
+    chat_turn_id: str | None = Field(default=None, max_length=200)
+    status: Literal["active", "complete"] = "active"
+    supported: bool = True
+    unsupported_reason: str | None = Field(default=None, max_length=1_000)
+    baseline: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    current: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    mutations: list[dict[str, Any]] = Field(default_factory=list, max_length=2_000)
+    attribution: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    confidence: Literal["exact", "uncertain_parallel_turns", "unsupported"] = "exact"
+    concurrent_scope_ids: list[str] = Field(default_factory=list, max_length=128)
+    started_at: datetime = Field(default_factory=utc_now)
+    completed_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def terminal_state_is_coherent(self) -> "WorkspaceProvenanceObservation":
+        if (self.status == "complete") != (self.completed_at is not None):
+            raise ValueError(
+                "completed_at is required exactly for complete observations"
+            )
+        if self.supported == (self.confidence == "unsupported"):
+            raise ValueError("unsupported observations require unsupported confidence")
+        if not self.supported and not self.unsupported_reason:
+            raise ValueError("unsupported observations require a reason")
+        return self
+
+
 class ChatMessage(Entity):
     """One immutable message in a durable analyst conversation."""
 
@@ -4758,6 +4801,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     NativeCheckpoint,
     ChatSchedule,
     NativeHookExecution,
+    WorkspaceProvenanceObservation,
     ChatMessage,
     PairedDeviceSession,
     ActionIntent,

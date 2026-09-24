@@ -191,6 +191,9 @@ HOOK_SCRIPT = """#!/bin/sh
 # Hooks that subscribe to tool.before or tool.after run automatically around
 # run_command and process_io. A blocking tool.before failure denies execution;
 # tool.after is audit-only because the command effect has already occurred.
+# Git workspaces also receive additive actor and workspace_provenance fields.
+# Provenance fingerprints only Git-reported dirty paths; unsupported or
+# concurrent observations are explicit and must not be assigned to the actor.
 # This starter appends each event to events.jsonl beside this script.
 # Replace it with your own logic. Exit non-zero to report a failure.
 cat >> events.jsonl

@@ -16,7 +16,12 @@ from pydantic import Field, field_validator
 
 from .diagnostics import record_caught_exception
 from .domain import NativeHookExecution, NativeHookLateOutcome, NebulaModel, utc_now
-from .storage import NebulaStore
+from .storage import NebulaStore, NotFoundError
+from .workspace_provenance import (
+    PROVENANCE_SCHEMA,
+    WorkspaceProvenanceService,
+    actor_id_for,
+)
 
 
 HOOK_MANIFEST = "hook.json"
@@ -220,6 +225,7 @@ class NativeHookRunner:
         owner_id: str | None = None,
         event_name: str,
         payload: dict[str, Any],
+        workspace_provenance: dict[str, Any] | None = None,
     ) -> NativeHookExecution:
         if event_name not in snapshot.manifest.events:
             raise NativeHookError(
@@ -264,6 +270,23 @@ class NativeHookRunner:
                 "chat_turn_id": chat_turn_id,
                 "owner_kind": owner_kind,
                 "owner_id": owner_id or chat_session_id or chat_turn_id,
+                "actor": {
+                    "id": (
+                        workspace_provenance.get("actor_id")
+                        if workspace_provenance
+                        else actor_id_for(
+                            self.store,
+                            owner_kind=owner_kind,
+                            owner_id=owner_id,
+                            chat_session_id=chat_session_id,
+                        )
+                    ),
+                    "owner_kind": owner_kind,
+                    "owner_id": owner_id or chat_session_id or chat_turn_id,
+                    "chat_session_id": chat_session_id,
+                    "chat_turn_id": chat_turn_id,
+                },
+                "workspace_provenance": workspace_provenance,
                 "payload": payload,
             },
             ensure_ascii=False,
@@ -384,6 +407,68 @@ async def run_project_tool_hooks(
         for item in catalog
         if event_name in item.manifest.events
     ]
+    if not snapshots:
+        return []
+    actor_id = actor_id_for(
+        store,
+        owner_kind=owner_kind,
+        owner_id=owner_id,
+        chat_session_id=chat_session_id,
+    )
+    provenance = WorkspaceProvenanceService(store)
+    scope_id = str(payload.get("tool_call_id") or "")
+    try:
+        if not scope_id:
+            workspace_receipt = {
+                "schema": PROVENANCE_SCHEMA,
+                "supported": False,
+                "unsupported_reason": "tool_call_id_is_missing",
+                "actor_id": actor_id,
+            }
+        elif event_name == "tool.before":
+            observation = provenance.begin(
+                workspace,
+                engagement_id=engagement_id,
+                scope_kind="tool",
+                scope_id=scope_id,
+                actor_id=actor_id,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                chat_session_id=chat_session_id,
+                chat_turn_id=chat_turn_id,
+            )
+            workspace_receipt = provenance.receipt(observation)
+        else:
+            try:
+                observation = provenance.finish(
+                    workspace,
+                    engagement_id=engagement_id,
+                    scope_kind="tool",
+                    scope_id=scope_id,
+                )
+            except NotFoundError:  # diagnostic-expected: an after-only tool hook reports the missing baseline explicitly
+                workspace_receipt = {
+                    "schema": PROVENANCE_SCHEMA,
+                    "supported": False,
+                    "unsupported_reason": "tool_baseline_is_missing",
+                    "actor_id": actor_id,
+                }
+            else:
+                workspace_receipt = provenance.receipt(observation)
+    except Exception as exc:
+        record_caught_exception(
+            "automation",
+            "automation.workspace_provenance.capture_failed",
+            "Workspace provenance could not be captured for a project tool hook.",
+            exc,
+            stage=event_name,
+        )
+        workspace_receipt = {
+            "schema": PROVENANCE_SCHEMA,
+            "supported": False,
+            "unsupported_reason": "capture_failed",
+            "actor_id": actor_id,
+        }
     runner = NativeHookRunner(store)
     executions: list[NativeHookExecution] = []
     for snapshot in snapshots:
@@ -396,6 +481,7 @@ async def run_project_tool_hooks(
             owner_id=owner_id,
             event_name=event_name,
             payload=payload,
+            workspace_provenance=workspace_receipt,
         )
         executions.append(outcome)
         if (
@@ -403,6 +489,22 @@ async def run_project_tool_hooks(
             and snapshot.manifest.failure_policy == "block"
             and outcome.status != "complete"
         ):
+            if event_name == "tool.before" and scope_id:
+                try:
+                    provenance.finish(
+                        workspace,
+                        engagement_id=engagement_id,
+                        scope_kind="tool",
+                        scope_id=scope_id,
+                    )
+                except Exception as exc:
+                    record_caught_exception(
+                        "automation",
+                        "automation.workspace_provenance.cleanup_failed",
+                        "A denied tool left its provenance observation unresolved.",
+                        exc,
+                        stage=event_name,
+                    )
             raise NativeHookError(
                 f"required project hook {snapshot.id!r} did not complete: "
                 f"{outcome.error or outcome.status}"

@@ -1,31 +1,27 @@
 {
-  "change_digest": "a535777eb44fb40d7d587fc962a7a786e736c1d85f3714c761338ddbbe12847f",
-  "reviewed_by": "Codex focused review for accessible follow-up queue controls",
-  "reason": "The change moves the durable follow-up queue out of the bounded goal/subagent context scroller so expanding a queued item immediately exposes its Core-backed controls. The selected component checks retain the queue disclosure contract; the exact mocked journey now stacks an active goal, active subagent and queued messages and verifies visible pause, edit and clear controls across the permanent desktop and mobile viewport matrix; the dedicated production-LAN real-Core journey proves paused enqueue, edit, refresh persistence and removal against durable Core state.",
-  "exclusions": "Full suites are not approved and are excluded. Backend Python, Rust/native code, storage schema, queue dispatch semantics, provider routing and unrelated interface journeys are unchanged. The shared Playwright config and impact catalog changes only enroll the exact follow-up-queue regression in the missing permanent 1024, 320, 390 and 430 px projects; those eight catalogued entries plus one isolated real-Core entry are the reviewed browser boundary.",
+  "change_digest": "f878ef94fc058c6b80d9c5959758e25e57ba2a3062f0f929b6b203f2d54e5631",
+  "reviewed_by": "Codex focused review for actor-scoped workspace provenance",
+  "reason": "The change adds bounded Git dirty-path provenance to Core, persists actor and subagent ownership, and exposes the receipt through chat lifecycle and automatic command hook envelopes. The selection covers exact/pre-existing/other/concurrent/unsupported classification, store-reopen durability, durable native-hook envelope shape, all turn-ending lifecycle variants, automatic before/after command hooks, blocking before-hook cleanup, and the regression that command execution itself never walks the workspace.",
+  "exclusions": "Full suites are not approved and are excluded. Frontend, Rust/native code, browser/device behavior, API routes, provider wire formats, mission orchestration, and unrelated harness adapters are unchanged. The production Core journey is exercised manually after immutable deployment because it validates the installed binary and authenticated native-hook path rather than a browser presentation surface.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 3,
+    "python": 17,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 0
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/components/ChatQueuePanel.test.tsx"
+  "python": [
+    "tests/v3/test_workspace_provenance.py",
+    "tests/v3/test_native_hooks.py",
+    "tests/v3/test_native_hook_turn_ends.py::test_every_turn_end_sends_one_payload_shape",
+    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_runs_the_completed_hook_once",
+    "tests/v3/test_automation_runtime.py::test_command_tools_run_automatic_project_hooks_before_and_after",
+    "tests/v3/test_automation_runtime.py::test_blocking_before_hook_denies_command_before_runtime_execution",
+    "tests/v3/test_automation_runtime.py::test_command_execution_does_not_walk_workspace"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant-queue-reconciliation/desktop",
-    "entry:assistant-queue-reconciliation/compact",
-    "entry:assistant-queue-reconciliation/mobile-chromium-small",
-    "entry:assistant-queue-reconciliation/mobile-chromium-ledger-390",
-    "entry:assistant-queue-reconciliation/mobile-chromium-wide",
-    "entry:assistant-queue-reconciliation/mobile-webkit-small",
-    "entry:assistant-queue-reconciliation/mobile-webkit",
-    "entry:assistant-queue-reconciliation/mobile-webkit-wide",
-    "entry:assistant-queue-core/assistant-real-desktop"
-  ]
+  "playwright": []
 }
