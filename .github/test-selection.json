@@ -1,10 +1,10 @@
 {
   "change_digest": "51787f64605189664f6da382cff2f723990c0b23a3b42b77e5b370976be9a873",
   "reviewed_by": "Claude focused review for turn-preflight-latency",
-  "reason": "The change reorders chat prepare_async so tool ranking (Jev or the local index) runs as a task beside knowledge planning and context compaction, bounds knowledge planning, reuses a covering context snapshot while the tail still fits, shares one request allowance across non-streamed inference resends (OpenAI-compatible, Responses, Anthropic, Gemini, Bedrock), and stamps routing steps with provider_group and provider request timing. The selection covers the new regression file, Jev ranking and catalog integration, the turn ledger and scheduler, provider timeout, retry and adapter contracts, the routing tool loop, context compaction, context status, and the prepare paths used by queues, schedules, goals, subagent choices, agent messages, decisions, native hooks, dashboards and web search, plus the green test_chat.py nodes for knowledge retrieval, runtime-switch compaction, OpenRouter context sizing and goal compaction charging.",
+  "reason": "The change reorders chat prepare_async so tool ranking (Jev or the local index) runs as a task beside knowledge planning and context compaction, bounds knowledge planning, reuses a covering context snapshot while the tail still fits, shares one request allowance across non-streamed inference resends (OpenAI-compatible, Responses, Anthropic, Gemini, Bedrock), and stamps routing steps with provider_group and provider request timing. The selection covers the new regression file, Jev ranking and catalog integration, the turn ledger and scheduler, provider timeout, retry and adapter contracts, the routing tool loop and its prompt-cache replay and in-turn pruning (#564), context compaction, context status, and the prepare paths used by queues, schedules, goals, subagent choices, agent messages, decisions, native hooks, dashboards and web search, plus the green test_chat.py nodes for knowledge retrieval, runtime-switch compaction, OpenRouter context sizing and goal compaction charging.",
   "exclusions": "Full suites are not approved and are excluded. The rest of tests/v3/test_chat.py and all of tests/v3/test_chat_api.py, tests/v3/test_chat_subagents.py, tests/v3/test_history_content_fidelity.py and tests/v3/test_chat_leftovers.py are excluded because they are red on pristine origin/main 4facf4a: 22 test_chat.py and 4 test_chat_api.py nodes fail with 'chat turn cannot start from queued' after #559, 14 subagent nodes belong to claude/resume-admission, plus 1 context-recovery and 3 pre-#559 frame nodes. Locally their failure sets are identical on this branch and on main. The updated assertion in test_long_durable_chat_uses_a_bounded_user_led_model_context is among those red nodes (it fails on main before reaching it) and was verified through a complete() copy of the test. Frontend, Playwright and native layers are unchanged: no ui/ or Rust code is touched and no layout changes.",
   "expected_tests": {
-    "python": 585,
+    "python": 598,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -37,6 +37,8 @@
     "tests/v3/test_native_hooks.py",
     "tests/v3/test_structured_results.py",
     "tests/v3/test_web_search.py",
+    "tests/v3/test_turn_prompt_cache.py",
+    "tests/v3/test_in_turn_context_pruning.py",
     "tests/v3/test_chat.py::test_runtime_switch_requires_revision_bound_compaction_confirmation",
     "tests/v3/test_chat.py::test_openrouter_chat_verifies_route_limits_before_sizing_context",
     "tests/v3/test_chat.py::test_openrouter_chat_sizes_an_alias_from_its_target_routes",
