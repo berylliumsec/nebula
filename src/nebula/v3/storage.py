@@ -124,6 +124,7 @@ _CHAT_SESSION_REFERENCE_ENTITY_KINDS = frozenset(
         "native_checkpoints",
         "native_hook_executions",
         "tool_calls",
+        "workspace_provenance_observations",
     }
 )
 

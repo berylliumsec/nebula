@@ -95,6 +95,54 @@ def test_native_hook_runner_persists_versioned_bounded_outcome(tmp_path):
     assert store.get(type(execution), execution.id) == execution
 
 
+def test_native_hook_envelope_exposes_generic_actor_and_workspace_provenance(tmp_path):
+    workspace = tmp_path / "workspace"
+    _hook(
+        workspace,
+        script=(
+            "#!/bin/sh\n"
+            "python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin), sort_keys=True))'\n"
+        ),
+    )
+    snapshot = snapshot_native_hook("audit", discover_native_hooks(workspace))
+    store = NebulaStore(tmp_path / "envelope.db")
+
+    execution = asyncio.run(
+        NativeHookRunner(store).run(
+            snapshot,
+            engagement_id="eng",
+            chat_session_id="child-session",
+            chat_turn_id="child-turn",
+            owner_kind="chat",
+            owner_id="child-session",
+            event_name="chat.turn.completed",
+            payload={"model": "model"},
+            workspace_provenance={
+                "schema": "nebula.workspace-provenance/v1",
+                "actor_id": "subagent:child-agent",
+                "supported": True,
+                "confidence": "exact",
+                "attribution": {"owned": [{"path": "owned.txt"}]},
+            },
+        )
+    )
+    envelope = json.loads(execution.stdout)
+
+    assert envelope["actor"] == {
+        "id": "subagent:child-agent",
+        "owner_kind": "chat",
+        "owner_id": "child-session",
+        "chat_session_id": "child-session",
+        "chat_turn_id": "child-turn",
+    }
+    assert envelope["workspace_provenance"]["schema"] == (
+        "nebula.workspace-provenance/v1"
+    )
+    assert envelope["workspace_provenance"]["attribution"]["owned"] == [
+        {"path": "owned.txt"}
+    ]
+
+
 def test_native_hook_runner_times_out_without_treating_output_as_approval(tmp_path):
     workspace = tmp_path / "workspace"
     _hook(
