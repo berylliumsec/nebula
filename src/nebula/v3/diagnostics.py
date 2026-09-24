@@ -1241,6 +1241,8 @@ class DiagnosticManager:
                 # again without manufacturing a diagnostic incident.
                 self._append(path, b"\n")
             except OSError as exc:
+                # diagnostic-expected: the failed recovery probe stays degraded
+                # and retains the concrete sink failure for health reporting.
                 self._record_failure(
                     "Local diagnostics storage remains unavailable.", exc
                 )

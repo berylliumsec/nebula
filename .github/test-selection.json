@@ -1,5 +1,5 @@
 {
-  "change_digest": "39d7bab56e95096a809aeb3beb5a4b3ab15211f59d5b264b55ffb0aabb049352",
+  "change_digest": "affbfc8069890ef62d6e6a4e1600bee378a2cab3d7592d8ac2f3833e3eea6cf1",
   "reviewed_by": "Codex focused review for diagnostics sink self-recovery",
   "reason": "The change tracks transient write failures per diagnostics sink and clears degradation only after the exact failed destination accepts a later write. A bounded background probe makes recovery autonomous when no new diagnostic targets that sink. The selection covers retained aggregate failures, exact-sink recovery for both feature and aggregate destinations, and recovery by the autonomous probe.",
   "exclusions": "Full suites are not approved and are excluded. Frontend, Rust/native code, browser/device behavior, API response shape, provider and harness runtimes, chat lifecycle, and database persistence are unchanged. The live Core restart and authenticated localhost/LAN health checks cover the operator-visible recovery baseline; this branch changes only diagnostics manager state reconciliation.",
