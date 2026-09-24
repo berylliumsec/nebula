@@ -326,3 +326,23 @@ Downloaded execution/selection receipts match
 Python 3.11/3.13 were omitted. Browser plan/gate run `35981730853` passed with
 Playwright execution skipped. This CI evidence covers that committed increment,
 not the subsequent help/profile/decision preparation changes.
+
+CI for `f7fc383` found that provider-profile recapture compared interpreter
+provenance as behavior: Python 3.12.14 differs from the captured 3.12.11 version
+string, while every other captured field matches. The source oracle already
+requires CPython 3.12 / Unicode 15. Preserve the fixture's complete interpreter
+version, require the same major/minor family when comparing, and continue exact
+comparison of all behavioral vectors, source hashes, catalog and static tables.
+This changes test metadata comparison only; the send/credential journey, durable
+state and provider configuration remain unchanged. Rerun only the failing exact
+Python recapture under a fresh diff receipt; no Rust or browser expansion follows.
+
+That exact recapture passed locally in 1.61 seconds under
+`698255737ae1328e8f0a19298050846b1a85dbfe07eff8824db6a0b4ca106c12`.
+The completed `f7fc383` CI run `35984273210` executed and passed all 256 selected
+Rust checks. Its downloaded execution and selection receipts match
+`a7474e91ef36d101ab5d2aad13836ae62d7894a9068a85002e739cd7b3cb74f4`.
+Python had 72 passes and the single interpreter-metadata failure in 142.28 seconds.
+No application code or fixture vectors changed in the correction; the next CI
+selection repeats only that failed Python recapture. Browser planning passed
+with Playwright skipped; no production Rust UI or performance gate ran.
