@@ -169,6 +169,10 @@ def main() -> None:
     terminal_entrypoint = root / "src" / "nebula" / "v3" / "terminal_entrypoint.sh"
     if not terminal_entrypoint.is_file():
         raise RuntimeError("the Kali terminal entrypoint is required")
+    # Harness connections run this as a script, so the shim never imports Core.
+    gateway_shim = root / "src" / "nebula" / "v3" / "mcp_gateway.py"
+    if not gateway_shim.is_file():
+        raise RuntimeError("the harness MCP gateway shim is required")
 
     target = target_triple()
     metadata_root = root / "build" / "nebula-core-metadata"
@@ -238,6 +242,8 @@ def main() -> None:
         f"{public_ip_update}:nebula/v3",
         "--add-data",
         f"{terminal_entrypoint}:nebula/v3",
+        "--add-data",
+        f"{gateway_shim}:nebula/v3",
     ]
     # Exclusions are defense in depth for developer/QA environments that may
     # contain unrelated global packages. The post-build audit is authoritative.

@@ -10,11 +10,12 @@ from .diagnostics import (
 
 import asyncio
 import json
+import os
 import secrets
 import shutil
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections.abc import Callable, Collection
 from pathlib import Path
 from typing import Any
@@ -36,14 +37,52 @@ from .domain import (
     RiskClass,
     utc_now,
 )
+from . import mcp_gateway as gateway_shim
+from .mcp_gateway import MAX_MCP_MESSAGE_BYTES, MCP_PROTOCOL_VERSION
 from .redaction import redact_text
 from .storage import NebulaStore
 
-MCP_PROTOCOL_VERSION = "2025-06-18"
 # A frozen Core relaunch may need one-file extraction and platform verification.
 GATEWAY_STARTUP_TIMEOUT_SECONDS = 30.0
-MAX_MCP_MESSAGE_BYTES = 4 * 1024 * 1024
 MAX_MCP_TOOL_RESPONSE_BYTES = 100 * 1024 * 1024
+# A one-file Core unpacks its whole runtime (hundreds of MB) before Python
+# starts. Its bootloader reuses the running Core's unpacked directory for a
+# relaunch of the same executable that carries these variables, so the shim
+# starts in milliseconds instead of seconds. Vendors pass MCP servers only the
+# environment they are given, so the launch forwards them explicitly.
+_FROZEN_RELAUNCH_ENVIRONMENT_PREFIXES = ("_PYI_", "_MEIPASS")
+
+
+def _executable_identity(path: str) -> tuple[int, int, int, int] | None:
+    try:
+        status = os.stat(path)
+    except OSError:  # diagnostic-expected: an unreadable executable is never reused
+        return None
+    return (status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns)
+
+
+# Recorded when Core imports this module, which is during startup.
+_STARTUP_EXECUTABLE_IDENTITY = _executable_identity(sys.executable)
+
+
+def _frozen_relaunch_environment() -> dict[str, str]:
+    """Return the variables that let the shim reuse Core's unpacked runtime.
+
+    An executable replaced on disk since Core started (a package upgrade) is
+    a different build; it must unpack its own runtime rather than borrow this
+    process's, so the variables are withheld and the shim starts cold.
+    """
+
+    if not getattr(sys, "frozen", False):
+        return {}
+    identity = _executable_identity(sys.executable)
+    if identity is None or identity != _STARTUP_EXECUTABLE_IDENTITY:
+        return {}
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if name.startswith(_FROZEN_RELAUNCH_ENVIRONMENT_PREFIXES)
+    }
 
 
 JSONRPC_METHOD_NOT_FOUND = -32601
@@ -930,6 +969,7 @@ class McpGatewayLaunch:
     token: str
     command: str
     arguments: tuple[str, ...]
+    environment: dict[str, str] = field(default_factory=dict)
 
     def runtime_config(self) -> dict[str, dict[str, Any]]:
         return {
@@ -945,7 +985,10 @@ class McpGatewayLaunch:
                 "command": self.command,
                 "args": list(self.arguments),
                 "cwd": str(self.socket_path.parent),
-                "env": {"NEBULA_MCP_GATEWAY_TOKEN": self.token},
+                "env": {
+                    **self.environment,
+                    "NEBULA_MCP_GATEWAY_TOKEN": self.token,
+                },
             }
         }
 
@@ -1036,12 +1079,14 @@ class McpGatewaySession:
             limit=MAX_MCP_MESSAGE_BYTES + 1,
         )
         self.socket_path.chmod(0o600)
+        # The shim is standard-library only. Run it as a script in isolated
+        # mode so starting it never imports Nebula Core or reads PYTHON* state.
         arguments = (
             ("mcp-gateway", "--socket", str(self.socket_path))
             if getattr(sys, "frozen", False)
             else (
-                "-m",
-                "nebula.v3.mcp_gateway",
+                "-I",
+                str(Path(gateway_shim.__file__).resolve()),
                 "--socket",
                 str(self.socket_path),
             )
@@ -1051,6 +1096,7 @@ class McpGatewaySession:
             token=self.token,
             command=sys.executable,
             arguments=arguments,
+            environment=_frozen_relaunch_environment(),
         )
 
     async def close(self) -> None:
@@ -1155,6 +1201,7 @@ class McpGatewaySession:
 
 
 __all__ = [
+    "MAX_MCP_MESSAGE_BYTES",
     "MCP_PROTOCOL_VERSION",
     "McpGatewayLaunch",
     "McpGatewaySession",

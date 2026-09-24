@@ -1,4 +1,11 @@
-"""Tiny STDIO MCP shim; all authority and state remain in Nebula Core."""
+"""Tiny STDIO MCP shim; all authority and state remain in Nebula Core.
+
+A harness launches one shim per connection, and waits for it before its first
+turn. Keep this module standard-library only, with no package-relative
+imports: the shim runs as a plain script (``python -I mcp_gateway.py`` from a
+checkout, or the frozen Core's bundled copy of this file) so that starting it
+never imports Nebula Core itself.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +17,23 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .mcp import MAX_MCP_MESSAGE_BYTES, MCP_PROTOCOL_VERSION, encode_gateway_frame
+MCP_PROTOCOL_VERSION = "2025-06-18"
+MAX_MCP_MESSAGE_BYTES = 4 * 1024 * 1024
+
+
+def _encode_frame(message: dict[str, Any]) -> bytes:
+    """Encode one newline-delimited gateway frame as UTF-8.
+
+    Matches Core's ``encode_gateway_frame``: the frame limit measures the
+    message itself rather than its ``\\uXXXX`` escapes.
+    """
+
+    text = json.dumps(message, separators=(",", ":"), ensure_ascii=False)
+    try:
+        return text.encode("utf-8") + b"\n"
+    except UnicodeEncodeError:
+        # diagnostic-expected: lone surrogates cannot be UTF-8; send them escaped.
+        return json.dumps(message, separators=(",", ":")).encode() + b"\n"
 
 
 class GatewayClient:
@@ -65,7 +88,7 @@ class GatewayClient:
                 "method": method,
                 **({"params": params} if params is not None else {}),
             }
-            encoded = encode_gateway_frame(payload)
+            encoded = _encode_frame(payload)
             # Refuse before writing: a partial or oversized frame would cost
             # the single-use authenticated connection for the whole session.
             if len(encoded) > MAX_MCP_MESSAGE_BYTES:
@@ -149,11 +172,11 @@ async def serve(socket_path: Path, token: str) -> int:
         await client.close()
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="nebula-core mcp-gateway")
     parser.add_argument("--socket", type=Path, required=True)
     parser.add_argument("--token")
-    options = parser.parse_args()
+    options = parser.parse_args(argv)
     token = options.token or os.environ.pop("NEBULA_MCP_GATEWAY_TOKEN", None)
     if not token:
         parser.error("gateway token is required")

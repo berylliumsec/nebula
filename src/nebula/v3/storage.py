@@ -1933,25 +1933,51 @@ class NebulaStore:
         *,
         after_sequence: int = 0,
         limit: int = 1000,
+        through_sequence: int | None = None,
+        exclude_event_types: Sequence[str] = (),
+        payload_values: Mapping[str, Sequence[str]] | None = None,
     ) -> list[OperationEvent]:
+        """Return one operation's events after ``after_sequence``, in order.
+
+        ``through_sequence`` caps the range, ``exclude_event_types`` skips
+        whole event types, and ``payload_values`` keeps only events whose
+        top-level payload field is one of the listed values. All filtering
+        happens in SQL on the ``(operation_id, sequence)`` index.
+        """
+
         if after_sequence < 0:
             raise ValueError("after_sequence cannot be negative")
         if not 1 <= limit <= 10_000:
             raise ValueError("limit must be between 1 and 10000")
-        statement = (
-            select(OperationEventRow)
-            .where(
-                OperationEventRow.operation_id == operation_id,
-                OperationEventRow.sequence > after_sequence,
-            )
-            .order_by(OperationEventRow.sequence)
-            .limit(limit)
+        statement = select(OperationEventRow).where(
+            OperationEventRow.operation_id == operation_id,
+            OperationEventRow.sequence > after_sequence,
         )
+        if through_sequence is not None:
+            statement = statement.where(OperationEventRow.sequence <= through_sequence)
+        if exclude_event_types:
+            statement = statement.where(
+                OperationEventRow.event_type.not_in(list(exclude_event_types))
+            )
+        for field_name, accepted in (payload_values or {}).items():
+            statement = statement.where(
+                OperationEventRow.payload[field_name].as_string().in_(list(accepted))
+            )
+        statement = statement.order_by(OperationEventRow.sequence).limit(limit)
         with self.database.session() as session:
             return [
                 self._row_to_operation_event(row)
                 for row in session.scalars(statement).all()
             ]
+
+    def last_operation_event_sequence(self, operation_id: str) -> int:
+        """Return the newest sequence recorded for an operation, or 0."""
+
+        statement = select(func.max(OperationEventRow.sequence)).where(
+            OperationEventRow.operation_id == operation_id
+        )
+        with self.database.session() as session:
+            return int(session.scalar(statement) or 0)
 
     def list_operation_events(
         self, engagement_id: str, *, offset: int = 0, limit: int = 1000
