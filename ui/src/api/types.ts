@@ -2043,8 +2043,13 @@ export type ChatStreamEvent =
       toolCallId: Identifier;
       processId?: Identifier;
       resultsUrl?: string;
+      /** What the turn waits for, when Core said: a command's results or subagent reports. */
+      waitKind?: ChatWaitKind;
+      subagentIds?: Identifier[];
       summary: string;
     }
+  /** Core resumed this turn in a new runtime that replays it from its first frame. */
+  | { type: "restarted"; turnId?: Identifier }
   | {
       type: "status";
       phase: string;
@@ -2111,7 +2116,16 @@ export interface ChatTurn {
   unresolvedHookExecutionIds: Identifier[];
   resultsUrl?: string;
   processId?: Identifier;
+  /** What a waiting_callback turn waits for, and the wait's own status line. */
+  waitKind?: ChatWaitKind;
+  waitSummary?: string;
+  subagentIds: Identifier[];
+  /** Whether Core resumes this interrupted turn by itself; otherwise the operator stops it. */
+  recoverable: boolean;
 }
+
+/** A paused turn waits for a background command, its subagents, or (as a subagent) its supervisor's reply. */
+export type ChatWaitKind = "process" | "subagents" | "reply";
 
 export interface NativeHookDescriptor {
   id: Identifier;

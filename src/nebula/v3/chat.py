@@ -739,6 +739,11 @@ class PreparedChat:
 @dataclass
 class _ActiveProviderTurn:
     events: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    # Frame sequences index this runtime's events only. A turn resumed after a
+    # pause or a Core restart gets a new runtime that counts from 1 again, so
+    # every frame names its runtime and a viewer holding another runtime's
+    # cursor replays this one from the start instead of skipping or doubling.
+    epoch: str = field(default_factory=lambda: uuid4().hex)
     condition: asyncio.Condition = field(default_factory=asyncio.Condition)
     task: asyncio.Task[None] | None = None
     cleanup_task: asyncio.Task[None] | None = None
@@ -760,6 +765,31 @@ _FORK_PRIVATE_METADATA_KEYS = frozenset(
         "temporary_assistant",
     }
 )
+
+
+def _unresumed_goal_turn_reason(goal: ChatGoal) -> str | None:
+    """Why restart recovery will never resume a turn of this goal, if it won't.
+
+    A paused goal with budget left resumes; a running or draft goal is not
+    settled here. Every other case would leave the interrupted turn blocking
+    the conversation, and a goal cannot resume past an interrupted turn.
+    """
+
+    if goal.status == ChatGoalStatus.CANCELLED:
+        return "Core did not resume this interrupted response because its goal was cancelled."
+    if goal.status == ChatGoalStatus.COMPLETED:
+        return "Core did not resume this interrupted response because its goal is complete."
+    if goal.status == ChatGoalStatus.BLOCKED:
+        return (
+            "Core did not resume this interrupted response because its goal is blocked."
+        )
+    if (
+        goal.status == ChatGoalStatus.PAUSED
+        and goal.time_budget_seconds is not None
+        and goal.elapsed_seconds >= goal.time_budget_seconds
+    ):
+        return "Core did not resume this interrupted response because its goal's time budget is spent."
+    return None
 
 
 def _content_with_selected_context(
@@ -2145,6 +2175,12 @@ class ChatService:
                     and goal.elapsed_seconds >= goal.time_budget_seconds
                 )
             ):
+                reason = _unresumed_goal_turn_reason(goal)
+                if reason is not None:
+                    # No later pass resumes it either, and the operator
+                    # cannot resume the goal past it: settle the turn so
+                    # the conversation takes the next message.
+                    self._settle_unresumed_turn(pending.id, reason)
                 continue
             latest = self.store.update(
                 ChatTurn,
@@ -2251,6 +2287,39 @@ class ChatService:
             if recorded is not None and key in recorded and key not in restored:
                 restored[key] = recorded[key]
         return restored
+
+    def _settle_unresumed_turn(self, turn_id: str, reason: str) -> None:
+        """Stop an interrupted turn that restart recovery will not resume."""
+
+        try:
+            self.cancel_turn(turn_id, reason=reason)
+        except ConflictError as exc:  # diagnostic-expected: the turn changed concurrently; the next recovery pass rereads it
+            record_caught_exception(
+                "chat",
+                "chat.restart_recovery.settle_conflict",
+                "An interrupted response changed while Core settled it; the next pass retries.",
+                exc,
+                stage="restart-recovery",
+            )
+            return
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:  # diagnostic-expected: without an event loop, subagent restart reconciliation settles the children
+            return
+        create_diagnostic_task(
+            self._release_settled_turn(turn_id),
+            feature="chat",
+            event_code="chat.restart_recovery.release_settled_turn",
+            failure_message="Subagents of a settled interrupted response could not be stopped.",
+            name=f"nebula-settle-interrupted-{turn_id}",
+        )
+
+    async def _release_settled_turn(self, turn_id: str) -> None:
+        # The same cleanup an operator stop does once the turn is cancelled.
+        await self.subagents.stop_for_parent_turn(turn_id)
+        await self.subagents.deliver_pending(
+            self.store.get(ChatTurn, turn_id).session_id
+        )
 
     def _auto_reconcile_restart_uncertainty(self, turn_id: str) -> ChatTurn:
         """Materialize unresolved restart effects as non-replayable observations."""
@@ -2997,8 +3066,18 @@ class ChatService:
         runtime = self._active_provider_turns.get(turn_id)
         return runtime is not None and not runtime.done
 
+    def has_provider_turn_stream(self, turn_id: str) -> bool:
+        """Whether a viewer can still read this turn's frames from this process.
+
+        A runtime that ended (paused for approval or a callback, stopped, or
+        failed) stays readable for a while, so a viewer whose connection
+        dropped just before that last frame still receives it.
+        """
+
+        return turn_id in self._active_provider_turns
+
     async def follow_provider_turn(
-        self, turn_id: str, *, after_sequence: int = 0
+        self, turn_id: str, *, after_sequence: int = 0, epoch: str | None = None
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
         runtime = self._active_provider_turns.get(turn_id)
         if runtime is None:
@@ -3009,7 +3088,9 @@ class ChatService:
             cleanup_task.cancel()
             runtime.cleanup_task = None
             await asyncio.gather(cleanup_task, return_exceptions=True)
-        index = after_sequence
+        # A cursor from another runtime of this turn counts that runtime's
+        # frames, not these: replay this runtime from its first frame.
+        index = after_sequence if epoch is None or epoch == runtime.epoch else 0
         try:
             while True:
                 async with runtime.condition:
@@ -3022,7 +3103,10 @@ class ChatService:
                     done = runtime.done
                     error = runtime.error
                 for offset, (event_type, payload) in enumerate(batch, batch_start + 1):
-                    yield event_type, {**payload, "sequence": offset}
+                    yield (
+                        event_type,
+                        {**payload, "sequence": offset, "epoch": runtime.epoch},
+                    )
                 if done and index >= len(runtime.events):
                     if error is not None:
                         raise error
@@ -3033,8 +3117,22 @@ class ChatService:
                 runtime.done
                 and runtime.followers == 0
                 and self._active_provider_turns.get(turn_id) is runtime
+                and runtime.cleanup_task is None
             ):
-                self._active_provider_turns.pop(turn_id, None)
+                # The last frames may have left this process without reaching
+                # the viewer; keep them readable for its reconnect.
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:  # diagnostic-expected: a follower closed outside the event loop leaves no loop for a reconnect to use
+                    self._active_provider_turns.pop(turn_id, None)
+                else:
+                    runtime.cleanup_task = create_diagnostic_task(
+                        self._expire_provider_turn(turn_id, runtime),
+                        feature="chat",
+                        event_code="chat.provider_turn_cleanup",
+                        failure_message="A completed provider turn could not be expired.",
+                        name=f"nebula-provider-chat-cleanup-{turn_id}",
+                    )
 
     async def stop_provider_turn(self, turn_id: str) -> ChatTurn:
         runtime = self._active_provider_turns.get(turn_id)
@@ -6479,6 +6577,9 @@ class ChatService:
                             "type": "callback_required",
                             "turn_id": turn.id,
                             "tool_call_id": durable_call_id,
+                            "wait_kind": (
+                                "reply" if waiting.wait.get("reply_to") else "subagents"
+                            ),
                             "subagent_ids": waiting.wait.get("ids", []),
                             "summary": waiting.summary,
                         },
@@ -6555,6 +6656,7 @@ class ChatService:
                                 "type": "callback_required",
                                 "turn_id": turn.id,
                                 "tool_call_id": durable_call_id,
+                                "wait_kind": "process",
                                 "process_id": receipt.process_id,
                                 "results_url": receipt.results_url,
                                 "summary": entry.get("result_summary")
@@ -8648,6 +8750,7 @@ class ChatService:
                         "type": "callback_required",
                         "turn_id": turn.id,
                         "tool_call_id": entry["tool_call_id"],
+                        "wait_kind": "process",
                         "process_id": receipt.process_id,
                         "results_url": receipt.results_url,
                         "summary": entry.get("result_summary")
@@ -8709,6 +8812,7 @@ class ChatService:
                     "type": "callback_required",
                     "turn_id": turn.id,
                     "tool_call_id": entry["tool_call_id"],
+                    "wait_kind": "process",
                     "process_id": process_id,
                     "results_url": entry.get("results_url"),
                     "summary": "Waiting for the command to POST results.",
@@ -8985,6 +9089,7 @@ class ChatService:
                     "type": "callback_required",
                     "turn_id": turn.id,
                     "tool_call_id": entry["tool_call_id"],
+                    "wait_kind": "reply" if wait.get("reply_to") else "subagents",
                     "subagent_ids": [str(item) for item in wait.get("ids") or []],
                     "summary": entry.get("result_summary")
                     or "Waiting for subagents to report.",
@@ -10362,7 +10467,9 @@ class ChatService:
             )
         return None
 
-    def cancel_turn(self, turn_id: str) -> ChatTurn:
+    def cancel_turn(
+        self, turn_id: str, *, reason: str = "response stopped"
+    ) -> ChatTurn:
         turn = self.store.get(ChatTurn, turn_id)
         if turn.status == ChatTurnStatus.COMPLETE:
             return turn
@@ -10411,7 +10518,7 @@ class ChatService:
                     {
                         "status": ToolCallStatus.CANCELLED,
                         "completed_at": utc_now(),
-                        "error": "response stopped",
+                        "error": reason,
                     },
                     expected_revision=call.revision,
                     run_id=turn.id,
@@ -10430,7 +10537,7 @@ class ChatService:
                 turn.id,
                 {
                     "status": ChatTurnStatus.CANCELLED,
-                    "error": "response stopped",
+                    "error": reason,
                     "execution_owner_id": None,
                     "execution_claim_id": None,
                     "execution_claimed_at": None,

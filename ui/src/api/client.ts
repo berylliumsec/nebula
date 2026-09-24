@@ -1341,6 +1341,10 @@ interface WireChatStreamEvent extends JsonObject {
   schema_version?: "nebula.harness-activity/v1" | "nebula.harness-activity/v2";
   id?: string;
   sequence?: number;
+  /** The Core runtime that numbered `sequence`; a new one counts from 1 again. */
+  epoch?: string;
+  wait_kind?: "process" | "subagents" | "reply";
+  subagent_ids?: string[];
   vendor?: "codex_app_server" | "claude_agent_sdk" | "grok_acp";
   occurred_at?: string;
   external_session_id?: string;
@@ -1612,6 +1616,10 @@ interface WireChatTurn extends WireEntity {
   unresolved_hook_execution_ids?: string[];
   results_url?: string | null;
   process_id?: string | null;
+  wait_kind?: "process" | "subagents" | "reply" | null;
+  wait_summary?: string | null;
+  subagent_ids?: string[];
+  recoverable?: boolean;
 }
 
 interface WirePersistedChatMessage extends WireEntity {
@@ -3861,6 +3869,11 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
     unresolvedHookExecutionIds: value.unresolved_hook_execution_ids ?? [],
     resultsUrl: typeof value.results_url === "string" ? value.results_url : undefined,
     processId: typeof value.process_id === "string" ? value.process_id : undefined,
+    waitKind: value.wait_kind === "process" || value.wait_kind === "subagents" || value.wait_kind === "reply" ? value.wait_kind : undefined,
+    waitSummary: typeof value.wait_summary === "string" && value.wait_summary ? value.wait_summary : undefined,
+    subagentIds: Array.isArray(value.subagent_ids) ? value.subagent_ids.filter((id): id is string => typeof id === "string") : [],
+    // A Core that does not report it resumed every interrupted turn it kept.
+    recoverable: value.recoverable !== false,
   };
 }
 
@@ -9191,11 +9204,15 @@ export class ApiClient {
   ): Promise<ChatCompletionResponse | undefined> {
     let turnId = resumeTurnId;
     let cursor = 0;
+    let epoch: string | undefined;
     let recovering = followOnly;
     let attempts = 0;
     let protocolFailure = false;
     let completed: ChatCompletionResponse | undefined;
     let pausedForApproval = false;
+    // A turn that parks for a command's results or its subagents' reports
+    // ends this stream on purpose; Core resumes it later in a new runtime.
+    let pausedForCallback = false;
     let cancelled = false;
 
     const processBlock = (block: string) => {
@@ -9224,6 +9241,17 @@ export class ApiClient {
         );
       }
       if (wire.turn_id && !wire.harness_turn_id || wire.type === "started" && wire.turn_id) turnId = wire.turn_id;
+      // Sequence numbers count one Core runtime's frames. A turn resumed after
+      // a restart or a pause runs in a new runtime that replays from its first
+      // frame, including the saved text: drop the earlier cursor and let the
+      // viewer discard what the earlier runtime streamed.
+      if (typeof wire.epoch === "string" && wire.epoch !== epoch) {
+        if (epoch !== undefined) {
+          cursor = 0;
+          onEvent({type: "restarted", turnId: wire.turn_id ?? turnId});
+        }
+        epoch = wire.epoch;
+      }
       // Durable sequence numbers are scoped to the accepted turn. Unsequenced
       // final snapshots remain deliverable after an interrupted final frame.
       if (typeof wire.sequence === "number") {
@@ -9366,12 +9394,21 @@ export class ApiClient {
       if (wire.type === "callback_required") {
         const turnId = wire.turn_id;
         if (!turnId || !wire.tool_call_id) return;
+        pausedForCallback = true;
+        const subagentIds = Array.isArray(wire.subagent_ids)
+          ? wire.subagent_ids.filter((id): id is string => typeof id === "string")
+          : undefined;
+        const waitKind = wire.wait_kind === "process" || wire.wait_kind === "subagents" || wire.wait_kind === "reply"
+          ? wire.wait_kind
+          : subagentIds?.length ? "subagents" : wire.process_id || wire.results_url ? "process" : undefined;
         onEvent({
           type: "callback_required",
           turnId,
           toolCallId: wire.tool_call_id,
           processId: typeof wire.process_id === "string" ? wire.process_id : undefined,
           resultsUrl: typeof wire.results_url === "string" ? wire.results_url : undefined,
+          waitKind,
+          subagentIds,
           summary: typeof wire.summary === "string" ? wire.summary : "Waiting for results.",
         });
         return;
@@ -9468,7 +9505,7 @@ export class ApiClient {
         this.authorizeHeaders(headers, recovering ? "GET" : "POST");
         const response = await this.fetchImpl(
           recovering
-            ? `${this.baseUrl}/chat/turns/${encodeURIComponent(turnId!)}/events?after=${cursor}`
+            ? `${this.baseUrl}/chat/turns/${encodeURIComponent(turnId!)}/events?after=${cursor}${epoch ? `&epoch=${encodeURIComponent(epoch)}` : ""}`
             : resumeTurnId
               ? `${this.baseUrl}/chat/turns/${encodeURIComponent(resumeTurnId)}/resume`
               : `${this.baseUrl}/chat/completions`,
@@ -9494,11 +9531,11 @@ export class ApiClient {
             processBlock(block);
             separator = buffer.search(/\r?\n\r?\n/);
           }
-          if (completed || pausedForApproval || cancelled) return completed;
+          if (completed || pausedForApproval || pausedForCallback || cancelled) return completed;
           if (done) break;
         }
         if (buffer.trim()) processBlock(buffer);
-        if (completed || pausedForApproval || cancelled) return completed;
+        if (completed || pausedForApproval || pausedForCallback || cancelled) return completed;
         throw new Error("The chat connection ended before the turn completed.");
       } catch (error) {
         if (signal?.aborted || protocolFailure) throw error;

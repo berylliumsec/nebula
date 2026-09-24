@@ -23,9 +23,26 @@ from .domain import (
     HarnessTurn,
     utc_now,
 )
+from .chat_subagents import core_resumes_interrupted_turn
 from .storage import NebulaStore, NotFoundError
 
 TERMINAL = {"complete", "failed", "cancelled", "interrupted"}
+
+
+def _recovery_pending(turn: ChatTurn) -> bool:
+    """An interrupted turn that still blocks its conversation.
+
+    ``pending-turn`` keeps it as the conversation's active turn until Core
+    resumes it or the operator stops it, so the snapshot must not call it
+    finished: it is busy, and stopping it is the operator's way out.
+    """
+
+    if turn.status.value != "interrupted":
+        return False
+    recovery = turn.request_snapshot.get("recovery")
+    return isinstance(recovery, dict) and bool(
+        recovery.get("required") or recovery.get("automatic_retry_pending")
+    )
 
 
 def session_state(
@@ -142,7 +159,7 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
     active_ids = {
         item.id
         for item in turns
-        if item.status.value not in TERMINAL
+        if (item.status.value not in TERMINAL or _recovery_pending(item))
         and (
             item.harness_turn_id not in harnesses
             or harnesses[item.harness_turn_id].status.value not in TERMINAL
@@ -249,6 +266,10 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
         decision["progress"] = "observed" if sequence is not None else "not_observed"
         decision["progress_sequence"] = sequence
     execution = turn.status.value if turn else "idle"
+    if turn and _recovery_pending(turn):
+        execution = (
+            "recovering" if core_resumes_interrupted_turn(turn) else "needs_stop"
+        )
     if harness and execution not in TERMINAL:
         execution = harness.status.value
     execution = {"routing": "running"}.get(execution, execution)
@@ -279,6 +300,8 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
         "complete": "Response complete.",
         "cancelled": "Response stopped.",
         "interrupted": "Response interrupted. No work was replayed; start a new response.",
+        "recovering": "Core is resuming this interrupted response.",
+        "needs_stop": "Response interrupted and will not resume automatically. Stop it to continue.",
         "failed": "Response failed. Review the saved error before retrying.",
     }.get(execution, "Checking response status.")
     busy = execution not in TERMINAL and execution != "idle"

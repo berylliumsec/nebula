@@ -245,7 +245,14 @@ def test_completed_provider_events_wait_for_a_late_follower(tmp_path):
             "delta",
             "done",
         ]
-        assert turn_id not in service._active_provider_turns
+        # The frames stay readable for a viewer whose connection dropped
+        # before they arrived, then expire.
+        assert not service.has_active_provider_turn(turn_id)
+        assert service.has_provider_turn_stream(turn_id)
+        again = [event async for event in service.follow_provider_turn(turn_id)]
+        assert again == events
+        runtime = service._active_provider_turns[turn_id]
+        assert runtime.cleanup_task is not None
         await service.shutdown()
 
     asyncio.run(scenario())

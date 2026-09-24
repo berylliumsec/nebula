@@ -51,3 +51,19 @@ it("opens a catch-up item and clears its acknowledged summary while keeping pend
   expect(screen.getByRole("button", { name: "Review pending actions" })).toBeVisible();
   expect(JSON.parse(request.mock.calls[1][1].body).expected_revision).toBe(2);
 });
+
+it("leaves a message the transcript has not rendered unread while the viewer is at the bottom", async () => {
+  const unseen = { ...record, items: [{ id: "answer", message_id: "answer", kind: "completed", text: "The second turn's answer" }] };
+  const request = vi.fn().mockResolvedValueOnce(record).mockResolvedValue(unseen);
+  const rendered = new Set<string>();
+  render(<ChatCatchUp {...props} isShown={id => rendered.has(id)} api={{ request } as unknown as ApiClient} />);
+  const acknowledged = () => request.mock.calls.some(call => call[0] === "chat/sessions/chat/read-cursor");
+  await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+  // A turn Core ran on its own saved an answer this page does not show yet.
+  await waitFor(() => { document.dispatchEvent(new Event("visibilitychange")); expect(request.mock.calls.length).toBeGreaterThanOrEqual(3); });
+  expect(acknowledged()).toBe(false);
+  // Once the transcript renders it, reading the bottom marks it read.
+  rendered.add("answer");
+  await waitFor(() => { document.dispatchEvent(new Event("visibilitychange")); expect(acknowledged()).toBe(true); });
+  expect(JSON.parse(request.mock.calls.find(call => call[0] === "chat/sessions/chat/read-cursor")![1].body).expected_revision).toBe(2);
+});

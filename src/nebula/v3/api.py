@@ -163,7 +163,7 @@ from .chat import (
     ChatService,
     unarchive_chat_session,
 )
-from .chat_subagents import is_subagent_session
+from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
 from .chat_media import MAX_CHAT_IMAGE_BYTES, ChatImageError, validate_chat_image
 from .chat_schedules import ChatScheduleService, ScheduleCreate, ScheduleWrite
 from .container_terminal import (
@@ -1058,6 +1058,15 @@ class ChatTurnSummary(NebulaModel):
     unresolved_hook_execution_ids: list[str] = Field(default_factory=list)
     results_url: str | None = None
     process_id: str | None = None
+    # What a waiting_callback turn waits for: a background command's results,
+    # its subagents' reports, or (for a subagent) the delegating assistant's
+    # reply. The summary is the wait's own status line.
+    wait_kind: Literal["process", "subagents", "reply"] | None = None
+    wait_summary: str | None = None
+    subagent_ids: list[str] = Field(default_factory=list)
+    # Whether Core resumes this interrupted turn by itself. Otherwise only
+    # the operator's stop settles it.
+    recoverable: bool = False
 
 
 class NativeHookExecutionSummary(NebulaModel):
@@ -9565,7 +9574,9 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     async def follow_chat_turn(
-        turn_id: str, after: int = Query(default=0, ge=0)
+        turn_id: str,
+        after: int = Query(default=0, ge=0),
+        epoch: str | None = Query(default=None, min_length=1, max_length=64),
     ) -> StreamingResponse:
         """Attach a viewer only. Never create, resume or retry execution."""
         turn = store.get(ChatTurn, turn_id)
@@ -9574,7 +9585,9 @@ def create_app(
         if (
             not turn.harness_turn_id
             and not turn.final_message_id
-            and not service.has_active_provider_turn(turn_id)
+            # A runtime that just paused, stopped or failed still holds its
+            # last frames for a viewer whose connection dropped before them.
+            and not service.has_provider_turn_stream(turn_id)
         ):
             raise HTTPException(
                 status_code=409,
@@ -9599,7 +9612,7 @@ def create_app(
             elif not turn.final_message_id:
                 try:
                     async for event_type, payload in service.follow_provider_turn(
-                        turn_id, after_sequence=after
+                        turn_id, after_sequence=after, epoch=epoch
                     ):
                         yield _server_sent_event(event_type, payload)
                     return
@@ -10176,11 +10189,13 @@ def create_app(
                             if turn is None
                             else "waiting"
                             if not is_subagent_session(session)
-                            and turn.status
-                            in {
-                                ChatTurnStatus.WAITING_APPROVAL,
-                                ChatTurnStatus.INTERRUPTED,
-                            }
+                            and (
+                                turn.status == ChatTurnStatus.WAITING_APPROVAL
+                                # Core resumes a recoverable interrupted turn
+                                # itself; any other one waits for a stop.
+                                or turn.status == ChatTurnStatus.INTERRUPTED
+                                and not core_resumes_interrupted_turn(turn)
+                            )
                             else "working"
                         ),
                         turn_id=turn.id if turn else None,
@@ -12419,6 +12434,20 @@ def _chat_turn_summary(service: ChatService, turn: ChatTurn) -> ChatTurnSummary:
         else []
     )
     history = service.turn_ledger.history(turn)
+    waiting = (
+        next(
+            (
+                item
+                for item in reversed(history)
+                if item.get("status") == "waiting_callback"
+            ),
+            None,
+        )
+        if turn.status == ChatTurnStatus.WAITING_CALLBACK
+        else None
+    )
+    subagent_wait = waiting.get("subagent_wait") if waiting else None
+    wait_ids = subagent_wait.get("ids") if isinstance(subagent_wait, dict) else None
     return ChatTurnSummary(
         id=turn.id,
         session_id=turn.session_id,
@@ -12456,6 +12485,24 @@ def _chat_turn_summary(service: ChatService, turn: ChatTurn) -> ChatTurnSummary:
             ),
             None,
         ),
+        wait_kind=(
+            None
+            if waiting is None
+            else "process"
+            if not isinstance(subagent_wait, dict)
+            else "reply"
+            if subagent_wait.get("reply_to")
+            else "subagents"
+        ),
+        wait_summary=(
+            str(waiting["result_summary"])
+            if waiting and waiting.get("result_summary")
+            else None
+        ),
+        subagent_ids=(
+            [str(item) for item in wait_ids] if isinstance(wait_ids, list) else []
+        ),
+        recoverable=core_resumes_interrupted_turn(turn),
     )
 
 

@@ -1,5 +1,5 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Locator, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 
 // Service-worker-owned requests bypass Playwright routes after reload. These
 // tests exercise mocked Core state, so preserve that authority on navigation.
@@ -1405,6 +1405,9 @@ test("automation callback keeps its endpoint compact and accessible", async ({ p
     approval_id: null, harness_turn_id: null, tool_call_ids: ["tool-callback-1"], results_url: resultsUrl, process_id: "callback-process-1",
   } : null }));
 
+  const followRequests: string[] = [];
+  page.on("request", request => { if (/\/chat\/turns\/[^/]+\/events/.test(request.url())) followRequests.push(request.url()); });
+
   await openWorkspace(page, "/?view=chat", "Workbench");
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   await page.getByPlaceholder("Ask about this project…").fill("Run the asynchronous automation");
@@ -1413,6 +1416,12 @@ test("automation callback keeps its endpoint compact and accessible", async ({ p
   const status = page.getByRole("status", { name: "Waiting for command results" });
   await expect(status).toBeVisible();
   await expect(status.getByText("Callback ready")).toBeVisible();
+  // Parking for a callback is not a lost connection: the reply stays and no
+  // reconnect is attempted against a turn Core has paused.
+  await expect(page.locator(".chat-message.assistant").last()).toBeVisible();
+  await expect(page.getByText("Connection lost. Reconnecting to the existing turn…")).toHaveCount(0);
+  await expect(page.getByText(/no longer running|Could not reconnect/)).toHaveCount(0);
+  expect(followRequests).toEqual([]);
   await expect(status.locator("details")).not.toHaveAttribute("open");
   const copy = status.getByRole("button", { name: "Copy results URL" });
   const geometry = await status.evaluate(element => ({
@@ -1433,6 +1442,359 @@ test("automation callback keeps its endpoint compact and accessible", async ({ p
   expect((await new AxeBuilder({ page }).include(".callback-waiting-status").analyze()).violations).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath("automation-callback-waiting.png") });
 });
+
+const followProvider = {
+  ...entity, id: "follow-provider", name: "Follow provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+  enabled: true, is_local: true, secret_ref: null, model_allowlist: ["follow-model"], capabilities: { streaming: true, tools: true },
+  privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "follow-model" },
+};
+const followSse = (events: object[]) => events.map(event => `data: ${JSON.stringify(event)}\n\n`).join("");
+function followState(sessionId: string, revision: number, turnId: string | null, execution: string, busy: boolean, pending: object[] = []) {
+  return {
+    schema: "nebula.session-state/v1", session_id: sessionId, revision, turn_id: turnId, harness_turn_id: null, execution, busy,
+    detail: busy ? "Working." : "Response complete.", connection: "unknown", connection_scope: "harness_transport",
+    actions: busy ? ["check_status", "stop"] : ["check_status"], pending, decisions: [],
+  };
+}
+function followMessage(sessionId: string, id: string, sequence: number, role: "user" | "assistant", content: string, metadata: Record<string, unknown> = {}) {
+  return { ...entity, id, engagement_id: "scratch-project", session_id: sessionId, sequence, role, content, citations: [], metadata };
+}
+/** One provider conversation whose Core behaviour each journey scripts in `handle`. */
+async function installProviderFollowCore(page: Page, sessionId: string, title: string, handle: (path: string, route: Route) => Promise<boolean>) {
+  await page.context().route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({ json: [followProvider] });
+    if (path.endsWith(`/providers/${followProvider.id}/health`)) return route.fulfill({ json: { provider_id: followProvider.id, healthy: true, models: ["follow-model"] } });
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: [{
+      ...entity, id: sessionId, engagement_id: "scratch-project", title, backend: "provider",
+      provider_profile_id: followProvider.id, model: "follow-model", metadata: {},
+    }] });
+    if (await handle(path, route)) return;
+    await route.fallback();
+  });
+}
+async function expectNoStreamFailure(page: Page) {
+  await expect(page.getByText(/no longer running|Could not reconnect|could not be completed/)).toHaveCount(0);
+}
+
+reloadTest("automation callback subagent wait keeps the assistant reply and follows the resumed turn", async ({ page }, testInfo) => {
+  const sessionId = "follow-wait";
+  const summary = "Waiting for 2 subagents to report.";
+  let phase: "idle" | "waiting" | "resumed" | "done" = "idle";
+  let pendingReads = 0;
+  const followRequests: string[] = [];
+  const prompt = followMessage(sessionId, "wait-prompt", 1, "user", "Delegate both checks.");
+  const answer = followMessage(sessionId, "wait-answer", 2, "assistant", "I delegated two checks. Both reports agree.", { chat_turn_id: "wait-turn" });
+  await installProviderFollowCore(page, sessionId, "Delegated checks", async (path, route) => {
+    if (path.endsWith("/chat/completions")) {
+      phase = "waiting";
+      // Core parks the tool turn on the subagent wait and ends the stream.
+      await route.fulfill({ status: 200, contentType: "text/event-stream", body: followSse([
+        { type: "started", provider_id: followProvider.id, model: "follow-model", session_id: sessionId, turn_id: "wait-turn", sequence: 1, epoch: "runtime-a" },
+        { type: "delta", turn_id: "wait-turn", delta: "I delegated two checks.", sequence: 2, epoch: "runtime-a" },
+        { type: "tool_started", turn_id: "wait-turn", tool_call_id: "wait-call", capability: "wait_subagents", display_name: "Wait for subagents", arguments: {}, sequence: 3, epoch: "runtime-a" },
+        { type: "callback_required", turn_id: "wait-turn", tool_call_id: "wait-call", wait_kind: "subagents", subagent_ids: ["child-a", "child-b"], summary, sequence: 4, epoch: "runtime-a" },
+      ]) });
+      return true;
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) {
+      await route.fulfill({ json: phase === "idle" ? [] : phase === "done" ? [prompt, answer] : [prompt] });
+      return true;
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) {
+      pendingReads += 1;
+      const turn = { ...entity, id: "wait-turn", session_id: sessionId, started_at: entity.created_at, reasoning: "", tool_call_ids: ["wait-call"] };
+      await route.fulfill({ json: phase === "waiting"
+        ? { ...turn, status: "waiting_callback", revision: 2, content: "I delegated two checks.", wait_kind: "subagents", wait_summary: summary, subagent_ids: ["child-a", "child-b"] }
+        : phase === "resumed" ? { ...turn, status: "routing", revision: 3, content: "" } : null });
+      return true;
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/state`)) {
+      await route.fulfill({ json: phase === "idle" ? followState(sessionId, 1, null, "idle", false)
+        : phase === "waiting" ? followState(sessionId, 2, "wait-turn", "waiting_callback", true)
+          : phase === "resumed" ? followState(sessionId, 3, "wait-turn", "running", true)
+            : followState(sessionId, 4, "wait-turn", "complete", false) });
+      return true;
+    }
+    if (path.endsWith("/chat/turns/wait-turn/events")) {
+      followRequests.push(phase);
+      if (phase !== "resumed") {
+        await route.fulfill({ status: 409, json: { detail: "This turn is no longer running. Reload the conversation to review its saved state." } });
+        return true;
+      }
+      phase = "done";
+      // The resumed turn runs in a new runtime that replays the saved text.
+      await route.fulfill({ status: 200, contentType: "text/event-stream", body: followSse([
+        { type: "queued", turn_id: "wait-turn", sequence: 1, epoch: "runtime-b" },
+        { type: "started", provider_id: followProvider.id, model: "follow-model", session_id: sessionId, turn_id: "wait-turn", sequence: 2, epoch: "runtime-b" },
+        { type: "delta", turn_id: "wait-turn", delta: "I delegated two checks.", sequence: 3, epoch: "runtime-b" },
+        { type: "delta", turn_id: "wait-turn", delta: " Both reports agree.", sequence: 4, epoch: "runtime-b" },
+        { type: "done", turn_id: "wait-turn", session_id: sessionId, provider_id: followProvider.id, backend: "provider", model: "follow-model", message: { id: answer.id, role: "assistant", content: answer.content }, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }, citations: [], sequence: 5, epoch: "runtime-b" },
+      ]) });
+      return true;
+    }
+    return false;
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
+  await page.locator(".chat-composer textarea").fill("Delegate both checks.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+
+  const status = page.getByRole("status", { name: "Waiting for subagents" });
+  await expect(status).toContainText(summary);
+  await expect(page.getByText("Callback ready")).toHaveCount(0);
+  const reply = page.locator(".chat-message.assistant").last();
+  await expect(reply).toContainText("I delegated two checks.");
+  // The wait is a pause, not a lost connection: no reconnect and no error.
+  await expect.poll(() => pendingReads, { timeout: 10_000 }).toBeGreaterThan(1);
+  expect(followRequests).toEqual([]);
+  await expect(page.getByText("Connection lost. Reconnecting to the existing turn…")).toHaveCount(0);
+  await expectNoStreamFailure(page);
+  expect((await new AxeBuilder({ page }).include(".callback-waiting-status").analyze()).violations).toEqual([]);
+
+  // After a reload the saved wait still reads as a subagent wait.
+  await page.reload();
+  await expect(page.getByRole("status", { name: "Waiting for subagents" })).toContainText(summary);
+  await expect(page.getByText("Callback ready")).toHaveCount(0);
+  await expect(page.getByText("Waiting for command results")).toHaveCount(0);
+  await expect(reply).toContainText("I delegated two checks.");
+
+  // The children report; Core resumes the turn and the viewer follows it.
+  phase = "resumed";
+  await expect(reply).toHaveText(/I delegated two checks\. Both reports agree\./, { timeout: 15_000 });
+  await expect(page.getByRole("status", { name: "Waiting for subagents" })).toHaveCount(0);
+  expect(await reply.locator(".assistant-markdown").innerText()).toBe("I delegated two checks. Both reports agree.");
+  expect(followRequests).toEqual(["resumed"]);
+  await expectNoStreamFailure(page);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("subagent-wait-followed.png") });
+});
+
+reloadTest("assistant upgrade follows provider turns Core starts without this viewer", async ({ page }, testInfo) => {
+  const sessionId = "follow-core";
+  // 0: the viewer's turn settled; 1: Core runs the goal's next turn; 2: a
+  // scheduled turn ran start to finish between polls; 3: Core's turn needs approval.
+  let phase = 0;
+  const followRequests: string[] = [];
+  const messages = [
+    followMessage(sessionId, "core-prompt", 1, "user", "Work toward the goal."),
+    followMessage(sessionId, "answer-1", 2, "assistant", "Turn one finished.", { chat_turn_id: "turn-1" }),
+  ];
+  const approval = {
+    ...entity, id: "approval-3", engagement_id: "scratch-project", run_id: "", origin: "chat", status: "pending", risk_class: "passive",
+    requested_by: "provider", requested_at: entity.created_at, policy_rationale: "Review the command", chat_turn_id: "turn-3",
+    exact_request: { tool_name: "run_command", arguments: { command: "id" } },
+  };
+  await installProviderFollowCore(page, sessionId, "Core-started work", async (path, route) => {
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) { await route.fulfill({ json: messages }); return true; }
+    if (path.endsWith(`/chat/sessions/${sessionId}/state`)) {
+      await route.fulfill({ json: [
+        followState(sessionId, 1, "turn-1", "complete", false),
+        followState(sessionId, 2, "turn-2", "running", true),
+        followState(sessionId, 3, "turn-2b", "complete", false),
+        followState(sessionId, 4, "turn-3", "waiting_approval", true, [{ id: approval.id, turn_id: "turn-3", kind: "approval", text: "Review the requested action" }]),
+      ][phase] });
+      return true;
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) {
+      const turn = { ...entity, session_id: sessionId, started_at: entity.created_at, reasoning: "", tool_call_ids: [] };
+      await route.fulfill({ json: phase === 1 ? { ...turn, id: "turn-2", status: "routing", content: "" }
+        : phase === 3 ? { ...turn, id: "turn-3", status: "waiting_approval", approval_id: approval.id, tool_call_ids: ["call-3"], content: "Turn three needs a command." }
+          : null });
+      return true;
+    }
+    if (path.endsWith(`/approvals/${approval.id}`)) { await route.fulfill({ json: approval }); return true; }
+    if (path.endsWith("/chat/turns/turn-2/events")) {
+      followRequests.push("turn-2");
+      await route.fulfill({ status: 200, contentType: "text/event-stream", body: followSse([
+        { type: "started", provider_id: followProvider.id, model: "follow-model", session_id: sessionId, turn_id: "turn-2", sequence: 1, epoch: "runtime-2" },
+        { type: "delta", turn_id: "turn-2", delta: "Turn two streamed without a click.", sequence: 2, epoch: "runtime-2" },
+        { type: "done", turn_id: "turn-2", session_id: sessionId, provider_id: followProvider.id, backend: "provider", model: "follow-model", message: { id: "answer-2", role: "assistant", content: "Turn two streamed without a click." }, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }, citations: [], sequence: 3, epoch: "runtime-2" },
+      ]) });
+      messages.push(followMessage(sessionId, "answer-2", 3, "assistant", "Turn two streamed without a click.", { chat_turn_id: "turn-2" }));
+      return true;
+    }
+    return false;
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
+  await expect(page.getByText("Turn one finished.", { exact: true })).toBeVisible();
+
+  // Core starts the goal's next turn on its own; the transcript follows it.
+  phase = 1;
+  await expect(page.getByText("Turn two streamed without a click.", { exact: true })).toBeVisible({ timeout: 15_000 });
+  expect(followRequests).toEqual(["turn-2"]);
+
+  // A scheduled turn finishes before any poll saw it run: its answer loads.
+  messages.push(followMessage(sessionId, "answer-2b", 4, "assistant", "A scheduled turn answered while you watched.", { chat_turn_id: "turn-2b" }));
+  phase = 2;
+  await expect(page.getByText("A scheduled turn answered while you watched.", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Turn two streamed without a click.", { exact: true })).toHaveCount(1);
+
+  // Core's next turn asks for approval: the card appears without Review.
+  phase = 3;
+  const card = page.getByRole("region", { name: "Approval required", exact: true });
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await expect(card.getByText("run_command", { exact: true })).toBeVisible();
+  expect(followRequests).toEqual(["turn-2"]);
+  await expectNoStreamFailure(page);
+  expect((await new AxeBuilder({ page }).include(".chat-approval-card").analyze()).violations).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("core-started-turns-followed.png") });
+});
+
+reloadTest("assistant upgrade replays a response Core resumed after a restart without doubling it", async ({ page }) => {
+  const sessionId = "follow-restart";
+  const followRequests: string[] = [];
+  let release: (() => void) | undefined;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  const final = "Saved draft. Finished after recovery.";
+  let posted = false;
+  let settled = false;
+  await installProviderFollowCore(page, sessionId, "Restarted work", async (path, route) => {
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) { await route.fulfill({ json: [] }); return true; }
+    if (path.endsWith(`/chat/sessions/${sessionId}/state`)) {
+      await route.fulfill({ json: settled ? followState(sessionId, 3, "restart-turn", "complete", false)
+        : posted ? followState(sessionId, 2, "restart-turn", "running", true) : followState(sessionId, 1, null, "idle", false) });
+      return true;
+    }
+    if (path.endsWith("/chat/completions")) {
+      posted = true;
+      // The stream ends mid-turn when Core restarts.
+      await route.fulfill({ status: 200, contentType: "text/event-stream", body: followSse([
+        { type: "started", provider_id: followProvider.id, model: "follow-model", session_id: sessionId, turn_id: "restart-turn", sequence: 1, epoch: "runtime-a" },
+        { type: "delta", turn_id: "restart-turn", delta: "Draft before the restart.", sequence: 2, epoch: "runtime-a" },
+      ]) });
+      return true;
+    }
+    if (path.endsWith("/chat/turns/restart-turn/events")) {
+      const url = new URL(route.request().url());
+      followRequests.push(url.search);
+      if (followRequests.length === 1) {
+        // The resumed runtime counts from 1 and replays the saved text.
+        await route.fulfill({ status: 200, contentType: "text/event-stream", body: followSse([
+          { type: "queued", turn_id: "restart-turn", sequence: 1, epoch: "runtime-b" },
+          { type: "started", provider_id: followProvider.id, model: "follow-model", session_id: sessionId, turn_id: "restart-turn", sequence: 2, epoch: "runtime-b" },
+          { type: "delta", turn_id: "restart-turn", delta: "Saved draft.", sequence: 3, epoch: "runtime-b" },
+          { type: "delta", turn_id: "restart-turn", delta: " Finished after recovery.", sequence: 4, epoch: "runtime-b" },
+        ]) });
+        return true;
+      }
+      await released;
+      settled = true;
+      await route.fulfill({ status: 200, contentType: "text/event-stream", body: followSse([
+        { type: "done", turn_id: "restart-turn", session_id: sessionId, provider_id: followProvider.id, backend: "provider", model: "follow-model", message: { id: "restart-answer", role: "assistant", content: final }, usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }, citations: [], sequence: 5, epoch: "runtime-b" },
+      ]) });
+      return true;
+    }
+    return false;
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
+  await page.locator(".chat-composer textarea").fill("Draft the report.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  const reply = page.locator(".chat-message.assistant").last();
+  // The replay replaces what the earlier runtime streamed; nothing doubles.
+  await expect(reply.locator(".assistant-markdown")).toHaveText(final, { timeout: 15_000 });
+  await expect.poll(() => followRequests.slice(0, 2), { timeout: 15_000 }).toEqual(["?after=2&epoch=runtime-a", "?after=4&epoch=runtime-b"]);
+  await expect(reply.locator(".assistant-markdown")).toHaveText(final);
+  release?.();
+  await expect(page.getByRole("button", { name: "Stop response", exact: true })).toHaveCount(0, { timeout: 10_000 });
+  await expect(reply.locator(".assistant-markdown")).toHaveText(final);
+  await expectNoStreamFailure(page);
+});
+
+reloadTest("assistant upgrade restores an approval whose frame arrived after the connection dropped", async ({ page }) => {
+  const sessionId = "follow-approval";
+  const approval = {
+    id: "late-approval", status: "pending", origin: "chat", risk_class: "passive", policy_rationale: "Review the command",
+    exact_request: { tool_name: "run_command", arguments: { command: "uname -a" } },
+  };
+  let posted = false;
+  await installProviderFollowCore(page, sessionId, "Late approval", async (path, route) => {
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) { await route.fulfill({ json: [] }); return true; }
+    if (path.endsWith(`/chat/sessions/${sessionId}/state`)) {
+      await route.fulfill({ json: posted
+        ? followState(sessionId, 2, "late-turn", "waiting_approval", true, [{ id: approval.id, turn_id: "late-turn", kind: "approval", text: "Review the requested action" }])
+        : followState(sessionId, 1, null, "idle", false) });
+      return true;
+    }
+    if (path.endsWith("/chat/completions")) {
+      posted = true;
+      await route.fulfill({ status: 200, contentType: "text/event-stream", body: followSse([
+        { type: "started", provider_id: followProvider.id, model: "follow-model", session_id: sessionId, turn_id: "late-turn", sequence: 1, epoch: "runtime-a" },
+        { type: "tool_started", turn_id: "late-turn", tool_call_id: "late-call", capability: "run_command", arguments: {}, sequence: 2, epoch: "runtime-a" },
+      ]) });
+      return true;
+    }
+    if (path.endsWith("/chat/turns/late-turn/events")) {
+      // Core kept the paused runtime's last frame for this late viewer.
+      await route.fulfill({ status: 200, contentType: "text/event-stream", body: followSse([
+        { type: "approval_required", turn_id: "late-turn", tool_call_id: "late-call", approval, sequence: 3, epoch: "runtime-a" },
+      ]) });
+      return true;
+    }
+    return false;
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
+  await page.locator(".chat-composer textarea").fill("Inspect the host.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  const card = page.getByRole("region", { name: "Approval required", exact: true });
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await expect(card.getByText("run_command", { exact: true })).toBeVisible();
+  await expectNoStreamFailure(page);
+});
+
+for (const recoverable of [false, true]) {
+  reloadTest(`assistant upgrade offers Stop for an interrupted response ${recoverable ? "Core is recovering" : "Core will not resume"}`, async ({ page }) => {
+    const sessionId = recoverable ? "follow-recovering" : "follow-stuck";
+    let stopped = false;
+    let cancelRequests = 0;
+    const prompt = followMessage(sessionId, "stuck-prompt", 1, "user", "Keep working on the goal.");
+    const note = { ...followMessage(sessionId, "stuck-note", 2, "assistant", "Response stopped: the operator stopped it before it finished.", { kind: "turn_outcome", chat_turn_id: "stuck-turn" }), finish_reason: "turn_outcome" };
+    await installProviderFollowCore(page, sessionId, "Interrupted work", async (path, route) => {
+      if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) { await route.fulfill({ json: stopped ? [prompt, note] : [prompt] }); return true; }
+      if (path.endsWith(`/chat/sessions/${sessionId}/state`)) {
+        await route.fulfill({ json: stopped ? followState(sessionId, 2, "stuck-turn", "cancelled", false)
+          : followState(sessionId, 1, "stuck-turn", recoverable ? "recovering" : "needs_stop", true) });
+        return true;
+      }
+      if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) {
+        await route.fulfill({ json: stopped ? null : {
+          ...entity, id: "stuck-turn", session_id: sessionId, started_at: entity.created_at, status: "interrupted", revision: 2,
+          content: "", reasoning: "", tool_call_ids: [], error: "Core restarted before this response completed.", recoverable,
+        } });
+        return true;
+      }
+      if (path.endsWith("/chat/turns/stuck-turn/hooks")) { await route.fulfill({ json: [] }); return true; }
+      if (path.endsWith("/chat/turns/stuck-turn/cancel")) {
+        cancelRequests += 1;
+        stopped = true;
+        await route.fulfill({ json: { ...entity, id: "stuck-turn", session_id: sessionId, status: "cancelled", tool_call_ids: [] } });
+        return true;
+      }
+      return false;
+    });
+
+    await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
+    await expect(page.getByText("Keep working on the goal.", { exact: true })).toBeVisible();
+    await expect(page.getByText(recoverable
+      ? "Core is recovering this response automatically. Recorded receipts will be adopted; uncertain effects will not be replayed."
+      : "This interrupted response will not resume automatically. Stop it to continue the conversation.", { exact: true })).toBeVisible();
+    const stop = page.getByRole("button", { name: "Stop response", exact: true });
+    await expect(stop).toBeEnabled();
+    await stop.click();
+    await expect.poll(() => cancelRequests).toBe(1);
+    await expect(page.getByText("Response stopped: the operator stopped it before it finished.", { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(stop).toHaveCount(0);
+    await expect(page.getByText(/will not resume automatically|recovering this response automatically/)).toHaveCount(0);
+    await page.locator(".chat-composer textarea").fill("Start again.");
+    await expect(page.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  });
+}
 
 test("editing a sent message replaces its turns inside the same conversation", async ({ page }, testInfo) => {
   const sessionId = "chat-edit-in-place";
@@ -4628,6 +4990,7 @@ reloadTest("assistant upgrade restores paused provider supervisor thinking and p
   await page.reload();
   await expect(reply).toContainText("I have dispatched the command.");
   await expect(reply.getByLabel("Thinking")).toBeVisible();
+  await reply.getByLabel("Thinking").locator("summary").click();
   await expect(reply.getByLabel("Thinking")).toContainText("Check the returned evidence before continuing.");
 
   await page.getByRole("button", { name: "New chat", exact: true }).click();
@@ -4683,6 +5046,7 @@ reloadTest("assistant upgrade replaces a callback wait when its turn finishes be
   callbackComplete = true;
   const reply = page.locator(".chat-message.assistant").last();
   await expect(reply).toContainText("The command completed and I checked its result.", { timeout: 10_000 });
+  await reply.getByLabel("Thinking").locator("summary").click();
   await expect(reply.getByLabel("Thinking")).toContainText("The returned evidence supports this answer.");
   await expect(page.getByText("Waiting for command results")).toHaveCount(0);
 });
@@ -4711,6 +5075,11 @@ test("assistant upgrade provider thinking stays collapsed and out of the reply",
     }
     if (path.endsWith(`/providers/${provider.id}/health`) && route.request().method() === "POST") {
       await route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["deepseek/deepseek-v4-flash"] } });
+      return;
+    }
+    // Sending first checks the provider credential is available on the host.
+    if (path.endsWith(`/credentials/${encodeURIComponent(provider.secret_ref)}/status`)) {
+      await route.fulfill({ json: { reference: provider.secret_ref, persistence: "environment", available: true, state: "available" } });
       return;
     }
     await route.fallback();
@@ -4830,6 +5199,11 @@ test("assistant upgrade names a provider turn that thinks without answering and 
     }
     if (path.endsWith(`/providers/${provider.id}/health`) && route.request().method() === "POST") {
       await route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["deepseek/deepseek-v4-flash"] } });
+      return;
+    }
+    // Sending first checks the provider credential is available on the host.
+    if (path.endsWith(`/credentials/${encodeURIComponent(provider.secret_ref)}/status`)) {
+      await route.fulfill({ json: { reference: provider.secret_ref, persistence: "environment", available: true, state: "available" } });
       return;
     }
     await route.fallback();
@@ -8931,7 +9305,7 @@ for (const scenario of ["stale catalog", "request failure", "reconnected approva
       return;
     }
     if (scenario === "request failure") {
-      await expect(page.getByText("Approval details temporarily unavailable", { exact: true })).toBeVisible();
+      await expect(page.getByText(/could not verify its active response state/)).toBeVisible();
       await expect(page.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
       failRequest = false;
     }

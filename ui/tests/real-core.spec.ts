@@ -4944,3 +4944,234 @@ reliabilityTest("ssh environments list config hosts, enable, test, edit, and sur
     await core.stop();
   }
 });
+
+/** A model that delegates one check to a subagent, then answers from its report. */
+async function startDelegatingModelStub(options: { childDelayMs: number }) {
+  const requests: Array<Record<string, unknown>> = [];
+  const server = createServer(async (request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    if (request.method === "GET" && request.url === "/v1/models") {
+      response.end(JSON.stringify({ object: "list", data: [{ id: "security-model", object: "model", created: 1, owned_by: "local-acceptance" }] }));
+      return;
+    }
+    if (request.method !== "POST" || request.url !== "/v1/chat/completions") {
+      response.statusCode = 404;
+      response.end(JSON.stringify({ error: "not found" }));
+      return;
+    }
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
+    requests.push(body);
+    const tools = (Array.isArray(body.tools) ? body.tools : []) as Array<{ function?: { name?: string } }>;
+    const messages = (Array.isArray(body.messages) ? body.messages : []) as Array<{ role?: string; content?: unknown }>;
+    const said = (needle: string) => messages.some(message => JSON.stringify(message.content ?? "").includes(needle));
+    const answer = (content: string) => {
+      if (body.stream === true) {
+        response.setHeader("Content-Type", "text/event-stream");
+        response.write(`data: ${JSON.stringify({ id: "chatcmpl-delegate", object: "chat.completion.chunk", created: 1, model: "security-model", choices: [{ index: 0, delta: { role: "assistant", content }, finish_reason: null }] })}\n\n`);
+        response.write(`data: ${JSON.stringify({ id: "chatcmpl-delegate", object: "chat.completion.chunk", created: 1, model: "security-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 } })}\n\n`);
+        response.end("data: [DONE]\n\n");
+        return;
+      }
+      response.end(JSON.stringify({ id: "chatcmpl-delegate", object: "chat.completion", created: 1, model: "security-model", choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }], usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 } }));
+    };
+    const probe = (tools as Array<{ function?: { name?: string; parameters?: { properties?: { nonce?: { enum?: string[] } } } } }>)
+      .find(tool => tool.function?.name === "nebula_capability_probe")?.function?.parameters?.properties?.nonce?.enum?.[0];
+    if (probe) {
+      response.end(JSON.stringify({
+        id: "chatcmpl-delegate-probe", object: "chat.completion", created: 1, model: "security-model",
+        choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [{ id: "call-probe", type: "function", function: { name: "nebula_capability_probe", arguments: JSON.stringify({ nonce: probe }) } }] }, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+      }));
+      return;
+    }
+    if (said("Name this conversation from its first exchange")) return answer("Delegated banner check");
+    // The resumed supervisor reads its subagent's report as a tool result.
+    if (messages.some(message => message.role === "tool")) return answer("PARENT_SUMMARY: the subagent confirmed the banner.");
+    if (said("CHILD_TASK")) {
+      await new Promise(resolve => setTimeout(resolve, options.childDelayMs));
+      return answer("CHILD_REPORT: the banner is present.");
+    }
+    if (tools.some(tool => tool.function?.name === "start_subagent")) {
+      response.end(JSON.stringify({
+        id: "chatcmpl-delegate-tools", object: "chat.completion", created: 1, model: "security-model",
+        choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [
+          { id: "call-start-child", type: "function", function: { name: "start_subagent", arguments: JSON.stringify({ task: "CHILD_TASK: confirm the login banner is present.", name: "Banner check" }) } },
+          { id: "call-wait-child", type: "function", function: { name: "wait_subagents", arguments: "{}" } },
+        ] }, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 },
+      }));
+      return;
+    }
+    answer("The delegation conversation is ready.");
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, requests, server, fail: false } satisfies LocalModelStub;
+}
+
+async function pairRealCoreBrowser(page: Page, core: RealCore, name: string) {
+  const pairingApi = await playwrightRequest.newContext({
+    baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  const pairingResponse = await pairingApi.post("auth/pairings", { data: { name } });
+  expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+  const pairing = await pairingResponse.json() as { secret: string; confirmation_code: string };
+  await pairingApi.dispose();
+  await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+  await page.getByLabel("Device name").fill(name);
+  await page.getByRole("button", { name: "Pair device" }).click();
+  await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+}
+
+async function expectNoChatStreamFailure(page: Page) {
+  await expect(page.getByText(/no longer running|Could not reconnect|could not be completed|Connection lost/)).toHaveCount(0);
+}
+
+test("assistant upgrade real Core follows goal turns Core starts while the viewer waits", async ({ page }, testInfo) => {
+  test.setTimeout(150_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const modelStub = await startLocalModelStub({ streamDelayMs: 4_000 });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const providerResponse = await api.post("providers", { data: {
+      name: "Core-started goal model", provider_type: "vllm", endpoint: `${modelStub.origin}/v1`, enabled: true, is_local: true,
+      model_allowlist: ["security-model"], privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+    const chatResponse = await api.post("chat/completions", { data: {
+      backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projectId,
+      messages: [{ role: "user", content: "Open the goal conversation" }], include_knowledge: false, stream: false,
+    } });
+    expect(chatResponse.ok(), await chatResponse.text()).toBe(true);
+    const { session_id: sessionId } = await chatResponse.json() as { session_id: string };
+    const goalResponse = await api.post(`chat/sessions/${sessionId}/goal`, { data: {
+      objective: "Keep working until the step budget ends", completion_criteria: ["Every Core turn reaches the open transcript"], step_budget: 3,
+    } });
+    expect(goalResponse.ok(), await goalResponse.text()).toBe(true);
+    const goal = await goalResponse.json() as { revision: number };
+
+    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Core-started goal viewer");
+    await page.goto(`${core.origin}/?view=chat&session=${sessionId}`);
+    await expect(page.getByText("Real Core retained the exact research context.", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0);
+
+    // Another device starts the goal; Core runs every turn with no viewer here.
+    const started = await api.post(`chat/sessions/${sessionId}/goal/actions`, { data: { expected_revision: goal.revision, action: "start" } });
+    expect(started.ok(), await started.text()).toBe(true);
+    // The open transcript attaches to Core's turn and shows it streaming.
+    await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible({ timeout: 20_000 });
+    const streaming = page.locator(".chat-message.assistant").filter({ hasText: "Core is continuing in Project A" }).filter({ hasNotText: "finished after the viewer detached." });
+    await expect(streaming.first()).toBeVisible({ timeout: 20_000 });
+
+    await expect.poll(async () => (await (await api.get(`chat/sessions/${sessionId}/goal`)).json() as { status: string }).status, { timeout: 90_000 }).toBe("paused");
+    const saved = (await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{ role: string; content: string }>)
+      .filter(message => message.role === "assistant");
+    const goalAnswers = saved.filter(message => message.content.includes("finished after the viewer detached."));
+    // The goal's own turns and its automatic continuation, not just one turn.
+    expect(goalAnswers.length).toBeGreaterThanOrEqual(2);
+    // Every saved answer is on screen exactly once, without a reload.
+    await expect(page.locator(".chat-message.assistant")).toHaveCount(saved.length, { timeout: 20_000 });
+    await expect(page.locator(".chat-message.assistant").filter({ hasText: "finished after the viewer detached." })).toHaveCount(goalAnswers.length);
+    await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 20_000 });
+    await expectNoChatStreamFailure(page);
+    expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
+    expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+    await page.reload();
+    await expect(page.locator(".chat-message.assistant")).toHaveCount(saved.length, { timeout: 20_000 });
+    await testInfo.attach("core-started-goal-turns", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, goalAnswers: goalAnswers.length }), contentType: "application/json" });
+    await page.screenshot({ path: testInfo.outputPath("core-started-goal-turns.png") });
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
+
+test("assistant upgrade real Core keeps a subagent wait attached and follows the resumed answer", async ({ page }, testInfo) => {
+  test.setTimeout(150_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const modelStub = await startDelegatingModelStub({ childDelayMs: 8_000 });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  const followRequests: string[] = [];
+  page.on("response", response => { if (/\/chat\/turns\/[^/]+\/events/.test(response.url())) followRequests.push(`${response.status()} ${new URL(response.url()).search}`); });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const providerResponse = await api.post("providers", { data: {
+      name: "Delegating model", provider_type: "vllm", endpoint: `${modelStub.origin}/v1`, enabled: true, is_local: true,
+      model_allowlist: ["security-model"], privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string; revision: number };
+    // Delegation runs tools, which Core allows only for a verified model.
+    const verification = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, { data: { model: "security-model", expected_revision: provider.revision } });
+    expect(verification.ok(), await verification.text()).toBe(true);
+    expect(await verification.json()).toMatchObject({ verification: { model: "security-model", status: "verified" } });
+    const chatResponse = await api.post("chat/completions", { data: {
+      backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projectId,
+      messages: [{ role: "user", content: "Open the delegation conversation" }], include_knowledge: false, stream: false,
+    } });
+    expect(chatResponse.ok(), await chatResponse.text()).toBe(true);
+    const { session_id: sessionId } = await chatResponse.json() as { session_id: string };
+    const delegation = await api.patch(`chat-sessions/${sessionId}`, { data: { allow_subagents: true } });
+    expect(delegation.ok(), await delegation.text()).toBe(true);
+
+    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Subagent wait viewer");
+    await page.goto(`${core.origin}/?view=chat&session=${sessionId}`);
+    await expect(page.getByText("The delegation conversation is ready.", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Delegate the login banner check.");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+
+    // The supervisor parks on the wait: a named pause, not a lost stream.
+    const waiting = page.getByRole("status", { name: "Waiting for subagents" });
+    await expect(waiting).toContainText("Waiting for 1 subagent to report.", { timeout: 30_000 });
+    await expect(page.getByText("Callback ready")).toHaveCount(0);
+    await expect.poll(() => modelStub.requests.some(body => JSON.stringify(body.messages ?? "").includes("CHILD_TASK") && !JSON.stringify(body.messages ?? "").includes("\"tool\"")), { timeout: 20_000 }).toBe(true);
+    await expectNoChatStreamFailure(page);
+    await expect(page.locator(".chat-message.assistant").last()).toContainText("Waiting for 1 subagent to report.");
+
+    // The report resumes the supervisor in a new runtime; the viewer follows
+    // it. Core then posts the subagent's report card after the answer.
+    const answer = page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY: the subagent confirmed the banner." });
+    await expect(answer).toHaveCount(1, { timeout: 60_000 });
+    await expect(waiting).toHaveCount(0);
+    await expect(page.getByText("Waiting for 1 subagent to report.")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 20_000 });
+    await expectNoChatStreamFailure(page);
+    expect(followRequests.every(entry => entry.startsWith("200 "))).toBe(true);
+    const saved = (await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{ role: string; content: string }>)
+      .filter(message => message.role === "assistant" && message.content.includes("PARENT_SUMMARY"));
+    expect(saved).toHaveLength(1);
+    await expect(page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY" })).toHaveCount(1);
+    expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
+    expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+    await page.reload();
+    await expect(page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY" })).toHaveCount(1, { timeout: 20_000 });
+    await testInfo.attach("subagent-wait-followed", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, followRequests }), contentType: "application/json" });
+    await page.screenshot({ path: testInfo.outputPath("subagent-wait-followed.png") });
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});

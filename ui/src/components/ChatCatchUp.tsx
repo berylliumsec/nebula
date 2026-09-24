@@ -9,11 +9,12 @@ function readDeviceId() {
   const existing = localStorage.getItem(key); if (existing) return existing;
   const value = `reader-${Date.now()}-${Math.random().toString(36).slice(2)}`; localStorage.setItem(key, value); return value;
 }
-export function ChatCatchUp({api, sessionId, ready, atLatest, actionRevision, pendingActions, onMessage, onPending, onTurn}: {api: ApiClient; sessionId: string; ready: boolean; atLatest: boolean; actionRevision?: string; pendingActions?: CatchUpEntry[]; onMessage: (id: string) => void; onPending: () => void; onTurn: (id: string) => void}) {
+export function ChatCatchUp({api, sessionId, ready, atLatest, isShown, actionRevision, pendingActions, onMessage, onPending, onTurn}: {api: ApiClient; sessionId: string; ready: boolean; atLatest: boolean; /** Whether the transcript renders this message; an unrendered one stays unread. */ isShown?: (messageId: string) => boolean; actionRevision?: string; pendingActions?: CatchUpEntry[]; onMessage: (id: string) => void; onPending: () => void; onTurn: (id: string) => void}) {
   const [card, setCard] = useState<CatchUpRecord>(); const cardRef = useRef<CatchUpRecord | undefined>(undefined);
   const [pending, setPending] = useState<CatchUpEntry[]>([]); const [error, setError] = useState<string>(); const [refresh, setRefresh] = useState(0);
   const needsCatchupRef = useRef(true);
   const atLatestRef = useRef(atLatest); atLatestRef.current = atLatest;
+  const isShownRef = useRef(isShown); isShownRef.current = isShown;
   const acknowledgeRef = useRef<((record: CatchUpRecord) => Promise<void>) | undefined>(undefined);
   const visiblePending = pendingActions ?? pending;
   const visibleItems = card?.items.filter(item => !["pending", "approval"].includes(item.kind) || pendingActions === undefined || pendingActions.some(request => request.id === item.id)) ?? [];
@@ -41,7 +42,9 @@ export function ChatCatchUp({api, sessionId, ready, atLatest, actionRevision, pe
         setPending(record.pending);
         if (cardRef.current || needsCatchup && record.initialized && record.items.length > 0) {
           cardRef.current = record; setCard(record);
-        } else if (atLatestRef.current && (!record.initialized || record.items.length > 0)) await acknowledge(record);
+        } else if (atLatestRef.current && (!record.initialized || record.items.length > 0)
+          // Reading the bottom of the transcript reads only what it renders.
+          && record.items.every(item => !item.message_id || (isShownRef.current?.(item.message_id) ?? true))) await acknowledge(record);
         needsCatchup = false; needsCatchupRef.current = false;
       } catch(e) {void logCaughtDiagnostic("interface.assistant_chat.cursor_operation_failed", "The read cursor operation failed.", e, "assistant_chat"); report(e);} finally {busy = false;}
     };

@@ -24,6 +24,15 @@ describe("CallbackWaitingStatus", () => {
     expect(screen.getByText("Copied")).toBeInTheDocument();
   });
 
+  it("labels a subagent wait as one, without callback copy", () => {
+    render(<CallbackWaitingStatus summary="Waiting for 2 subagents to report." kind="subagents" />);
+
+    const status = screen.getByRole("status", { name: "Waiting for subagents" });
+    expect(status).toHaveTextContent("Waiting for 2 subagents to report.");
+    expect(screen.queryByText("Callback ready")).toBeNull();
+    expect(screen.queryByRole("status", { name: "Waiting for command results" })).toBeNull();
+  });
+
   it("leaves the URL selectable and explains clipboard failure", async () => {
     writeText.mockRejectedValue(new Error("denied"));
     render(<CallbackWaitingStatus summary="Waiting for results" resultsUrl={resultsUrl} />);

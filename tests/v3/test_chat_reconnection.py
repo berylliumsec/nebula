@@ -173,6 +173,7 @@ def test_provider_follow_cursor_is_stable_across_viewers(tmp_path):
             "type": "delta",
             "delta": "second",
             "sequence": 2,
+            "epoch": runtime.epoch,
         }
         await second.aclose()
         assert len(runtime.events) == 2
