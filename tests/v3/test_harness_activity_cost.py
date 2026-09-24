@@ -59,6 +59,12 @@ class ScriptedConnection(FakeConnection):
         async for event in self.script(self):
             yield event
 
+    async def interrupt(self) -> None:
+        # A vendor acknowledges an interrupt asynchronously; the turn is not
+        # terminal until it does.
+        await asyncio.sleep(0.2)
+        self.interrupted = True
+
 
 class ScriptedAdapter(FakeAdapter):
     def __init__(self, script, *, release=None) -> None:
@@ -182,26 +188,34 @@ def test_coalescing_keeps_distinct_streams_apart_and_flushes_before_others():
     ]
 
 
-def test_stop_inside_the_coalescing_window_keeps_the_last_text(tmp_path):
+def test_stop_inside_the_coalescing_window_keeps_the_last_text(tmp_path, monkeypatch):
+    # A window long enough that nothing is flushed before Stop lands.
+    monkeypatch.setattr(harness_module, "ACTIVITY_DELTA_FLUSH_SECONDS", 30.0)
+
     async def script(connection):
         yield HarnessEvent(type="message_delta", delta="Partial ", item_id="msg")
-        await asyncio.sleep(0.3)
-        # Still inside its flush window when Stop lands.
         yield HarnessEvent(type="message_delta", delta="finding", item_id="msg")
+        connection.produced.set()
         await connection.release.wait()
 
     async def scenario() -> None:
         gate = asyncio.Event()
-        store, engagement, profile, _adapter, runtime = _scripted_runtime(
+        store, engagement, profile, adapter, runtime = _scripted_runtime(
             tmp_path, script, release=gate
         )
+        produced = asyncio.Event()
+        original_open = adapter.open
+
+        async def open_with_signal(request):
+            connection = await original_open(request)
+            connection.produced = produced
+            return connection
+
+        adapter.open = open_with_signal
         chat, _chat_turn, turn = _prepare(runtime, engagement, profile)
         runtime.start_chat_turn(turn.id)
-        deadline = time.monotonic() + 5
-        while not _ledger(store, turn.id, "harness.message_delta"):
-            assert time.monotonic() < deadline
-            await asyncio.sleep(0.01)
-        await asyncio.sleep(0.32)
+        await asyncio.wait_for(produced.wait(), timeout=5)
+        assert _ledger(store, turn.id, "harness.message_delta") == []
         await runtime.cancel_turn(turn.id, reason="Stopped by operator")
         deadline = time.monotonic() + 5
         while turn.id in runtime._chat_turn_tasks:
@@ -370,11 +384,21 @@ def test_harness_turn_reads_only_its_own_conversation(tmp_path, monkeypatch):
     ]
 
 
-def test_idle_follower_is_woken_instead_of_polling(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("last", "status"),
+    [
+        ("completed", HarnessTurnStatus.COMPLETE),
+        # Settles after an awaited vendor interrupt, with no event after it.
+        ("interrupted", HarnessTurnStatus.INTERRUPTED),
+    ],
+)
+def test_idle_follower_is_woken_instead_of_polling(tmp_path, monkeypatch, last, status):
+    monkeypatch.setattr(harness_module, "ACTIVITY_FOLLOW_IDLE_SECONDS", 30.0)
+
     async def script(connection):
         await connection.release.wait()
         yield HarnessEvent(type="message_delta", delta="Done", item_id="msg")
-        yield HarnessEvent(type="completed", message="Done")
+        yield HarnessEvent(type=last, message="Done")
 
     async def scenario() -> None:
         gate = asyncio.Event()
@@ -403,18 +427,17 @@ def test_idle_follower_is_woken_instead_of_polling(tmp_path, monkeypatch):
             assert time.monotonic() < deadline
             await asyncio.sleep(0.01)
         reads.clear()
-        await asyncio.sleep(1.5)
-        # A quiet turn is re-read at the idle interval, not ten times a second.
-        assert len(reads) <= 3, len(reads)
+        await asyncio.sleep(1.0)
+        # A quiet turn is not re-read ten times a second.
+        assert len(reads) <= 1, len(reads)
 
-        released = time.monotonic()
         gate.set()
+        # The idle fallback is 30 s here: the follower must be woken by the
+        # new events and by the owner finishing the turn, never by the timer.
         await asyncio.wait_for(follower, timeout=5)
-        delivered = next(at for kind, at in received if kind == "message_delta")
-        assert delivered - released < 0.5
-        # Completion ends the follower without waiting out the idle interval.
-        assert time.monotonic() - released < 0.9
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
+        kinds = [kind for kind, _ in received]
+        assert kinds.index("message_delta") < kinds.index(last)
+        assert store.get(HarnessTurn, turn.id).status == status
         await runtime.shutdown()
 
     asyncio.run(scenario())
