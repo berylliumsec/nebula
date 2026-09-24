@@ -1086,3 +1086,97 @@ desktop-native selection contracts stay separate. Cumulative PR coverage selects
 at 560×615; its older Start/resume wording differs from current Save draft behavior.
 No production Rust-backed create/select/refresh, mobile/WebKit/LAN/device or
 whole-Assistant performance evidence is implied by these isolated checks.
+
+CI for commit `7143ffb` passed (run `35961338065`). Downloaded selection and
+Rust receipts match digest
+`8fd5f83aa256a75241e9c7448b86d8005cb36f7fcc32720f933726bcf3e34d90`;
+all 176 unique Rust tests collected and executed once. Python 3.12 collected 61
+and passed all 61 in 118.85 seconds. Browser plan/gate run `35961338071` passed
+with browser execution skipped. Local cumulative collection initially hit ENOSPC;
+removing only this worktree's regenerable incremental compiler cache recovered
+space, after which collection completed without changing implementation or scope.
+
+## Conversation fork implementation contract
+
+Journey: from a saved Assistant message choose Fork conversation here, select
+its new conversation, inspect the copied transcript/context/goal and refresh.
+Both provider and harness conversations use this route. Core owns durable
+lineage, copied records and search; the UI owns transient selection before the
+returned identity is installed in the list/URL. Project files and artifact
+references stay shared. No provider turn, vendor process, workspace copy or tool
+starts during this operation. Sending in the new branch remains a later service.
+
+Preserve source request normalization and boundary exclusivity before reads.
+For harness conversations, validate and create a new retained STARTING vendor
+session before chat-history checks. Reuse internal pending-turn reconciliation;
+its tool/hook repairs may commit before a fork refusal. Decode the complete
+session transcript before filtering retracted messages, preserve exact sequence
+ordering and through/before tie semantics, and retain immediate-source provenance.
+Remove only the five private lifecycle markers from copied session metadata.
+
+Fork commits are sequential: vendor session if applicable, chat session, each
+message, each decision, then a fresh provider Goal draft if one exists. Preserve
+that committed prefix on late failure. Harness failure cleanup deletes only the
+new vendor row; it does not roll back already committed chat records. A partial
+chat can therefore refer to the deleted vendor identity, as in Python. Source
+Session/transcript records remain unchanged; pending repair is the separate
+exception for parent-owned Turn/tool/hook state. No atomic/idempotent fork claim
+is made. Copy configuration and shared context references, not execution claims,
+turns, tool receipts, goal progress or workspace contents.
+
+Full direct Message/ContentBlock/Citation/Decision validation, contextual retained
+HarnessSession hydration and constructor factory provenance are prerequisites.
+Omitted UUIDs and timestamps stay separate from original diagnostic inputs.
+Bound retained and hydrated collections to the existing 10,000-row/16-MiB
+contracts, preserving separate-stage ordering and explicit resource failures.
+Do not truncate branches or pre-read later decision/goal stages before commits.
+
+Planned layers: isolated source model/request/service/HTTP captures with exact
+UUID/clock/read/commit order; per-phase entity/search changes and protected
+ledgers; late collisions, malformed ignored records, harness cleanup, pending
+repair-before-refusal, reopen, Unicode/large sequence and resource bounds.
+Collect exact selected tests and bind the receipt before any test execution.
+Discover, fork/create, select, refresh, failure, retry and reconnect apply.
+Streaming/interrupt, rewind/resend, deletion/revocation and actual branch execution
+remain separate services. Production desktop/mobile Chromium/WebKit, keyboard,
+touch, LAN-origin, packaged build and physical-device gates remain open.
+
+A fresh live Figma Session details `4:77` screenshot was inspected on September24
+at 1440×1180. It separates Preview restore from Fork conversation and states that
+forks share the workspace. Its checkpoint placement and optional-isolation copy
+do not imply that checkpoint restore or isolation exists in this message-fork API.
+The current message action and Python route define this increment; the Figma
+inspection is design evidence, not interactive prototype or Rust UI acceptance.
+
+The 40th experimental handler now implements both provider and harness forks.
+The frozen source fixture contains 89 HTTP cases, 69 service cases, 78 direct
+model vectors, 12 constructor vectors and 27 request vectors, with 12 separate
+strict retained-base observations. Its SHA-256 is
+`7fc5dd92458b349b2b16c8e34143d28dd4e2e09b23e4abbeb5f500a3ced21e93`.
+Full fork Session hydration is retained through the internal pending check;
+existing public recovery readers keep their previous contract. Nested typed
+constructor inputs preserve model-class diagnostic previews and declaration order.
+Validation provenance is shared behind an Arc so service errors remain small.
+
+Dedicated fork writers recheck allowed record kinds, validate raw/canonical
+equivalence and bound queued bytes. Raw reconstruction descends only known model
+containers, preserving equal opaque fragments without reparsing changed opaque
+subtrees at every depth. Error reports count against aggregate read budgets.
+Harness reads release SQL permits before bounded blocking hydration. Four separate
+workflow slots retain complete fork operations through caller cancellation and
+late cleanup. Application shutdown must still join these workflows before closing
+storage; this is a remaining executable-integration gate.
+
+Focused local validation passed 46 exact Rust checks and five Python source
+recaptures. Seven new domain/storage checks passed under digest
+`6e4a7de3cdf5d11a23e692d0a3cb30aef4a98a64d06d13c7be118d19beb719a1`.
+The service replay then exposed a missing successful paired-device descriptor in
+the test fixture, while all 68 included case comparisons already matched. Adding
+that descriptor changed no HTTP responses, durable states or model vectors.
+The corrected service replay and remaining 38 checks passed under digest
+`f33a37b69fd134d5874264f6af6bd2807623e0915c4a5127b32392dc51bebc38`.
+The five Python recaptures passed in 26.86 seconds; the corrected fork capture alone
+was rerun and passed in 8.21 seconds. Tests include 1,003-message sequence ties,
+complete-read limits, per-stage collisions, failed vendor cleanup, legacy Session
+coercion, cancellation under SQLite contention, bounded detached work and reopen.
+No production UI, provider execution or whole-Assistant performance is inferred.

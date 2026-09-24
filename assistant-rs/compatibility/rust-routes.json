@@ -197,6 +197,11 @@
       "method": "POST",
       "path": "/api/v1/chat/goal-conversations",
       "status": "experimental"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/chat/sessions/{session_id}/fork",
+      "status": "experimental"
     }
   ],
   "evidence": [
@@ -216,7 +221,8 @@
     "python-settings.json: 173 settings/schedule HTTP captures, 113 service cases, 74 MCP hydration vectors and 57 request vectors; includes archive-before-schedule-error and writer rollback controls",
     "python-model-validation.json: 145 ordered Entity/Schedule validation vectors and 8 explicitly separate factory-default observations; bounded shared-input diagnostics",
     "python-goal-drafts.json: 133 existing-conversation Goal HTTP captures, 93 service cases, 162 finite Goal/usage model vectors and 50 request vectors; separate 2 model and 3 HTTP nonfinite observations document an explicit parity gap",
-    "python-goal-conversations.json: 120 atomic create HTTP captures, 78 service cases, 82 contextual project/provider vectors, 12 Session constructor and 57 request vectors; separate 14 strict retained-base/envelope observations"
+    "python-goal-conversations.json: 120 atomic create HTTP captures, 78 service cases, 82 contextual project/provider vectors, 12 Session constructor and 57 request vectors; separate 14 strict retained-base/envelope observations",
+    "python-forks.json: 89 provider/harness fork HTTP captures, 69 service cases, 78 direct model and 12 constructor vectors, 27 request vectors; 12 separate strict retained-base observations; source sequential commits and failed harness cleanup"
   ],
   "remaining_gates": [
     "JSON syntax, content-type and method edge cases",
@@ -234,6 +240,7 @@
     "Recorded-effect adoption has bounded snapshot/transaction/serialization extensions; real execution/restart recovery, production reconnect and complete malformed-record error parity remain open",
     "Retained identity/revision/timestamp factories remain refused; nested opaque dictionary order and nonstandard environment settings in validation-display guidance are not fully represented",
     "Nonfinite historical Goal elapsed values: source permits infinity, but canonical Rust JSON cannot yet preserve its read/write behavior",
-    "Atomic goal-conversation capture covers requests after inert app construction with canonical dependency bootstrap and exact raw restoration; malformed-dependency startup, non-Unix home expansion and full constructor error parity are separate gates"
+    "Atomic goal-conversation capture covers requests after inert app construction with canonical dependency bootstrap and exact raw restoration; malformed-dependency startup, non-Unix home expansion and full constructor error parity are separate gates",
+    "Conversation forks preserve sequential source commit boundaries and can leave partial records on failure; bounded collection extensions, retained factory defaults, checkpoint restore and real production fork UI journeys remain separate gates"
   ]
 }

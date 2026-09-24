@@ -145,6 +145,18 @@ async fn install_fault(db: &mut SqliteConnection, case: &Value) {
     let Some(fault) = case.get("fault").filter(|v| !v.is_null()) else {
         return;
     };
+    if fault["kind"] == "fork_cleanup_database_error" {
+        let target = fault["harness_session_id"].as_str().unwrap();
+        assert!(
+            !target.is_empty()
+                && target
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+        );
+        sqlx::query(&format!("CREATE TRIGGER fixture_fork_cleanup_failure BEFORE DELETE ON entities WHEN OLD.id='{target}' BEGIN SELECT RAISE(ABORT, 'fixture fork cleanup failure'); END"))
+            .execute(db).await.unwrap();
+        return;
+    }
     let target = match fault["kind"].as_str().unwrap() {
         "unarchive_conflict" => {
             assert_eq!(fault["count"], 3);
@@ -165,7 +177,12 @@ async fn install_fault(db: &mut SqliteConnection, case: &Value) {
         .execute(db).await.unwrap();
 }
 async fn remove_fault(db: &mut SqliteConnection, case: &Value) {
-    if case.get("fault").is_some_and(|v| !v.is_null()) {
+    if case["fault"]["kind"] == "fork_cleanup_database_error" {
+        sqlx::query("DROP TRIGGER fixture_fork_cleanup_failure")
+            .execute(db)
+            .await
+            .unwrap();
+    } else if case.get("fault").is_some_and(|v| !v.is_null()) {
         sqlx::query("DROP TRIGGER fixture_settings_conflict; DROP TABLE fixture_conflict")
             .execute(db)
             .await
@@ -272,7 +289,18 @@ pub async fn run(
             Body::empty()
         } else {
             request = request.header("content-type", "application/json");
-            Body::from(serde_json::to_vec(&case["body"]).unwrap())
+            if let Some(raw) = case.get("raw_body") {
+                let raw = raw.as_str().expect("captured request bytes are UTF-8");
+                let input = if raw.is_empty() {
+                    Value::Null
+                } else {
+                    serde_json::from_str::<Value>(raw).unwrap()
+                };
+                assert_eq!(input, case["body"], "raw request: {}", case["name"]);
+                Body::from(raw.to_owned())
+            } else {
+                Body::from(serde_json::to_vec(&case["body"]).unwrap())
+            }
         };
         let response = router(store.clone(), config)
             .unwrap()

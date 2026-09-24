@@ -195,6 +195,15 @@ impl ApiError {
             ServiceError::HistoryConflict(detail) => {
                 Self::named(409, detail.into(), "chat.chat_history_conflict", "chat")
             }
+            ServiceError::HarnessState(detail) => Self::named(
+                409,
+                detail.into(),
+                "harnesses.harness_state_error",
+                "harnesses",
+            ),
+            ServiceError::ChatConfiguration(detail) => {
+                Self::named(422, detail.into(), "chat.chat_configuration_error", "chat")
+            }
             ServiceError::RetainedModelValidation(report) => Self::retained_validation(report),
             ServiceError::ModelValidation(errors) => {
                 let mut error = Self::validation(errors);
@@ -243,6 +252,9 @@ impl ApiError {
         let unhandled = self.code == "api.unhandled_exception";
         let retryable = self.status >= 500 && !unhandled;
         let mut value = json!({"code":self.code,"feature":self.feature,"request_id":request_id,"error_id":format!("err_{}",uuid::Uuid::new_v4().simple()),"retryable":retryable,"help_article":GUIDANCE["features"][self.feature]["help_article"],"reason_code":reason,"operator_detail":operator,"impact":guidance["impact"],"remediation_id":format!("{}.{reason}",self.feature),"recovery_action":if retryable {"Retry this operation"} else {"Review recovery guidance"},"recovery_destination":"/settings#diagnostics-settings"});
+        if self.feature == "harnesses" {
+            value["recovery_destination"] = "/settings#harnesses-settings".into();
+        }
         if unhandled {
             value["help_article"] = Value::Null;
             value["operator_detail"] = guidance["cause"].clone();

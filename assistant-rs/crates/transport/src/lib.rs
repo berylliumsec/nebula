@@ -21,6 +21,7 @@ use nebula_assistant_services::{
     AssistantRecords, Error as ServiceError,
     artifact_preview::ArtifactPreview,
     context::{CursorWrite, DecisionWrite},
+    fork::ForkRequest,
     generated::CatalogKind,
     goal_conversations::GoalConversationCreate,
     goal_drafts::{GoalDraft, GoalDraftUpdate},
@@ -46,6 +47,7 @@ pub struct HttpConfig {
     /// Trusted host identity source; never accepted from request fields.
     pub new_schedule_id: fn() -> String,
     pub new_goal_id: fn() -> String,
+    pub new_fork_id: fn() -> String,
     /// Trusted host home expansion and bounded dependency hydration.
     pub conversation_dependencies: ConversationDependencies,
     pub artifacts: Option<ArtifactPreview>,
@@ -64,6 +66,7 @@ impl HttpConfig {
             clock: Utc::now,
             new_schedule_id: || uuid::Uuid::new_v4().to_string(),
             new_goal_id: || uuid::Uuid::new_v4().to_string(),
+            new_fork_id: || uuid::Uuid::new_v4().to_string(),
             conversation_dependencies: ConversationDependencies::default(),
             artifacts: None,
             harness_connection: None,
@@ -125,6 +128,10 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
         .route(
             "/api/v1/chat/goal-conversations",
             post(create_goal_conversation),
+        )
+        .route(
+            "/api/v1/chat/sessions/{session_id}/fork",
+            post(fork_conversation),
         )
         .route(
             "/api/v1/chat/sessions/{session_id}/goal",
@@ -432,6 +439,23 @@ async fn session_goal(
         .session_goal_with_clock(&session)
         .await;
     reply(request, result)
+}
+async fn fork_conversation(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let (parts, body) = request.into_parts();
+    let records = AssistantRecords::with_clock(state.store, state.config.clock);
+    let result = match decode::<ForkRequest>(body, state.config.body_bytes).await {
+        Ok(body) => records
+            .fork_conversation(&session, body, state.config.new_fork_id)
+            .await
+            .map(|record| record.into_payload())
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply_status(&parts, result, StatusCode::CREATED)
 }
 async fn create_goal_conversation(State(state): State<AppState>, request: Request) -> Response {
     let (parts, body) = request.into_parts();
@@ -752,7 +776,10 @@ async fn decode<T: validation::RequestModel>(body: Body, limit: usize) -> Result
             )
         })?
     };
-    let order = if T::MODEL == validation::BodyModel::Settings {
+    let order = if matches!(
+        T::MODEL,
+        validation::BodyModel::Settings | validation::BodyModel::Fork
+    ) {
         validation::key_order(&bytes)
     } else {
         Vec::new()

@@ -3,6 +3,7 @@
 pub mod artifact_preview;
 pub mod catchup;
 pub mod context;
+pub mod fork;
 pub mod generated;
 pub mod goal_conversations;
 pub mod goal_drafts;
@@ -32,6 +33,10 @@ pub enum Error {
     Timeout(&'static str),
     #[error("{0}")]
     Invalid(&'static str),
+    #[error("{0}")]
+    HarnessState(&'static str),
+    #[error("{0}")]
+    ChatConfiguration(&'static str),
     #[error("{0}")]
     NotFound(&'static str),
     #[error("{0}")]

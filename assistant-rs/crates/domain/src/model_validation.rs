@@ -21,16 +21,22 @@ use strum::EnumMessage;
 
 const MAX_ISSUES: usize = 10_000;
 type Result<T> = std::result::Result<T, RecordError>;
+mod fork;
 mod goal;
 mod session;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum Model {
     Entity,
     ChatSchedule,
     ChatGoal,
     ChatTokenUsage,
     ChatSession,
+    ChatMessage,
+    ChatContentBlock,
+    ChatCitation,
+    ChatDecision,
+    HarnessSession,
 }
 impl Model {
     pub const fn name(self) -> &'static str {
@@ -40,6 +46,11 @@ impl Model {
             Self::ChatGoal => "ChatGoal",
             Self::ChatTokenUsage => "ChatTokenUsage",
             Self::ChatSession => "ChatSession",
+            Self::ChatMessage => "ChatMessage",
+            Self::ChatContentBlock => "ChatContentBlock",
+            Self::ChatCitation => "ChatCitation",
+            Self::ChatDecision => "ChatDecision",
+            Self::HarnessSession => "HarnessSession",
         }
     }
     fn kind(self) -> &'static str {
@@ -49,6 +60,11 @@ impl Model {
             Self::ChatGoal => "chat_goals",
             Self::ChatTokenUsage => "chat_token_usage",
             Self::ChatSession => "chat_sessions",
+            Self::ChatMessage => "chat_messages",
+            Self::ChatContentBlock => "chat_content_blocks",
+            Self::ChatCitation => "chat_citations",
+            Self::ChatDecision => "chat_decisions",
+            Self::HarnessSession => "harness_sessions",
         }
     }
     fn fields(self) -> &'static [Field] {
@@ -58,8 +74,37 @@ impl Model {
             Self::ChatGoal => &goal::FIELDS,
             Self::ChatTokenUsage => &goal::USAGE_FIELDS,
             Self::ChatSession => &session::FIELDS,
+            Self::ChatMessage => &fork::MESSAGE_FIELDS,
+            Self::ChatContentBlock => &fork::BLOCK_FIELDS,
+            Self::ChatCitation => &fork::CITATION_FIELDS,
+            Self::ChatDecision => &fork::DECISION_FIELDS,
+            Self::HarnessSession => &fork::HARNESS_FIELDS,
         }
     }
+    fn is_entity(self) -> bool {
+        !matches!(
+            self,
+            Self::ChatTokenUsage | Self::ChatContentBlock | Self::ChatCitation
+        )
+    }
+}
+
+/// Trusted constructor factory outputs, separate from original keyword inputs.
+/// `id` is supplied only for a source constructor that omitted its UUID field.
+#[derive(Clone)]
+pub struct CreatedEntityDefaults {
+    pub id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub last_activity_at: Option<DateTime<Utc>>,
+}
+
+/// Existing nested Python model instances supplied by a trusted clone caller.
+/// Their field values have already been validated; only model-after hooks rerun.
+#[derive(Clone, PartialEq, Serialize)]
+pub struct TypedModelPath {
+    pub path: Vec<Location>,
+    pub model: Model,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -103,13 +148,19 @@ pub struct ValidationIssueRef<'a> {
 }
 
 #[derive(Clone, PartialEq)]
+struct InputProvenance {
+    datetime_fields: Vec<&'static str>,
+    typed_models: Vec<TypedModelPath>,
+}
+
+#[derive(Clone, PartialEq)]
 pub struct ValidationReport {
     model: Model,
     origin: InputOrigin,
     input: Arc<Value>,
     input_order: Arc<[String]>,
     nested_order: Arc<Vec<(Vec<Location>, Vec<String>)>>,
-    datetime_fields: Vec<&'static str>,
+    provenance: Arc<InputProvenance>,
     issues: Vec<Issue>,
     retained_bytes: usize,
 }
@@ -159,10 +210,17 @@ impl ValidationReport {
             .ok()
             .map(|index| self.nested_order[index].1.as_slice())
     }
+    pub fn model_input_at(&self, path: &[Location]) -> Option<Model> {
+        self.provenance
+            .typed_models
+            .binary_search_by(|entry| entry.path.as_slice().cmp(path))
+            .ok()
+            .map(|index| self.provenance.typed_models[index].model)
+    }
     /// Only the trusted writer entry point supplies typed datetime values.
     /// Ordinary ISO-looking strings in retained JSON or metadata are not typed.
     pub fn is_datetime_input(&self, field: &str) -> bool {
-        self.datetime_fields.contains(&field)
+        self.provenance.datetime_fields.contains(&field)
     }
     pub fn len(&self) -> usize {
         self.issues.len()
@@ -313,19 +371,43 @@ impl<'de> Deserialize<'de> for Keys {
 
 #[derive(Clone, Copy)]
 enum FieldType {
-    String { min: usize, max: Option<usize> },
-    Integer { min: i64, max: Option<i64> },
-    Timestamp { schedule: bool },
+    String {
+        min: usize,
+        max: Option<usize>,
+    },
+    Integer {
+        min: i64,
+        max: Option<i64>,
+    },
+    AnyInteger,
+    Timestamp {
+        schedule: bool,
+    },
     Boolean,
     Archive,
     OptionalTime,
     Float,
     GoalStatus,
     ChatBackend,
-    Strings { min: usize, max: usize },
-    Dictionaries { max: usize },
+    Strings {
+        min: usize,
+        max: usize,
+    },
+    Dictionaries {
+        max: usize,
+    },
     Dictionary,
     Usage,
+    Models {
+        model: Model,
+        max: Option<usize>,
+    },
+    Enum(&'static [&'static str]),
+    Literal(&'static [&'static str]),
+    Pattern {
+        values: &'static [&'static str],
+        pattern: &'static str,
+    },
 }
 #[derive(Clone, Copy)]
 struct Field {
@@ -457,11 +539,77 @@ fn hydrate_inner(
     bytes: &[u8],
     factory_defaults: Option<&Value>,
 ) -> Result<Value> {
+    hydrate_context(model, origin, bytes, factory_defaults, &[], None)
+}
+
+/// Fork constructors supply every trusted factory result outside their original
+/// kwargs. Nested model provenance is restricted to the three clone input types.
+pub fn hydrate_fork_created(
+    model: Model,
+    bytes: &[u8],
+    defaults: &CreatedEntityDefaults,
+    typed_paths: &[TypedModelPath],
+) -> Result<Value> {
+    if !matches!(
+        model,
+        Model::ChatSession
+            | Model::ChatMessage
+            | Model::ChatDecision
+            | Model::ChatGoal
+            | Model::HarnessSession
+    ) {
+        return Err(RecordError::UnknownKind);
+    }
+    let mut factories = json!({"created_at":defaults.created_at.to_rfc3339_opts(SecondsFormat::Micros,true),"updated_at":defaults.updated_at.to_rfc3339_opts(SecondsFormat::Micros,true),"revision":1});
+    if let Some(id) = &defaults.id {
+        if id.len() > MAX_RECORD_BYTES {
+            return Err(RecordError::TooLarge);
+        }
+        factories["id"] = id.clone().into();
+    }
+    if let Some(time) = defaults.last_activity_at {
+        factories["last_activity_at"] = time.to_rfc3339_opts(SecondsFormat::Micros, true).into();
+    }
+    hydrate_context(
+        model,
+        InputOrigin::RetainedJson,
+        bytes,
+        Some(&factories),
+        typed_paths,
+        None,
+    )
+}
+
+/// Direct retained HarnessSession hydration with an explicitly supplied clock.
+/// Missing last_activity_at is sampled at its declared field, including when
+/// preceding independent fields already produced diagnostics.
+pub fn hydrate_harness_session(
+    bytes: &[u8],
+    environment: &mut dyn crate::dependencies::DependencyEnvironment,
+) -> Result<Value> {
+    hydrate_context(
+        Model::HarnessSession,
+        InputOrigin::RetainedJson,
+        bytes,
+        None,
+        &[],
+        Some(environment),
+    )
+}
+
+fn hydrate_context(
+    model: Model,
+    origin: InputOrigin,
+    bytes: &[u8],
+    factory_defaults: Option<&Value>,
+    typed_paths: &[TypedModelPath],
+    mut environment: Option<&mut dyn crate::dependencies::DependencyEnvironment>,
+) -> Result<Value> {
     if bytes.len() > MAX_RECORD_BYTES {
         return Err(RecordError::TooLarge);
     }
     let mut input: Value = serde_json::from_slice(bytes).map_err(|_| RecordError::Json)?;
-    if input.is_object() && model != Model::ChatTokenUsage {
+    if input.is_object() && model.is_entity() {
         for field in ["id", "revision", "created_at", "updated_at"] {
             if input.get(field).is_none() && factory_defaults.and_then(|v| v.get(field)).is_none() {
                 return Err(RecordError::Shape(model.kind()));
@@ -496,15 +644,72 @@ fn hydrate_inner(
     let base_bytes = input_bytes
         .saturating_add(encoded_len(&keys, MAX_RECORD_BYTES)?)
         .saturating_add(encoded_len(&datetime_fields, MAX_RECORD_BYTES)?);
-    let nested_order = if matches!(
-        model,
-        Model::ChatGoal | Model::ChatTokenUsage | Model::ChatSession
-    ) {
+    let mut nested_order = if !matches!(model, Model::Entity | Model::ChatSchedule) {
         goal::nested_orders(bytes, &input, MAX_RECORD_BYTES.saturating_sub(base_bytes))?
     } else {
         Vec::new()
     };
-    let retained_bytes = base_bytes.saturating_add(encoded_len(&nested_order, MAX_RECORD_BYTES)?);
+    if typed_paths.len() > MAX_ISSUES {
+        return Err(RecordError::TooLarge);
+    }
+    let typed_bytes = encoded_len(&typed_paths, MAX_RECORD_BYTES)?;
+    let mut typed_models = typed_paths.to_vec();
+    typed_models.sort_unstable_by(|left, right| left.path.cmp(&right.path));
+    for (index, entry) in typed_models.iter().enumerate() {
+        let clone_field = model == Model::ChatMessage
+            && match (entry.model, entry.path.as_slice()) {
+                (Model::ChatTokenUsage, [Location::Field(field)]) => field == "usage",
+                (Model::ChatContentBlock, [Location::Field(field), Location::Index(_)]) => {
+                    field == "content_blocks"
+                }
+                (Model::ChatCitation, [Location::Field(field), Location::Index(_)]) => {
+                    field == "citations"
+                }
+                _ => false,
+            };
+        if !matches!(
+            entry.model,
+            Model::ChatTokenUsage | Model::ChatContentBlock | Model::ChatCitation
+        ) || entry.path.is_empty()
+            || !clone_field
+            || index > 0 && typed_models[index - 1].path == entry.path
+        {
+            return Err(RecordError::Invariant("invalid clone model provenance"));
+        }
+        let Some(object) = input_at(&input, &entry.path).as_object() else {
+            return Err(RecordError::Invariant(
+                "clone model input must be a validated object",
+            ));
+        };
+        if object.len() != entry.model.fields().len()
+            || entry
+                .model
+                .fields()
+                .iter()
+                .any(|field| !object.contains_key(field.name))
+        {
+            return Err(RecordError::Invariant(
+                "clone model input must contain canonical fields",
+            ));
+        }
+        let order = entry
+            .model
+            .fields()
+            .iter()
+            .map(|field| field.name.to_owned())
+            .collect();
+        match nested_order.binary_search_by(|(path, _)| path.cmp(&entry.path)) {
+            Ok(index) => nested_order[index].1 = order,
+            Err(_) => {
+                return Err(RecordError::Invariant(
+                    "clone model order metadata is missing",
+                ));
+            }
+        }
+    }
+    let retained_bytes = base_bytes
+        .saturating_add(encoded_len(&nested_order, MAX_RECORD_BYTES)?)
+        .saturating_add(typed_bytes);
     if retained_bytes > MAX_RECORD_BYTES {
         return Err(RecordError::TooLarge);
     }
@@ -516,7 +721,10 @@ fn hydrate_inner(
         input: input.clone(),
         input_order: keys.clone(),
         nested_order: Arc::new(nested_order),
-        datetime_fields,
+        provenance: Arc::new(InputProvenance {
+            datetime_fields,
+            typed_models,
+        }),
         issues: Vec::new(),
         retained_bytes,
     };
@@ -539,8 +747,26 @@ fn hydrate_inner(
             .get(field.name)
             .or_else(|| factory_defaults.and_then(|v| v.get(field.name)))
         else {
-            if let Some(value) =
-                session::default(model, *field).or_else(|| goal::default(model, *field))
+            if model == Model::HarnessSession && field.name == "last_activity_at" {
+                let Some(environment) = environment.as_deref_mut() else {
+                    return Err(RecordError::Shape(model.kind()));
+                };
+                let time = environment.now();
+                output.insert(
+                    field.name.into(),
+                    time.to_rfc3339_opts(
+                        if time.timestamp_subsec_micros() == 0 {
+                            SecondsFormat::Secs
+                        } else {
+                            SecondsFormat::Micros
+                        },
+                        true,
+                    )
+                    .into(),
+                );
+            } else if let Some(value) = session::default(model, *field)
+                .or_else(|| goal::default(model, *field))
+                .or_else(|| fork::default(model, *field))
             {
                 output.insert(field.name.into(), value);
             } else if field.name == "enabled" {
@@ -581,7 +807,7 @@ fn hydrate_inner(
     if !report.is_empty() {
         return report.error();
     }
-    if model != Model::ChatTokenUsage {
+    if model.is_entity() {
         let created =
             DateTime::parse_from_rfc3339(output["created_at"].as_str().ok_or(RecordError::Schema)?)
                 .map_err(|_| RecordError::Schema)?;
@@ -604,6 +830,11 @@ fn hydrate_inner(
     if model == Model::ChatSession
         && let Some(message) = session::coherence(&output)
     {
+        let error = Failure::value(message);
+        report.add(error.kind, None, false, error.msg, error.ctx)?;
+        return report.error();
+    }
+    if let Some(message) = fork::coherence(model, &output) {
         let error = Failure::value(message);
         report.add(error.kind, None, false, error.msg, error.ctx)?;
         return report.error();
@@ -758,10 +989,17 @@ fn validate_field(field: Field, value: &Value) -> FieldResult {
             goal::scalar(field.kind, value)
         }
         FieldType::ChatBackend => session::backend(value),
+        FieldType::AnyInteger
+        | FieldType::Enum(_)
+        | FieldType::Literal(_)
+        | FieldType::Pattern { .. } => fork::scalar(field.kind, value),
         FieldType::Strings { .. }
         | FieldType::Dictionaries { .. }
         | FieldType::Dictionary
-        | FieldType::Usage => unreachable!("compound field validated through goal::validate"),
+        | FieldType::Usage
+        | FieldType::Models { .. } => {
+            unreachable!("compound field validated through goal::validate")
+        }
     }
 }
 

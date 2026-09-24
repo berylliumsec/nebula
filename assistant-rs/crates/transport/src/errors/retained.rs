@@ -142,6 +142,8 @@ fn render(report: &ValidationReport, output: &mut Prefix) -> fmt::Result {
             ", input_type={}]\n    For further information visit {}{}",
             if datetime {
                 "datetime"
+            } else if let Some(model) = report.model_input_at(issue.input_path) {
+                model.name()
             } else {
                 input_type(issue.input)
             },
@@ -183,6 +185,29 @@ fn repr(
 ) -> fmt::Result {
     if datetime {
         return datetime_repr(value.as_str().ok_or(fmt::Error)?, output);
+    }
+    if let Some(model) = report.model_input_at(path) {
+        let fields = value.as_object().ok_or(fmt::Error)?;
+        let order = report.input_order_at(path).ok_or(fmt::Error)?;
+        output.write_str(model.name())?;
+        output.write_char('(')?;
+        for (index, key) in order.iter().enumerate() {
+            if index != 0 {
+                output.write_str(", ")?;
+            }
+            output.write_str(key)?;
+            output.write_char('=')?;
+            path.push(Location::Field(key.clone()));
+            repr(
+                fields.get(key).ok_or(fmt::Error)?,
+                output,
+                report,
+                path,
+                false,
+            )?;
+            path.pop();
+        }
+        return output.write_char(')');
     }
     match value {
         Value::Null => output.write_str("None"),

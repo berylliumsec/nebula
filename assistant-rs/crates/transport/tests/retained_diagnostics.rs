@@ -151,3 +151,141 @@ fn goal_exception_previews_preserve_nested_input_locations_and_order() {
     }
     assert!(matched > 50, "complete rejected Goal/usage corpus required");
 }
+
+#[test]
+fn fork_exception_previews_preserve_direct_and_typed_constructor_inputs() {
+    use chrono::{DateTime, Utc};
+    use nebula_assistant_domain::{
+        dependencies::DependencyEnvironment,
+        model_validation::{
+            CreatedEntityDefaults, Location, TypedModelPath, hydrate_fork_created,
+            hydrate_harness_session,
+        },
+    };
+    use std::collections::VecDeque;
+
+    fn model(name: &str) -> Model {
+        match name {
+            "HarnessSession" => Model::HarnessSession,
+            "ChatSession" => Model::ChatSession,
+            "ChatMessage" => Model::ChatMessage,
+            "ChatContentBlock" => Model::ChatContentBlock,
+            "ChatCitation" => Model::ChatCitation,
+            "ChatDecision" => Model::ChatDecision,
+            "ChatGoal" => Model::ChatGoal,
+            "ChatTokenUsage" => Model::ChatTokenUsage,
+            other => panic!("unreviewed model {other}"),
+        }
+    }
+    fn time(value: &Value) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value.as_str().unwrap())
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+    struct Clock(VecDeque<DateTime<Utc>>);
+    impl DependencyEnvironment for Clock {
+        fn now(&mut self) -> DateTime<Utc> {
+            self.0.pop_front().expect("uncaptured factory")
+        }
+        fn expand_user(&mut self, _: &str) -> Result<String, RecordError> {
+            panic!("fork diagnostic hydration cannot resolve host accounts")
+        }
+    }
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../../compatibility/python-forks.json")).unwrap();
+    let fallback = time(&fixture["clock"]);
+    let mut previews = 0;
+    let mut typed_previews = 0;
+    for case in fixture["model_vectors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(fixture["constructor_vectors"].as_array().unwrap())
+    {
+        let model = model(case["model"].as_str().unwrap());
+        let raw = case["raw_input"].as_str().unwrap().as_bytes();
+        let mut clock = Clock(
+            case["expected_factory_trace"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|event| event["kind"] == "model")
+                .map(|event| time(&event["value"]))
+                .collect(),
+        );
+        let result = if case["input_origin"] == "constructor" {
+            let input = &case["input"];
+            let defaults = CreatedEntityDefaults {
+                id: input
+                    .get("id")
+                    .is_none()
+                    .then(|| case["generated_ids"][0].as_str().unwrap().to_owned()),
+                created_at: if input.get("created_at").is_none() {
+                    clock.now()
+                } else {
+                    fallback
+                },
+                updated_at: if input.get("updated_at").is_none() {
+                    clock.now()
+                } else {
+                    fallback
+                },
+                last_activity_at: (model == Model::HarnessSession
+                    && input.get("last_activity_at").is_none())
+                .then(|| clock.now()),
+            };
+            let typed: Vec<_> = case["typed_paths"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|entry| TypedModelPath {
+                    model: match entry["model"].as_str().unwrap() {
+                        "ChatContentBlock" => Model::ChatContentBlock,
+                        "ChatCitation" => Model::ChatCitation,
+                        "ChatTokenUsage" => Model::ChatTokenUsage,
+                        other => panic!("unreviewed typed model {other}"),
+                    },
+                    path: entry["path"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|part| match part {
+                            Value::String(value) => Location::Field(value.clone()),
+                            Value::Number(value) => {
+                                Location::Index(value.as_u64().unwrap().try_into().unwrap())
+                            }
+                            _ => panic!("invalid typed path"),
+                        })
+                        .collect(),
+                })
+                .collect();
+            hydrate_fork_created(model, raw, &defaults, &typed)
+        } else if model == Model::HarnessSession {
+            hydrate_harness_session(raw, &mut clock)
+        } else {
+            hydrate(model, InputOrigin::RetainedJson, raw)
+        };
+        assert!(clock.0.is_empty(), "missed factory: {}", case["name"]);
+        if case["expected"]["accepted"] == true {
+            assert!(result.is_ok(), "{}: {result:?}", case["name"]);
+            continue;
+        }
+        let Err(RecordError::ModelValidation(report)) = result else {
+            panic!("expected detailed error: {}: {result:?}", case["name"]);
+        };
+        let preview = retained::exception_prefix(&report);
+        assert!(preview.chars().count() <= 300);
+        assert_eq!(
+            preview, case["expected"]["exception_preview"],
+            "{}",
+            case["name"]
+        );
+        previews += 1;
+        if case.get("typed_paths").is_some() {
+            typed_previews += 1;
+            assert!(preview.contains("total_tokens=3)"));
+        }
+    }
+    assert!(previews >= 40);
+    assert!(typed_previews >= 1);
+}

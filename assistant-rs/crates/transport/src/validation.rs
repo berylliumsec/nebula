@@ -2,6 +2,7 @@
 //! Unknown fields retain the existing BaseModel behavior: they are ignored.
 use crate::ApiError;
 use nebula_assistant_services::context::{CursorWrite, DecisionWrite};
+use nebula_assistant_services::fork::ForkRequest;
 use nebula_assistant_services::generated::GeneratedListRequest;
 use nebula_assistant_services::goal_conversations::GoalConversationCreate;
 use nebula_assistant_services::goal_drafts::{GoalDraft, GoalDraftUpdate};
@@ -12,6 +13,7 @@ use serde_json::{Map, Value, json};
 use speedate::{Date, DateTime, DateTimeConfig, MicrosecondsPrecisionOverflowBehavior, TimeConfig};
 use strum::EnumMessage;
 
+mod fork;
 mod goals;
 mod settings;
 pub(crate) use settings::key_order;
@@ -30,6 +32,7 @@ pub(crate) enum BodyModel {
     GoalCreate,
     GoalUpdate,
     GoalConversationCreate,
+    Fork,
 }
 impl RequestModel for CursorWrite {
     const MODEL: BodyModel = BodyModel::Cursor;
@@ -57,6 +60,9 @@ impl RequestModel for GoalDraftUpdate {
 }
 impl RequestModel for GoalConversationCreate {
     const MODEL: BodyModel = BodyModel::GoalConversationCreate;
+}
+impl RequestModel for ForkRequest {
+    const MODEL: BodyModel = BodyModel::Fork;
 }
 
 fn error(
@@ -99,6 +105,14 @@ pub(crate) fn validate<T: RequestModel>(input: Value, key_order: &[String]) -> R
             None,
         )]));
     };
+    if T::MODEL == BodyModel::Fork {
+        return serde_json::from_value(fork::validate(fields, key_order)?).map_err(|_| {
+            ApiError::http(
+                422,
+                "Assistant request cannot be represented by its validated contract",
+            )
+        });
+    }
     if matches!(
         T::MODEL,
         BodyModel::Settings | BodyModel::ScheduleCreate | BodyModel::ScheduleWrite

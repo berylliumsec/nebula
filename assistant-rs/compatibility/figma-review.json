@@ -1136,5 +1136,19 @@
     ],
     "current_authority": "ProviderGoalPanel Save draft and ChatGoalService.create_conversation persist configuration without execution; execution/recovery remain separate services.",
     "scope": "Fresh live screenshot visually inspected; no interactive prototype or production Rust UI/browser/device/LAN evidence."
+  },
+  "conversation_fork_followup": {
+    "reviewed_date": "2026-09-24",
+    "file_key": "tVEa0PXZaa7H4ZLflwgcb7",
+    "node_id": "4:77",
+    "width": 1440,
+    "height": 1180,
+    "sha256": "9eb47c6396ef1fb02c2182857e42eb341344e466496f98f698031c22f3bc09d2",
+    "observations": [
+      "Preview restore and Fork conversation are distinct controls in the checkpoint card.",
+      "Forks share the workspace; isolation copy does not establish an implemented selector in the current message-fork API."
+    ],
+    "current_authority": "SessionsPage Fork conversation here and Python session-fork route; preserve shared files and separate record commits.",
+    "scope": "Fresh live screenshot visually inspected; no interactive prototype or production Rust-backed browser/mobile/LAN/device evidence."
   }
 }

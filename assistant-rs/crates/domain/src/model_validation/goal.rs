@@ -420,6 +420,9 @@ pub(super) fn validate(
     }
     match field.kind {
         FieldType::Usage => {
+            if report.model_input_at(&path) == Some(Model::ChatTokenUsage) {
+                return fork::nested(Model::ChatTokenUsage, value, path, report);
+            }
             let Some(object) = value.as_object() else {
                 return fail(
                     report,
@@ -502,6 +505,9 @@ pub(super) fn validate(
                     ),
                 );
             }
+            if items.len() > MAX_ISSUES {
+                return Err(RecordError::TooLarge);
+            }
             let before = report.len();
             let mut output = Vec::with_capacity(items.len());
             for (index, item) in items.iter().enumerate() {
@@ -525,6 +531,7 @@ pub(super) fn validate(
             Ok(value) => Ok(Some(value)),
             Err(error) => fail(report, path, error),
         },
+        FieldType::Models { model, max } => fork::models(model, max, value, path, report),
         FieldType::Float => {
             if float_number(value).is_ok_and(|n| n == f64::INFINITY) {
                 // Pydantic admits +infinity. Keep a private sentinel until all

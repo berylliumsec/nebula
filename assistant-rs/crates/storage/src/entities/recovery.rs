@@ -94,15 +94,24 @@ impl SqliteAssistantStore {
         &self,
         session_id: &str,
     ) -> Result<RecoveryTurnsSnapshot> {
-        self.recovery_turns(session_id, true).await
+        self.recovery_turns(session_id, true, false).await
     }
     pub async fn session_turns_snapshot(&self, session_id: &str) -> Result<RecoveryTurnsSnapshot> {
-        self.recovery_turns(session_id, false).await
+        self.recovery_turns(session_id, false, false).await
+    }
+    /// Fork uses complete wrapped Session hydration without broadening other
+    /// retained readers. Turn selection and effect reconciliation stay shared.
+    pub async fn fork_unfinished_turns_snapshot(
+        &self,
+        session_id: &str,
+    ) -> Result<RecoveryTurnsSnapshot> {
+        self.recovery_turns(session_id, true, true).await
     }
     async fn recovery_turns(
         &self,
         session_id: &str,
         unfinished: bool,
+        fork_session: bool,
     ) -> Result<RecoveryTurnsSnapshot> {
         validate_id(session_id)?;
         let _permit = self.read_permit()?;
@@ -116,7 +125,23 @@ impl SqliteAssistantStore {
         .await?
         .ok_or(Error::NotFound)?;
         budget.charge(&row, false)?;
-        let session = decode_row(row)?;
+        let session = if fork_session {
+            let result = fork::recovery_session(&row);
+            let additional = match &result {
+                Ok(record) => fork::size(record.payload())?,
+                Err(Error::WrappedRecord(RecordError::ModelValidation(report))) => {
+                    report.retained_bytes()
+                }
+                _ => 0,
+            };
+            budget.bytes = budget.bytes.saturating_add(additional);
+            if budget.bytes > MAX_TRANSACTION_BYTES {
+                return Err(Error::ReadLimit);
+            }
+            result?
+        } else {
+            decode_row(row)?
+        };
         let mut q = QueryBuilder::new(SELECT_RECORD);
         q.push(" WHERE kind='chat_turns' AND chat_session_id=")
             .push_bind(session_id);

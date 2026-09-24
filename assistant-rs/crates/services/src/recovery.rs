@@ -291,11 +291,15 @@ impl AssistantRecords {
             .unfinished_turns_snapshot(session_id)
             .await
             .map_err(|e| lookup_error(e, AssistantKind::Session, session_id))?;
+        self.pending_from_turns(snapshot.turns).await
+    }
+
+    async fn pending_from_turns(&self, turns: Vec<RecoveryTurn>) -> Result<Option<RecoveryTurn>> {
         let mut selected = None;
         // Python constructs the entire filtered list before checking conflicts.
         // A malformed later recovery object must still surface first.
         let mut count = 0;
-        for turn in snapshot.turns {
+        for turn in turns {
             if is_pending(&turn)? {
                 count += 1;
                 selected = Some(turn);
@@ -341,6 +345,21 @@ impl AssistantRecords {
     /// effects before the caller decides whether its own write is permitted.
     pub(crate) async fn has_pending_turn(&self, session_id: &str) -> Result<bool> {
         self.pending_record(session_id)
+            .await
+            .map(|turn| turn.is_some())
+    }
+
+    pub(crate) async fn has_pending_fork(&self, session_id: &str) -> Result<bool> {
+        identity(session_id)?;
+        let snapshot = self
+            .store
+            .fork_unfinished_turns_snapshot(session_id)
+            .await
+            .map_err(|error| match error {
+                StorageError::WrappedRecord(_) => Error::LegacyStorageUnhandled,
+                error => lookup_error(error, AssistantKind::Session, session_id),
+            })?;
+        self.pending_from_turns(snapshot.turns)
             .await
             .map(|turn| turn.is_some())
     }

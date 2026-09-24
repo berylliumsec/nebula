@@ -1,14 +1,14 @@
 {
-  "change_digest": "8fd5f83aa256a75241e9c7448b86d8005cb36f7fcc32720f933726bcf3e34d90",
+  "change_digest": "ee58bcffd11e5c6ecb6b0735c2b764057bb1a8e9b69084b879b857dd5de62937",
   "reviewed_by": "Codex with domain, storage and oracle sub-agent review",
-  "reason": "Assistant-only Rust compatibility port. Exact cumulative selections cover implemented records, bounded SQLite persistence, auth/read/recovery/settings routes, Entity/Schedule/Goal/usage diagnostics, Goal configuration and atomic goal-conversation creation. Source captures bind contextual project/provider hydration, lazy clocks/identities, exact numeric validation, raw changes, search and protected ledgers. Exact library-test support preserves the focused CI boundary. No execution or whole-product completion claimed.",
-  "exclusions": "39 experimental Assistant route handlers; no shipped Rust entrypoint or production UI. Other areas and desktop-native stay untouched. No real provider/harness/tool/hook execution, dispatch, streaming or live data. Historical nonfinite Goal values and strict retained-base/envelope boundaries remain explicit source-observed parity gaps. Lifecycle actions, complete route/dependency/validation coverage, migrations/PostgreSQL, production browser/mobile/WebKit/LAN/device journeys and full performance acceptance remain open. No full suites. Rust compile/list 600 seconds per exact selector, execution 120 seconds per test, CI Rust job 20 minutes. Python local focused run has a 300-second total limit; CI Python uses its existing workflow boundary.",
+  "reason": "Cumulative Assistant-only Rust replacement: exact tests cover introduced domain, persistence, fair queue/journal policy, saved context/navigation/catalogs/catch-up/results/status/plans/subagents/state/recovery/settings/goal services and authenticated transport. Adds12 focused fork checks for both backends, complete bounded reads, typed constructor diagnostics, raw/narrow writes, sequential commits/cleanup, legacy hydration, and detached cancellation. Python captures verify source contracts and selection guards; local fork work ran46 exact Rust checks and5 source oracles with corrected paired-device coverage.",
+  "exclusions": "No full suites or unrelated product areas. Desktop-native/frontend/Playwright are unselected because this PR adds no shipped Rust-backed UI; production mobile/WebKit/LAN/device and whole-Assistant performance gates remain open. No live state, providers, tools, helper processes or workspace mutation. Rust collection/compile600s per exact selector, execution120s each; CI Rust job20min. PythonCI uses existingworkflow boundaries; local focusedforkrecaptures were bounded300s total.",
   "expected_tests": {
-    "python": 61,
+    "python": 62,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 176
+    "assistant_rust": 188
   },
   "python_versions": [
     "3.12"
@@ -31,7 +31,8 @@
     "tests/test_assistant_settings_contract.py",
     "tests/test_assistant_model_validation_contract.py::test_model_validation_oracle_matches_current_python_boundary",
     "tests/test_assistant_goal_drafts_contract.py::test_goal_drafts_oracle_matches_current_python_assistant_boundary",
-    "tests/test_assistant_goal_conversations_contract.py::test_goal_conversations_oracle_matches_current_python_assistant_boundary"
+    "tests/test_assistant_goal_conversations_contract.py::test_goal_conversations_oracle_matches_current_python_assistant_boundary",
+    "tests/test_assistant_forks_contract.py::test_forks_oracle_matches_current_python_assistant_boundary"
   ],
   "frontend": [],
   "native": [],
@@ -212,6 +213,18 @@
     "nebula-assistant-services/goal_conversations::goal_conversation_collisions_rollback_search_and_consume_factories_in_source_order",
     "nebula-assistant-services/goal_conversations::goal_conversation_titles_and_budget_numbers_preserve_python_boundaries",
     "nebula-assistant-transport/goal_conversations::python_goal_conversation_http_preserves_atomic_state_and_factory_order",
-    "nebula-assistant-storage/lib::entities::conversations::tests::default_home_expansion_preserves_python_workspace_root_boundary"
+    "nebula-assistant-storage/lib::entities::conversations::tests::default_home_expansion_preserves_python_workspace_root_boundary",
+    "nebula-assistant-domain/forks::fork_models_match_python_hydration_and_validation_vectors",
+    "nebula-assistant-domain/forks::fork_constructors_preserve_factory_inputs_and_nested_model_provenance",
+    "nebula-assistant-domain/forks::fork_harness_reads_are_contextual_lazy_and_wrap_model_errors",
+    "nebula-assistant-domain/forks::fork_model_bounds_and_direct_read_extensions_are_explicit",
+    "nebula-assistant-storage/fork::fork_reads_validate_complete_scoped_history_and_shared_limits",
+    "nebula-assistant-storage/fork::fork_commits_preserve_order_reject_raw_bypasses_and_cleanup_only_vendor",
+    "nebula-assistant-storage/fork::fork_harness_cancelled_hydration_keeps_admission_without_reader_leases",
+    "nebula-assistant-services/fork::python_forks_preserve_both_backends_factory_order_and_durable_prefixes",
+    "nebula-assistant-services/fork::forks_copy_complete_history_with_exact_ties_and_shared_opaque_provenance",
+    "nebula-assistant-services/fork::cancelled_fork_callers_keep_bounded_workflows_until_commits_and_cleanup_finish",
+    "nebula-assistant-transport/fork::python_fork_http_preserves_both_backends_committed_prefixes_and_factory_order",
+    "nebula-assistant-transport/retained_diagnostics::fork_exception_previews_preserve_direct_and_typed_constructor_inputs"
   ]
 }

@@ -391,3 +391,32 @@ observations document strict retained-base and envelope boundaries. Canonical
 dependency rows are temporarily used during inert app construction, then original
 raw rows are restored before each request and snapshot. This isolates request
 compatibility; it does not establish malformed-history startup parity.
+
+Conversation fork POST copies a retained provider or harness conversation at a
+message boundary. It preserves exact sequence ties, parent and source-message
+lineage, shared workspace references, private-metadata removal, active conversation
+decisions and draft goal configuration. Harness branches create a fresh vendor
+record without launching a process. Pending receipt repair runs before the fork
+guard; acknowledged repairs remain durable when an active turn prevents branching.
+
+Each source stage commits separately. A later collision or invalid goal can leave
+a partial conversation. Harness cleanup deletes only its new vendor record;
+cleanup failure replaces the original error and can leave that vendor record too.
+The fork has no idempotency guarantee. Complete collection reads fail above
+10,000 records or the aggregate 16 MiB bound instead of truncating the branch.
+Four shared workflow slots bound fork operations. Accepted operations retain their
+slot and finish copying or cleanup after a caller disconnects or times out. This
+lane is separate from the four blocking hydration slots. Whole-application shutdown
+must drain workflows before closing the writer; that lifecycle is not wired yet.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_forks --output assistant-rs/compatibility/python-forks.json
+```
+
+This fixture captures 89 HTTP cases, 69 service cases, 78 direct model vectors,
+12 constructor vectors and 27 request vectors. Twelve separate observations
+document strict retained-base boundaries. It includes raw request ordering,
+nested model-instance diagnostics, UUID/clock order, committed prefixes, failed
+harness cleanup and reopened state. Figma's conversation fork action has been
+reviewed; checkpoint restoration, workspace isolation, actual execution and the
+production browser journey remain separate integration gates.

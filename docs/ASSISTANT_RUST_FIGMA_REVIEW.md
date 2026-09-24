@@ -169,3 +169,13 @@ This visit informs the draft-to-execution boundary. It does not prove that the
 dialog, persistence, selection, execution or restart journeys run against Rust.
 Interactive prototype, production desktop/mobile/LAN and physical-device gates
 remain open. Export identity, dimensions and hash are in `figma-review.json`.
+
+## Conversation fork follow-up, September 24
+
+Freshly inspected [Session details 4:77](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-77)
+at 1440×1180. The checkpoint card separates Preview restore and Fork conversation;
+its footer says forks share the workspace unless isolation is selected. Current
+message-level Fork conversation here likewise retains shared files. Checkpoint
+restore and an isolation selector are separate capabilities; this API increment
+must not imply that it implements either. The screenshot hash is unchanged from
+the prior live export. This is design inspection, not a production workflow test.

@@ -54,6 +54,8 @@ pub use conversations::{
 };
 mod settings;
 pub use settings::{McpProfileRow, RawSession};
+mod fork;
+pub use fork::{ForkHarness, ForkRecord};
 
 const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MUTATIONS: usize = 64;
@@ -273,6 +275,7 @@ enum Command {
     SessionState(session_state::StateRequest),
     Recover(recovery::RepairRequest),
     Settings(settings::SettingsRequest),
+    Fork(fork::ForkRequest),
     TouchDevice {
         id: String,
         revision: i64,
@@ -289,6 +292,8 @@ pub struct SqliteAssistantStore {
     readers: SqlitePool,
     bytes: Arc<Semaphore>,
     read_slots: Arc<Semaphore>,
+    fork_slots: Arc<Semaphore>,
+    fork_workflows: Arc<Semaphore>,
     closing: Arc<AtomicBool>,
     page_bytes: usize,
 }
@@ -350,6 +355,8 @@ impl SqliteAssistantStore {
             readers,
             bytes: Arc::new(Semaphore::new(config.queued_bytes)),
             read_slots: Arc::new(Semaphore::new(config.read_capacity)),
+            fork_slots: Arc::new(Semaphore::new(config.readers.min(4) as usize)),
+            fork_workflows: Arc::new(Semaphore::new(4)),
             closing,
             page_bytes: config.page_bytes,
         })
@@ -998,6 +1005,10 @@ async fn writer(
             }
             Command::Settings(request) => {
                 let result = settings::write(&mut connection, &request).await;
+                let _ = request.reply.send(result);
+            }
+            Command::Fork(request) => {
+                let result = fork::write(&mut connection, &request.operation).await;
                 let _ = request.reply.send(result);
             }
             Command::TouchDevice {

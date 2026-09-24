@@ -26,9 +26,10 @@ pub enum DependencyKind {
     McpServerProfile,
     Engagement,
     ProviderProfile,
+    HarnessSession,
 }
 impl DependencyKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Approval,
         Self::HarnessInteraction,
         Self::HarnessTurn,
@@ -39,6 +40,7 @@ impl DependencyKind {
         Self::McpServerProfile,
         Self::Engagement,
         Self::ProviderProfile,
+        Self::HarnessSession,
     ];
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -52,6 +54,7 @@ impl DependencyKind {
             Self::McpServerProfile => "mcp_servers",
             Self::Engagement => "engagements",
             Self::ProviderProfile => "providers",
+            Self::HarnessSession => "harness_sessions",
         }
     }
 }
@@ -97,6 +100,11 @@ static SCHEMAS: LazyLock<Result<Value, RecordError>> = LazyLock::new(|| {
     for kind in [DependencyKind::Engagement, DependencyKind::ProviderProfile] {
         schemas[kind.as_str()] = conversations["dependency_schemas"][kind.as_str()].clone();
     }
+    let forks: Value =
+        serde_json::from_str(include_str!("../../../compatibility/python-forks.json"))
+            .map_err(|_| RecordError::Schema)?;
+    schemas[DependencyKind::HarnessSession.as_str()] =
+        forks["dependency_schemas"][DependencyKind::HarnessSession.as_str()].clone();
     Ok(schemas)
 });
 static VALIDATORS: LazyLock<Result<HashMap<DependencyKind, Validator>, RecordError>> =
@@ -143,6 +151,23 @@ impl std::fmt::Debug for StoredDependency {
     }
 }
 impl StoredDependency {
+    /// Narrow trusted constructor for a retained harness fork; no adapter or
+    /// provider capability is created by this immutable record value.
+    pub fn decode_harness_session_created(
+        bytes: &[u8],
+        defaults: &crate::model_validation::CreatedEntityDefaults,
+    ) -> Result<Self, RecordError> {
+        let payload = crate::model_validation::hydrate_fork_created(
+            crate::model_validation::Model::HarnessSession,
+            bytes,
+            defaults,
+            &[],
+        )?;
+        Self::decode(
+            DependencyKind::HarnessSession,
+            &serde_json::to_vec(&payload).map_err(|_| RecordError::Json)?,
+        )
+    }
     pub fn decode(kind: DependencyKind, bytes: &[u8]) -> Result<Self, RecordError> {
         Self::decode_context(kind, bytes, None)
     }
@@ -190,10 +215,27 @@ impl StoredDependency {
             DependencyKind::Engagement | DependencyKind::ProviderProfile
         ) {
             p = profiles::hydrate(schema, bytes, environment)?;
+        } else if kind == DependencyKind::HarnessSession {
+            let hydrated = match environment {
+                Some(environment) => {
+                    crate::model_validation::hydrate_harness_session(bytes, environment)
+                }
+                None => crate::model_validation::hydrate(
+                    crate::model_validation::Model::HarnessSession,
+                    crate::model_validation::InputOrigin::RetainedJson,
+                    bytes,
+                ),
+            };
+            p = hydrated.map_err(|error| match error {
+                RecordError::ModelValidation(_) => RecordError::Shape("harness_sessions"),
+                error => error,
+            })?;
         }
         if !matches!(
             kind,
-            DependencyKind::Engagement | DependencyKind::ProviderProfile
+            DependencyKind::Engagement
+                | DependencyKind::ProviderProfile
+                | DependencyKind::HarnessSession
         ) {
             // Contextual codecs already fill and validate every model field.
             // Re-normalizing an expanded workspace path would strip characters
@@ -203,7 +245,9 @@ impl StoredDependency {
         if !VALIDATORS.as_ref().map_err(|_| RecordError::Schema)?[&kind].is_valid(&p)
             || (!matches!(
                 kind,
-                DependencyKind::Engagement | DependencyKind::ProviderProfile
+                DependencyKind::Engagement
+                    | DependencyKind::ProviderProfile
+                    | DependencyKind::HarnessSession
             ) && p["revision"].as_i64().is_none_or(|r| r < 1))
         {
             return Err(RecordError::Shape(kind.as_str()));
@@ -298,6 +342,7 @@ impl StoredDependency {
             | DependencyKind::Artifact
             | DependencyKind::Engagement
             | DependencyKind::ProviderProfile => {}
+            DependencyKind::HarnessSession => {}
         }
         Ok(Self { kind, payload: p })
     }

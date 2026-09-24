@@ -108,6 +108,48 @@ pub struct StoredAssistantRecord {
 }
 
 impl StoredAssistantRecord {
+    /// Direct model boundary used only by transcript forks. Other retained
+    /// readers preserve their existing strict decoding and error surfaces.
+    pub fn decode_fork_persisted_direct(
+        kind: AssistantKind,
+        bytes: &[u8],
+    ) -> Result<Self, RecordError> {
+        use crate::model_validation::{InputOrigin, Model, hydrate};
+        let model = match kind {
+            AssistantKind::Session => Model::ChatSession,
+            AssistantKind::Message => Model::ChatMessage,
+            AssistantKind::Decision => Model::ChatDecision,
+            AssistantKind::Goal => Model::ChatGoal,
+            _ => return Err(RecordError::UnknownKind),
+        };
+        let payload = hydrate(model, InputOrigin::RetainedJson, bytes)?;
+        Self::decode(
+            kind,
+            &serde_json::to_vec(&payload).map_err(|_| RecordError::Json)?,
+        )
+    }
+
+    pub fn decode_fork_created(
+        kind: AssistantKind,
+        bytes: &[u8],
+        defaults: &crate::model_validation::CreatedEntityDefaults,
+        typed_paths: &[crate::model_validation::TypedModelPath],
+    ) -> Result<Self, RecordError> {
+        use crate::model_validation::{Model, hydrate_fork_created};
+        let model = match kind {
+            AssistantKind::Session => Model::ChatSession,
+            AssistantKind::Message => Model::ChatMessage,
+            AssistantKind::Decision => Model::ChatDecision,
+            AssistantKind::Goal => Model::ChatGoal,
+            _ => return Err(RecordError::UnknownKind),
+        };
+        let payload = hydrate_fork_created(model, bytes, defaults, typed_paths)?;
+        Self::decode(
+            kind,
+            &serde_json::to_vec(&payload).map_err(|_| RecordError::Json)?,
+        )
+    }
+
     /// Match a direct Python model hydration where model validation errors are
     /// observable. Wrapped storage reads must continue using decode_persisted.
     /// Complete Goal/Schedule contracts are covered here; other kinds
