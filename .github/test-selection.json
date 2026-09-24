@@ -1,21 +1,63 @@
 {
-  "change_digest": "426468632c55199f1adc5f580c35dbe17a8ab7c58c3495c68a25a770edfa8760",
-  "reviewed_by": "Codex focused review for background callback and subagent lifecycle reconciliation",
-  "reason": "The change backfills terminal callback receipts into stale durable ToolCall rows even when a competing wake already settled the owning turn. The selected file covers the callback contract, successful webhook continuation, approval-to-callback parking, terminal producer notification, durable ToolCall settlement, wake ordering, and settled-turn backfill.",
-  "exclusions": "Full suites are not approved and are excluded. Frontend rendering, Playwright selectors and layouts, native Rust/Tauri code, provider adapters, missions, hooks, terminals, and unrelated automation runtime behavior are unchanged. The deployed real-Core stale record is verified separately after merge.",
+  "change_digest": "b4ab7d90eda4b149eca000895ea4803f68cf2080b0e3530a3b9e2f86cddc33c7",
+  "reviewed_by": "Claude focused review for row-horizon",
+  "reason": "Lookups that read one oldest-first 1,000-row page of a kind and filtered it in Python now filter in SQL (find_entities, with the indexed browser automation projections and integer payload filters), and bounded views show the newest 1,000 rows in chronological order (list_latest_entities). The selection covers the store contract and the AST guard against new one-page lookups (test_row_horizon.py, test_storage.py); the chat image preview fallback and image history (test_row_horizon.py, test_history_content_fidelity.py); mission analysis attempts (test_execution_ai.py); runtime preparation and VPN profile de-duplication (test_automation_runtime.py); the scope-import list (test_scope_import.py); browser assessments, automation leases/commands/rules, companion approvals and conversation binding, research intercepts/site map/Intruder/Repeater/HAR, and browser workspace bootstrap and traffic (the five browser test files). Each regression test seeds 1,000 older rows in one bulk insert and fails on origin/main. The real-Core Playwright entry drives the production Browser workspace, assessment and research views against a Core built from this branch.",
+  "exclusions": "Full suites are not approved and are excluded. harnesses.py and missions.py are owned by claude/harness-lifecycle and claude/mission-recovery and are unchanged here; chat.py startup/recovery scans and chat_subagents.py are unchanged. Two nodes are pre-existing failures on origin/main 4facf4a and are excluded by node selection: test_browser_companion.py::test_screenshot_tool_persists_owned_image_and_replays_without_recapture (its SimpleNamespace ChatService stand-in lacks _turn_history since #559) and test_history_content_fidelity.py::test_selected_context_survives_context_length_recovery (ChatHistoryConflict: chat turn cannot start from queued, #559 admission). test_browser_companion.py::test_real_chromium_capture_retains_fields_and_rejects_changed_document is excluded because it drives browser_companion_runtime against real Chromium, which this change does not touch. No frontend or native tests: no ui/ or Rust change and response shapes are unchanged. Mocked Playwright browser entries are excluded because a mocked API cannot observe a storage query change; only the real-Core browser entry is selected. test_chat.py and test_api.py are not selected: the one chat.py change is the image-preview lookup covered above, and the api.py changes are covered by test_scope_import.py and test_automation_runtime.py.",
   "expected_tests": {
-    "python": 4,
+    "python": 167,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 2
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_process_results_webhook.py"
+    "tests/v3/test_row_horizon.py",
+    "tests/v3/test_storage.py",
+    "tests/v3/test_history_content_fidelity.py::test_text_only_switch_replaces_history_images_with_placeholders",
+    "tests/v3/test_history_content_fidelity.py::test_image_history_counts_toward_compaction",
+    "tests/v3/test_history_content_fidelity.py::test_switch_preflight_estimates_history_images_for_the_target_model",
+    "tests/v3/test_history_content_fidelity.py::test_selected_context_survives_followups",
+    "tests/v3/test_history_content_fidelity.py::test_compaction_summarises_selected_context_of_archived_messages",
+    "tests/v3/test_execution_ai.py",
+    "tests/v3/test_automation_runtime.py",
+    "tests/v3/test_scope_import.py",
+    "tests/v3/test_browser_assessments.py",
+    "tests/v3/test_browser_automation.py",
+    "tests/v3/test_browser_companion.py::test_binding_rejects_other_project_and_survives_store_reopen",
+    "tests/v3/test_browser_companion.py::test_revoked_identity_cannot_be_read_or_controlled",
+    "tests/v3/test_browser_companion.py::test_takeover_revokes_pending_actions_across_service_instances",
+    "tests/v3/test_browser_companion.py::test_expired_approval_does_not_execute",
+    "tests/v3/test_browser_companion.py::test_decided_mutation_is_never_replayed",
+    "tests/v3/test_browser_companion.py::test_companion_tool_has_no_script_or_security_testing_operations",
+    "tests/v3/test_browser_companion.py::test_real_core_requires_auth_and_reports_absent_browser_runtime",
+    "tests/v3/test_browser_companion.py::test_assistant_waits_for_inline_approval_and_receives_actual_result",
+    "tests/v3/test_browser_companion.py::test_project_never_policy_executes_scoped_companion_change_without_prompt",
+    "tests/v3/test_browser_companion.py::test_manual_action_revokes_approvals_without_clearing_control_grant",
+    "tests/v3/test_browser_companion.py::test_cancelled_turn_cannot_dispatch_an_approved_action_waiting_for_control",
+    "tests/v3/test_browser_companion.py::test_model_results_remove_url_credentials_and_tokens",
+    "tests/v3/test_browser_companion.py::test_harness_image_capability_follows_discovered_model_modalities",
+    "tests/v3/test_browser_companion.py::test_protected_reference_fills_only_after_approval_and_retains_capture",
+    "tests/v3/test_browser_companion.py::test_attached_files_are_scoped_revocable_and_integrity_checked",
+    "tests/v3/test_browser_companion.py::test_background_tab_poll_reports_lost_state_once_without_repausing_on_reconnect",
+    "tests/v3/test_browser_companion.py::test_host_failure_explains_recovery_without_replaying",
+    "tests/v3/test_browser_companion.py::test_attached_browser_has_project_graph_capabilities",
+    "tests/v3/test_browser_companion.py::test_agent_browser_result_carries_durable_model_evidence",
+    "tests/v3/test_browser_companion.py::test_automatic_browser_model_workflow_reaches_provider_and_harness",
+    "tests/v3/test_browser_companion.py::test_preflight_tab_check_failure_is_sanitized_like_the_operation",
+    "tests/v3/test_browser_companion.py::test_cancelled_decision_leaves_a_terminal_action",
+    "tests/v3/test_browser_companion.py::test_invalidating_approvals_sweeps_stale_running_actions_only",
+    "tests/v3/test_browser_companion.py::test_new_approvals_stay_visible_and_revocable_after_a_page_of_actions",
+    "tests/v3/test_browser_companion.py::test_conversation_browser_is_found_after_a_page_of_project_sessions",
+    "tests/v3/test_browser_research.py",
+    "tests/v3/test_browser_security.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:browser-complete/real-core"
+  ]
 }
