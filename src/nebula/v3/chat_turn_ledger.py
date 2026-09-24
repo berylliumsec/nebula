@@ -423,10 +423,16 @@ class ChatTurnLedger:
                     .order_by(ChatTurnStepEventRow.sequence)
                 )
             )
-        latest: dict[int, tuple[int, dict[str, Any]]] = {}
+        # A row naming its step's first row for shared replay state finds it
+        # here: that row belongs to the same step.
+        by_sequence = {row.sequence: row for row in rows}
+        latest: dict[int, ChatTurnStepEventRow] = {}
         for row in rows:
-            latest[row.step] = (row.sequence, dict(row.payload))
-        return max(steps) + 1, [payload for _, payload in sorted(latest.values())]
+            latest[row.step] = row
+        return max(steps) + 1, [
+            self._resolved(row.payload, by_sequence)
+            for row in sorted(latest.values(), key=lambda row: row.sequence)
+        ]
 
     def tool_call_ids(self, turn: ChatTurn) -> list[str]:
         ids = [
