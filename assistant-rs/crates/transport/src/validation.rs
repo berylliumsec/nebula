@@ -5,9 +5,13 @@ use nebula_assistant_services::context::{CursorWrite, DecisionWrite};
 use nebula_assistant_services::generated::GeneratedListRequest;
 use nebula_assistant_services::navigation::{BookmarkWrite, SearchRequest};
 use nebula_assistant_services::results::ResultsQuery;
+use nebula_assistant_services::settings::{ScheduleCreate, ScheduleWrite, SettingsWrite};
 use serde_json::{Map, Value, json};
 use speedate::{Date, DateTime, DateTimeConfig, MicrosecondsPrecisionOverflowBehavior, TimeConfig};
 use strum::EnumMessage;
+
+mod settings;
+pub(crate) use settings::key_order;
 
 pub(crate) trait RequestModel: serde::de::DeserializeOwned {
     const MODEL: BodyModel;
@@ -17,6 +21,9 @@ pub(crate) enum BodyModel {
     Cursor,
     Decision,
     Bookmark,
+    Settings,
+    ScheduleCreate,
+    ScheduleWrite,
 }
 impl RequestModel for CursorWrite {
     const MODEL: BodyModel = BodyModel::Cursor;
@@ -26,6 +33,15 @@ impl RequestModel for DecisionWrite {
 }
 impl RequestModel for BookmarkWrite {
     const MODEL: BodyModel = BodyModel::Bookmark;
+}
+impl RequestModel for SettingsWrite {
+    const MODEL: BodyModel = BodyModel::Settings;
+}
+impl RequestModel for ScheduleCreate {
+    const MODEL: BodyModel = BodyModel::ScheduleCreate;
+}
+impl RequestModel for ScheduleWrite {
+    const MODEL: BodyModel = BodyModel::ScheduleWrite;
 }
 
 fn error(
@@ -49,7 +65,7 @@ fn field_error(kind: &str, field: &str, message: &str, input: &Value) -> Value {
     error(kind, Some(field), message.into(), input, None)
 }
 
-pub(crate) fn validate<T: RequestModel>(input: Value) -> Result<T, ApiError> {
+pub(crate) fn validate<T: RequestModel>(input: Value, key_order: &[String]) -> Result<T, ApiError> {
     let Some(fields) = input.as_object() else {
         return Err(ApiError::validation(vec![error(
             if input.is_null() {
@@ -68,6 +84,18 @@ pub(crate) fn validate<T: RequestModel>(input: Value) -> Result<T, ApiError> {
             None,
         )]));
     };
+    if matches!(
+        T::MODEL,
+        BodyModel::Settings | BodyModel::ScheduleCreate | BodyModel::ScheduleWrite
+    ) {
+        return serde_json::from_value(settings::validate(&T::MODEL, &input, fields, key_order)?)
+            .map_err(|_| {
+                ApiError::http(
+                    422,
+                    "Assistant request cannot be represented by its validated contract",
+                )
+            });
+    }
     let mut output = Map::new();
     let mut errors = Vec::new();
     if T::MODEL == BodyModel::Bookmark {
@@ -553,7 +581,11 @@ fn integer(value: &Value) -> Result<Value, IntegerError> {
                 "Input should be a valid integer, got a number with a fractional part",
             ));
         }
-        // Python accepts integral JSON floats beyond i64 as integers as well.
+        // Pydantic accepts arbitrary-size JSON integer tokens, but its float
+        // conversion excludes both endpoints of the signed 64-bit range.
+        if number <= i64::MIN as f64 || number >= i64::MAX as f64 {
+            return Err(SIZE);
+        }
         return format!("{number:.0}")
             .parse::<serde_json::Number>()
             .map(Value::Number)

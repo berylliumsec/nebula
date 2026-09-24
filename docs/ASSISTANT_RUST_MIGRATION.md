@@ -784,3 +784,74 @@ storage-handoff checks (52.10 seconds). This additional run verifies the new sou
 baseline; the earlier 63-test recovery run still covers unchanged reducer/storage
 behavior. Cumulative CI retains 132 Rust and 55 Python selections. No broader
 suite or production workflow ran during this integration.
+
+
+## Conversation settings and schedule mutation contract
+
+Journey: rename or archive a conversation from the Assistant list, change saved
+reasoning/MCP/hook/subagent/messaging settings, refresh or reconnect and observe
+the durable choices. Unarchive restores only an archive-driven schedule pause;
+an explicit operator pause stays paused. Existing schedule API creation and
+configuration also preserve their source contract, although an Assistant schedule
+control has not been found in the current UI. Figma conversation details and
+archive frames remain the design references. No schedule execution is implied by
+configuration parity.
+
+Authorities: ChatSession metadata/title/revision, ChatSchedule records, immutable
+MCP profile configuration, and the internal pending-turn reconciliation service.
+The browser owns only unsaved choices. PATCH reads the session before reconciling
+pending effects, applies source restrictions to the original session, and uses its
+requested or observed revision. Saved reasoning/subagent choices may change during
+a turn; title/archive/MCP/hook changes are refused while pending. Omitted and null
+fields differ, and provider versus harness saved subagent choices retain existing
+behavior. Validation and selection must not launch MCP, provider, hook or harness
+processes.
+
+Session PATCH and subsequent schedule pause/resume remain separate commits.
+Enabling a schedule commits before attempting to unarchive its session. Preserve
+error-after-commit outcomes and bounded optimistic retries. Writer timestamps come
+from a trusted clock inside the transaction. Search documents update with indexed
+session mutations; unchanged entities, operation/run events, relations and display
+watermarks remain intact. Preserve opaque saved metadata and existing raw ordering
+where Python renders it as text. Accepted writes retain admission through caller
+cancellation; return explicit row/byte/capacity errors without partial transactions.
+
+Planned evidence: deterministic isolated Python HTTP and validation captures,
+strict MCP hydration vectors, exact changed entity/search rows, stale revision and
+concurrent writer checks, pending-repair-before-refusal, schedule/archive partial
+failures, null/omitted and malformed choices, raw history and reopen comparisons.
+Use exact collected Rust/Python selections and a refreshed diff-bound receipt.
+Production Assistant create/select/use/failure/retry/reconnect journeys, desktop
+Chromium and mobile Chromium/WebKit, LAN authorization and physical-device gates
+remain required for product completion. This tranche does not establish provider
+or schedule execution, full session deletion or a shipped Rust entry point.
+
+
+Implemented three more experimental handlers, bringing the total to 36. Session
+settings retain complete MCP configuration validation, literal hook IDs, safe
+in-flight settings changes and original-session messaging restrictions. Harness
+saved choices preserve lazy lookup and Python text rendering of opaque values.
+Schedule configuration retains duplicate ordering, provider-record independence,
+revision-only updates, archive pauses and bounded unarchive retries. UUID factories
+run only after source guards, and clocks retain the source service/writer phases.
+Search updates share their owning transaction; untouched metadata fragments retain
+the original reader's ordering even when an explicit revision targets newer state.
+
+The fixture contains 159 supported HTTP cases, 110 service cases, 57 request
+vectors and 74 MCP hydration vectors. It compares exact entity/search changes,
+raw unaffected envelopes, complete state hashes, UUID call timing, protected
+operation/run ledgers, relations and display watermarks, plus reopen. Real isolated
+SQLite uniqueness failures exercise independent schedule/archive commits and
+exhausted retries. Three separately captured malformed historical schedules still
+have unsupported detailed validation envelopes; they are excluded explicitly from
+parity counts, and remain a completion blocker.
+
+All 42 unique selected local Rust tests passed after fixing a Debug formatting
+leak in the new RawSession wrapper. The initial run passed three tests and failed
+that redaction check; the remaining 39 passed after the wrapper stopped formatting
+its nested record. Both selected Python tests passed in 10.63 seconds. Review
+also corrected signed float-to-int boundary validation and deferred UUID generation
+until creation guards pass. Formatting, scoped Clippy and Python lint passed.
+Cumulative CI selects 142 Rust tests and 56 Python checks; results are recorded on
+the corresponding PR commit. The live Figma archive/details follow-up is recorded
+separately; production Rust-backed browser/device/LAN acceptance remains open.

@@ -336,6 +336,15 @@ impl AssistantRecords {
             .map(|v| v.unwrap_or(Value::Null))
     }
 
+    /// Mutation guards use the internal selector, without the read endpoint's
+    /// failed-answer fallback or display projection. Selection may repair saved
+    /// effects before the caller decides whether its own write is permitted.
+    pub(crate) async fn has_pending_turn(&self, session_id: &str) -> Result<bool> {
+        self.pending_record(session_id)
+            .await
+            .map(|turn| turn.is_some())
+    }
+
     pub async fn session_hooks(&self, session_id: &str) -> Result<Value> {
         let turn = match self.pending_record(session_id).await? {
             Some(turn) => Some(turn),

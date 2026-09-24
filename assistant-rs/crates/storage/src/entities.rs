@@ -47,6 +47,8 @@ pub use recovery::{
     HookAdoption, RecoveryReceiptKind, RecoveryReceiptRow, RecoveryReceiptSnapshot, RecoveryTurn,
     RecoveryTurnsSnapshot,
 };
+mod settings;
+pub use settings::{McpProfileRow, RawSession};
 
 const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MUTATIONS: usize = 64;
@@ -80,6 +82,8 @@ pub enum Error {
     AlreadyExists(String),
     #[error("revision conflict: expected {expected}, found {found}")]
     RevisionConflict { expected: i64, found: i64 },
+    #[error("revision conflict: expected {expected}, found {found}")]
+    SettingsRevisionConflict { expected: String, found: i64 },
     #[error("stored assistant envelope and payload disagree")]
     CorruptEnvelope,
     #[error("retained session state became invalid during display revision assignment")]
@@ -253,6 +257,7 @@ enum Command {
     Apply(WriteRequest),
     SessionState(session_state::StateRequest),
     Recover(recovery::RepairRequest),
+    Settings(settings::SettingsRequest),
     TouchDevice {
         id: String,
         revision: i64,
@@ -949,6 +954,10 @@ async fn writer(
             }
             Command::Recover(request) => {
                 let result = recovery::repair(&mut connection, &request).await;
+                let _ = request.reply.send(result);
+            }
+            Command::Settings(request) => {
+                let result = settings::write(&mut connection, &request).await;
                 let _ = request.reply.send(result);
             }
             Command::TouchDevice {

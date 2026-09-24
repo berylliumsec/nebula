@@ -10,6 +10,7 @@ pub mod recorded_effects;
 pub mod recovery;
 pub mod results;
 pub mod session_state;
+pub mod settings;
 pub mod status;
 pub mod subagents;
 mod unicode_casefold;
@@ -37,6 +38,8 @@ pub enum Error {
     RetainedNotFound(String),
     #[error("{0}")]
     Conflict(&'static str),
+    #[error("{0}")]
+    DynamicConflict(String),
     #[error("{0}")]
     HistoryConflict(&'static str),
     #[error("Retained Assistant state cannot be projected")]

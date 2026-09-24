@@ -309,3 +309,25 @@ entities, event ledgers, relations, display watermarks and search projections.
 The Rust HTTP harness checks every entity envelope, exact changed records,
 canonical full-state hashes, search/watermark purity and reopen. Production
 reconnect, actual recovery dispatch and the browser/device matrix remain open.
+
+
+Conversation PATCH and schedule create/configure actions preserve saved choices,
+null-versus-omitted fields, pending-effect repair before refusal and separate
+archive/schedule commits. Immutable MCP configuration is validated without
+resolving secrets or launching processes. Dedicated bounded writes retain original
+opaque metadata ordering, compare fresh revisions before hydration, sample clocks
+inside the writer, and update search documents atomically. Enabling a schedule
+makes its configuration durable; schedule dispatch remains unimplemented.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_settings --output assistant-rs/compatibility/python-settings.json
+```
+
+The settings fixture records 159 supported HTTP cases, 74 MCP hydration vectors
+and 57 request vectors, with exact entity/search changes and protected ledger,
+relation and watermark tables. Three separately labeled malformed historical
+schedule cases capture the source's detailed validation error; Rust still has a
+sanitized error gap for those cases. They are not counted as parity evidence.
+Historical missing identity/revision timestamps and noncanonical raw MCP datetime
+inputs also remain outside retained-profile parity. Production Assistant settings,
+archive and recurring-work journeys require the remaining integration gates.

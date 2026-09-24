@@ -7,6 +7,7 @@ use serde_json::{Map, Value};
 pub mod auth;
 pub mod dependencies;
 mod harness_profile;
+mod mcp_profile;
 pub mod records;
 pub mod retained_json;
 pub mod session_state;

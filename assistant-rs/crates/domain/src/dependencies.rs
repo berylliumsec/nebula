@@ -15,9 +15,10 @@ pub enum DependencyKind {
     Artifact,
     NativeHookExecution,
     HarnessProfile,
+    McpServerProfile,
 }
 impl DependencyKind {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Approval,
         Self::HarnessInteraction,
         Self::HarnessTurn,
@@ -25,6 +26,7 @@ impl DependencyKind {
         Self::Artifact,
         Self::NativeHookExecution,
         Self::HarnessProfile,
+        Self::McpServerProfile,
     ];
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -35,6 +37,7 @@ impl DependencyKind {
             Self::Artifact => "artifacts",
             Self::NativeHookExecution => "native_hook_executions",
             Self::HarnessProfile => "harnesses",
+            Self::McpServerProfile => "mcp_servers",
         }
     }
 }
@@ -68,6 +71,11 @@ static SCHEMAS: LazyLock<Result<Value, RecordError>> = LazyLock::new(|| {
             .map_err(|_| RecordError::Schema)?;
     schemas[DependencyKind::HarnessProfile.as_str()] =
         state["dependency_schemas"][DependencyKind::HarnessProfile.as_str()].clone();
+    let settings: Value =
+        serde_json::from_str(include_str!("../../../compatibility/python-settings.json"))
+            .map_err(|_| RecordError::Schema)?;
+    schemas[DependencyKind::McpServerProfile.as_str()] =
+        settings["dependency_schemas"][DependencyKind::McpServerProfile.as_str()].clone();
     Ok(schemas)
 });
 static VALIDATORS: LazyLock<Result<HashMap<DependencyKind, Validator>, RecordError>> =
@@ -127,6 +135,9 @@ impl StoredDependency {
             return Err(RecordError::Shape(kind.as_str()));
         }
         let schema = &SCHEMAS.as_ref().map_err(|_| RecordError::Schema)?[kind.as_str()];
+        if kind == DependencyKind::McpServerProfile {
+            p = crate::mcp_profile::hydrate(schema, bytes)?;
+        }
         fill_defaults(schema, schema, &mut p);
         if !VALIDATORS.as_ref().map_err(|_| RecordError::Schema)?[&kind].is_valid(&p)
             || p["revision"].as_i64().is_none_or(|r| r < 1)
@@ -175,6 +186,7 @@ impl StoredDependency {
         let truthy = |field: &str| p[field].as_str().is_some_and(|v| !v.is_empty());
         match kind {
             DependencyKind::HarnessProfile => crate::harness_profile::validate(&mut p)?,
+            DependencyKind::McpServerProfile => crate::mcp_profile::validate(&p)?,
             DependencyKind::NativeHookExecution => {
                 if (p["status"] != "running") == p["completed_at"].is_null() {
                     return Err(RecordError::Invariant(

@@ -165,7 +165,9 @@ impl ApiError {
             ServiceError::StorageNotFound(_) | ServiceError::RetainedNotFound(_) => {
                 Self::named(404, error.to_string(), "chat.not_found_error", "chat")
             }
-            ServiceError::Conflict(_) | ServiceError::RevisionConflict { .. } => {
+            ServiceError::Conflict(_)
+            | ServiceError::DynamicConflict(_)
+            | ServiceError::RevisionConflict { .. } => {
                 Self::named(409, error.to_string(), "chat.conflict_error", "chat")
             }
             ServiceError::Storage(error) => Self::storage(error),

@@ -123,3 +123,20 @@ storage/API evidence only. Automatic continuation, real reconnect and the
 production browser/LAN/device journeys above still require end-to-end proof.
 The previously inspected Figma frames remain the design reference; no new live
 Figma inspection occurred in this tranche.
+
+
+Settings/archive follow-up inspection on September 23: revisited live frame
+[Archive 52:3](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=52-3)
+at 1080x620 and
+[Session details 4:77](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-77)
+at 1440x1180. The archive frame keeps the selected transcript visible, exposes
+Unarchive, and explains that sending restores the conversation. Session details
+exposes Edit limits, child agents and Advanced hooks/scheduled tasks. Those visible
+controls require durable choices, explicit archive restoration and preserved
+operator pauses. The new settings APIs cover saved state and archive configuration;
+sending, recurring dispatch and the production UI journeys remain unfinished.
+
+These two live screenshots were visually inspected. This was a design review,
+not interactive prototype execution or a Rust-backed browser/device test. The
+current Assistant UI still lacks a verified schedule configuration control despite
+the Advanced scheduled-tasks reference in the older details frame.

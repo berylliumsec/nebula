@@ -263,6 +263,15 @@ pub(crate) fn python_string_repr(value: &str) -> Result<String> {
     repr_string(value, &mut output).map_err(|_| StorageError::ReadLimit)?;
     Ok(output.0)
 }
+/// Render Python str(value or "") from a retained raw fragment. In particular,
+/// nested dictionary order must not pass through serde_json's sorted map.
+pub(crate) fn python_json_string(raw: &str) -> Result<String> {
+    if raw.len() > RESPONSE_BYTES {
+        return Err(StorageError::ReadLimit.into());
+    }
+    let value: Ordered = serde_json::from_str(raw).map_err(|_| Error::LegacyUnhandled)?;
+    display(Some(&value))
+}
 fn repr(value: &Ordered, output: &mut Text) -> Result<()> {
     let capacity = |_| Error::Storage(StorageError::ReadLimit);
     match value {

@@ -12,7 +12,7 @@ use axum::{
     http::HeaderValue,
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, put},
+    routing::{get, post, put},
 };
 use chrono::{DateTime, Utc};
 use errors::ApiError;
@@ -23,6 +23,7 @@ use nebula_assistant_services::{
     context::{CursorWrite, DecisionWrite},
     generated::CatalogKind,
     navigation::BookmarkWrite,
+    settings::{ScheduleCreate, ScheduleWrite, SettingsWrite},
 };
 use nebula_assistant_storage::entities::{
     ConnectionObserver, SqliteAssistantStore, StateObservations,
@@ -40,6 +41,8 @@ pub struct HttpConfig {
     pub body_bytes: usize,
     pub request_timeout: std::time::Duration,
     pub clock: fn() -> DateTime<Utc>,
+    /// Trusted host identity source; never accepted from request fields.
+    pub new_schedule_id: fn() -> String,
     pub artifacts: Option<ArtifactPreview>,
     /// Trusted, synchronous observation of retained harness transport liveness.
     /// Must never start a transport or wait for network/process activity.
@@ -54,6 +57,7 @@ impl HttpConfig {
             body_bytes: 1024 * 1024,
             request_timeout: std::time::Duration::from_secs(30),
             clock: Utc::now,
+            new_schedule_id: || uuid::Uuid::new_v4().to_string(),
             artifacts: None,
             harness_connection: None,
         }
@@ -88,7 +92,10 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
     };
     Ok(Router::new()
         .route("/api/v1/chat-sessions", get(catalog_sessions))
-        .route("/api/v1/chat-sessions/{entity_id}", get(catalog_session))
+        .route(
+            "/api/v1/chat-sessions/{entity_id}",
+            get(catalog_session).patch(update_session_settings),
+        )
         .route("/api/v1/chat-messages", get(catalog_messages))
         .route("/api/v1/chat-messages/{entity_id}", get(catalog_message))
         .route("/api/v1/chat-goals", get(other_catalog))
@@ -115,7 +122,11 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
         )
         .route(
             "/api/v1/chat/sessions/{session_id}/schedule",
-            get(session_schedule),
+            get(session_schedule).post(create_schedule),
+        )
+        .route(
+            "/api/v1/chat/sessions/{session_id}/schedule/actions",
+            post(write_schedule),
         )
         .route(
             "/api/v1/chat/sessions/{session_id}/subagents",
@@ -425,6 +436,57 @@ async fn session_schedule(
     let result = state.services.session_schedule(&session).await;
     reply(request, result)
 }
+async fn create_schedule(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let (parts, body) = request.into_parts();
+    let records = AssistantRecords::with_clock(state.store, state.config.clock);
+    let result = match decode::<ScheduleCreate>(body, state.config.body_bytes).await {
+        Ok(body) => records
+            .create_schedule(&session, body, state.config.new_schedule_id)
+            .await
+            .map(|r| r.into_payload())
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
+}
+async fn write_schedule(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let (parts, body) = request.into_parts();
+    let records = AssistantRecords::with_clock(state.store, state.config.clock);
+    let result = match decode::<ScheduleWrite>(body, state.config.body_bytes).await {
+        Ok(body) => records
+            .write_schedule(&session, body)
+            .await
+            .map(|r| r.into_payload())
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
+}
+async fn update_session_settings(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let (parts, body) = request.into_parts();
+    let records = AssistantRecords::with_clock(state.store, state.config.clock);
+    let result = match decode::<SettingsWrite>(body, state.config.body_bytes).await {
+        Ok(body) => records
+            .update_session_settings(&session, body)
+            .await
+            .map(|r| r.into_payload())
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
+}
 async fn session_subagents(
     State(state): State<AppState>,
     Path(session): Path<String>,
@@ -626,7 +688,12 @@ async fn decode<T: validation::RequestModel>(body: Body, limit: usize) -> Result
             )
         })?
     };
-    validation::validate(value)
+    let order = if T::MODEL == validation::BodyModel::Settings {
+        validation::key_order(&bytes)
+    } else {
+        Vec::new()
+    };
+    validation::validate(value, &order)
 }
 fn reply(request: Request, result: Result<Value, ServiceError>) -> Response {
     let (parts, _) = request.into_parts();

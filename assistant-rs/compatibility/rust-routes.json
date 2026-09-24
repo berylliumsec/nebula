@@ -167,6 +167,21 @@
       "method": "GET",
       "path": "/api/v1/chat/sessions/{session_id}/hooks",
       "status": "experimental"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/chat-sessions/{session_id}",
+      "status": "experimental"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/chat/sessions/{session_id}/schedule",
+      "status": "experimental"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/chat/sessions/{session_id}/schedule/actions",
+      "status": "experimental"
     }
   ],
   "evidence": [
