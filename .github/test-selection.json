@@ -1,10 +1,10 @@
 {
-  "change_digest": "a713658e5b6cc858125c2471a36fb6b3882c01d99eeeaf6f5a5d0f7589685dad",
+  "change_digest": "be4962964019535bcc28a4f5b4e49689d4b14d5f3e223d2cad322b0d9ff33b94",
   "reviewed_by": "Claude focused review for restart-recovery",
-  "reason": "Restart and shutdown recovery, callback-wait reconciliation, goal continuation, operator stop, scheduled occurrences and the periodic recovery tick changed in chat.py, chat_subagents.py, chat_schedules.py, automation_runtime.py, automation_tools.py, tools.py, storage.py (list_session_entities latest-only read) and api.py (schedule loop and its stop). The new test_restart_recovery_lifecycle.py proves each finding (projected results survive restart, only open effects become unknown, interrupted reads rerun, resumed goal turns continue, idle running goals continue or pause, failed parent resume pauses its goal, interrupted callback producers settle as unknown with late receipts attached, graceful stop interrupts without waking owners, complete()-driven turns park on shutdown, operator stop terminates callback producers, stale approved calls settle, the tick scans only recoverable rows off the event loop, schedules dispatch without holding the tick). The whole files for the automation runtime, schedules, process-results webhook, goals, follow-up queue, tool loop, turn outcomes, subagent settings, session lookups and the named restart/shutdown/goal/stop nodes of test_chat.py, test_chat_subagents.py, test_chat_api.py and test_native_hook_turn_ends.py cover the neighbouring journeys.",
+  "reason": "Restart and shutdown recovery, callback-wait reconciliation, goal continuation, operator stop, scheduled occurrences and the periodic recovery tick changed in chat.py, chat_subagents.py, chat_schedules.py, automation_runtime.py, automation_tools.py, tools.py, storage.py (list_session_entities latest-only read) and api.py (schedule loop and its stop). The new test_restart_recovery_lifecycle.py proves each finding (projected results survive restart, only open effects become unknown, interrupted reads rerun, resumed goal turns continue, idle running goals continue or pause, failed parent resume pauses its goal, interrupted callback producers settle as unknown with late receipts attached, graceful stop interrupts without waking owners, complete()-driven turns park on shutdown, operator stop terminates callback producers, stale approved calls settle, the tick scans only recoverable rows off the event loop, schedules dispatch without holding the tick). The whole files for the automation runtime, schedules, process-results webhook, goals, follow-up queue, tool loop, turn outcomes, subagent settings, session lookups, the row-horizon guard over the rewritten scans, and the named restart/shutdown/goal/stop nodes of test_chat.py, test_chat_subagents.py, test_chat_api.py and test_native_hook_turn_ends.py cover the neighbouring journeys.",
   "exclusions": "Full suites are not approved and are excluded. The other nodes of test_chat.py (22), test_chat_subagents.py (14), test_chat_api.py (4), test_native_hook_turn_ends.py (2) and test_chat_final_synthesis_recovery.py (1) are excluded because they fail identically on pristine origin/main 4facf4a (stale since #559: queued/admitted stream events, ledger-projected tool_history, admission status); claude/resume-admission owns repairing them. No UI, Playwright, frontend or native code changed. Missions, harness adapters and provider transports are unchanged.",
   "expected_tests": {
-    "python": 196,
+    "python": 201,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -53,7 +53,8 @@
     "tests/v3/test_chat_api.py::test_pending_callback_turn_returns_saved_thinking_and_partial_answer",
     "tests/v3/test_chat_api.py::test_chat_subagent_routes_list_and_stop_within_their_conversation",
     "tests/v3/test_native_hook_turn_ends.py::test_stop_hook_failure_is_a_warning_naming_the_hook_not_the_stop",
-    "tests/v3/test_native_hook_turn_ends.py::test_a_hook_running_when_the_turn_ends_never_stays_running"
+    "tests/v3/test_native_hook_turn_ends.py::test_a_hook_running_when_the_turn_ends_never_stays_running",
+    "tests/v3/test_row_horizon.py"
   ],
   "frontend": [],
   "native": [],
