@@ -45,6 +45,27 @@ The engine does not yet compose the actual execution mutations, authorize dispat
 bound aggregate returned buffers or reconcile physical locators after maintenance.
 Its preceding experimental schema is refused rather than silently migrated.
 
+Packaged operator help is available as pure preparation: the embedded corpus,
+ranking, token budget, citations and instruction suffix match source captures.
+Help remains applicable when optional engagement knowledge is disabled. Queries
+are bounded to 64 strings and 1 MiB, projections to 128 KiB; runtime admission
+must additionally own aggregate concurrent preparation memory. This module does
+not perform the complete send workflow or retrieve engagement knowledge.
+
+Provider-profile preparation preserves catalog identity, locality/privacy,
+credential precedence, model/capability requirements and bounded header settings.
+It binds opaque metadata to a once-hydrated row and receives secrets/environment
+values through trusted injected interfaces. The 25 catalog entries retain their
+actual adapter identity; native adapters remain explicit missing capabilities.
+No provider is executed by the bridge. Its configuration, metadata and error
+limits are per operation; concurrent preparation requires aggregate ownership.
+
+The preparation-specific decision reader handles a missing Session with SQL NULL
+selection and validates all selected rows before choosing active context. Its
+typed seven-field snapshot preserves exact prompt ordering, Unicode and integer
+spelling. Existing list/mutation APIs remain unchanged; strict retained envelopes
+and bounded reads remain explicit extensions to the source behavior.
+
 The lab refuses existing output directories and refuses to open databases without
 its private application/schema markers. It has no server, provider, harness, or
 command-execution entry point. No production database should be supplied to it.

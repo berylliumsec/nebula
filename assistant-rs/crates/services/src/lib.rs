@@ -3,14 +3,17 @@
 pub mod artifact_preview;
 pub mod catchup;
 pub mod context;
+pub mod decision_preparation;
 pub mod execution_context;
 pub mod fork;
 pub mod generated;
 pub mod goal_conversations;
 pub mod goal_drafts;
 pub mod navigation;
+pub mod operator_help;
 pub mod plans;
 pub mod project_instructions;
+pub mod provider_profile;
 pub mod recorded_effects;
 pub mod recovery;
 pub mod results;

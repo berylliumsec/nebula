@@ -32,6 +32,7 @@ use sqlx::{
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 
 mod catchup;
+mod decision_preparation;
 pub use catchup::{CatchupSnapshot, PendingSnapshot};
 mod results;
 pub use results::ResultsSnapshot;

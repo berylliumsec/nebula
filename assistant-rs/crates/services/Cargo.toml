@@ -7,7 +7,9 @@ license = "BSD-3-Clause AND Unicode-3.0"
 publish.workspace = true
 
 [dependencies]
+aho-corasick.workspace = true
 nebula-assistant-domain.workspace = true
+nebula-assistant-integrations.workspace = true
 nebula-assistant-storage.workspace = true
 chrono.workspace = true
 serde.workspace = true

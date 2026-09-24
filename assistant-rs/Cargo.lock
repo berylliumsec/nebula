@@ -1573,8 +1573,10 @@ dependencies = [
 name = "nebula-assistant-services"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "chrono",
  "nebula-assistant-domain",
+ "nebula-assistant-integrations",
  "nebula-assistant-storage",
  "num-bigint",
  "num-traits",

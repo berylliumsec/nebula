@@ -375,7 +375,11 @@ impl ProviderConfig {
         }
         if (!request.tools.is_empty() || !request.tool_results.is_empty()) && !self.tools
             || request.tools.iter().any(|t| t.strict) && !self.strict_tools
-            || request.response_schema.is_some() && !self.structured_output
+            || request
+                .response_schema
+                .as_ref()
+                .is_some_and(|schema| !schema.as_object().is_some_and(|fields| fields.is_empty()))
+                && !self.structured_output
         {
             return Err(ProviderError::new(
                 ErrorKind::Configuration,

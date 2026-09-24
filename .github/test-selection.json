@@ -1,14 +1,14 @@
 {
-  "change_digest": "616ff5272acdad2352b0d28c0fcf997ef9b51ae9dc193a187f5b8b4de3e8d357",
+  "change_digest": "a7474e91ef36d101ab5d2aad13836ae62d7894a9068a85002e739cd7b3cb74f4",
   "reviewed_by": "Codex using current Assistant source captures, independent writer/provider review and shared validator impact review",
-  "reason": "Cumulative exact Assistant replacement contract selection: existing retained reads/mutations, source differential fixtures, bounded OpenAI-compatible protocol, execution phase/CAS/recovery and reservation policy; adds supervised admission ownership, passive ScopePolicy privacy, project instructions and transaction-local provider ledger. Local increment passed32 unique Rust and2 Python checks; previous committed227 Rust/68 Python selection passed CI. Shared DependencyKind test match explicitly includes ScopePolicy and remains covered.",
+  "reason": "Cumulative exact Assistant replacement contract selection, including retained contracts/read/mutation/differential checks, execution primitives and recorded-effect recovery, provider protocol, bounded reservation/admission and ledger, ScopePolicy/project instructions, and new packaged help/provider-profile/operator-decision preparation. The preceding246 Rust/70 Python selection passed CI. New local increment passed11 unique exact Rust and3 Python source recaptures; one formatter defect was corrected and only its failing selector repeated. No unrelated suites selected.",
   "exclusions": "No full suites. Rust compile/collection600s and execution120s per exact selector; CI Rust job20min. Python3.12 only, local collection300s; CI has no explicit Python job timeout. Python3.11/3.13, frontend/native/Playwright excluded. No live state/provider/tool execution, production UI/mobile/LAN/physical-device, historical migration/cutover or performance acceptance claimed. Selection covers the cumulative experimental Assistant diff.",
   "expected_tests": {
-    "python": 70,
+    "python": 73,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 246
+    "assistant_rust": 256
   },
   "python_versions": [
     "3.12"
@@ -38,7 +38,10 @@
     "tests/v3/test_assistant_rust_provider_protocol.py::test_committed_assistant_provider_protocol_matches_python_source",
     "tests/test_assistant_execution_context_contract.py::test_execution_context_oracle_matches_python_source",
     "tests/test_assistant_scope_policy_contract.py::test_scope_policy_oracle_matches_python_source",
-    "tests/test_assistant_project_instructions_contract.py::test_project_instructions_oracle_matches_python_source"
+    "tests/test_assistant_project_instructions_contract.py::test_project_instructions_oracle_matches_python_source",
+    "tests/test_assistant_operator_help_contract.py::test_operator_help_oracle_matches_python_source",
+    "tests/test_assistant_provider_profile_contract.py::test_provider_profile_oracle_matches_python_source",
+    "tests/test_assistant_decision_preparation_contract.py::test_decision_preparation_oracle_matches_python_source"
   ],
   "frontend": [],
   "native": [],
@@ -289,6 +292,16 @@
     "nebula-assistant-storage/provider_ledger_writer::ledger_writer_atomic_receipts_events_dedup_and_reopen",
     "nebula-assistant-storage/provider_ledger_writer::ledger_writer_control_quota_conserves_reservations_and_rolls_back",
     "nebula-assistant-storage/provider_ledger_writer::ledger_writer_replay_rejects_corruption_and_bounds_cursors",
-    "nebula-assistant-storage/provider_ledger_writer::ledger_writer_watch_fences_and_canonical_identity_preserve_lineage"
+    "nebula-assistant-storage/provider_ledger_writer::ledger_writer_watch_fences_and_canonical_identity_preserve_lineage",
+    "nebula-assistant-services/operator_help::packaged_help_corpus_and_search_match_python",
+    "nebula-assistant-services/operator_help::packaged_help_budget_and_prompt_projection_match_python",
+    "nebula-assistant-services/operator_help::packaged_help_bounds_and_redaction_are_explicit",
+    "nebula-assistant-services/lib::operator_help::tests::substring_counts_follow_python_nonoverlap",
+    "nebula-assistant-services/provider_profile::source_profile_configuration_catalog_credentials_and_require_match",
+    "nebula-assistant-services/provider_profile::profile_metadata_binding_and_secret_limits_are_explicit",
+    "nebula-assistant-services/provider_profile::empty_response_schema_agrees_with_supported_adapter_require",
+    "nebula-assistant-services/decision_preparation::python_decision_preparation_snapshot_and_prompt_match_source",
+    "nebula-assistant-services/decision_preparation::decision_preparation_rejects_corrupt_envelopes_and_bounded_reads",
+    "nebula-assistant-services/decision_preparation::decision_instruction_encoding_preserves_order_unicode_and_bounded_output"
   ]
 }

@@ -10,6 +10,7 @@ license = "BSD-3-Clause"
 publish = false
 
 [workspace.dependencies]
+aho-corasick = "=1.1.5"
 nebula-assistant-domain = { path = "crates/domain" }
 nebula-assistant-storage = { path = "crates/storage" }
 nebula-assistant-runtime = { path = "crates/runtime" }

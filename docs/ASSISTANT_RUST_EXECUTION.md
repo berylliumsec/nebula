@@ -264,3 +264,65 @@ two Python source recaptures. The engine still requires composition with actual
 execution entity mutations on the authoritative writer connection. Staged results
 never authorize publication or dispatch. Aggregate replay-result credits, startup
 reconciliation and the continuous production workflow remain required.
+
+The next preparation increment preserves packaged operator-help retrieval when
+an operator sends relevant product or failure text, including when engagement
+knowledge is disabled. The release-bundled corpus is the authority: ranking,
+token budgeting, citation fields and prompt bytes must match Python. This is a
+pure preparation step before durable admission, with no provider or workspace
+access. Planned evidence uses the captured corpus/search/projection vectors,
+overlapping keyword and non-overlapping occurrence cases, bounded inputs and
+redacted diagnostics. Actual completion/stream/reconnect UI evidence remains open.
+
+Four exact Rust help checks and one Python source recapture passed under
+`3c520c71b344a3abd1f4fc3324dc2d89fed5d2ae782bd8f363d536c5587760c1`.
+The Python check passed in 4.80 seconds. The corpus contains 14 articles; the
+fixture contains 37 search, 17 projection, seven integer-budget and six substring
+count observations. Capture exhaustively compares the existing 1,530 casefold
+mappings against CPython 3.12 / Unicode 15. The port reuses that map and a pinned
+keyword matcher, with a static occurrence index. No throughput claim follows
+from the algorithm choice. Input/output bounds are per operation; aggregate
+preparation-memory ownership remains the runtime's responsibility.
+
+Provider preparation next binds an already hydrated profile to metadata from
+the same detached SQL row, preserving opaque dictionary order without repeating
+factory clocks. Trusted injected credential/environment access follows source
+precedence; the bridge itself performs no ambient lookup or network operation.
+Catalog adapter identity, locality/privacy, model allowance, capabilities and
+header configuration must match source vectors. Native adapters remain explicit
+missing capabilities. Focused validation covers the profile vectors, metadata
+binding/secret limits and the shared empty-schema capability correction, plus
+the existing exact protocol projection test affected by that correction.
+
+Those four exact Rust checks passed under
+`1efe9d34893898cd45da6d927b58c5ce502dd160d663dc0d4346d3b7264c91c3`;
+the Python recapture passed in 1.62 seconds. Its 130 vectors cover 25 catalog
+entries, injected access traces and metadata ordering. No live provider request
+was made. The shared adapter now agrees with Python that an empty response-schema
+object does not require structured-output capability.
+
+The next integration preserves saved operator decisions on the first send before
+a durable Session exists. An absent Session selector uses SQL IS NULL; it must not
+be replaced with a fabricated Session identity. Full selected-row validation
+precedes active filtering and context budgets, including invalid inactive rows.
+The existing decision list and mutation APIs remain unchanged. Three exact Rust
+checks and one isolated source recapture will cover optional selectors, validation
+precedence, prompt bytes, unchanged rows/reopen and explicit retained-data bounds.
+
+Two decision Rust checks and the Python recapture passed under
+`7cb5f01e2842159dae6cf8160b3baad01ce4968b2bbebaa592c8b697f3bf92d6`;
+the Python check took 1.70 seconds. The formatter check exposed serde Value's
+floating-point conversion of a large integer power of ten. Revision decoding now
+captures raw JSON spelling first. The unchanged formatter fixture passed under
+`309945810d46dafb8dafd70bde299619c0d0c5f92d09a6f6eaa9ab4622c35cd4`.
+Only that failed check was repeated. The corpus has 25 source scenarios, three
+format vectors and a separately identified strict-envelope observation. This
+increment passed 11 unique exact Rust checks and three Python source recaptures.
+
+The preceding committed increment `7e01619` passed CI run `35981730825`: 246 exact
+Rust tests and 70 Python tests on Python 3.12, the latter in 131.14 seconds.
+Downloaded execution/selection receipts match
+`616ff5272acdad2352b0d28c0fcf997ef9b51ae9dc193a187f5b8b4de3e8d357`.
+Python 3.11/3.13 were omitted. Browser plan/gate run `35981730853` passed with
+Playwright execution skipped. This CI evidence covers that committed increment,
+not the subsequent help/profile/decision preparation changes.
