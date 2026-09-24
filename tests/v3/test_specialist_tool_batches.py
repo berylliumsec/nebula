@@ -7,17 +7,24 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from nebula.v3.agent_tooling import BrokeredToolSpecialist
 from nebula.v3.domain import (
+    AgentAttempt,
     Approval,
+    ApprovalStatus,
+    Engagement,
     RiskClass,
     RunBudget,
     ScopePolicy,
     TaskStatus,
+    ToolCall as LedgerCall,
+    ToolCallStatus,
+    utc_now,
 )
 from nebula.v3.orchestration import (
     call_records,
     MissionPlan,
     MissionRuntime,
     PlannedTask,
+    RoutingJournal,
     SpecialistApprovalRequired,
     SpecialistContext,
     SpecialistOutcome,
@@ -37,6 +44,7 @@ from nebula.v3.providers import (
 )
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import (
+    AmbiguousToolState,
     ApprovalRequired,
     IdempotencyBehavior,
     ToolExecutionResult,
@@ -539,3 +547,172 @@ def test_model_safe_result_sanitizes_every_call_in_a_batch():
     for record in records:
         assert record["provider_result"]["schema"] == "nebula.tool-result/v2"
         assert record["provider_result"]["tool_call_id"] == record["model_call_id"]
+
+
+class _UnknownEffectBroker:
+    """A broker that reports every call as an already-started unknown effect."""
+
+    async def execute(self, invocation, scope, *, approval=None):
+        del invocation, scope, approval
+        raise AmbiguousToolState("this call already started before Core stopped")
+
+
+class _ApprovalCapturingBroker:
+    """Record the invocation and approval each execute receives."""
+
+    def __init__(self):
+        self.calls = []
+        self.approvals = []
+
+    async def execute(self, invocation, scope, *, approval=None):
+        del scope
+        self.calls.append(invocation)
+        self.approvals.append(approval)
+        return ToolExecutionResult(
+            output={"tool": invocation.tool_name, "ok": True},
+            evidence_ids=[],
+            execution={"command": ["run", invocation.tool_name]},
+            exit_code=0,
+        )
+
+
+def test_specialist_derives_deterministic_call_identity_from_position(tmp_path):
+    """MIS-1: an invocation's id and idempotency key come from its place in the
+    turn, not the provider's random call id, so a replay addresses the same
+    ledger slot."""
+
+    provider = ScriptedRoutingProvider(
+        [[_call("prov-random-1", "nmap.tcp"), _call("prov-random-2", "browser.fetch")]]
+    )
+    broker = RecordingBroker()
+    specialist = _specialist(tmp_path, provider, broker)
+
+    asyncio.run(specialist.run(_context(turn_index=3)))
+
+    assert [invocation.idempotency_key for invocation in broker.calls] == [
+        "task:scan:turn:3:call:0",
+        "task:scan:turn:3:call:1",
+    ]
+
+
+def test_specialist_replays_a_recorded_routing_response_after_restart(tmp_path):
+    """MIS-1: a turn re-dispatched after a Core restart replays the recorded
+    routing response instead of asking the model again, and every call keeps
+    its ledger identity."""
+
+    store = NebulaStore(tmp_path / "journal.db")
+    engagement = store.create(Engagement(name="Replay"))
+    attempt = store.create(
+        AgentAttempt(
+            id="run-1:scan:1",
+            engagement_id=engagement.id,
+            run_id="run-1",
+            task_id="scan",
+            agent_role="network_service",
+            attempt_number=1,
+            status=TaskStatus.RUNNING,
+        )
+    )
+    provider = ScriptedRoutingProvider(
+        [[_call("prov-abc", "nmap.tcp", {"ports": [80]})]]
+    )
+    first_broker = RecordingBroker()
+    first_specialist = _specialist(tmp_path, provider, first_broker)
+    context = _context().model_copy(
+        update={"routing_journal": RoutingJournal(store, attempt.id)}
+    )
+
+    asyncio.run(first_specialist.run(context))
+    assert len(provider.requests) == 1
+    first_ids = [invocation.id for invocation in first_broker.calls]
+    assert store.get(AgentAttempt, attempt.id).routing_response is not None
+
+    # A Core restart re-dispatches the same turn with a fresh specialist and a
+    # fresh broker. The recorded response is replayed, not re-requested.
+    second_broker = RecordingBroker()
+    second_specialist = _specialist(tmp_path, provider, second_broker)
+    replayed_context = _context().model_copy(
+        update={"routing_journal": RoutingJournal(store, attempt.id)}
+    )
+
+    asyncio.run(second_specialist.run(replayed_context))
+
+    assert len(provider.requests) == 1  # the model was never asked again
+    assert [invocation.id for invocation in second_broker.calls] == first_ids
+    assert [invocation.idempotency_key for invocation in second_broker.calls] == [
+        "task:scan:turn:1:call:0"
+    ]
+
+
+def test_specialist_marks_a_refused_effect_as_an_unknown_observation(tmp_path):
+    """MIS-1: a call the broker refuses as an unknown effect becomes a failed
+    observation the next turn reads, never a silent re-run."""
+
+    provider = ScriptedRoutingProvider([[_call("call-1", "nmap.tcp")]])
+    specialist = _specialist(tmp_path, provider, _UnknownEffectBroker())
+
+    result = asyncio.run(specialist.run(_context()))
+
+    record = call_records(result.output)[0]
+    assert record["status"] == "failed"
+    assert record["provider_result"]["category"] == "outcome_unknown"
+    assert record["provider_result"]["side_effects"] == "unknown"
+
+
+def test_specialist_resumes_an_approval_from_the_durable_ledger_row(tmp_path):
+    """MIS-3: an approved specialist call is rebuilt from its paused ledger row
+    and executed once with the durable operator decision."""
+
+    store = NebulaStore(tmp_path / "approve.db")
+    engagement = store.create(Engagement(name="Approve"))
+    call = store.create(
+        LedgerCall(
+            id="call-durable",
+            engagement_id=engagement.id,
+            run_id="run-1",
+            task_id="scan",
+            tool_name="nmap.tcp",
+            status=ToolCallStatus.WAITING_APPROVAL,
+            risk_class=RiskClass.ACTIVE_SCAN,
+            arguments={"ports": [443]},
+            idempotency_key="task:scan:turn:1:call:0",
+        )
+    )
+    approval = store.create(
+        Approval(
+            id="approval-1",
+            engagement_id=engagement.id,
+            run_id="run-1",
+            task_id="scan",
+            tool_call_id=call.id,
+            status=ApprovalStatus.APPROVED,
+            risk_class=RiskClass.ACTIVE_SCAN,
+            exact_request={"tool_name": "nmap.tcp", "arguments": {"ports": [443]}},
+            policy_rationale="active scanning requires operator approval",
+            requested_by="network-specialist",
+            decided_by="operator",
+            decided_at=utc_now(),
+        )
+    )
+    broker = _ApprovalCapturingBroker()
+    specialist = BrokeredToolSpecialist(
+        ScriptedRoutingProvider([]),
+        role=SpecialistRole.NETWORK_SERVICE,
+        broker=broker,
+        scope=ScopePolicy(id="scope-1", engagement_id=engagement.id),
+        workspace=tmp_path,
+        specs={"nmap.tcp": _spec("nmap.tcp")},
+        model="model-a",
+        store=store,
+    )
+    context = _context().model_copy(
+        update={"approval_response": {"approval_id": approval.id, "status": "approved"}}
+    )
+
+    asyncio.run(specialist.run(context))
+
+    assert len(broker.calls) == 1
+    assert broker.calls[0].id == "call-durable"
+    assert broker.calls[0].idempotency_key == "task:scan:turn:1:call:0"
+    assert broker.calls[0].arguments == {"ports": [443]}
+    assert broker.approvals[0].id == approval.id

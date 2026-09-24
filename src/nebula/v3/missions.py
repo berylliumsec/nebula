@@ -274,7 +274,12 @@ class MissionService:
                     or run.metadata.get("origin") != "api"
                 ):
                     continue
-                recoveries.append(self._reconcile_interrupted_run(run.id))
+                reconciled = self._reconcile_interrupted_run(run.id)
+                # A run the operator had asked to stop is finalized as
+                # cancelled by reconciliation; only a still-active run needs a
+                # recovery worker.
+                if reconciled.status not in _TERMINAL_RUN_STATUSES:
+                    recoveries.append(reconciled)
             if len(page) < 1_000:
                 break
             offset += len(page)
@@ -1200,12 +1205,23 @@ class MissionService:
     ) -> list[AgentRun]:
         return [
             item
-            for item in self.store.list_entities(AgentRun, limit=1_000)
+            for item in self._all_runs()
             if str(item.metadata.get("series_id") or "") == series_id
             and item.id != exclude_run_id
             and item.status
             in {RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_APPROVAL}
         ]
+
+    def _all_runs(self) -> Iterator[AgentRun]:
+        """Every run, one bounded page at a time (no 1,000-row horizon)."""
+
+        offset = 0
+        while True:
+            page = self.store.list_entities(AgentRun, offset=offset, limit=1_000)
+            yield from page
+            if len(page) < 1_000:
+                return
+            offset += len(page)
 
     def _record_capacity_deferral(self, run_id: str) -> None:
         latest = self.store.get(AgentRun, run_id)
@@ -1351,7 +1367,29 @@ class MissionService:
                 return current
             if current.metadata.get("origin") != "api":
                 return current
+            if current.status == RunStatus.CANCELLING:
+                # The operator asked to stop this run before Core restarted.
+                # Honour that decision instead of resurrecting the checkpoint.
+                return self._finalize_cancelled(
+                    current.id,
+                    "Stopped by operator before Nebula Core restarted",
+                    "operator",
+                )
             try:
+                prior = current.metadata.get("restart_recovery")
+                prior = dict(prior) if isinstance(prior, dict) else {}
+                # A fresh Core start that re-queues an already-queued recovery
+                # keeps its generation, so the queue is idempotent. A run that
+                # was recovered and then interrupted again starts a new
+                # generation, so its recovery events do not collide with the
+                # previous cycle's under a reused idempotency key.
+                requeue_same_cycle = (
+                    current.status == RunStatus.QUEUED
+                    and prior.get("state") == "queued"
+                )
+                generation = int(prior.get("generation") or 0) + (
+                    0 if requeue_same_cycle else 1
+                )
                 unresolved = [
                     call
                     for call in self._run_tool_calls(current)
@@ -1362,6 +1400,7 @@ class MissionService:
                     "required": False,
                     "automatic": True,
                     "state": "queued",
+                    "generation": generation,
                     "reason": error,
                     "interrupted_at": interrupted_at,
                     "unresolved_tool_call_ids": [],
@@ -1414,7 +1453,9 @@ class MissionService:
                         ],
                     },
                     actor_id="system",
-                    idempotency_key="run:automatic_restart_recovery_queued",
+                    idempotency_key=(
+                        f"run:automatic_restart_recovery_queued:{generation}"
+                    ),
                 )
                 return queued
             except ConflictError as caught_error:
@@ -1469,6 +1510,7 @@ class MissionService:
                     return
                 recovery = current.metadata.get("restart_recovery")
                 recovery = dict(recovery) if isinstance(recovery, dict) else {}
+                generation = int(recovery.get("generation") or 0)
                 if current.status == RunStatus.QUEUED:
                     current, _ = self.store.update_with_event(
                         AgentRun,
@@ -1493,7 +1535,10 @@ class MissionService:
                             "attempt": attempt,
                         },
                         actor_id="system",
-                        idempotency_key=f"run:automatic_restart_recovery_started:{attempt}",
+                        idempotency_key=(
+                            "run:automatic_restart_recovery_started:"
+                            f"{generation}:{attempt}"
+                        ),
                     )
                 components = self._components(current, provider)
                 assert self.checkpoint_path is not None
@@ -1533,7 +1578,9 @@ class MissionService:
                             "status": latest.status.value,
                         },
                         actor_id="system",
-                        idempotency_key="run:automatic_restart_recovery_finished",
+                        idempotency_key=(
+                            f"run:automatic_restart_recovery_finished:{generation}"
+                        ),
                     )
                     return
                 if latest.status not in _TERMINAL_RUN_STATUSES:
@@ -1562,7 +1609,9 @@ class MissionService:
                                 "reason": "recovered mission requires a new operator decision"
                             },
                             actor_id="system",
-                            idempotency_key="run:restart_recovery_waiting_approval",
+                            idempotency_key=(
+                                f"run:restart_recovery_waiting_approval:{generation}"
+                            ),
                         )
                     else:
                         self._finalize_failed(

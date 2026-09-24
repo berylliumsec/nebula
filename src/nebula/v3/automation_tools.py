@@ -32,6 +32,7 @@ from .diagnostics import record_caught_exception
 from .domain import (
     AgentRun,
     Approval,
+    ApprovalStatus,
     Artifact,
     CommandExecution,
     CommandExecutionStatus,
@@ -56,11 +57,13 @@ from .tool_results import (
     artifact_ref,
 )
 from .tools import (
+    AmbiguousToolState,
     ApprovalRequired,
     RETRIEVAL_TOOL_NAMES,
     InvalidToolArguments,
     PolicyDenied,
     StoreToolLedger,
+    ToolBrokerError,
     ToolExecutionResult,
     ToolInvocation,
     ToolSpec,
@@ -430,6 +433,19 @@ class AutomationBroker:
                 running, ToolCallStatus.COMPLETE, result=output
             )
             return ToolExecutionResult(output=output)
+        if call.status not in {
+            ToolCallStatus.PROPOSED,
+            ToolCallStatus.WAITING_APPROVAL,
+        }:
+            # This ledger slot already started, or ended without a receipt, so
+            # its effect is unknown. Running the identical invocation again
+            # could repeat the command; the caller must issue a new request.
+            raise AmbiguousToolState(
+                f"tool call {call.id} is {call.status.value}; create an "
+                "explicit new retry request"
+            )
+        if call.status == ToolCallStatus.WAITING_APPROVAL:
+            approval = await self._waiting_call_approval(call, approval)
         if call.status == ToolCallStatus.PROPOSED:
             try:
                 await self._run_tool_hooks(invocation, call.id, "tool.before")
@@ -477,15 +493,23 @@ class AutomationBroker:
                     owner_id=owner_id,
                 )
         except CommandApprovalRequired as exc:
+            # Bind the card to this ledger slot and, for a Mission, to the
+            # task that must consume it, as ToolBroker approvals are bound.
+            links: dict[str, Any] = {}
             if exc.approval.tool_call_id is None:
-                updated = self.store.update(
+                links["tool_call_id"] = call.id
+            if exc.approval.task_id is None and invocation.task_id is not None:
+                links["task_id"] = invocation.task_id
+            updated = (
+                self.store.update(
                     Approval,
                     exc.approval.id,
-                    {"tool_call_id": call.id},
+                    links,
                     expected_revision=exc.approval.revision,
                 )
-            else:
-                updated = exc.approval
+                if links
+                else exc.approval
+            )
             await self.ledger.transition(
                 running,
                 ToolCallStatus.WAITING_APPROVAL,
@@ -545,6 +569,27 @@ class AutomationBroker:
             exit_code=result.exit_code,
             receipt=receipt,
         )
+
+    async def _waiting_call_approval(
+        self, call: Any, supplied: Approval | None
+    ) -> Approval:
+        """The durable decision a call parked for approval may continue with.
+
+        Only the approval linked to this ledger slot can release it. Re-entry
+        without a decision in hand reuses that card instead of asking the
+        operator a second time for the same invocation.
+        """
+
+        if not call.approval_id:
+            raise AmbiguousToolState(
+                f"tool call {call.id} is waiting for an approval it does not name"
+            )
+        if supplied is not None and supplied.id != call.approval_id:
+            raise ToolBrokerError("approval does not belong to this tool call")
+        durable = await self.ledger.get_approval(call.approval_id)
+        if durable.status == ApprovalStatus.PENDING:
+            raise ApprovalRequired(durable)
+        return durable
 
     def _retrieve(self, invocation: ToolInvocation) -> dict[str, Any]:
         if invocation.tool_name == "tool_output.search":
@@ -925,6 +970,7 @@ class AutomationToolPlatform:
                 run.supervisor_model or provider.config.default_model,
                 token_budget=run.budget.max_tokens,
             ),
+            store=self.store,
         )
         return MissionComponents(
             supervisor=ToolMissionSupervisor(action_specs),

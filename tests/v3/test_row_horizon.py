@@ -46,9 +46,7 @@ BOUNDED_KINDS = {
 
 # Temporary: other open pull requests replace the one-page lookups in these
 # modules. Remove each entry once its branch merges.
-PENDING_MODULES = {
-    "missions.py": "owned by claude/mission-recovery",
-}
+PENDING_MODULES: dict[str, str] = {}
 
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
