@@ -819,6 +819,91 @@ def test_aggregate_sink_failure_retains_the_error_once(
         manager.close()
 
 
+@pytest.mark.parametrize("failed_sink", ["feature", "aggregate"])
+def test_transient_sink_failure_recovers_only_after_the_failed_path_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_sink: str
+) -> None:
+    manager = DiagnosticManager(tmp_path, watch_settings=False)
+    original = manager._append
+    failed_once = False
+
+    def transient_failure(path: Path, line: bytes) -> None:
+        nonlocal failed_once
+        should_fail = (
+            path.name == "api.log"
+            if failed_sink == "feature"
+            else path.name == "errors.log"
+        )
+        if should_fail and not failed_once:
+            failed_once = True
+            raise OSError(28, "No space left on device")
+        original(path, line)
+
+    monkeypatch.setattr(manager, "_append", transient_failure)
+    try:
+        manager.record(
+            "error", "api", "api.test.transient_failed", "The first write failed."
+        )
+        assert manager.flush()
+        failed = manager.status()
+        assert failed["degraded"] is True
+        assert failed["writable"] is False
+
+        manager.record(
+            "info",
+            "projects",
+            "projects.test.different_sink",
+            "A different sink remained writable.",
+        )
+        assert manager.flush()
+        assert manager.status()["degraded"] is True
+
+        manager.record(
+            "error", "api", "api.test.transient_recovered", "The retry succeeded."
+        )
+        assert manager.flush()
+        recovered = manager.status()
+        assert recovered["degraded"] is False
+        assert recovered["writable"] is True
+        assert recovered["last_failure"]["message"] == (
+            "Local diagnostics storage became unavailable."
+        )
+    finally:
+        manager.close()
+
+
+def test_transient_sink_failure_is_probed_without_another_matching_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = DiagnosticManager(tmp_path, watch_settings=False)
+    original = manager._append
+    failed_once = False
+
+    def transient_failure(path: Path, line: bytes) -> None:
+        nonlocal failed_once
+        if path.name == "api.log" and not failed_once:
+            failed_once = True
+            raise OSError(28, "No space left on device")
+        original(path, line)
+
+    monkeypatch.setattr(manager, "_append", transient_failure)
+    try:
+        manager.record(
+            "error", "api", "api.test.transient_failed", "The first write failed."
+        )
+        assert manager.flush()
+        assert manager.status()["degraded"] is True
+
+        with manager._writer_lock:
+            manager._probe_failed_write_paths(force=True)
+
+        recovered = manager.status()
+        assert recovered["degraded"] is False
+        assert recovered["writable"] is True
+    finally:
+        manager.close()
+
+
 def test_operator_detail_drops_os_error_codes_and_host_paths(
     manager: DiagnosticManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
