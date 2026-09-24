@@ -1,14 +1,14 @@
 {
-  "change_digest": "b03422b31c1f190aa446b735940e98d05c5b1127068559a4e603467465531e25",
-  "reviewed_by": "Codex Assistant child-view review with independent storage and service agents",
-  "reason": "Cumulative Assistant-only port: 111 exact Rust tests and 53 Python checks across ten selected feature/policy files. Current increment adds eight Rust tests for complete batched child-view snapshots, conditional dependencies, shared read and expanded response limits, retained raw JSON, source ordering/Unicode/float/integer/time behavior, recovery and usage overlays, purity/reopen, and 73-case Python HTTP/header parity. Local selection is eight new plus 25 affected regressions: 16 HTTP and 9 storage entities (33 total); the shared HTTP oracle helper and borrowed-row decoder extraction justify those regressions. Local Python selects subagent capture and Python-Rust-Python storage handoff (two). Each Rust test collects once; compile/list 600 seconds per command, execution 120 seconds per test; Python 300 seconds. No full suites.",
-  "exclusions": "Thirty experimental Assistant handlers only. No shipped launch, production UI, other areas, desktop-native, execution, child dispatch, delivery, approval/stop actions or pending-effect reconciliation. Historical/PostgreSQL/checkpoint migration, full route parity, production browser/device/LAN/reconnect, packaging and whole-Assistant performance remain open. Consistent complete snapshots and explicit read/response bounds are compatibility extensions. Malformed persisted schema errors use sanitized 500 rather than exact Python 422 details; missing hook times are refused. Goal UI elapsed double counting/hidden child-goal errors and subagent client omission of question/reasoning/rounds remain production blockers. Raw history rendering uses Unicode 15 matching Python 3.12. No live state or full suites.",
+  "change_digest": "ee060ff3b787a113950b39e9fbe6bae034a77b1e532841aa3bd3b185c1571c9e",
+  "reviewed_by": "Codex with domain, storage and oracle sub-agent review",
+  "reason": "Cumulative Assistant-only rewrite: 119 exact Rust tests and 54 Python checks across eleven selected feature/policy files. This increment adds eight Rust tests for session-state projection, 85 immutable profile vectors, Python ASCII digests, expiry/progress precedence, bounded snapshots, writer-free unchanged polling, queued re-projection, concurrent revisions, cancellation/drain, reopen/cascade, overflow and 81-case HTTP/header/watermark parity. Local selection is eight new plus 33 affected regressions: 17 HTTP, nine entity-store writer/prefetch, four shared dependency and three catch-up purity/bounds cases (41 total). Local Python selects state capture and Python-Rust-Python storage handoff (two). Each Rust test must collect once; compile/list bounded to 600 seconds per command, execution to 120 seconds per test; Python 300 seconds. No full suites. The first HTTP run exposed diagnostic feature classification; actual Python capture also distinguishes initial-read storage failures from writer-phase chat failures. Added a captured writer fault and queued HTTP regression. The retry selects the failed HTTP case, 33 unexecuted regressions, and repeats two affected state writer/limit cases (36 exact tests).",
+  "exclusions": "Thirty-one experimental Assistant handlers; no shipped Rust entrypoint or production UI. Other areas and desktop-native remain untouched. No providers, harness execution, tools, child dispatch, streaming, receipt reconciliation or live data. Historical/PostgreSQL/checkpoint migration, complete route/error parity, production desktop/mobile/WebKit/LAN/reconnect/device, packaging and whole-Assistant performance remain open. Complete snapshot/response/ASCII-hash bounds and strict cached watermark validity are explicit extensions. Malformed retained model errors use sanitized failures instead of exact Python 422 details. Goal elapsed/error visibility and subagent question/reasoning/rounds UI gaps remain open. Figma inspection is design evidence only. Browser tests remain unselected until an isolated shipped Rust-backed journey exists.",
   "expected_tests": {
-    "python": 53,
+    "python": 54,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 111
+    "assistant_rust": 119
   },
   "python_versions": [
     "3.12"
@@ -25,7 +25,8 @@
     "tests/test_assistant_results_contract.py",
     "tests/test_assistant_status_contract.py",
     "tests/test_assistant_plans_contract.py",
-    "tests/test_assistant_subagents_contract.py"
+    "tests/test_assistant_subagents_contract.py",
+    "tests/test_assistant_state_contract.py"
   ],
   "frontend": [],
   "native": [],
@@ -141,6 +142,14 @@
     "nebula-assistant-services/subagents::subagent_clocks_preserve_recovery_usage_and_raw_state_after_reopen",
     "nebula-assistant-services/subagents::subagent_repr_expansion_fails_without_partial_results_or_writes",
     "nebula-assistant-services/subagents::subagent_renderer_preserves_order_unicode15_and_float_spelling",
-    "nebula-assistant-transport/http::python_subagents_http_oracle_preserves_child_views_headers_and_saved_state"
+    "nebula-assistant-transport/http::python_subagents_http_oracle_preserves_child_views_headers_and_saved_state",
+    "nebula-assistant-domain/session_state::harness_profile_decoder_matches_python_retained_validation_vectors",
+    "nebula-assistant-domain/session_state::session_state_digest_matches_python_ascii_vectors_and_resource_bounds",
+    "nebula-assistant-domain/session_state::session_state_projection_preserves_expiry_progress_precedence_and_bounds",
+    "nebula-assistant-storage/session_state::state_watermarks_preserve_python_digests_expiry_first_progress_and_retained_state",
+    "nebula-assistant-storage/session_state::state_unchanged_reads_avoid_writer_and_queued_updates_reproject_and_drain",
+    "nebula-assistant-storage/session_state::state_snapshot_preserves_scopes_validates_complete_collections_and_profile_authority",
+    "nebula-assistant-storage/session_state::state_snapshot_limits_and_revision_exhaustion_leave_durable_state_unchanged",
+    "nebula-assistant-transport/session_state::python_state_http_oracle_preserves_watermarks_pending_actions_and_passive_connections"
   ]
 }

@@ -7,6 +7,7 @@ pub mod generated;
 pub mod navigation;
 pub mod plans;
 pub mod results;
+pub mod session_state;
 pub mod status;
 pub mod subagents;
 mod unicode_casefold;
@@ -38,6 +39,8 @@ pub enum Error {
     HistoryConflict(&'static str),
     #[error("Retained Assistant state cannot be projected")]
     LegacyUnhandled,
+    #[error("Retained Assistant state cannot be projected in its storage snapshot")]
+    LegacyStorageUnhandled,
     #[error("Assistant model validation failed")]
     ModelValidation(Vec<Value>),
     #[error("{kind} entity not found: {id}")]

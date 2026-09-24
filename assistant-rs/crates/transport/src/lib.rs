@@ -24,7 +24,9 @@ use nebula_assistant_services::{
     generated::CatalogKind,
     navigation::BookmarkWrite,
 };
-use nebula_assistant_storage::entities::SqliteAssistantStore;
+use nebula_assistant_storage::entities::{
+    ConnectionObserver, SqliteAssistantStore, StateObservations,
+};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -39,6 +41,9 @@ pub struct HttpConfig {
     pub request_timeout: std::time::Duration,
     pub clock: fn() -> DateTime<Utc>,
     pub artifacts: Option<ArtifactPreview>,
+    /// Trusted, synchronous observation of retained harness transport liveness.
+    /// Must never start a transport or wait for network/process activity.
+    pub harness_connection: Option<Arc<ConnectionObserver>>,
 }
 impl HttpConfig {
     pub fn new(authentication: Authentication) -> Self {
@@ -50,6 +55,7 @@ impl HttpConfig {
             request_timeout: std::time::Duration::from_secs(30),
             clock: Utc::now,
             artifacts: None,
+            harness_connection: None,
         }
     }
 }
@@ -116,6 +122,10 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
             get(session_subagents),
         )
         .route("/api/v1/chat/sessions/{session_id}/catch-up", get(catch_up))
+        .route(
+            "/api/v1/chat/sessions/{session_id}/state",
+            get(session_state),
+        )
         .route("/api/v1/chat/session-activity", get(session_activity))
         .route("/api/v1/chat/sessions/{session_id}/queue", get(saved_queue))
         .route("/api/v1/chat/turns/{turn_id}/hooks", get(turn_hooks))
@@ -415,6 +425,29 @@ async fn session_subagents(
     let result = state
         .services
         .subagents(&session, (state.config.clock)())
+        .await;
+    let mut response = reply(request, result);
+    if response.status().is_success() {
+        response
+            .headers_mut()
+            .insert("cache-control", HeaderValue::from_static("no-store"));
+    }
+    response
+}
+async fn session_state(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let result = state
+        .services
+        .session_state(
+            &session,
+            StateObservations {
+                clock: Arc::new(state.config.clock),
+                connection: state.config.harness_connection,
+            },
+        )
         .await;
     let mut response = reply(request, result);
     if response.status().is_success() {

@@ -22,7 +22,7 @@ clickthrough was performed. No design files were changed.
 ## Journey-to-contract map
 
 Every row still needs real Rust-backed production UI acceptance. The final column
-describes the remaining evidence, not tests already run against a Rust assistant.
+distinguishes isolated API evidence from outstanding production acceptance.
 
 | Journey and Figma reference | Authority and invariant | Rust status / remaining evidence |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ describes the remaining evidence, not tests already run against a Rust assistant
 | [Subagents](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=21-2): inspect, wait, approve, stop | Children retain parent identity; waits release execution capacity; pending approval is visible | Retained child views have a 73-case Python HTTP/header oracle covering recovery, approvals, questions, usage and elapsed time. Isolated queue policy exists; durable admission, actions, delivery and execution pending |
 | [Nested chats](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=120-85): select child, open parent | Sidebar and banner preserve the parent/child relationship after refresh | Canonical IDs retained; snapshot projection and UI integration pending |
 | [Peer messaging](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=124-113): enable, discover, send, receive | Explicit opt-in, same project, one durable message/transcript entry, no idle-peer wake-up | Record endpoint/delivery invariants ported; transactional delivery and authorization pending |
-| [Action states](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-19): approval, failure, retry, restart | Decisions remain visible; trustworthy receipts settle effects; unknown outcomes are not replayed | Record claim/status validation only; full recovery and cancellation pending |
+| [Action states](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-19): approval, failure, retry, restart | Decisions remain visible; trustworthy receipts settle effects; unknown outcomes are not replayed | State GET preserves pending controls, expiry, first progress, passive connection state and durable display revisions with 81 HTTP comparisons plus a writer-phase fault. Receipt adoption, full recovery, cancellation and production UI remain pending |
 | [Agent view](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=97-3): follow, pin, minimize, dock | Saved Results own snapshots; device preferences own panel placement | Shared structured-results projections remain pending. The separate chat Results drawer has retained-output/context-source reads and bounded file-diff previews; these do not implement Agent view |
 | [Side terminal](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=44-3) and [environment](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=57-2) | Workspace/session references stay attached to the selected host and project | Helper, artifact and permission contracts remain dependencies; no terminal/environment area edits |
 | [Runtime/tool selections](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=101-3) | Existing provider/MCP catalogs remain discoverable; opt-ins and disclosure persist | Shared settings remain unchanged; Assistant consumption, auth and bounded helpers pending |
@@ -104,3 +104,12 @@ Required production matrix: desktop Chromium 1440/1024; mobile Chromium and WebK
 loading, empty, error/retry, background/reconnect, long content, keyboard/touch,
 labels, focus, reduced motion, revocation and deletion. Label emulation separately
 from physical devices. None of these product gates passed on Rust in this review.
+
+
+Session-state reads now preserve the revision authority consumed by
+`useSessionState.ts`, including approval expiry, pending questions, interruption
+capability and passive transport observations. Unchanged reads avoid the writer;
+changed reads re-project under the write boundary before assigning a revision.
+The 81-case API oracle and writer-phase fault verify the retained state and error
+contracts. These are isolated API checks, not production reconnect, keyboard,
+mobile, LAN or physical-device evidence. No new Figma visit is implied here.

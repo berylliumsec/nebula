@@ -14,15 +14,17 @@ pub enum DependencyKind {
     ToolCall,
     Artifact,
     NativeHookExecution,
+    HarnessProfile,
 }
 impl DependencyKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Approval,
         Self::HarnessInteraction,
         Self::HarnessTurn,
         Self::ToolCall,
         Self::Artifact,
         Self::NativeHookExecution,
+        Self::HarnessProfile,
     ];
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -32,6 +34,7 @@ impl DependencyKind {
             Self::ToolCall => "tool_calls",
             Self::Artifact => "artifacts",
             Self::NativeHookExecution => "native_hook_executions",
+            Self::HarnessProfile => "harnesses",
         }
     }
 }
@@ -60,6 +63,11 @@ static SCHEMAS: LazyLock<Result<Value, RecordError>> = LazyLock::new(|| {
             .map_err(|_| RecordError::Schema)?;
     schemas[DependencyKind::NativeHookExecution.as_str()] =
         status["dependency_schemas"][DependencyKind::NativeHookExecution.as_str()].clone();
+    let state: Value =
+        serde_json::from_str(include_str!("../../../compatibility/python-state.json"))
+            .map_err(|_| RecordError::Schema)?;
+    schemas[DependencyKind::HarnessProfile.as_str()] =
+        state["dependency_schemas"][DependencyKind::HarnessProfile.as_str()].clone();
     Ok(schemas)
 });
 static VALIDATORS: LazyLock<Result<HashMap<DependencyKind, Validator>, RecordError>> =
@@ -166,6 +174,7 @@ impl StoredDependency {
         }
         let truthy = |field: &str| p[field].as_str().is_some_and(|v| !v.is_empty());
         match kind {
+            DependencyKind::HarnessProfile => crate::harness_profile::validate(&mut p)?,
             DependencyKind::NativeHookExecution => {
                 if (p["status"] != "running") == p["completed_at"].is_null() {
                     return Err(RecordError::Invariant(

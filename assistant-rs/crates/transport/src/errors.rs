@@ -141,12 +141,16 @@ impl ApiError {
                 error.code = "api.model_validation".into();
                 error
             }
-            ServiceError::LegacyUnhandled => Self::named(
+            ServiceError::LegacyUnhandled | ServiceError::LegacyStorageUnhandled => Self::named(
                 500,
                 "The operation failed unexpectedly. No verified recovery procedure is available."
                     .into(),
                 "api.unhandled_exception",
-                "chat",
+                if matches!(error, ServiceError::LegacyStorageUnhandled) {
+                    "storage"
+                } else {
+                    "chat"
+                },
             ),
             ServiceError::Unavailable(detail) => Self::http(503, detail),
             ServiceError::Timeout(detail) => Self::http(504, detail),

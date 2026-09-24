@@ -40,6 +40,8 @@ mod plans;
 pub use plans::{GoalChildrenSnapshot, SessionPlansSnapshot};
 mod subagents;
 pub use subagents::{RawSubagentTurn, SubagentSnapshot, SubagentViewRow};
+mod session_state;
+pub use session_state::{ConnectionObserver, StateClock, StateObservations};
 
 const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MUTATIONS: usize = 64;
@@ -73,6 +75,8 @@ pub enum Error {
     RevisionConflict { expected: i64, found: i64 },
     #[error("stored assistant envelope and payload disagree")]
     CorruptEnvelope,
+    #[error("retained session state became invalid during display revision assignment")]
+    InvalidStateProjectionDuringWrite,
     #[error("invalid assistant storage configuration or query bounds")]
     InvalidBounds,
     #[error("transaction must contain 1 to 64 mutations and at most 16 MiB")]
@@ -240,6 +244,7 @@ struct WriteRequest {
 }
 enum Command {
     Apply(WriteRequest),
+    SessionState(session_state::StateRequest),
     TouchDevice {
         id: String,
         revision: i64,
@@ -298,6 +303,9 @@ impl SqliteAssistantStore {
                 .foreign_keys(true)
                 .journal_mode(SqliteJournalMode::Wal)
                 .synchronous(SqliteSynchronous::Normal)
+                // Session-state assignment re-reads bounded collections inside
+                // this connection's write transaction. Bound SQLx prefetch too.
+                .row_buffer_size(1)
                 .busy_timeout(Duration::from_secs(5)),
         )
         .await?;
@@ -922,6 +930,12 @@ async fn writer(
             Command::Apply(request) => {
                 let result =
                     apply_transaction(&mut connection, request.preconditions, request.mutations)
+                        .await;
+                let _ = request.reply.send(result);
+            }
+            Command::SessionState(request) => {
+                let result =
+                    session_state::write_state(&mut connection, &request.id, &request.observations)
                         .await;
                 let _ = request.reply.send(result);
             }

@@ -616,3 +616,74 @@ all approval statuses, recovery versus terminal receipts, large token counters,
 Unicode whitespace, timestamps and response expansion. No selected test failed.
 Cumulative CI selection is 111 exact Rust and 53 Python checks. Production
 journeys, actions/delivery, full error parity and performance remain unverified.
+
+## Session-state display and watermark contract
+
+Journey: select or reconnect to a conversation, observe work and pending decisions,
+refresh after a decision or transport change, and reject stale responses by their
+durable display revision. Session, Turn, Approval, HarnessInteraction, HarnessTurn
+and HarnessProfile records plus the immutable operation ledger own this view.
+The clock controls approval expiry; a passive transport observer alone supplies
+connection state. Missing runtime observation means unknown, never inferred live
+or disconnected from a saved turn. Figma Recovery and Assistant conversation
+journeys remain the product references.
+
+Preserve complete scoped input validation, oldest active turn selection, pending
+ownership and secret redaction, decision/first-progress precedence, interruption
+capability, response detail strings and no-store caching. The projection writes only
+the existing session_projections watermark. Shared authentication retains its
+existing paired-device idle refresh. Python-compatible sorted ASCII JSON
+hashing must recognize existing digests. An unchanged digest uses pooled readers
+without entering the writer lane. A changed digest queues a bounded request,
+re-reads and projects after acquiring the write transaction, and atomically assigns
+one revision. Clock rollback, concurrent polls, expiry and connection changes must
+not produce stale snapshots or decreasing revisions. Entity revisions, events,
+claims, callbacks, receipts and scheduling remain untouched. No transport observer
+may start work or wait for a network or child process inside the transaction.
+
+Planned evidence: deterministic Python capture with isolated databases and inert
+connection observations; pure projection and digest vectors; bounded storage input
+and response tests; concurrent/queued revision assignment, unchanged fast path,
+reopen, cascade and raw-state checks; full HTTP response/header/auth comparison;
+focused regressions for the shared decoder, writer and transport. Fresh clocks and
+passive observations are sampled for the projection inside the writer boundary.
+Production UI, desktop/mobile/browser/LAN and real transport lifecycle gates remain
+required before claiming the complete Assistant journey. Full malformed-model
+error parity, execution/recovery, migrations and performance remain open.
+
+
+Implemented as the thirty-first experimental Assistant handler. Immutable profile
+validation is scoped to retained input; no credentials, endpoint connections or
+processes are resolved. The snapshot batches progress lookups and uses indexed
+per-operation first-sequence reads. Ownership selection is linear with indexed
+fallback owners, and ASCII hashing processes ordinary text in chunks without
+per-character allocations. Writer row prefetch is one, matching the bounded read
+materialization policy. These choices have no measured throughput claim yet.
+
+Evidence: 81 deterministic Python HTTP cases plus one captured writer-phase fault,
+106 Assistant records, 61 shared dependencies and 85 profile validation vectors.
+Rust compares complete responses, cache headers, every watermark and unchanged
+raw entity envelopes/operation ledger around each GET and after reopen. Python
+capture additionally checks run events and relations. An existing Python Unicode
+digest is retained unchanged. Focused tests cover complete 1,001-turn/decision
+collections, shared row/byte limits, expiry/clock rollback, first-progress stability,
+concurrent revision assignment, queued fresh observations, cancellation/drain,
+deleted sessions, revision exhaustion and catch-up watermark independence.
+
+All 41 unique selected local Rust tests passed. The first HTTP run exposed the
+source's diagnostic feature inheritance: initial Database.session() failures are
+storage failures, while writer re-projection failures retain chat context. A fresh
+Python fault capture and queued Rust HTTP regression now verify both. Seven new
+domain/storage tests passed before that fix; the retry passed 36 tests, including
+two repeated writer/limit cases. Review also corrected sub-microsecond expiry
+comparison and a legacy profile-kind lookup before test execution. Both selected
+Python checks passed: updated oracle regeneration (5.57 seconds) and the existing
+Python/Rust/Python storage handoff (2.30 seconds). Cumulative CI selects 119 exact
+Rust tests and 54 Python checks; CI evidence is recorded with the PR commit.
+
+A fresh isolated mounted-route/model capture with explicit worktree imports found
+no change to the retained inventory: 85 routes, 13 entity schemas, OpenAPI contracts
+and captured Assistant source hashes match. The verified integration base remains
+origin/main d2d1ba62e3ad96c966a6612f1a446f6798e96c37. Detailed malformed-model
+validation envelopes, remaining mutation/execution services, recovery, streaming,
+migrations, packaging, production Figma journeys and performance remain open.

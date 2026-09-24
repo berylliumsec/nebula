@@ -17,14 +17,15 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
   revision history, atomic project promotion, per-device read cursors, transcript
   navigation, project message search, durable bookmarks, conversation catalogs,
   catch-up, retained Results/context-source reads, activity, saved queues, hook
-  summaries, goals, child goals, schedules and retained subagent views. Source
-  and session revisions are rechecked inside the bounded writer transaction.
+  summaries, goals, child goals, schedules, retained subagent views and durable
+  session display revisions. Source and session revisions are rechecked inside
+  the bounded writer transaction.
 - `nebula-assistant-transport`: experimental Axum routes for saved-context GET/PUT
   and read-cursor PUT, transcript/search GET, bookmark GET/PUT, conversation
   catalogs, catch-up/summary, Results/context-source, activity, saved queue,
-  hook-summary, goal/children, schedule and subagent-view GET, with
-  bearer/paired-device authentication. No shipped entry
-  point mounts this router yet. Typed request coercion and error envelopes have
+  hook-summary, goal/children, schedule, subagent-view and session-state GET, with
+  bearer/paired-device authentication. No shipped entry point mounts this router
+  yet. Typed request coercion and error envelopes have
   Python-oracle coverage; complete route and production parity are open.
 - `nebula-assistant-lab`: fixture generation, replay and journal measurements.
 
@@ -252,3 +253,31 @@ messages, settle receipts, or start/stop children.
 ```sh
 PYTHONPATH=src python -m scripts.capture_assistant_subagents --output assistant-rs/compatibility/python-subagents.json
 ```
+
+The experimental session-state GET combines retained turns, pending approvals and
+questions, interruption capability and the first qualifying immutable ledger
+progress event. A trusted, synchronous observer supplies existing harness transport
+liveness; it must never create a transport or perform I/O. Absent observation is
+`unknown`. The projection cannot dispatch work, reconcile receipts or change entities.
+Shared authentication preserves its existing paired-device idle refresh.
+
+Changed display state writes only the existing `session_projections` row through
+the bounded writer. It rereads all inputs after acquiring `BEGIN IMMEDIATE`, then
+atomically assigns the revision. An unchanged digest stays on pooled readers.
+The digest uses Python's sorted compact ASCII JSON, allowing existing Python
+watermarks to survive switching implementations on isolated copies. Input records
+and lookup references share the 10,000-row / 16-MiB budget; expanded JSON and its
+ASCII hash stream each have a 16-MiB bound. Overflow or invalid retained watermarks
+fail explicitly. These bounds are compatibility extensions.
+
+Regenerate the inert session-state fixture from the repository root:
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_state --output assistant-rs/compatibility/python-state.json
+```
+
+The fixture captures 81 HTTP cases, a writer-phase fault, and 85 immutable
+harness-profile validation vectors. Scripted changes model expiry, decisions, first progress, connection
+observations, deletion and reopen. No lifespan, adapter, provider, process or tool
+execution runs during capture. This remains an experimental API port; production
+UI and transport lifecycle acceptance are separate outstanding gates.
