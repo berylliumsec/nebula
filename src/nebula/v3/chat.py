@@ -1648,8 +1648,17 @@ class ChatService:
                     exc,
                     stage="startup-recovery",
                 )
-        # Results callbacks can land while Core is stopped. Reattach completed
-        # waits without asking the provider to poll or replay the command.
+        self.reconcile_waiting_callbacks()
+
+    def reconcile_waiting_callbacks(self) -> list[str]:
+        """Resume process callback waits whose producer can no longer be live.
+
+        A terminal process without a callback is not proof of the external
+        effect's outcome. Resuming lets the callback consumer materialize that
+        uncertainty for the provider instead of presenting false activity.
+        """
+
+        resumed: list[str] = []
         offset = 0
         while waiting_page := self.store.list_entities(
             ChatTurn, offset=offset, limit=1_000
@@ -1688,8 +1697,25 @@ class ChatService:
                         expected_revision=latest.revision,
                     )
                     continue
-                if execution.metadata.get("results_received"):
-                    self.start_provider_turn(self.prepare_resume(waiting_turn.id))
+                callback_ready = bool(execution.metadata.get("results_received"))
+                producer_terminal = self._callback_producer_terminal(execution)
+                if not callback_ready and not producer_terminal:
+                    continue
+                if self.has_active_provider_turn(waiting_turn.id):
+                    continue
+                try:
+                    resumed.append(
+                        self.start_provider_turn(self.prepare_resume(waiting_turn.id))
+                    )
+                except Exception as exc:
+                    record_caught_exception(
+                        "chat",
+                        "chat.callback.reconcile_failed",
+                        "A completed callback wait could not resume; the next reconciliation pass will retry.",
+                        exc,
+                        stage="callback-recovery",
+                    )
+        return resumed
 
     def resume_turns_stopped_by_core(self) -> list[str]:
         """Automatically reconcile and resume turns owned by the previous Core.
@@ -7550,7 +7576,9 @@ class ChatService:
 
         execution_id = AutomationRuntimeManager._execution_id(process_id)
         execution = self.store.get(CommandExecution, execution_id)
-        if not execution.metadata.get("results_received"):
+        callback_received = bool(execution.metadata.get("results_received"))
+        producer_terminal = self._callback_producer_terminal(execution)
+        if not callback_received and not producer_terminal:
             yield (
                 "callback_required",
                 {
@@ -7563,27 +7591,57 @@ class ChatService:
                 },
             )
             return
-        output = {
-            "schema": "nebula.tool-result/v2",
-            "tool_call_id": entry["tool_call_id"],
-            "tool_name": entry["name"],
-            "status": "completed"
-            if execution.status.value == "completed"
-            else "failed",
-            "summary": execution.metadata.get("results_summary")
-            or execution.error
-            or f"Callback recorded {execution.status.value}",
-            "exit_code": execution.exit_code,
-            "output": execution.metadata.get("results_output") or {},
-            "stdout": execution.metadata.get("results_stdout") or "",
-            "incomplete": False,
-        }
-        failed = execution.status != CommandExecutionStatus.COMPLETED
+        if callback_received:
+            output = {
+                "schema": "nebula.tool-result/v2",
+                "tool_call_id": entry["tool_call_id"],
+                "tool_name": entry["name"],
+                "status": "completed"
+                if execution.status.value == "completed"
+                else "failed",
+                "summary": execution.metadata.get("results_summary")
+                or execution.error
+                or f"Callback recorded {execution.status.value}",
+                "exit_code": execution.exit_code,
+                "output": execution.metadata.get("results_output") or {},
+                "stdout": execution.metadata.get("results_stdout") or "",
+                "incomplete": False,
+            }
+            failed = execution.status != CommandExecutionStatus.COMPLETED
+        else:
+            summary = (
+                f"Background command became {execution.status.value} before it "
+                "posted the required result. Its side effects and final output "
+                "are unknown; do not repeat it automatically."
+            )
+            output = {
+                "schema": "nebula.tool-failure/v1",
+                "status": "failed",
+                "tool": entry["name"],
+                "category": "missing_callback",
+                "problem": summary,
+                "side_effects": "unknown",
+                "invalid_input": None,
+                "effective_input_schema": None,
+                "schema_truncated": False,
+                "schema_reference": None,
+                "next_action": (
+                    "Inspect the recorded process output and operation state before "
+                    "choosing a different action."
+                ),
+                "retry_safe": False,
+                "diagnostic_reference": None,
+                "diagnostic_available": False,
+                "process_id": execution.process_id,
+                "process_status": execution.status.value,
+                "exit_code": execution.exit_code,
+            }
+            failed = True
         entry.update(
             {
                 "status": "failed" if failed else "complete",
                 "provider_result": serialize_model_result(output),
-                "result_summary": output["summary"],
+                "result_summary": output.get("summary") or output["problem"],
             }
         )
         from .domain import ToolCall
@@ -7601,7 +7659,7 @@ class ChatService:
                         else ToolCallStatus.COMPLETE,
                         "completed_at": utc_now(),
                         "result": output,
-                        "error": execution.error,
+                        "error": execution.error or output.get("problem"),
                     },
                     expected_revision=call.revision,
                 )
@@ -7691,7 +7749,7 @@ class ChatService:
         )
 
     def continue_after_tool_callback(self, process_id: str) -> str | None:
-        """Resume a provider turn after a LAN results webhook."""
+        """Resume a provider turn after a callback or terminal producer state."""
 
         from .automation_runtime import AutomationRuntimeManager
 
@@ -7706,10 +7764,25 @@ class ChatService:
             return None
         if turn.backend != ChatBackend.PROVIDER:
             return None
+        if not execution.metadata.get(
+            "results_received"
+        ) and not self._callback_producer_terminal(execution):
+            return None
         if self.has_active_provider_turn(turn.id):
             return turn.id
         prepared = self.prepare_resume(turn.id)
         return self.start_provider_turn(prepared)
+
+    @staticmethod
+    def _callback_producer_terminal(execution: CommandExecution) -> bool:
+        """True only when the process can no longer deliver a callback."""
+
+        return execution.status in {
+            CommandExecutionStatus.COMPLETED,
+            CommandExecutionStatus.FAILED,
+            CommandExecutionStatus.TIMED_OUT,
+            CommandExecutionStatus.CANCELLED,
+        }
 
     def prepare_resume(self, turn_id: str) -> PreparedChat:
         turn = self.reconcile_recorded_effects(turn_id)
