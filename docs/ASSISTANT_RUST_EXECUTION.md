@@ -207,3 +207,60 @@ test for this increment. They do not connect admission to workers or establish
 stream publication/recovery. The ledger command engine and supervisor-owned
 admission controller are the next integration steps. Production UI, historical
 migrations, full provider/harness coverage and performance gates remain open.
+
+CI for `b47771d` passed (run `35975820117`): 227 exact Rust tests and 68 Python
+tests on Python 3.12. Downloaded selection and Rust execution receipts both bind
+`a5390c74d8a0e6594a75793da5afcdac54d2a4a24bc733c5e4165914f5442564`.
+Python 3.11/3.13 were omitted. Browser planning passed with Playwright skipped.
+
+The following integration work owns admission through caller disconnect and
+shutdown, preserves immutable receipt/event identity inside the SQLite writer,
+and resolves project privacy and root instructions before any future dispatch.
+ScopePolicy reads use the same bounded dependency reader; malformed or missing
+referenced policies cannot become unrestricted access. Instructions come from
+the host-authorized linked workspace and are reread every turn, with the exact
+source 64-KiB prefix, UTF-8 replacement, receipt and prompt formatting. No new
+untrusted path becomes a filesystem capability. Blocking reads, returned content
+and admission error materialization each require their own bounded ownership.
+Focused evidence will use isolated database/workspace fixtures, exact selected
+Rust tests and source recaptures. Continuous completion/Stop/reconnect journeys
+and the production UI/performance gates remain open.
+
+Local integration checks passed 24 unique exact Rust tests and two Python source
+recaptures. Five admission checks passed under
+`3f6a372a054d13089959523907415368608994358279fec9250fddf28fee14d0`;
+the two Python recaptures also passed in 5.86 seconds. A scope vector then exposed
+an implementation error: CPython's CIDR prefix parser requires ASCII digits,
+unlike generic Python integer conversion. The fixture was preserved and the Rust
+parser corrected. Two scope model checks passed under
+`b0fff42e4ebb90c1ad28957e11471c8d6033d4dcf348ff54984f97b4571b912a`.
+The reopen test next needed an awaited writer shutdown before reacquiring its
+file lock; this was a test-only correction. The remaining 17 checks passed under
+`bf1cb2da8740f0b28fe110af575fc825bffc71987b7b4fc2d2acfca7524b562c`.
+Passed selections were not repeated or broadened during either correction.
+
+The policy corpus has 148 direct model vectors and 12 isolated-store privacy
+cases; four separate observations retain the strict missing-base-field boundary.
+Project instructions have nine content and 14 path cases, plus isolated tests of
+retained result credits, changed content, special files, substituted symlinks and
+blocked-work ownership after timeout/caller cancellation. The source permission
+fixture requires an unprivileged POSIX user. Neither module resolves provider
+secrets or grants any execution capability. The ledger writer remains excluded
+from these runs and has its own pending transaction/replay selection.
+
+The subsequent ledger selection passed eight exact Rust checks under
+`d30ff9ea668451b3e01eb04c0a543a04db26160d15569e7181dea95473504410`:
+four new transaction-engine checks and four existing schema checks. They cover
+outer-transaction rollback and reopen, lost-ack deduplication, identical adjacent
+deltas with distinct identities, exact replay bytes, corrupt/future cursor
+refusal, immutable attempt/watch fences, and logical quota conservation. Terminal
+events link typed settlement evidence. Explicit release returns unused reservation
+only after definitive settlement; recovery uncertainty retains its reserve.
+The preceding experimental schema is explicitly incompatible. No live schema
+was installed, and no automatic migration is supplied.
+
+Across this increment, local selections passed 32 unique exact Rust tests and
+two Python source recaptures. The engine still requires composition with actual
+execution entity mutations on the authoritative writer connection. Staged results
+never authorize publication or dispatch. Aggregate replay-result credits, startup
+reconciliation and the continuous production workflow remain required.

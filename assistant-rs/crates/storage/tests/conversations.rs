@@ -373,7 +373,7 @@ async fn conversation_dependency_budget_bounds_retained_and_defaulted_payloads()
         Err(Error::ReadLimit)
     ));
     let mut budget = DependencyReadBudget::default();
-    for _ in 0..66 {
+    for _ in 0..67 {
         store
             .conversation_dependency(Kind::Engagement, "small", &env, Arc::new(now), &mut budget)
             .await

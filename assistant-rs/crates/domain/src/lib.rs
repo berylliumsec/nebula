@@ -12,6 +12,7 @@ pub mod model_validation;
 pub mod provider_stream;
 pub mod records;
 pub mod retained_json;
+pub mod scope_policy;
 pub mod session_state;
 pub mod tool_receipt;
 

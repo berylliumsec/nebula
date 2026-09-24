@@ -3,6 +3,8 @@
 //! The owning service must durably admit/claim work before acknowledging/dispatching
 //! it. This deterministic policy is deliberately separate from persistence and I/O.
 
+pub mod admission;
+
 use nebula_assistant_domain::{ValidationError, bounded};
 use serde::{Deserialize, Serialize};
 use std::{

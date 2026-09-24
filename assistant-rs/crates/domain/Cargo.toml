@@ -3,7 +3,7 @@ name = "nebula-assistant-domain"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license = "BSD-3-Clause AND Unicode-3.0"
 publish.workspace = true
 
 [dependencies]
@@ -17,6 +17,7 @@ num-bigint.workspace = true
 num-traits.workspace = true
 speedate.workspace = true
 strum.workspace = true
+idna.workspace = true
 
 [lints]
 workspace = true

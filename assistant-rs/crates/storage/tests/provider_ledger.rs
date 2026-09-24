@@ -5,6 +5,7 @@ use nebula_assistant_storage::entities::provider_ledger::{
     Error, InstallIdentity, SchemaLimits, Status, inspect, install, manifest_sha256,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::{Connection, Row, SqliteConnection};
 use support::{database, raw};
 use uuid::Uuid;
@@ -195,6 +196,7 @@ async fn provider_ledger_refuses_partial_unknown_or_changed_schema_without_write
         "missing-trigger",
         "extra-index",
         "changed-index",
+        "preceding-development-schema",
         "checksum",
         "future",
         "oversized-ddl",
@@ -205,7 +207,12 @@ async fn provider_ledger_refuses_partial_unknown_or_changed_schema_without_write
         let (_dir, mut db) = fresh().await;
         if matches!(
             mode,
-            "missing-trigger" | "extra-index" | "changed-index" | "checksum" | "future"
+            "missing-trigger"
+                | "extra-index"
+                | "changed-index"
+                | "checksum"
+                | "future"
+                | "preceding-development-schema"
         ) {
             install(&mut db, identity(), limits()).await.unwrap();
         }
@@ -223,6 +230,47 @@ async fn provider_ledger_refuses_partial_unknown_or_changed_schema_without_write
             "changed-index" => {
                 q(&mut db, "DROP INDEX assistant_provider_streams_recovery").await;
                 q(&mut db, "CREATE INDEX assistant_provider_streams_recovery ON assistant_provider_streams(state,turn_id)").await;
+            }
+            "preceding-development-schema" => {
+                // Reconstruct the previous experimental manifest, including its valid
+                // self-checksum. Recognizing it never means silently upgrading it.
+                q(&mut db, "DROP INDEX assistant_provider_receipts_control").await;
+                let events: String = sqlx::query_scalar(
+                    "SELECT sql FROM sqlite_schema WHERE name='assistant_provider_events'",
+                )
+                .fetch_one(&mut db)
+                .await
+                .unwrap();
+                let previous=events
+                    .replace(",\nsettlement_receipt_sequence INTEGER CHECK(settlement_receipt_sequence IS NULL OR (typeof(settlement_receipt_sequence) = 'integer' AND settlement_receipt_sequence >= 1))", "")
+                    .replace(",\nCHECK((event_type IN ('done','error','cancelled','interrupted')) = (settlement_receipt_sequence IS NOT NULL))", "")
+                    .replace(",\nFOREIGN KEY(turn_id, settlement_receipt_sequence) REFERENCES assistant_provider_receipts(turn_id, receipt_sequence)", "");
+                assert_ne!(events, previous);
+                let triggers:Vec<String>=sqlx::query_scalar("SELECT sql FROM sqlite_schema WHERE type='trigger' AND tbl_name='assistant_provider_events' ORDER BY name").fetch_all(&mut db).await.unwrap();
+                q(&mut db, "DROP TABLE assistant_provider_events").await;
+                q(&mut db, &previous).await;
+                for ddl in triggers {
+                    q(&mut db, &ddl).await;
+                }
+                let objects:Vec<(String,String,String,String)>=sqlx::query_as("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE sql IS NOT NULL AND (lower(substr(name,1,19))='assistant_provider_' OR lower(substr(tbl_name,1,19))='assistant_provider_') ORDER BY type,name").fetch_all(&mut db).await.unwrap();
+                let mut hash = Sha256::new();
+                hash.update(b"nebula.assistant-provider-schema/v1\0");
+                for (kind, name, table, sql) in objects {
+                    for part in [kind, name, table, sql] {
+                        hash.update((part.len() as u64).to_be_bytes());
+                        hash.update(part.as_bytes());
+                    }
+                }
+                let checksum = format!("{:x}", hash.finalize());
+                assert_ne!(checksum, manifest_sha256());
+                let guard = trigger_sql(&mut db, "assistant_provider_schema_no_update").await;
+                q(&mut db, "DROP TRIGGER assistant_provider_schema_no_update").await;
+                sqlx::query("UPDATE assistant_provider_schema SET migration_sha256=?")
+                    .bind(checksum)
+                    .execute(&mut db)
+                    .await
+                    .unwrap();
+                q(&mut db, &guard).await;
             }
             "checksum" | "future" => {
                 let ddl = trigger_sql(&mut db, "assistant_provider_schema_no_update").await;

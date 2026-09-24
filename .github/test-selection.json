@@ -1,14 +1,14 @@
 {
-  "change_digest": "a5390c74d8a0e6594a75793da5afcdac54d2a4a24bc733c5e4165914f5442564",
+  "change_digest": "616ff5272acdad2352b0d28c0fcf997ef9b51ae9dc193a187f5b8b4de3e8d357",
   "reviewed_by": "Codex using current Assistant source captures, independent writer/provider review and shared validator impact review",
-  "reason": "Assistant-only cumulative PR selection: retain the reviewed exact domain/storage/runtime/service/HTTP and selection-guard checks. Add 17 exact Rust checks for non-dispatchable queue reservations and Session ordering, additive provider-ledger schema/epoch preservation, bounded immutable SSE encoding, and pure context/history preparation. The new Python recapture binds 99 preparation vectors and Unicode 15 tables to CPython 3.12. Local evidence for this increment: 25 unique Rust checks (including eight existing fairness regressions) and one Python check passed. Cumulative collection: 227 exact Rust and 68 Python tests.",
-  "exclusions": "No full suites or automatic scope expansion. Rust selector compile/collection is limited to 600 seconds and execution to 120 seconds each; CI Rust job is limited to 20 minutes. Local Python recapture limit was 120 seconds; CI selects Python 3.12 only and declares no explicit Python job timeout. Other Python versions are omitted. SQLite fixtures are isolated and provider protocol tests use harmless loopback simulators. Shipped entrypoints/UI still use Python; no new completion handler or live state changes. Frontend, desktop-native, production Chromium/WebKit, LAN/physical-device, real provider/tool, historical SQLite/PostgreSQL/checkpoint migration and whole-Assistant performance gates remain open.",
+  "reason": "Cumulative exact Assistant replacement contract selection: existing retained reads/mutations, source differential fixtures, bounded OpenAI-compatible protocol, execution phase/CAS/recovery and reservation policy; adds supervised admission ownership, passive ScopePolicy privacy, project instructions and transaction-local provider ledger. Local increment passed32 unique Rust and2 Python checks; previous committed227 Rust/68 Python selection passed CI. Shared DependencyKind test match explicitly includes ScopePolicy and remains covered.",
+  "exclusions": "No full suites. Rust compile/collection600s and execution120s per exact selector; CI Rust job20min. Python3.12 only, local collection300s; CI has no explicit Python job timeout. Python3.11/3.13, frontend/native/Playwright excluded. No live state/provider/tool execution, production UI/mobile/LAN/physical-device, historical migration/cutover or performance acceptance claimed. Selection covers the cumulative experimental Assistant diff.",
   "expected_tests": {
-    "python": 68,
+    "python": 70,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 227
+    "assistant_rust": 246
   },
   "python_versions": [
     "3.12"
@@ -36,7 +36,9 @@
     "tests/test_assistant_execution_contract.py::test_execution_oracle_matches_current_python_assistant_boundary",
     "tests/test_assistant_turn_validation_contract.py::test_turn_validation_oracle_matches_current_python_models",
     "tests/v3/test_assistant_rust_provider_protocol.py::test_committed_assistant_provider_protocol_matches_python_source",
-    "tests/test_assistant_execution_context_contract.py::test_execution_context_oracle_matches_python_source"
+    "tests/test_assistant_execution_context_contract.py::test_execution_context_oracle_matches_python_source",
+    "tests/test_assistant_scope_policy_contract.py::test_scope_policy_oracle_matches_python_source",
+    "tests/test_assistant_project_instructions_contract.py::test_project_instructions_oracle_matches_python_source"
   ],
   "frontend": [],
   "native": [],
@@ -268,6 +270,25 @@
     "nebula-assistant-services/execution_context::python_context_limits_and_catalog_match_source",
     "nebula-assistant-services/execution_context::python_text_estimates_match_source",
     "nebula-assistant-services/execution_context::python_visible_history_merge_and_joins_match_source",
-    "nebula-assistant-services/execution_context::text_preparation_bounds_and_unsupported_projections_are_explicit"
+    "nebula-assistant-services/execution_context::text_preparation_bounds_and_unsupported_projections_are_explicit",
+    "nebula-assistant-runtime/admission::caller_drop_keeps_owned_admission_and_shutdown_drains_commit",
+    "nebula-assistant-runtime/admission::confirmed_rejection_preserves_error_and_aborts_only_its_reservation",
+    "nebula-assistant-runtime/admission::error_replies_retain_credits_and_oversized_reports_keep_rollback_disposition",
+    "nebula-assistant-runtime/admission::intake_pending_identity_and_ownership_limits_precede_persistence",
+    "nebula-assistant-runtime/admission::uncertain_writer_outcome_retains_capacity_without_dispatch_or_reuse",
+    "nebula-assistant-domain/scope_policy::python_scope_policy_hydration_and_grant_clocks_match_source",
+    "nebula-assistant-domain/scope_policy::scope_policy_retained_boundaries_and_diagnostics_stay_bounded",
+    "nebula-assistant-storage/scope_policy::python_scope_policy_privacy_reads_preserve_raw_rows_and_reopen",
+    "nebula-assistant-storage/scope_policy::scope_policy_reads_fail_closed_on_envelopes_and_budget",
+    "nebula-assistant-services/project_instructions::source_project_instruction_content_receipts_and_prompt_bytes_match",
+    "nebula-assistant-services/project_instructions::source_project_instruction_path_rules_preserve_parent_links_and_refusals",
+    "nebula-assistant-services/project_instructions::project_instruction_rereads_and_shared_reply_credits_bound_retained_results",
+    "nebula-assistant-services/project_instructions::project_instruction_special_files_and_resolution_work_are_bounded",
+    "nebula-assistant-services/lib::project_instructions::tests::verified_project_read_refuses_substituted_symlink_components",
+    "nebula-assistant-services/lib::project_instructions::tests::project_read_timeout_and_caller_drop_keep_blocking_ownership",
+    "nebula-assistant-storage/provider_ledger_writer::ledger_writer_atomic_receipts_events_dedup_and_reopen",
+    "nebula-assistant-storage/provider_ledger_writer::ledger_writer_control_quota_conserves_reservations_and_rolls_back",
+    "nebula-assistant-storage/provider_ledger_writer::ledger_writer_replay_rejects_corruption_and_bounds_cursors",
+    "nebula-assistant-storage/provider_ledger_writer::ledger_writer_watch_fences_and_canonical_identity_preserve_lineage"
   ]
 }

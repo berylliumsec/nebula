@@ -12,7 +12,9 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
   Its separate `entities` module reads and updates an isolated copy of Nebula's
   current SQLite schema, preserving revisions, lookup and search projections.
 - `nebula-assistant-runtime`: fair project/parent/session queue selection;
-  waits release execution slots while retaining session ownership. No execution.
+  waits release execution slots while retaining session ownership. Its admission
+  supervisor reserves the same queue before persistence and owns accepted store
+  work through caller disconnect/shutdown. Provider dispatch is not connected.
 - `nebula-assistant-integrations`: bounded OpenAI-compatible HTTP and SSE,
   pooled connections, explicit retry boundaries and cancellation. Parsed tools
   remain inert. See its README for supported protocol shapes and remaining gaps.
@@ -31,6 +33,17 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
   yet. Typed request coercion and error envelopes have
   Python-oracle coverage; complete route and production parity are open.
 - `nebula-assistant-lab`: fixture generation, replay and journal measurements.
+
+The provider ledger engine borrows the existing SQLite writer transaction. It
+binds immutable stream/attempt identities, watched record epochs, typed settlement
+receipts and exact replay bytes; returned handles are staged until the caller
+commits. Receipt/event idempotency and logical storage reservations survive retry.
+Ordinary deltas cannot spend the terminal reserve. Definitive terminal settlement
+allows an explicit, idempotent release of unused reservation; uncertain recovery
+retains it. These counters measure logical retained bytes, not SQLite pages or RSS.
+The engine does not yet compose the actual execution mutations, authorize dispatch,
+bound aggregate returned buffers or reconcile physical locators after maintenance.
+Its preceding experimental schema is refused rather than silently migrated.
 
 The lab refuses existing output directories and refuses to open databases without
 its private application/schema markers. It has no server, provider, harness, or
@@ -64,9 +77,11 @@ eagerly clears queue indices. Work identifiers and grouping fields are bounded.
 Provider execution components now include full completion-request and Turn model
 hydration, fenced SQLite admission/claim/answer/completion/release commands,
 read-only recovery classification, and lifetime-accounted result records. These
-components are not yet connected to the queue, replay receipts, preparation or
-HTTP completion routes. See `../docs/ASSISTANT_RUST_EXECUTION.md`; a successful
-component test does not establish a running Rust conversation.
+admission commands are now connected to queue reservations through a bounded
+supervisor. Replay receipts, complete preparation, provider workers and HTTP
+completion routes remain separate integration work. See
+`../docs/ASSISTANT_RUST_EXECUTION.md`; a successful component test does not
+establish a running Rust conversation.
 
 `FairQueue::reserve/commit/abort` now separates pending capacity from dispatchable
 work, preserving Session order even when admission commits arrive out of order.
@@ -79,6 +94,20 @@ context limits and token estimates. Its 99-vector oracle explicitly targets
 CPython 3.12 / Unicode 15.0.0, including numeric descriptors outside Unicode 14.
 Inputs must already be hydrated and authorized; image/tool projections, compaction,
 privacy resolution and the preparation orchestrator remain separate work.
+
+Passive ScopePolicy reads now preserve retained validation, ownership and
+local-only refusals, including historical grant timestamps. They do not authorize
+tools or create grants. Preparation still must resolve the referenced policy in
+the source's order and use the normalized provider locality.
+
+The project-instruction reader rereads a trusted absolute workspace each turn.
+It preserves source trimming, 64-KiB raw-prefix hashes, truncation and prompt bytes,
+including permitted ancestor AGENTS.md links. Unix directory-relative opens refuse
+substituted symlink components. Other platforms require their verified reader
+implementation. Defaults allow eight blocking reads and 16 MiB of retained-result
+credits; timed-out OS work keeps its slot until it exits. These are bounded logical
+ownership limits, not measured peak allocation/RSS or a cancellable-kernel promise.
+The workspace resolver and full preparation path are still required.
 
 `records::StoredAssistantRecord::decode` preserves opaque JSON metadata and large
 integers, checks the captured storage schemas, and enforces the Python model's

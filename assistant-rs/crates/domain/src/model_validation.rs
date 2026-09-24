@@ -24,12 +24,15 @@ type Result<T> = std::result::Result<T, RecordError>;
 pub mod completion;
 mod fork;
 mod goal;
+mod scope;
 mod session;
 mod turn;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum Model {
     Entity,
+    ScopePolicy,
+    MissionGrant,
     ChatSchedule,
     ChatGoal,
     ChatTokenUsage,
@@ -49,6 +52,8 @@ impl Model {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Entity => "Entity",
+            Self::ScopePolicy => "ScopePolicy",
+            Self::MissionGrant => "MissionGrant",
             Self::ChatSchedule => "ChatSchedule",
             Self::ChatGoal => "ChatGoal",
             Self::ChatTokenUsage => "ChatTokenUsage",
@@ -68,6 +73,8 @@ impl Model {
     fn kind(self) -> &'static str {
         match self {
             Self::Entity => "entities",
+            Self::ScopePolicy => "scope_policies",
+            Self::MissionGrant => "mission_grants",
             Self::ChatSchedule => "chat_schedules",
             Self::ChatGoal => "chat_goals",
             Self::ChatTokenUsage => "chat_token_usage",
@@ -87,6 +94,8 @@ impl Model {
     fn fields(self) -> &'static [Field] {
         match self {
             Self::Entity => &FIELDS[..4],
+            Self::ScopePolicy => &scope::FIELDS,
+            Self::MissionGrant => &scope::GRANT_FIELDS,
             Self::ChatSchedule => &FIELDS,
             Self::ChatGoal => &goal::FIELDS,
             Self::ChatTokenUsage => &goal::USAGE_FIELDS,
@@ -106,7 +115,8 @@ impl Model {
     fn is_entity(self) -> bool {
         !matches!(
             self,
-            Self::ChatTokenUsage
+            Self::MissionGrant
+                | Self::ChatTokenUsage
                 | Self::ChatContentBlock
                 | Self::ChatCitation
                 | Self::ChatCompletionRequest
@@ -648,6 +658,25 @@ pub fn hydrate_harness_session(
     )
 }
 
+/// Passive policy/grant hydration with trusted defaults for historical grants.
+pub fn hydrate_scope_policy(
+    model: Model,
+    bytes: &[u8],
+    environment: &mut dyn crate::dependencies::DependencyEnvironment,
+) -> Result<Value> {
+    if !matches!(model, Model::ScopePolicy | Model::MissionGrant) {
+        return Err(RecordError::UnknownKind);
+    }
+    hydrate_context(
+        model,
+        InputOrigin::RetainedJson,
+        bytes,
+        None,
+        &[],
+        Some(environment),
+    )
+}
+
 fn hydrate_context(
     model: Model,
     origin: InputOrigin,
@@ -656,7 +685,10 @@ fn hydrate_context(
     typed_paths: &[TypedModelPath],
     mut environment: Option<&mut dyn crate::dependencies::DependencyEnvironment>,
 ) -> Result<Value> {
-    if bytes.len() > MAX_RECORD_BYTES {
+    if bytes.len() > MAX_RECORD_BYTES
+        || matches!(model, Model::ScopePolicy | Model::MissionGrant)
+            && bytes.len() > 2 * 1024 * 1024
+    {
         return Err(RecordError::TooLarge);
     }
     let mut input: Value = serde_json::from_slice(bytes).map_err(|_| RecordError::Json)?;
@@ -798,7 +830,9 @@ fn hydrate_context(
             .get(field.name)
             .or_else(|| factory_defaults.and_then(|v| v.get(field.name)))
         else {
-            if model == Model::HarnessSession && field.name == "last_activity_at" {
+            if model == Model::MissionGrant && field.name == "granted_at" {
+                output.insert(field.name.into(), scope::clock(&mut environment)?);
+            } else if model == Model::HarnessSession && field.name == "last_activity_at" {
                 let Some(environment) = environment.as_deref_mut() else {
                     return Err(RecordError::Shape(model.kind()));
                 };
@@ -820,6 +854,7 @@ fn hydrate_context(
                 .or_else(|| fork::default(model, *field))
                 .or_else(|| completion::default(model, *field))
                 .or_else(|| turn::default(model, *field))
+                .or_else(|| scope::default(model, *field))
             {
                 output.insert(field.name.into(), value);
             } else if field.name == "enabled" {
@@ -837,12 +872,13 @@ fn hydrate_context(
             }
             continue;
         };
-        if let Some(value) = goal::validate(
-            *field,
-            value,
-            vec![Location::Field(field.name.into())],
-            &mut report,
-        )? {
+        let path = vec![Location::Field(field.name.into())];
+        let hydrated = if matches!(model, Model::ScopePolicy | Model::MissionGrant) {
+            scope::validate(model, *field, value, path, &mut report, &mut environment)?
+        } else {
+            goal::validate(*field, value, path, &mut report)?
+        };
+        if let Some(value) = hydrated {
             output.insert(field.name.into(), value);
         }
     }
@@ -900,6 +936,11 @@ fn hydrate_context(
         return report.error();
     }
     if let Some(message) = completion::coherence(model, &output) {
+        let error = Failure::value(message);
+        report.add(error.kind, None, false, error.msg, error.ctx)?;
+        return report.error();
+    }
+    if let Some(message) = scope::coherence(model, &output) {
         let error = Failure::value(message);
         report.add(error.kind, None, false, error.msg, error.ctx)?;
         return report.error();

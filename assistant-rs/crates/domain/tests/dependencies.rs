@@ -84,6 +84,7 @@ fn shared_dependency_records_preserve_python_fields_and_reject_incoherent_state(
             | Kind::McpServerProfile
             | Kind::Engagement
             | Kind::ProviderProfile
+            | Kind::ScopePolicy
             | Kind::HarnessSession => {
                 unreachable!("covered by retained read dependency tests")
             }

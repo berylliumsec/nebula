@@ -8,8 +8,16 @@ publish.workspace = true
 
 [dependencies]
 nebula-assistant-domain.workspace = true
+nebula-assistant-storage.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+sqlx.workspace = true
+tempfile.workspace = true
 
 [lints]
 workspace = true

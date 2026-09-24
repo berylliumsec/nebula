@@ -1,4 +1,4 @@
-//! Sequential immutable dependency reads for atomic goal-conversation creation.
+//! Sequential immutable dependency reads for conversation creation/preparation.
 //! Host account lookup never holds a database connection, transaction, or reader
 //! permit. Abandoned blocking work retains its admission slot until it finishes.
 use super::*;
@@ -167,6 +167,7 @@ impl SqliteAssistantStore {
             DependencyKind::Engagement
                 | DependencyKind::ProviderProfile
                 | DependencyKind::McpServerProfile
+                | DependencyKind::ScopePolicy
         ) {
             return Err(Error::InvalidBounds);
         }
@@ -177,7 +178,7 @@ impl SqliteAssistantStore {
             return Err(Error::NotFound);
         }
         budget.rows = budget.rows.saturating_add(1);
-        if budget.rows > 66 {
+        if budget.rows > 67 {
             return Err(Error::ReadLimit);
         }
         budget.add(id.len())?;
@@ -216,6 +217,8 @@ impl SqliteAssistantStore {
             let p = record.payload();
             let project = if kind == DependencyKind::Engagement {
                 p["id"].as_str()
+            } else if kind == DependencyKind::ScopePolicy {
+                p["engagement_id"].as_str()
             } else {
                 None
             };

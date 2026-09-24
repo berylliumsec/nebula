@@ -10,6 +10,7 @@ pub mod goal_conversations;
 pub mod goal_drafts;
 pub mod navigation;
 pub mod plans;
+pub mod project_instructions;
 pub mod recorded_effects;
 pub mod recovery;
 pub mod results;

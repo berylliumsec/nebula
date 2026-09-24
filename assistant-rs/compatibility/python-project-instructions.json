@@ -1,0 +1,359 @@
+{
+  "format": "nebula.assistant-project-instructions/v1",
+  "content_cases": [
+    {
+      "name": "empty",
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "body_bytes": 0,
+      "observation": {
+        "receipt": {
+          "path": "AGENTS.md",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size_bytes": 0,
+          "truncated": false
+        },
+        "content_bytes": 0,
+        "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "prompt_bytes": 0,
+        "prompt_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "content": "",
+        "prompt": ""
+      }
+    },
+    {
+      "name": "whitespace",
+      "body_sha256": "9c8ad9551b41110c28f21ffd35cb01b17ed1dbfcefae4041bc37c6c28999e563",
+      "body_bytes": 8,
+      "observation": {
+        "receipt": {
+          "path": "AGENTS.md",
+          "sha256": "9c8ad9551b41110c28f21ffd35cb01b17ed1dbfcefae4041bc37c6c28999e563",
+          "size_bytes": 8,
+          "truncated": false
+        },
+        "content_bytes": 4,
+        "content_sha256": "0b88077a5d93f6b2bbb955f75571c8f65f4027e61078fef7fa1032bf2bc62327",
+        "prompt_bytes": 0,
+        "prompt_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "content": "\u001c\u001d\u001e\u001f",
+        "prompt": ""
+      }
+    },
+    {
+      "name": "unicode-json",
+      "body_sha256": "70b33ca01a392f75c1b740db9438a43021b7a8a15fc656e2a9a6b90d470dd119",
+      "body_bytes": 43,
+      "observation": {
+        "receipt": {
+          "path": "AGENTS.md",
+          "sha256": "70b33ca01a392f75c1b740db9438a43021b7a8a15fc656e2a9a6b90d470dd119",
+          "size_bytes": 43,
+          "truncated": false
+        },
+        "content_bytes": 43,
+        "content_sha256": "70b33ca01a392f75c1b740db9438a43021b7a8a15fc656e2a9a6b90d470dd119",
+        "prompt_bytes": 144,
+        "prompt_sha256": "b14bd3806850c6ac0da9ebb889ec5a0a464ac34dbf600b4754a45cf31b91ba6c",
+        "content": "Follow the project.\n\"quoted\" \\ 🌌  \u0000",
+        "prompt": "\n\nProject instructions (AGENTS.md at the project root).\n{\"path\": \"AGENTS.md\", \"content\": \"Follow the project.\\n\\\"quoted\\\" \\\\ 🌌  \\u0000\"}"
+      }
+    },
+    {
+      "name": "invalid-utf8",
+      "body_sha256": "183256a82d7fa09b3875ee7ef6abea2480640e8d9c83750b5351d3f4dcae9509",
+      "body_bytes": 10,
+      "observation": {
+        "receipt": {
+          "path": "AGENTS.md",
+          "sha256": "183256a82d7fa09b3875ee7ef6abea2480640e8d9c83750b5351d3f4dcae9509",
+          "size_bytes": 10,
+          "truncated": false
+        },
+        "content_bytes": 26,
+        "content_sha256": "495d5bfea33f73a59734c2322846e0bb4717dbe121779b896d93ea7318db9228",
+        "prompt_bytes": 118,
+        "prompt_sha256": "b2adef6cbe18bd0216820eca6f9ad4d5852a177181d69c5bc734af335b49b1ad",
+        "content": "a��������z",
+        "prompt": "\n\nProject instructions (AGENTS.md at the project root).\n{\"path\": \"AGENTS.md\", \"content\": \"a��������z\"}"
+      }
+    },
+    {
+      "name": "exact-cap",
+      "body_sha256": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3",
+      "body_bytes": 65536,
+      "observation": {
+        "receipt": {
+          "path": "AGENTS.md",
+          "sha256": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3",
+          "size_bytes": 65536,
+          "truncated": false
+        },
+        "content_bytes": 65536,
+        "content_sha256": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3",
+        "prompt_bytes": 65628,
+        "prompt_sha256": "285ff077e294139652c2cfe82e96b7b878aef12d297db6096c8c13be8d233dde",
+        "content": null,
+        "prompt": null
+      }
+    },
+    {
+      "name": "truncated",
+      "body_sha256": "311f4be0237c16738615484c87769da64acfaadfc520007b91afb3865cb49506",
+      "body_bytes": 65538,
+      "observation": {
+        "receipt": {
+          "path": "AGENTS.md",
+          "sha256": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3",
+          "size_bytes": 65538,
+          "truncated": true
+        },
+        "content_bytes": 65536,
+        "content_sha256": "1f8745f0d2d1387ec1af2211a3cf417b2e9e885e853472649c1d979d0e9370e3",
+        "prompt_bytes": 65679,
+        "prompt_sha256": "29995b3cbcace39a336dd3c68227add1cedc01a2b2e0af58b385d5d006bec3f3",
+        "content": null,
+        "prompt": null
+      }
+    },
+    {
+      "name": "split-codepoint",
+      "body_sha256": "1a7956b1f65ed79790dbfea6d0a43abec80431a761953f15d76f95801378c6a0",
+      "body_bytes": 65539,
+      "observation": {
+        "receipt": {
+          "path": "AGENTS.md",
+          "sha256": "3a3bd615097d970d887b99ea163c2998307c4fce7d4828e11d55a9e1e444a2d9",
+          "size_bytes": 65539,
+          "truncated": true
+        },
+        "content_bytes": 65535,
+        "content_sha256": "09ab7495d3e61a76f0deb12cb0306f0696cbb17ffc12131368c7a939f12f56d3",
+        "prompt_bytes": 65678,
+        "prompt_sha256": "46fc218f77531feae49093192c4a3d77d4f62ea08b123da13a332475fce5a023",
+        "content": null,
+        "prompt": null
+      }
+    },
+    {
+      "name": "literal-replacement",
+      "body_sha256": "bef8af279890d954e16c7e363212002b6a43de4b045fd39d199dfdf643b101a5",
+      "body_bytes": 65537,
+      "observation": {
+        "receipt": {
+          "path": "AGENTS.md",
+          "sha256": "58e1a7886961597f4d3dd2ca0aba25687f1d65d0ad4332fce76c9ce5f2849d24",
+          "size_bytes": 65537,
+          "truncated": true
+        },
+        "content_bytes": 65533,
+        "content_sha256": "e991a8fa00de79b270a9c7878455eaa899d7131e7edb45a67ec3acbd07999386",
+        "prompt_bytes": 65676,
+        "prompt_sha256": "be2c903f41f866ff33c89729f15579382dd0d9e3fc1f0a42a4eff861a9e6198c",
+        "content": null,
+        "prompt": null
+      }
+    },
+    {
+      "name": "control-cap",
+      "body_sha256": "4afcaba0f3eaddda95e3ee1589dcca36f05d1300b5259bcd57b534d82e36daf9",
+      "body_bytes": 65538,
+      "observation": {
+        "receipt": {
+          "path": "AGENTS.md",
+          "sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+          "size_bytes": 65538,
+          "truncated": true
+        },
+        "content_bytes": 65536,
+        "content_sha256": "de2f256064a0af797747c2b97505dc0b9f3df0de4f489eac731c23ae9ca9cc31",
+        "prompt_bytes": 393359,
+        "prompt_sha256": "602aafb823430b4eeec946d0c93304997358a42c857b089ae67f64ee21f29239",
+        "content": null,
+        "prompt": null
+      }
+    }
+  ],
+  "path_cases": [
+    {
+      "name": "missing",
+      "observation": {
+        "accepted": true,
+        "value": null
+      }
+    },
+    {
+      "name": "missing-root",
+      "observation": {
+        "accepted": true,
+        "value": null
+      }
+    },
+    {
+      "name": "regular",
+      "observation": {
+        "accepted": true,
+        "value": {
+          "receipt": {
+            "path": "AGENTS.md",
+            "sha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+            "size_bytes": 8,
+            "truncated": false
+          },
+          "content_bytes": 7,
+          "content_sha256": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "prompt_bytes": 99,
+          "prompt_sha256": "a8df0f7796a8de4fdffc72d65892d4698ace4ccb7b046bac3d49059cf93b147b",
+          "content": "fixture",
+          "prompt": "\n\nProject instructions (AGENTS.md at the project root).\n{\"path\": \"AGENTS.md\", \"content\": \"fixture\"}"
+        }
+      }
+    },
+    {
+      "name": "directory",
+      "observation": {
+        "accepted": false,
+        "kind": "ProjectInstructionsError",
+        "detail": "AGENTS.md must be a regular file"
+      }
+    },
+    {
+      "name": "inside-link",
+      "observation": {
+        "accepted": true,
+        "value": {
+          "receipt": {
+            "path": "AGENTS.md",
+            "sha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+            "size_bytes": 8,
+            "truncated": false
+          },
+          "content_bytes": 7,
+          "content_sha256": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "prompt_bytes": 99,
+          "prompt_sha256": "a8df0f7796a8de4fdffc72d65892d4698ace4ccb7b046bac3d49059cf93b147b",
+          "content": "fixture",
+          "prompt": "\n\nProject instructions (AGENTS.md at the project root).\n{\"path\": \"AGENTS.md\", \"content\": \"fixture\"}"
+        }
+      }
+    },
+    {
+      "name": "parent-link",
+      "observation": {
+        "accepted": true,
+        "value": {
+          "receipt": {
+            "path": "AGENTS.md",
+            "sha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+            "size_bytes": 8,
+            "truncated": false
+          },
+          "content_bytes": 7,
+          "content_sha256": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "prompt_bytes": 99,
+          "prompt_sha256": "a8df0f7796a8de4fdffc72d65892d4698ace4ccb7b046bac3d49059cf93b147b",
+          "content": "fixture",
+          "prompt": "\n\nProject instructions (AGENTS.md at the project root).\n{\"path\": \"AGENTS.md\", \"content\": \"fixture\"}"
+        }
+      }
+    },
+    {
+      "name": "ancestor-link",
+      "observation": {
+        "accepted": true,
+        "value": {
+          "receipt": {
+            "path": "AGENTS.md",
+            "sha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+            "size_bytes": 8,
+            "truncated": false
+          },
+          "content_bytes": 7,
+          "content_sha256": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "prompt_bytes": 99,
+          "prompt_sha256": "a8df0f7796a8de4fdffc72d65892d4698ace4ccb7b046bac3d49059cf93b147b",
+          "content": "fixture",
+          "prompt": "\n\nProject instructions (AGENTS.md at the project root).\n{\"path\": \"AGENTS.md\", \"content\": \"fixture\"}"
+        }
+      }
+    },
+    {
+      "name": "sibling-link",
+      "observation": {
+        "accepted": false,
+        "kind": "ProjectInstructionsError",
+        "detail": "AGENTS.md must stay inside the project workspace or link to an AGENTS.md in one of its parent folders"
+      }
+    },
+    {
+      "name": "outside-file",
+      "observation": {
+        "accepted": false,
+        "kind": "ProjectInstructionsError",
+        "detail": "AGENTS.md must stay inside the project workspace or link to an AGENTS.md in one of its parent folders"
+      }
+    },
+    {
+      "name": "dangling-inside",
+      "observation": {
+        "accepted": false,
+        "kind": "ProjectInstructionsError",
+        "detail": "AGENTS.md must be a regular file"
+      }
+    },
+    {
+      "name": "dangling-outside",
+      "observation": {
+        "accepted": false,
+        "kind": "ProjectInstructionsError",
+        "detail": "AGENTS.md must stay inside the project workspace or link to an AGENTS.md in one of its parent folders"
+      }
+    },
+    {
+      "name": "workspace-link",
+      "observation": {
+        "accepted": true,
+        "value": {
+          "receipt": {
+            "path": "AGENTS.md",
+            "sha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+            "size_bytes": 8,
+            "truncated": false
+          },
+          "content_bytes": 7,
+          "content_sha256": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "prompt_bytes": 99,
+          "prompt_sha256": "a8df0f7796a8de4fdffc72d65892d4698ace4ccb7b046bac3d49059cf93b147b",
+          "content": "fixture",
+          "prompt": "\n\nProject instructions (AGENTS.md at the project root).\n{\"path\": \"AGENTS.md\", \"content\": \"fixture\"}"
+        }
+      }
+    },
+    {
+      "name": "chain",
+      "observation": {
+        "accepted": true,
+        "value": {
+          "receipt": {
+            "path": "AGENTS.md",
+            "sha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+            "size_bytes": 8,
+            "truncated": false
+          },
+          "content_bytes": 7,
+          "content_sha256": "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d",
+          "prompt_bytes": 99,
+          "prompt_sha256": "a8df0f7796a8de4fdffc72d65892d4698ace4ccb7b046bac3d49059cf93b147b",
+          "content": "fixture",
+          "prompt": "\n\nProject instructions (AGENTS.md at the project root).\n{\"path\": \"AGENTS.md\", \"content\": \"fixture\"}"
+        }
+      }
+    },
+    {
+      "name": "inaccessible",
+      "observation": {
+        "accepted": true,
+        "value": null
+      }
+    }
+  ]
+}

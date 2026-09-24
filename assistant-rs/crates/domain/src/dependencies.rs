@@ -27,9 +27,10 @@ pub enum DependencyKind {
     Engagement,
     ProviderProfile,
     HarnessSession,
+    ScopePolicy,
 }
 impl DependencyKind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Approval,
         Self::HarnessInteraction,
         Self::HarnessTurn,
@@ -41,6 +42,7 @@ impl DependencyKind {
         Self::Engagement,
         Self::ProviderProfile,
         Self::HarnessSession,
+        Self::ScopePolicy,
     ];
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -55,6 +57,7 @@ impl DependencyKind {
             Self::Engagement => "engagements",
             Self::ProviderProfile => "providers",
             Self::HarnessSession => "harness_sessions",
+            Self::ScopePolicy => "scope_policies",
         }
     }
 }
@@ -105,6 +108,12 @@ static SCHEMAS: LazyLock<Result<Value, RecordError>> = LazyLock::new(|| {
             .map_err(|_| RecordError::Schema)?;
     schemas[DependencyKind::HarnessSession.as_str()] =
         forks["dependency_schemas"][DependencyKind::HarnessSession.as_str()].clone();
+    let scope: Value = serde_json::from_str(include_str!(
+        "../../../compatibility/python-scope-policy.json"
+    ))
+    .map_err(|_| RecordError::Schema)?;
+    schemas[DependencyKind::ScopePolicy.as_str()] =
+        scope["dependency_schemas"][DependencyKind::ScopePolicy.as_str()].clone();
     Ok(schemas)
 });
 static VALIDATORS: LazyLock<Result<HashMap<DependencyKind, Validator>, RecordError>> =
@@ -215,6 +224,19 @@ impl StoredDependency {
             DependencyKind::Engagement | DependencyKind::ProviderProfile
         ) {
             p = profiles::hydrate(schema, bytes, environment)?;
+        } else if kind == DependencyKind::ScopePolicy {
+            p = match environment {
+                Some(environment) => crate::model_validation::hydrate_scope_policy(
+                    crate::model_validation::Model::ScopePolicy,
+                    bytes,
+                    environment,
+                ),
+                None => crate::model_validation::hydrate(
+                    crate::model_validation::Model::ScopePolicy,
+                    crate::model_validation::InputOrigin::RetainedJson,
+                    bytes,
+                ),
+            }?;
         } else if kind == DependencyKind::HarnessSession {
             let hydrated = match environment {
                 Some(environment) => {
@@ -236,6 +258,7 @@ impl StoredDependency {
             DependencyKind::Engagement
                 | DependencyKind::ProviderProfile
                 | DependencyKind::HarnessSession
+                | DependencyKind::ScopePolicy
         ) {
             // Contextual codecs already fill and validate every model field.
             // Re-normalizing an expanded workspace path would strip characters
@@ -248,6 +271,7 @@ impl StoredDependency {
                 DependencyKind::Engagement
                     | DependencyKind::ProviderProfile
                     | DependencyKind::HarnessSession
+                    | DependencyKind::ScopePolicy
             ) && p["revision"].as_i64().is_none_or(|r| r < 1))
         {
             return Err(RecordError::Shape(kind.as_str()));
@@ -342,7 +366,7 @@ impl StoredDependency {
             | DependencyKind::Artifact
             | DependencyKind::Engagement
             | DependencyKind::ProviderProfile => {}
-            DependencyKind::HarnessSession => {}
+            DependencyKind::HarnessSession | DependencyKind::ScopePolicy => {}
         }
         Ok(Self { kind, payload: p })
     }

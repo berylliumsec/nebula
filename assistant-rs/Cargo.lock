@@ -1514,6 +1514,7 @@ name = "nebula-assistant-domain"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "idna",
  "jsonschema",
  "num-bigint",
  "num-traits",
@@ -1557,9 +1558,15 @@ dependencies = [
 name = "nebula-assistant-runtime"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "nebula-assistant-domain",
+ "nebula-assistant-storage",
  "serde",
+ "serde_json",
+ "sqlx",
+ "tempfile",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

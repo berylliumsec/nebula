@@ -4,6 +4,8 @@
 //! dispatch. The runtime must still reconcile receipts, row hashes, watched epochs, and byte
 //! accounting before using retained evidence. No legacy migration marker is changed here.
 
+pub mod writer;
+
 use sha2::{Digest, Sha256};
 use sqlx::{Connection, Row, SqliteConnection};
 use uuid::Uuid;
@@ -213,11 +215,17 @@ fn manifest() -> Vec<Object> {
             integer("committed_at_us")
         ),
     );
+    objects.push(Object {
+        kind: "index",
+        name: format!("{PREFIX}receipts_control"),
+        table: format!("{PREFIX}receipts"),
+        sql: "CREATE INDEX assistant_provider_receipts_control ON assistant_provider_receipts(turn_id, kind, attempt_id)".to_owned(),
+    });
     table(
         &mut objects,
         "events",
         format!(
-            "turn_id TEXT NOT NULL CHECK({}),\nsequence INTEGER NOT NULL CHECK({} AND sequence BETWEEN 1 AND {MAX_SEQUENCE}),\nattempt_id TEXT CHECK(attempt_id IS NULL OR ({})),\nevent_type TEXT NOT NULL CHECK({}),\nevent_key TEXT NOT NULL CHECK({}),\nevent_json TEXT NOT NULL CHECK(typeof(event_json) = 'text' AND length(CAST(event_json AS BLOB)) <= {MAX_EVENT_BYTES} AND instr(event_json, char(0)) = 0 AND json_valid(event_json)),\nsse_bytes BLOB NOT NULL CHECK(typeof(sse_bytes) = 'blob'),\nsse_bytes_len INTEGER NOT NULL CHECK({} AND sse_bytes_len BETWEEN 1 AND {MAX_EVENT_BYTES} AND sse_bytes_len = length(sse_bytes)),\ncontent_sha256 TEXT NOT NULL CHECK({}),\nprevious_sha256 TEXT NOT NULL CHECK({}),\nevent_sha256 TEXT NOT NULL CHECK({}),\ncommitted_at_us INTEGER NOT NULL CHECK({}),\nPRIMARY KEY(turn_id, sequence),\nUNIQUE(turn_id, event_key),\nFOREIGN KEY(turn_id) REFERENCES assistant_provider_streams(turn_id),\nFOREIGN KEY(turn_id, attempt_id) REFERENCES assistant_provider_attempts(turn_id, attempt_id)",
+            "turn_id TEXT NOT NULL CHECK({}),\nsequence INTEGER NOT NULL CHECK({} AND sequence BETWEEN 1 AND {MAX_SEQUENCE}),\nattempt_id TEXT CHECK(attempt_id IS NULL OR ({})),\nevent_type TEXT NOT NULL CHECK({}),\nevent_key TEXT NOT NULL CHECK({}),\nevent_json TEXT NOT NULL CHECK(typeof(event_json) = 'text' AND length(CAST(event_json AS BLOB)) <= {MAX_EVENT_BYTES} AND instr(event_json, char(0)) = 0 AND json_valid(event_json)),\nsse_bytes BLOB NOT NULL CHECK(typeof(sse_bytes) = 'blob'),\nsse_bytes_len INTEGER NOT NULL CHECK({} AND sse_bytes_len BETWEEN 1 AND {MAX_EVENT_BYTES} AND sse_bytes_len = length(sse_bytes)),\ncontent_sha256 TEXT NOT NULL CHECK({}),\nprevious_sha256 TEXT NOT NULL CHECK({}),\nevent_sha256 TEXT NOT NULL CHECK({}),\ncommitted_at_us INTEGER NOT NULL CHECK({}),\nsettlement_receipt_sequence INTEGER CHECK(settlement_receipt_sequence IS NULL OR (typeof(settlement_receipt_sequence) = 'integer' AND settlement_receipt_sequence >= 1)),\nCHECK((event_type IN ('done','error','cancelled','interrupted')) = (settlement_receipt_sequence IS NOT NULL)),\nPRIMARY KEY(turn_id, sequence),\nUNIQUE(turn_id, event_key),\nFOREIGN KEY(turn_id) REFERENCES assistant_provider_streams(turn_id),\nFOREIGN KEY(turn_id, attempt_id) REFERENCES assistant_provider_attempts(turn_id, attempt_id),\nFOREIGN KEY(turn_id, settlement_receipt_sequence) REFERENCES assistant_provider_receipts(turn_id, receipt_sequence)",
             identifier("turn_id"),
             integer("sequence"),
             identifier("attempt_id"),
