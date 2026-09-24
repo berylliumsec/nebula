@@ -25,9 +25,11 @@ Observable invariants:
 2. Process termination without a callback does not prove the external effect's
    outcome. Provider history records `side_effects: unknown` and
    `retry_safe: false`.
-3. A successful or failed authoritative callback retains the existing callback
+3. Recovery commits that receipt before queueing the provider continuation, so
+   concurrent message delivery cannot leave the old tool call looking live.
+4. A successful or failed authoritative callback retains the existing callback
    completion path.
-4. A still-running producer remains waiting and is never classified early.
+5. A still-running producer remains waiting and is never classified early.
 5. Startup and the normal runtime terminal notification converge on the same
    idempotent continuation path.
 6. Once the child turn settles, the existing subagent delivery path removes
