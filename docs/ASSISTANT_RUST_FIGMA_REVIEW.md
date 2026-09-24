@@ -113,3 +113,13 @@ changed reads re-project under the write boundary before assigning a revision.
 The 81-case API oracle and writer-phase fault verify the retained state and error
 contracts. These are isolated API checks, not production reconnect, keyboard,
 mobile, LAN or physical-device evidence. No new Figma visit is implied here.
+
+
+The pending-turn and session-hook API port follows the later durable-recovery
+contract: saved terminal receipts can repair interrupted display state, while
+uncertain outcomes stay visible. It preserves the conversation-selection and
+reconnect entry points used by `SessionsPage.tsx`. This tranche adds isolated
+storage/API evidence only. Automatic continuation, real reconnect and the
+production browser/LAN/device journeys above still require end-to-end proof.
+The previously inspected Figma frames remain the design reference; no new live
+Figma inspection occurred in this tranche.

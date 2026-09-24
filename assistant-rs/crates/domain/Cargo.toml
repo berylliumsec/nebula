@@ -13,6 +13,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 jsonschema.workspace = true
 sha2.workspace = true
+num-bigint.workspace = true
+num-traits.workspace = true
 
 [lints]
 workspace = true

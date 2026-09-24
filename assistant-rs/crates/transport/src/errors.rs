@@ -133,6 +133,9 @@ impl ApiError {
     }
     pub(crate) fn service(error: ServiceError) -> Self {
         match error {
+            ServiceError::LegacyValueError(detail) => {
+                Self::named(422, detail, "chat.value_error", "chat")
+            }
             ServiceError::HistoryConflict(detail) => {
                 Self::named(409, detail.into(), "chat.chat_history_conflict", "chat")
             }

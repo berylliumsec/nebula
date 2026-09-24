@@ -219,7 +219,7 @@ PYTHONPATH=src python -m scripts.capture_assistant_catchup --output assistant-rs
 PYTHONPATH=src python -m scripts.capture_assistant_results --output assistant-rs/compatibility/python-results.json
 ```
 
-Activity, saved queue and retained hook GETs do not reconcile effects or dispatch
+Activity, saved queue and retained turn-hook GETs do not reconcile effects or dispatch
 work. Absent queues remain response-only revision-zero values. Hook summaries
 retain recorded outcomes while omitting raw process output. Schema-corrupt hook
 records currently return a sanitized failure rather than the exact legacy 422
@@ -281,3 +281,31 @@ harness-profile validation vectors. Scripted changes model expiry, decisions, fi
 observations, deletion and reopen. No lifespan, adapter, provider, process or tool
 execution runs during capture. This remains an experimental API port; production
 UI and transport lifecycle acceptance are separate outstanding gates.
+
+
+Pending-turn and session-hook reads may adopt already-recorded terminal tool
+receipts and successful hook outcomes. They preserve unresolved evidence and never
+execute or resume work. Strict receipt validation, provider invocation identity,
+terminal-status agreement and absence of background results are required for tool
+adoption. A hook requires a retained complete zero-exit outcome. Tools and hooks
+remain two ordered commits, each with at most three optimistic retries; late hook
+changes and their Turn repair commit atomically. Concurrent polls retain counters,
+history and receipt identities without duplication.
+
+These snapshots batch ordered references under the shared 10,000-row / 16-MiB
+budget. Queued writes retain byte admission through completion or cancellation;
+trusted clocks are sampled after the writer lock. Unchanged opaque callback
+fragments keep their original dictionary ordering when another effect is adopted.
+Provider-result text follows Python's sorted UTF-8 JSON and 8-KiB bounded-result
+fallback. Arbitrary-precision validation handles retained large integer counters.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_recovery --output assistant-rs/compatibility/python-recovery.json
+```
+
+The isolated fixture contains 194 HTTP cases, 132 receipt validation vectors,
+13 serialization vectors and 123 phase captures. Python capture checks raw
+entities, event ledgers, relations, display watermarks and search projections.
+The Rust HTTP harness checks every entity envelope, exact changed records,
+canonical full-state hashes, search/watermark purity and reopen. Production
+reconnect, actual recovery dispatch and the browser/device matrix remain open.

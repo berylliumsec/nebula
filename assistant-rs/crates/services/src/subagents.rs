@@ -155,6 +155,47 @@ struct DisplayStep {
     #[serde(default)]
     arguments: Value,
 }
+
+/// Pending-turn summaries use Python str() for retained callback metadata too.
+/// Keep its dictionary order from the exact selected/committed Turn bytes.
+pub(crate) fn callback_fields(raw_turn: &str) -> Result<(Option<String>, Option<String>)> {
+    #[derive(Deserialize)]
+    struct Callbacks {
+        #[serde(default)]
+        tool_history: Vec<Callback>,
+    }
+    #[derive(Deserialize)]
+    struct Callback {
+        #[serde(default)]
+        status: Value,
+        #[serde(default)]
+        results_url: Option<Ordered>,
+        #[serde(default)]
+        process_id: Option<Ordered>,
+    }
+    let parsed: Callbacks = serde_json::from_str(raw_turn).map_err(|_| Error::LegacyUnhandled)?;
+    let mut results_url = None;
+    let mut process_id = None;
+    for item in parsed.tool_history.iter().rev() {
+        if item.status != "waiting_callback" {
+            continue;
+        }
+        if results_url.is_none()
+            && let Some(value) = item.results_url.as_ref().filter(|v| truthy(v))
+        {
+            results_url = Some(display(Some(value))?);
+        }
+        if process_id.is_none()
+            && let Some(value) = item.process_id.as_ref().filter(|v| truthy(v))
+        {
+            process_id = Some(display(Some(value))?);
+        }
+        if results_url.is_some() && process_id.is_some() {
+            break;
+        }
+    }
+    Ok((results_url, process_id))
+}
 fn number(value: &str) -> Result<String> {
     if !value.contains(['.', 'e', 'E']) {
         return Ok(value.into());
@@ -216,6 +257,11 @@ fn repr_string(value: &str, output: &mut Text) -> fmt::Result {
         }
     }
     output.write_char(quote)
+}
+pub(crate) fn python_string_repr(value: &str) -> Result<String> {
+    let mut output = Text(String::new());
+    repr_string(value, &mut output).map_err(|_| StorageError::ReadLimit)?;
+    Ok(output.0)
 }
 fn repr(value: &Ordered, output: &mut Text) -> Result<()> {
     let capacity = |_| Error::Storage(StorageError::ReadLimit);

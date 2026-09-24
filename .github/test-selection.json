@@ -1,14 +1,14 @@
 {
-  "change_digest": "ee060ff3b787a113950b39e9fbe6bae034a77b1e532841aa3bd3b185c1571c9e",
+  "change_digest": "cbb955b93a553179508b4ebe999deb79adc982f45eb290f226a3fd5c7f45427b",
   "reviewed_by": "Codex with domain, storage and oracle sub-agent review",
-  "reason": "Cumulative Assistant-only rewrite: 119 exact Rust tests and 54 Python checks across eleven selected feature/policy files. This increment adds eight Rust tests for session-state projection, 85 immutable profile vectors, Python ASCII digests, expiry/progress precedence, bounded snapshots, writer-free unchanged polling, queued re-projection, concurrent revisions, cancellation/drain, reopen/cascade, overflow and 81-case HTTP/header/watermark parity. Local selection is eight new plus 33 affected regressions: 17 HTTP, nine entity-store writer/prefetch, four shared dependency and three catch-up purity/bounds cases (41 total). Local Python selects state capture and Python-Rust-Python storage handoff (two). Each Rust test must collect once; compile/list bounded to 600 seconds per command, execution to 120 seconds per test; Python 300 seconds. No full suites. The first HTTP run exposed diagnostic feature classification; actual Python capture also distinguishes initial-read storage failures from writer-phase chat failures. Added a captured writer fault and queued HTTP regression. The retry selects the failed HTTP case, 33 unexecuted regressions, and repeats two affected state writer/limit cases (36 exact tests).",
-  "exclusions": "Thirty-one experimental Assistant handlers; no shipped Rust entrypoint or production UI. Other areas and desktop-native remain untouched. No providers, harness execution, tools, child dispatch, streaming, receipt reconciliation or live data. Historical/PostgreSQL/checkpoint migration, complete route/error parity, production desktop/mobile/WebKit/LAN/reconnect/device, packaging and whole-Assistant performance remain open. Complete snapshot/response/ASCII-hash bounds and strict cached watermark validity are explicit extensions. Malformed retained model errors use sanitized failures instead of exact Python 422 details. Goal elapsed/error visibility and subagent question/reasoning/rounds UI gaps remain open. Figma inspection is design evidence only. Browser tests remain unselected until an isolated shipped Rust-backed journey exists.",
+  "reason": "Cumulative Assistant-only rewrite: 132 exact Rust and 55 Python checks. This increment adds 13 Rust tests for 132 strict receipt vectors, 13 serializers, 64 tool and 59 hook phase captures, bounded recovery snapshots, atomic hook/Turn CAS, ordered two-phase commits, late evidence, writer-time clocks, cancellation/drain/reopen, callback spelling preservation, 16 concurrent observers and 194-case HTTP/error/durable-state parity. Local scope is these 13 plus 50 affected validator (15), writer (13), callback-renderer (4) and HTTP (18) regressions; local Python is recovery fixture regeneration and Python-Rust-Python storage handoff (two). Each Rust test must collect once; compile/list timeout600 seconds per command and execution120 seconds per test; Python300 seconds. No full suite. Independent review corrected float integer lower boundary, duplicate equal-history raw spelling reuse, and arbitrary-precision JSON Schema feature alignment before execution. Precollection found a seventh existing record/default test, bringing the local selection to63. Before execution, receipt SQL sorting moved after bounded materialization and ignored unknown-ID entries now count toward the row/reference limit. After the final receipt query refinement, repeat the single collected Python storage-handoff test under a300second limit; no other Python rerun.",
+  "exclusions": "Thirty-three experimental Assistant handlers; no shipped Rust entrypoint or production UI. Other areas and desktop-native remain untouched. No provider/harness/tool/hook execution, child dispatch, streaming or live data. This increment only adopts already durable terminal evidence. Manual reconciliation/resume, historical/PostgreSQL/checkpoint migrations, complete route/error parity, production desktop/mobile/WebKit/LAN/reconnect/device, packaging and whole-Assistant performance remain open. Complete snapshot/transaction/response/serialization limits are explicit resource-bound extensions. Detailed malformed retained-model validation envelopes remain open. Existing Goal/subagent UI visibility gaps remain; Figma inspection is design evidence. Browser tests stay unselected until an isolated Rust-backed production journey exists.",
   "expected_tests": {
-    "python": 54,
+    "python": 55,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 119
+    "assistant_rust": 132
   },
   "python_versions": [
     "3.12"
@@ -26,7 +26,8 @@
     "tests/test_assistant_status_contract.py",
     "tests/test_assistant_plans_contract.py",
     "tests/test_assistant_subagents_contract.py",
-    "tests/test_assistant_state_contract.py"
+    "tests/test_assistant_state_contract.py",
+    "tests/test_assistant_recovery_contract.py"
   ],
   "frontend": [],
   "native": [],
@@ -150,6 +151,19 @@
     "nebula-assistant-storage/session_state::state_unchanged_reads_avoid_writer_and_queued_updates_reproject_and_drain",
     "nebula-assistant-storage/session_state::state_snapshot_preserves_scopes_validates_complete_collections_and_profile_authority",
     "nebula-assistant-storage/session_state::state_snapshot_limits_and_revision_exhaustion_leave_durable_state_unchanged",
-    "nebula-assistant-transport/session_state::python_state_http_oracle_preserves_watermarks_pending_actions_and_passive_connections"
+    "nebula-assistant-transport/session_state::python_state_http_oracle_preserves_watermarks_pending_actions_and_passive_connections",
+    "nebula-assistant-domain/retained_json::repaired_turn_json_preserves_opaque_order_through_history_reordering_and_bounds",
+    "nebula-assistant-domain/tool_receipt::recorded_receipt_codec_matches_python_coercion_and_rejection_vectors",
+    "nebula-assistant-domain/tool_receipt::recorded_result_serialization_matches_python_and_enforces_byte_bounds",
+    "nebula-assistant-domain/tool_receipt::recorded_python_numbers_preserve_precision_hashability_and_integer_rules",
+    "nebula-assistant-storage/recovery::recovery_snapshots_preserve_session_scope_reference_order_and_deferred_errors",
+    "nebula-assistant-storage/recovery::hook_adoption_is_atomic_and_preserves_duplicate_cas_missing_and_binding_failures",
+    "nebula-assistant-storage/recovery::tool_adoption_preserves_receipts_samples_clock_after_lock_and_drains_cancellation",
+    "nebula-assistant-storage/recovery::recovery_collections_and_repairs_enforce_shared_bounds_without_partial_writes",
+    "nebula-assistant-services/recorded_effects::recorded_tool_reductions_match_python_phase_vectors_and_errors",
+    "nebula-assistant-services/recorded_effects::recorded_hook_reductions_match_python_and_preserve_atomic_conflict_inputs",
+    "nebula-assistant-services/recorded_effects::recorded_reductions_are_idempotent_precise_and_bound_expanded_history",
+    "nebula-assistant-services/recovery::concurrent_pending_reads_adopt_each_recorded_effect_once_and_survive_reopen",
+    "nebula-assistant-transport/recovery::python_recovery_http_oracle_preserves_ordered_commits_receipts_and_uncertainty"
   ]
 }

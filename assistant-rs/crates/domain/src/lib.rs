@@ -8,7 +8,9 @@ pub mod auth;
 pub mod dependencies;
 mod harness_profile;
 pub mod records;
+pub mod retained_json;
 pub mod session_state;
+pub mod tool_receipt;
 
 pub const MAX_EVENT_BYTES: usize = 1024 * 1024;
 

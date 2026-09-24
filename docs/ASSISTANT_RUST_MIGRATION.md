@@ -687,3 +687,73 @@ and captured Assistant source hashes match. The verified integration base remain
 origin/main d2d1ba62e3ad96c966a6612f1a446f6798e96c37. Detailed malformed-model
 validation envelopes, remaining mutation/execution services, recovery, streaming,
 migrations, packaging, production Figma journeys and performance remain open.
+
+## Recorded-effect adoption and pending recovery contract
+
+Journey: select, refresh or reconnect to an interrupted conversation and observe
+already-recorded tool results and successful hook outcomes without executing them
+again. The pending-turn and session-hook views are the entry points. The durable
+Turn, ToolCall receipt and NativeHookExecution outcome own recovery state; browser
+state, polling frequency and a missing transport cannot establish completion.
+Figma Recovery and conversation journeys remain the operator references.
+
+Preserve source pending selection and conflict precedence, latest failed-answer
+fallback, strict receipt acceptance, unresolved-effect visibility, and stable
+history/counters across repeated or concurrent reads. Tool-history adoption and
+hook adoption remain two ordered commits. Hook outcome and Turn changes commit
+atomically with expected revisions; conflicts retry at most three times. Background or mismatched tool receipts and unsuccessful or uncertain hook
+outcomes remain unresolved. Trustworthy terminal tool failures are retained as
+failures. No provider,
+command, hook, tool, helper or child-agent dispatch occurs in this boundary.
+
+Lifecycle coverage here is retained select/refresh/reconnect, interruption display,
+failure and safe repeated observation. Creating, streaming, resuming/retrying,
+deleting/revoking and actual execution remain required later integration gates.
+Planned tests use isolated fixed-clock Python HTTP fixtures, strict receipt vectors,
+bounded snapshots/serialization, CAS conflicts, hook rollback, cancellation/drain,
+ordered-commit interruption, raw durable-state comparisons and database reopen.
+Production desktop/mobile/WebKit/LAN and physical-device evidence remain open;
+passing these storage/API checks cannot complete the operator journey.
+
+Implemented the pending-turn and session-hook GETs, bringing the experimental
+route count to 33. Strict receipt hydration includes defaults, coercion, nested
+extra-field rejection, Python numeric equality and hashable deduplication. Saved
+history is indexed to avoid rescanning it for every tool reference. Tool failure
+receipts retain their terminal failure; unknown or background outcomes remain
+unresolved. Late successful hooks and their Turn update commit together. Tool and
+hook phases stay separate, preserving the first commit if the second phase fails.
+
+Read snapshots batch ordered references, defer decoding errors to source order,
+and charge ignored references as well as valid ones. SQLite does not sort joined
+receipt payloads ahead of budget checks; Rust sorts only the bounded collected
+rows after closing the read transaction. Dedicated writer requests retain queue
+admission after caller cancellation and sample trusted clocks inside the write
+transaction. Each unchanged opaque history occurrence keeps its own raw spelling,
+even when semantically equal callback dictionaries have different key order.
+
+The isolated fixture contains 194 full HTTP cases, 177 Assistant records,
+63 dependency records, 90 original Turn JSON strings, 132 receipt vectors,
+13 serialization vectors and 123 phase captures. Cases cover repeated/reopened
+reads, successful and rejected receipts, nonstring unknown IDs, history/counter
+idempotence, duplicate late-hook conflicts and tool-commit/hook-rollback boundaries.
+Python additionally checks event ledgers and relations; Rust checks every entity
+envelope, exact changed rows, full-state hashes, search and display watermarks.
+No execution function, provider, real hook or tool runs in the fixture.
+
+All 63 selected local Rust tests passed: 13 new tests and 50 affected regressions.
+The new tests include 16 concurrent observers, complete collections past 1,000,
+shared limits, queued fresh clocks, accepted cancellation/drain, atomic CAS
+rollback, deleted hooks and large integer validation. Both selected Python tests
+passed (oracle regeneration and storage handoff, 50.20 seconds together). Review
+before execution corrected duplicate raw-fragment reuse and aligned JSON Schema
+arbitrary precision, preventing a panic path for valid 400-digit integers. The
+receipt vectors also verify the Python floating-point integer boundary. Clippy,
+formatting and scoped Python lint checks passed. Cumulative CI selects 132 exact
+Rust and 55 Python tests; the PR records results for the pushed commit.
+
+Production conversation reconnect, automatic continuation, manual reconciliation,
+provider/harness integration, remaining routes, migrations, packaging and whole
+Assistant performance still require their acceptance gates. Existing malformed
+retained-model validation-envelope gaps remain. Bounded input, transaction and
+response behavior are explicit compatibility extensions; no complete product
+journey or speedup is claimed by these isolated tests.

@@ -157,6 +157,16 @@
       "method": "GET",
       "path": "/api/v1/chat/sessions/{session_id}/state",
       "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{session_id}/pending-turn",
+      "status": "experimental"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/chat/sessions/{session_id}/hooks",
+      "status": "experimental"
     }
   ],
   "evidence": [
@@ -171,7 +181,8 @@
     "python-plans.json: 153 fixed-clock goal, child, schedule and raw catalog read/error comparisons; all70 retained records unchanged",
     "python-subagents.json: 73 retained child-view/header comparisons, preserving 191 Assistant and 6 Approval records and raw history ordering",
     "python-state.json: 81 session-state HTTP/watermark comparisons, one writer-phase fault, and 85 immutable HarnessProfile validation vectors",
-    "nebula-assistant-transport/http: seventeen exact existing integration tests passed; transport/session_state adds the 81-case and queued writer-fault comparison"
+    "nebula-assistant-transport/http: seventeen exact existing integration tests passed; transport/session_state adds the 81-case and queued writer-fault comparison",
+    "python-recovery.json: 194 captured pending-turn/session-hook HTTP cases, 132 receipt vectors, 13 serialization vectors and 123 tool/hook phase vectors; exact adopted records and unresolved effects"
   ],
   "remaining_gates": [
     "JSON syntax, content-type and method edge cases",
@@ -185,6 +196,7 @@
     "Malformed session-linked goal/schedule schemas: Rust sanitizes failure rather than exact Python 422 validation detail",
     "Goal UI elapsed-time double counting and child-read failure visibility",
     "Subagent client omits question, reasoning effort and rounds; actions and production journey remain incomplete",
-    "Malformed session-state dependency schemas use sanitized failure instead of detailed Python model-validation envelopes; resource bounds and strict watermark validity are explicit extensions"
+    "Malformed session-state dependency schemas use sanitized failure instead of detailed Python model-validation envelopes; resource bounds and strict watermark validity are explicit extensions",
+    "Recorded-effect adoption has bounded snapshot/transaction/serialization extensions; real execution/restart recovery, production reconnect and complete malformed-record error parity remain open"
   ]
 }

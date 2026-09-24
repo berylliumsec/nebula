@@ -42,6 +42,11 @@ mod subagents;
 pub use subagents::{RawSubagentTurn, SubagentSnapshot, SubagentViewRow};
 mod session_state;
 pub use session_state::{ConnectionObserver, StateClock, StateObservations};
+mod recovery;
+pub use recovery::{
+    HookAdoption, RecoveryReceiptKind, RecoveryReceiptRow, RecoveryReceiptSnapshot, RecoveryTurn,
+    RecoveryTurnsSnapshot,
+};
 
 const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MUTATIONS: usize = 64;
@@ -67,6 +72,8 @@ pub enum Error {
     Closed,
     #[error("assistant record was not found")]
     NotFound,
+    #[error("recorded recovery hook was not found: {0}")]
+    RecoveryHookNotFound(String),
     #[error("assistant record revision or identity conflicts; reload the current record")]
     Conflict,
     #[error("entity already exists: {0}")]
@@ -245,6 +252,7 @@ struct WriteRequest {
 enum Command {
     Apply(WriteRequest),
     SessionState(session_state::StateRequest),
+    Recover(recovery::RepairRequest),
     TouchDevice {
         id: String,
         revision: i64,
@@ -937,6 +945,10 @@ async fn writer(
                 let result =
                     session_state::write_state(&mut connection, &request.id, &request.observations)
                         .await;
+                let _ = request.reply.send(result);
+            }
+            Command::Recover(request) => {
+                let result = recovery::repair(&mut connection, &request).await;
                 let _ = request.reply.send(result);
             }
             Command::TouchDevice {

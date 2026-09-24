@@ -130,6 +130,14 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
         .route("/api/v1/chat/sessions/{session_id}/queue", get(saved_queue))
         .route("/api/v1/chat/turns/{turn_id}/hooks", get(turn_hooks))
         .route(
+            "/api/v1/chat/sessions/{session_id}/pending-turn",
+            get(pending_turn),
+        )
+        .route(
+            "/api/v1/chat/sessions/{session_id}/hooks",
+            get(session_hooks),
+        )
+        .route(
             "/api/v1/chat/sessions/{session_id}/results",
             get(read_results),
         )
@@ -555,6 +563,22 @@ async fn turn_hooks(
 ) -> Response {
     let result = state.services.turn_hooks(&turn).await;
     reply(request, result)
+}
+async fn pending_turn(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let records = AssistantRecords::with_clock(state.store, state.config.clock);
+    reply(request, records.pending_turn(&session).await)
+}
+async fn session_hooks(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let records = AssistantRecords::with_clock(state.store, state.config.clock);
+    reply(request, records.session_hooks(&session).await)
 }
 async fn read_results(
     State(state): State<AppState>,

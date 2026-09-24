@@ -6,6 +6,8 @@ pub mod context;
 pub mod generated;
 pub mod navigation;
 pub mod plans;
+pub mod recorded_effects;
+pub mod recovery;
 pub mod results;
 pub mod session_state;
 pub mod status;
@@ -39,6 +41,8 @@ pub enum Error {
     HistoryConflict(&'static str),
     #[error("Retained Assistant state cannot be projected")]
     LegacyUnhandled,
+    #[error("{0}")]
+    LegacyValueError(String),
     #[error("Retained Assistant state cannot be projected in its storage snapshot")]
     LegacyStorageUnhandled,
     #[error("Assistant model validation failed")]
