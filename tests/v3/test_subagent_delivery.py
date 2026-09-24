@@ -737,3 +737,37 @@ def test_long_parent_message_reaches_a_working_subagent_in_parts(
         await chat.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_a_report_past_its_bound_keeps_its_conclusion_and_says_it_was_cut(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        answer = "OPENING " + "finding " * 4_000 + "CONCLUSION: port 8443 is exposed."
+        provider = RoutedProvider(
+            parent=[
+                _call("p1", "start_subagent", task="Survey the host.", name="Survey"),
+                _finish("p2"),
+                _response(text="Delegated."),
+            ],
+            child=[_response(text=answer)],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        prepared = await chat.prepare_async(
+            _request(project, content="Survey it.", allow_subagents=True)
+        )
+        chat.start_provider_turn(prepared)
+        await _until(
+            lambda: (
+                [item.status for item in store.list_entities(ChatSubagent)]
+                == [ChatSubagentStatus.COMPLETED]
+            )
+        )
+        (record,) = store.list_entities(ChatSubagent)
+        assert len(record.result) <= 20_000
+        assert record.result.startswith("OPENING finding")
+        assert record.result.endswith("CONCLUSION: port 8443 is exposed.")
+        assert "characters of this report were cut here" in record.result
+        await chat.shutdown()
+
+    asyncio.run(scenario())

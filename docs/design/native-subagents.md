@@ -108,7 +108,10 @@ Parent and child exchange durable `ChatSubagentMessage` records
   it in the Core-added steps before its next routing call, where a report or
   message too long for one result arrives in numbered parts (`report_part`,
   `part`), and a harness gets it from `subagent.list` or its next prompt.
-  Nothing is marked received until it went out whole.
+  Nothing is marked received until it went out whole. A report is the
+  child's final answer up to 20,000 characters; a longer one keeps its
+  opening and its last 3,000 characters and says how much was cut between
+  them, so the parent does not ask the child to send it again.
 
 ## Failures reach the parent
 

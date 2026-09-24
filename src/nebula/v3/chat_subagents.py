@@ -97,7 +97,12 @@ if TYPE_CHECKING:
 # Subagents are unlimited unless the operator sets how many may run at once
 # for a conversation. The ceiling only bounds that setting.
 SUBAGENT_LIMIT_CEILING = 100
-RESULT_CHARACTERS = 12_000
+# A report's own bound (ChatSubagent.result). Delivery no longer needs a
+# smaller one: a long report reaches the parent in parts.
+RESULT_CHARACTERS = 20_000
+# A report past RESULT_CHARACTERS keeps its opening and its end, where
+# reports conclude, and says what was cut between them.
+REPORT_TAIL_CHARACTERS = 3_000
 MESSAGE_CHARACTERS = 20_000
 RECENT_STEPS = 4
 FINISHED_STEP_CACHE = 4_096
@@ -470,6 +475,29 @@ def is_subagent_session(session: ChatSession) -> bool:
 def _bounded(text: str, limit: int = RESULT_CHARACTERS) -> str:
     text = text.strip()
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def _report_excerpt(text: str, limit: int = RESULT_CHARACTERS) -> str:
+    """A child's final answer as its report, within ``limit``.
+
+    A report cut silently reads as unfinished, and the parent asks the child
+    to send it again; this keeps the opening and the conclusion and says how
+    much is missing between them.
+    """
+
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    tail = text[-REPORT_TAIL_CHARACTERS:].lstrip()
+
+    def marker(omitted: int) -> str:
+        return (
+            f"\n\n[… {omitted} characters of this report were cut here to fit "
+            "the report limit; the end of the report follows …]\n\n"
+        )
+
+    head = text[: limit - len(tail) - len(marker(len(text)))].rstrip()
+    return head + marker(len(text) - len(head) - len(tail)) + tail
 
 
 def _known_effort(value: Any) -> ReasoningEffort | None:
@@ -2681,7 +2709,10 @@ class SubagentService:
                     ChatSubagentMessageDirection.TO_PARENT,
                     f"Report for round {finished_round} (it is now working on your "
                     f"newer message in round {record.rounds}):\n\n"
-                    + (_bounded(result) or "No report was produced."),
+                    + (
+                        _report_excerpt(result, MESSAGE_CHARACTERS - 200)
+                        or "No report was produced."
+                    ),
                 )
                 await self._deliver(record)
                 return
@@ -2702,7 +2733,7 @@ class SubagentService:
                     "status": status,
                     "finished_at": utc_now(),
                     "usage": usage,
-                    "result": _bounded(result),
+                    "result": _report_excerpt(result),
                     "error": _bounded(error, 1_000) if error else None,
                     "pending_goal_charge_turn_id": pending_charge,
                 },
