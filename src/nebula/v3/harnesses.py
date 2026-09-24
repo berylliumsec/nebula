@@ -43,6 +43,7 @@ from collections.abc import (
     AsyncIterator,
     Awaitable,
     Callable,
+    Coroutine,
     Mapping,
     Sequence,
 )
@@ -55,7 +56,7 @@ from pathlib import Path
 import hashlib
 import tempfile
 import weakref
-from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeVar, cast
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
@@ -148,6 +149,7 @@ from .providers import REASONING_EFFORTS
 from .redaction import redact_text, sanitize_display_text
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .mcp import (
+    GATEWAY_TOOL_TIMEOUT_SECONDS,
     MAX_MCP_MESSAGE_BYTES,
     McpGatewaySession,
     McpProbeService,
@@ -238,6 +240,14 @@ CODEX_GOAL_CONTINUATION_TIMEOUT_SECONDS = 15.0
 GROK_SESSION_LIST_TIMEOUT_SECONDS = 30.0
 
 GATEWAY_CATALOG_PAGE_BYTES = MAX_MCP_MESSAGE_BYTES - 64 * 1024
+# A gateway call answers this long before the harness's own tool timeout, so
+# the harness still reads the answer and the serial gateway is free again.
+GATEWAY_DEADLINE_MARGIN_SECONDS = 30.0
+# How long stopped gateway work may take to record its cancellation (and a
+# command to terminate) before its call is answered anyway.
+GATEWAY_CANCEL_GRACE_SECONDS = 10.0
+# How often a superseded session's closer rechecks a turn still running on it.
+SUPERSEDED_SESSION_RECHECK_SECONDS = 1.0
 _CODEX_MANAGED_VENDOR_FEATURES = (
     "shell_tool",
     "unified_exec",
@@ -435,6 +445,44 @@ def _subagent_wait_limits(kind: HarnessKind | None) -> tuple[int, int]:
     if kind in {HarnessKind.CODEX_APP_SERVER, HarnessKind.CLAUDE_AGENT_SDK}:
         return HARNESS_WAIT_DEFAULT_SECONDS, HARNESS_WAIT_MAX_SECONDS
     return 60, 120
+
+
+_GatewayResult = TypeVar("_GatewayResult")
+
+
+def _consume_gateway_work(task: asyncio.Task[Any]) -> None:
+    """Retrieve the outcome of gateway work its call stopped waiting for."""
+
+    if not task.cancelled():
+        task.exception()
+
+
+def _gateway_call_budget_seconds(kind: HarnessKind | None) -> float | None:
+    """How long one gateway call may run before the harness abandons it.
+
+    Codex gives the Nebula server ``GATEWAY_TOOL_TIMEOUT_SECONDS`` per call. A
+    call it abandoned would otherwise keep running and, because the gateway
+    answers one request at a time, hold every later Nebula tool call behind
+    it. Claude's SDK waits longer than any command policy allows and Grok's
+    limit is unknown, so neither gets a deadline; their abandoned calls end
+    with the turn.
+    """
+
+    if kind == HarnessKind.CODEX_APP_SERVER:
+        return GATEWAY_TOOL_TIMEOUT_SECONDS - GATEWAY_DEADLINE_MARGIN_SECONDS
+    return None
+
+
+def _foreground_timeout_limit_ms(spec: ToolSpec, kind: HarnessKind) -> int | None:
+    """The longest foreground run a command tool gets on this harness."""
+
+    properties = spec.input_schema.get("properties")
+    if not isinstance(properties, dict) or "timeout_ms" not in properties:
+        return None
+    budget = _gateway_call_budget_seconds(kind)
+    if budget is None:
+        return None
+    return int((budget - GATEWAY_DEADLINE_MARGIN_SECONDS) * 1_000)
 
 
 def _gateway_subagent_tools(
@@ -2155,6 +2203,16 @@ def _codex_turn_already_ended(error: HarnessProviderError) -> bool:
     )
 
 
+def _codex_steer_missed_turn(error: HarnessProviderError) -> bool:
+    """Codex's answer to ``turn/steer`` once the expected turn has ended."""
+
+    message = error.data.get("message") if isinstance(error.data, dict) else None
+    return isinstance(message, str) and (
+        message.startswith("expected active turn id")
+        or message.startswith("no active turn")
+    )
+
+
 class CodexAppServerConnection(HarnessConnection):
     adapter_version = ADAPTER_CONTRACT_VERSION + "/codex-v2"
 
@@ -3365,14 +3423,23 @@ class CodexAppServerConnection(HarnessConnection):
     async def steer(self, text: str) -> None:
         if not self.active_turn_id:
             raise HarnessStateError("Codex session has no active turn to steer")
-        await self.rpc.request(
-            "turn/steer",
-            {
-                "threadId": self.external_session_id,
-                "input": [{"type": "text", "text": text}],
-                "expectedTurnId": self.active_turn_id,
-            },
-        )
+        try:
+            await self.rpc.request(
+                "turn/steer",
+                {
+                    "threadId": self.external_session_id,
+                    "input": [{"type": "text", "text": text}],
+                    "expectedTurnId": self.active_turn_id,
+                },
+            )
+        except HarnessProviderError as exc:
+            if not _codex_steer_missed_turn(exc):
+                raise
+            # The turn completed while the input was on its way; nothing was
+            # added to it, exactly like a turn that had already ended.
+            raise HarnessStateError(
+                "Codex finished the turn before the input arrived"
+            ) from exc
 
     async def interrupt(self) -> None:
         if self.active_turn_id:
@@ -6325,6 +6392,10 @@ class GrokAcpConnection(HarnessConnection):
         self.external_session_id = external_session_id
         self.permission_handler = permission_handler
         self.developer_instructions = developer_instructions
+        # ACP keeps the session's conversation, so the instructions travel with
+        # the first prompt this connection completes rather than every prompt.
+        # A new connection sends them again: its catalog may have changed.
+        self._instructions_delivered = False
         self.active = False
         # ACP's answer to session/prompt is the turn boundary, so a stopped
         # prompt is kept until Grok answers it and the next prompt waits for it.
@@ -6430,7 +6501,10 @@ class GrokAcpConnection(HarnessConnection):
         del model  # Model selection is negotiated by the Grok ACP session.
         if skill is not None and f"${skill.name}" not in prompt:
             prompt = f"${skill.name} {prompt}"
-        if self.developer_instructions:
+        sends_instructions = bool(
+            self.developer_instructions and not self._instructions_delivered
+        )
+        if sends_instructions:
             prompt = self.developer_instructions + "\n\n" + prompt
         # A stopped turn's generator can be abandoned at a ``yield`` without
         # running its ``finally``; only a turn that was not stopped is active.
@@ -6719,6 +6793,14 @@ class GrokAcpConnection(HarnessConnection):
                 if isinstance(result, dict)
                 else "end_turn"
             )
+            if sends_instructions and stop_reason not in {
+                "refusal",
+                "cancelled",
+                "canceled",
+            }:
+                # Grok drops a refused prompt from the session, and a stopped
+                # one may not have been read; either sends them again.
+                self._instructions_delivered = True
             if stop_reason == "refusal":
                 # ACP drops the refused prompt and everything after it from the
                 # session, so its partial text is no answer (Zed truncates it).
@@ -7872,6 +7954,11 @@ class HarnessRuntimeService:
         )
         # Per-turn mode, plan and goal folded from the ledger up to ``cursor``.
         self._turn_activity_states: OrderedDict[str, _TurnActivityState] = OrderedDict()
+        # Long gateway work (commands, MCP calls, browser actions) per harness
+        # turn, so Stop and the turn's end can cancel what the harness left.
+        self._gateway_work: dict[str, set[asyncio.Task[Any]]] = {}
+        # Vendor sessions a conversation moved off, closed once they are idle.
+        self._superseded_session_closers: dict[str, asyncio.Task[None]] = {}
         self._closed = False
 
     def bind_knowledge_retriever(self, retriever: KnowledgeRetriever) -> None:
@@ -7987,6 +8074,8 @@ class HarnessRuntimeService:
         return self.automation_tool_platform.project_execution_mode(engagement_id)
 
     def _project_approval_policy(self, engagement_id: str) -> str:
+        # Bounded: a project has one policy (its id derives from the project),
+        # so the project-scoped page holds it whatever the kind's size.
         policies = self.store.list_entities(
             AutomationProjectPolicy, engagement_id=engagement_id, limit=1
         )
@@ -8037,11 +8126,29 @@ class HarnessRuntimeService:
                 self._fail_approval_delivery(approval, turn)
             else:
                 self._fail_unbound_approval(approval)
-        for turn in self.store.list_entities(HarnessTurn, limit=1_000):
-            if turn.status not in {
-                HarnessTurnStatus.RUNNING,
-                HarnessTurnStatus.WAITING_APPROVAL,
-            }:
+        # Filtered in SQL rather than read from the oldest 1,000 turns: a Core
+        # with more harness turns than that must still settle its newest ones.
+        for turn in self.store.find_entities(
+            HarnessTurn,
+            {
+                "status": [
+                    HarnessTurnStatus.QUEUED.value,
+                    HarnessTurnStatus.RUNNING.value,
+                    HarnessTurnStatus.WAITING_APPROVAL.value,
+                ]
+            },
+        ):
+            if turn.status == HarnessTurnStatus.QUEUED:
+                # A queued chat or analysis turn's producer died with the
+                # previous process, before or while it connected; nothing will
+                # ever start it. Queued mission stages belong to their run's
+                # recovery below.
+                if turn.origin != HarnessTurnOrigin.MISSION:
+                    self._settle_orphaned_queued_turn(
+                        turn,
+                        "Nebula Core restarted before the harness turn started.",
+                        reason="core_restart",
+                    )
                 continue
             interrupted_turn = self.store.update(
                 HarnessTurn,
@@ -8083,21 +8190,18 @@ class HarnessRuntimeService:
                     payload={"phase": "interrupted", "reason": "core_restart"},
                 ),
             )
-        for run in self.store.list_entities(AgentRun, limit=1_000):
+        for run in self.store.find_entities(
+            AgentRun,
+            {"backend": RunBackend.HARNESS.value, "status": RunStatus.QUEUED.value},
+        ):
             scheduled_for = run.metadata.get("scheduled_for")
-            if (
-                run.backend != RunBackend.HARNESS
-                or run.status != RunStatus.QUEUED
-                or not isinstance(scheduled_for, str)
-            ):
+            if not isinstance(scheduled_for, str):
                 continue
             turns = sorted(
-                (
-                    item
-                    for item in self.store.list_entities(
-                        HarnessTurn, engagement_id=run.engagement_id, limit=1_000
-                    )
-                    if item.run_id == run.id and item.status == HarnessTurnStatus.QUEUED
+                self.store.find_entities(
+                    HarnessTurn,
+                    {"run_id": run.id, "status": HarnessTurnStatus.QUEUED.value},
+                    engagement_id=run.engagement_id,
                 ),
                 key=lambda item: int(item.metadata.get("mission_stage_index", 0)),
             )
@@ -8116,9 +8220,9 @@ class HarnessRuntimeService:
                 name=f"scheduled-harness-mission-{run.id}",
             )
             self._scheduled_mission_tasks[run.id] = task
-        for interaction in self.store.list_entities(HarnessInteraction, limit=1_000):
-            if interaction.status != HarnessInteractionStatus.PENDING:
-                continue
+        for interaction in self.store.find_entities(
+            HarnessInteraction, {"status": HarnessInteractionStatus.PENDING.value}
+        ):
             self.store.update(
                 HarnessInteraction,
                 interaction.id,
@@ -8132,6 +8236,50 @@ class HarnessRuntimeService:
                 },
                 expected_revision=interaction.revision,
             )
+
+    def _settle_orphaned_queued_turn(
+        self, turn: HarnessTurn, error: str, *, reason: str
+    ) -> None:
+        """Interrupt a turn whose producer ended before the harness started it.
+
+        A queued turn is still connecting: nothing reached the vendor yet, so
+        it settles as interrupted with its chat turn, leaving the conversation
+        free for the operator's retry or next message instead of reserved.
+        """
+
+        turn = self.store.get(HarnessTurn, turn.id)
+        if turn.status != HarnessTurnStatus.QUEUED:
+            return
+        turn = self.store.update(
+            HarnessTurn,
+            turn.id,
+            {
+                "status": HarnessTurnStatus.INTERRUPTED,
+                "completed_at": utc_now(),
+                "error": error,
+                "metadata": {**turn.metadata, "interrupted_reason": reason},
+            },
+            expected_revision=turn.revision,
+        )
+        self._interrupt_owner(turn)
+        # The session only turns running once connected, so its status
+        # belongs to other turns and stays as it is.
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        self._persist_activity(
+            turn,
+            session,
+            HarnessEvent(
+                type="turn_status",
+                origin=turn.origin,
+                harness_profile_id=session.harness_profile_id,
+                harness_session_id=session.id,
+                harness_turn_id=turn.id,
+                model=session.model,
+                item_status="interrupted",
+                summary=error,
+                payload={"phase": "interrupted", "reason": reason},
+            ),
+        )
 
     def _interrupt_owner_for_missing_schedule(self, run: AgentRun) -> None:
         self.store.update(
@@ -8181,6 +8329,16 @@ class HarnessRuntimeService:
                     expected_revision=turn.revision,
                 )
                 self._interrupt_owner(turn)
+        # Chat turns whose producer had not connected yet have no ``_active``
+        # entry; they are settled below once their tasks stop.
+        unstarted_chat_turn_ids = [
+            turn_id
+            for turn_id in self._chat_turn_tasks
+            if all(item.turn_id != turn_id for _, item in active)
+        ]
+        for closer in self._superseded_session_closers.values():
+            closer.cancel()
+        self._superseded_session_closers.clear()
         scheduled_tasks = [
             task for task in self._scheduled_mission_tasks.values() if not task.done()
         ]
@@ -8220,6 +8378,22 @@ class HarnessRuntimeService:
                 )
                 pass
         self._chat_turn_tasks.clear()
+        for turn_id in unstarted_chat_turn_ids:
+            try:
+                self._settle_orphaned_queued_turn(
+                    self.store.get(HarnessTurn, turn_id),
+                    "Nebula Core shut down before the harness turn started.",
+                    reason="core_shutdown",
+                )
+            except Exception as caught_error:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.shutdown.queued_turn_not_settled",
+                    "A harness turn that had not started could not be settled at shutdown; startup settles it.",
+                    caught_error,
+                    stage="shutdown",
+                    metadata={"entity_type": "harness_turn", "entity_id": turn_id},
+                )
         await gather_diagnostic(
             *(connection.close() for connection in self._connections.values()),
             feature="harnesses",
@@ -8646,10 +8820,12 @@ class HarnessRuntimeService:
         )
         imported = {
             item.external_session_id: item
-            for item in self.store.list_entities(
-                HarnessSession, engagement_id=engagement_id, limit=1_000
+            for item in self.store.find_entities(
+                HarnessSession,
+                {"harness_profile_id": profile_id},
+                engagement_id=engagement_id,
             )
-            if item.harness_profile_id == profile_id and item.external_session_id
+            if item.external_session_id
         }
         reconciled: list[ExternalHarnessSession] = []
         for item in discovered:
@@ -8681,14 +8857,16 @@ class HarnessRuntimeService:
         display_name: str,
         model: str | None,
     ) -> HarnessSession:
-        for existing in self.store.list_entities(
-            HarnessSession, engagement_id=engagement_id, limit=1_000
+        for existing in self.store.find_entities(
+            HarnessSession,
+            {
+                "harness_profile_id": profile_id,
+                "external_session_id": external_session_id,
+            },
+            engagement_id=engagement_id,
+            limit=1,
         ):
-            if (
-                existing.harness_profile_id == profile_id
-                and existing.external_session_id == external_session_id
-            ):
-                return existing
+            return existing
         created = self.create_session(
             engagement_id=engagement_id,
             profile_id=profile_id,
@@ -8827,8 +9005,14 @@ class HarnessRuntimeService:
         model: str | None,
         prompt: str,
         files: dict[str, str] | None = None,
+        nebula_tools: bool = True,
     ) -> HarnessTurn:
-        """Run a tool-disabled, durable harness turn for bounded analysis."""
+        """Run a tool-disabled, durable harness turn for bounded analysis.
+
+        ``nebula_tools=False`` is for text-only requests such as conversation
+        naming: the session gets no command runtime, no native tools and no
+        Nebula gateway, so it starts only the vendor process.
+        """
 
         profile = self.store.get(HarnessProfile, profile_id)
         self._validate_harness_privacy(
@@ -8844,8 +9028,13 @@ class HarnessRuntimeService:
             profile_id=profile.id,
             model=selected_model,
             mcp_server_ids=[],
+            tools_enabled=nebula_tools,
         )
-        native = _container_only_native_capabilities(profile.native_capabilities)
+        native = (
+            _container_only_native_capabilities(profile.native_capabilities)
+            if nebula_tools
+            else HarnessNativeCapabilities()
+        )
         session = self.store.update(
             HarnessSession,
             session.id,
@@ -8856,6 +9045,7 @@ class HarnessRuntimeService:
                     "analysis_only": True,
                     "analysis_files": files or {},
                     "native_capabilities": native.model_dump(mode="json"),
+                    **({} if nebula_tools else {"nebula_gateway": False}),
                 }
             },
             expected_revision=session.revision,
@@ -9005,7 +9195,7 @@ class HarnessRuntimeService:
             }
         )
         metadata["harness_session_rollovers"] = rollovers
-        return self.store.update(
+        rebound = self.store.update(
             ChatSession,
             chat.id,
             {
@@ -9023,6 +9213,116 @@ class HarnessRuntimeService:
             },
             expected_revision=chat.revision,
         )
+        if previous_session_id and previous_session_id != session.id:
+            self._close_superseded_session(previous_session_id)
+        return rebound
+
+    def _close_superseded_session(self, session_id: str) -> None:
+        """Close a vendor session this conversation no longer uses, once idle.
+
+        Each rollover (settings, edit, execution mode, command runtime,
+        workspace binding, parallel fork, unavailable vendor session) starts a
+        new session; the old one kept its vendor process and gateway shim until
+        Core shut down. A turn still running on it finishes first, and a
+        session another chat or an unfinished run still uses stays open.
+        """
+
+        if self._closed:
+            return
+        existing = self._superseded_session_closers.get(session_id)
+        if existing is not None and not existing.done():
+            return
+        try:
+            asyncio.get_running_loop()
+        except (
+            RuntimeError
+        ):  # diagnostic-expected: no event loop holds a live connection to close
+            return
+        self._superseded_session_closers[session_id] = create_diagnostic_task(
+            self._close_when_idle(session_id),
+            feature="harnesses",
+            event_code="harnesses.superseded_session_close",
+            failure_message="A superseded harness session could not be closed.",
+            name=f"harness-superseded-{session_id}",
+        )
+
+    def _session_still_used(self, session_id: str) -> bool:
+        """Whether a conversation or an unfinished run still uses the session."""
+
+        if self.store.find_entities(
+            ChatSession, {"harness_session_id": session_id}, limit=1
+        ):
+            return True
+        return any(
+            run.status
+            not in {
+                RunStatus.COMPLETE,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+                RunStatus.INTERRUPTED,
+            }
+            for run in self.store.find_entities(
+                AgentRun, {"harness_session_id": session_id}
+            )
+        )
+
+    def _session_has_reserved_turns(self, session_id: str) -> bool:
+        return bool(
+            self.store.find_entities(
+                HarnessTurn,
+                {
+                    "harness_session_id": session_id,
+                    "status": [
+                        HarnessTurnStatus.QUEUED.value,
+                        HarnessTurnStatus.RUNNING.value,
+                        HarnessTurnStatus.WAITING_APPROVAL.value,
+                    ],
+                },
+                limit=1,
+            )
+        )
+
+    async def _close_when_idle(self, session_id: str) -> None:
+        try:
+            while not self._closed:
+                if self._session_still_used(session_id):
+                    return
+                lock = self._locks.setdefault(session_id, asyncio.Lock())
+                if (
+                    session_id not in self._active
+                    and not lock.locked()
+                    and not self._session_has_reserved_turns(session_id)
+                ):
+                    async with lock:
+                        if session_id in self._active or self._session_still_used(
+                            session_id
+                        ):
+                            return
+                        await self.close_session(session_id)
+                        record_diagnostic(
+                            "info",
+                            "harnesses",
+                            "harnesses.connection.superseded_closed",
+                            "A harness session its conversation moved off was closed.",
+                            outcome="closed",
+                            stage="connection",
+                            metadata={
+                                "entity_type": "harness_session",
+                                "entity_id": session_id,
+                            },
+                        )
+                    return
+                await asyncio.sleep(SUPERSEDED_SESSION_RECHECK_SECONDS)
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: the session was deleted with its conversation
+            return
+        finally:
+            if (
+                self._superseded_session_closers.get(session_id)
+                is asyncio.current_task()
+            ):
+                self._superseded_session_closers.pop(session_id, None)
 
     def _chat_messages(
         self, engagement_id: str, session_id: str, *, include_replaced: bool = False
@@ -9520,6 +9820,27 @@ class HarnessRuntimeService:
                     },
                 )
             )
+        if chat_session_id:
+            # The conversation's saved choices are the authority for the
+            # vendor binding; a send only changes one it names. A send that
+            # leaves a choice out (a composer that has not reloaded it yet)
+            # would otherwise drop the tools from the vendor catalog,
+            # reconnecting it now and again at the next send.
+            if chat.metadata.get("allow_agent_messaging") is True:
+                allow_agent_messaging = True
+            saved_subagent = chat.metadata.get("provider_subagent")
+            if (
+                subagent_setting is None
+                and pending_provider_subagent is None
+                and isinstance(saved_subagent, dict)
+            ):
+                pending_provider_subagent = saved_subagent
+        # Core checks the subagent model itself: the composer may still be
+        # loading the verification a saved or newly chosen model already has.
+        if subagent_setting is None and pending_provider_subagent is not None:
+            subagent_setting = self._verified_provider_subagent(
+                engagement_id, pending_provider_subagent
+            )
         forked_from_session_id = settings_previous_session_id
         session_rollover_reason = (
             "assistant_settings_changed" if settings_handoff else None
@@ -9787,6 +10108,30 @@ class HarnessRuntimeService:
                 [item["message_id"] for item in agent_update["messages"]]
             )
         return chat, chat_turn, harness_turn
+
+    def _verified_provider_subagent(
+        self, engagement_id: str, choice: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        """The saved or pending subagent choice, if Core can use it this turn.
+
+        A choice whose model has not passed the tool check (or whose provider
+        cannot take project data) runs the turn without subagents, as before;
+        it stays saved for a later turn.
+        """
+
+        if self.provider_subagents is None:
+            return None
+        try:
+            return self.provider_subagents.validate_harness_setting(
+                engagement_id,
+                str(choice.get("provider_profile_id") or ""),
+                str(choice.get("model") or ""),
+                choice.get("max_active"),
+            )
+        except (
+            ChatError
+        ):  # diagnostic-expected: an unverified choice waits for a later turn
+            return None
 
     def _bind_session_provider_subagent(
         self, session: HarnessSession, setting: dict[str, Any] | None
@@ -10166,6 +10511,19 @@ class HarnessRuntimeService:
                     yield notice
                     # Once: the fresh session has nothing to resume.
                     connection = await self._connection(session, turn)
+            except asyncio.CancelledError:
+                # Shutdown or a cancelled producer ended the connect. The turn
+                # is still queued and nothing reached the vendor; left queued it
+                # would reserve the chat forever. Stop has already written its
+                # own terminal state.
+                self._settle_orphaned_queued_turn(
+                    turn,
+                    "Nebula Core shut down before the harness turn started."
+                    if self._closed
+                    else "The harness turn stopped before it started.",
+                    reason="core_shutdown" if self._closed else "producer_cancelled",
+                )
+                raise
             except Exception as exc:
                 error_id = record_caught_exception(
                     "harnesses",
@@ -10667,6 +11025,35 @@ class HarnessRuntimeService:
                     for key, gate in self._gateway_target_gates.items()
                     if key[0] != turn.id
                 }
+                try:
+                    settled = self.store.get(HarnessTurn, turn.id)
+                    if settled.status in {
+                        HarnessTurnStatus.COMPLETE,
+                        HarnessTurnStatus.FAILED,
+                        HarnessTurnStatus.CANCELLED,
+                        HarnessTurnStatus.INTERRUPTED,
+                    }:
+                        stopped = settled.status == HarnessTurnStatus.CANCELLED
+                        self._retire_turn_requests(
+                            settled,
+                            reason=(settled.error or "Turn stopped")
+                            if stopped
+                            else "The harness finished this turn before a "
+                            "decision arrived.",
+                            stopped=stopped,
+                        )
+                except Exception as retire_error:
+                    record_caught_exception(
+                        "harnesses",
+                        "harnesses.turn.requests_not_retired",
+                        "A finished harness turn's pending requests could not be settled.",
+                        retire_error,
+                        stage="turn-cleanup",
+                        metadata={"entity_type": "harness_turn", "entity_id": turn.id},
+                    )
+                # Whatever gateway work the harness left running ends with the
+                # turn, so it stops acting and frees the session's gateway.
+                stopped_work = self._cancel_gateway_work(turn.id)
                 # The terminal status is written without a ledger event;
                 # followers must not wait out their idle interval to see it.
                 self._wake_activity_followers(turn.id)
@@ -10675,6 +11062,10 @@ class HarnessRuntimeService:
                     # above, so a stop racing this await cannot skip either,
                     # and an early exit never leaves the pending read behind.
                     await coalesced.aclose()
+                if stopped_work:
+                    await asyncio.wait(
+                        stopped_work, timeout=GATEWAY_CANCEL_GRACE_SECONDS
+                    )
 
     async def start_mission(
         self,
@@ -11106,10 +11497,12 @@ class HarnessRuntimeService:
         )
         if task is not None and not task.done():
             task.cancel()
-        for turn in self.store.list_entities(
-            HarnessTurn, engagement_id=run.engagement_id, limit=1_000
+        for turn in self.store.find_entities(
+            HarnessTurn,
+            {"run_id": run.id, "status": HarnessTurnStatus.QUEUED.value},
+            engagement_id=run.engagement_id,
         ):
-            if turn.run_id == run.id and turn.status == HarnessTurnStatus.QUEUED:
+            if turn.status == HarnessTurnStatus.QUEUED:
                 self.store.update(
                     HarnessTurn,
                     turn.id,
@@ -11170,7 +11563,15 @@ class HarnessRuntimeService:
             raise HarnessConfigurationError("steering text cannot be blank")
         # The live connection is authoritative. Persisted capability reports can
         # predate steering support and must not disable an upgraded active adapter.
-        await active.connection.steer(clean)
+        try:
+            await active.connection.steer(clean)
+        except HarnessTransportError as exc:
+            current = self._active.get(turn.harness_session_id)
+            if current is not None and current.turn_id == turn.id:
+                raise
+            # The turn ended while the input was on its way: report the same
+            # state as a steer that arrives after the turn, not a failure.
+            raise HarnessStateError("harness turn is not active") from exc
         event = HarnessEvent(
             type="notice",
             origin=turn.origin,
@@ -11320,11 +11721,14 @@ class HarnessRuntimeService:
             expected_revision=replacement_run.revision,
         )
         replacement = next(
-            item
-            for item in self.store.list_entities(
-                HarnessTurn, engagement_id=original.engagement_id, limit=1_000
+            iter(
+                self.store.find_entities(
+                    HarnessTurn,
+                    {"run_id": replacement_run.id},
+                    engagement_id=original.engagement_id,
+                    limit=1,
+                )
             )
-            if item.run_id == replacement_run.id
         )
         return self.store.update(
             HarnessTurn,
@@ -11563,6 +11967,82 @@ class HarnessRuntimeService:
     def _restore_approval_wait(self, turn: HarnessTurn, future) -> None:
         if future.cancelled() or future.exception() is not None:
             return
+        self._release_approval_wait(turn)
+
+    def _abandon_gateway_approval(
+        self,
+        turn: HarnessTurn,
+        approval_id: str | None,
+        tool_call_id: str | None,
+    ) -> None:
+        """Retire an approval its gateway call stopped waiting for.
+
+        Stop, the turn's end or the harness tool deadline abandoned the call,
+        so no decision can reach the harness any more; a pending card would
+        take a decision that does nothing. A decision already recorded stays.
+        """
+
+        if approval_id:
+            self._approval_futures.pop(approval_id, None)
+            self._broker_approval_ids.discard(approval_id)
+            try:
+                approval: Approval | None = self.store.get(Approval, approval_id)
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: a removed request has no card to retire
+                approval = None
+            if approval is not None and approval.status == ApprovalStatus.PENDING:
+                self.store.update(
+                    Approval,
+                    approval.id,
+                    {
+                        "status": ApprovalStatus.EXPIRED,
+                        "decided_by": "system",
+                        "decided_at": utc_now(),
+                        "decision_note": "The harness stopped waiting for this "
+                        "request before a decision arrived.",
+                    },
+                    expected_revision=approval.revision,
+                )
+        if tool_call_id:
+            self._cancel_gateway_tool_call(
+                tool_call_id, "The harness stopped waiting for approval."
+            )
+        latest = self.store.get(HarnessTurn, turn.id)
+        if latest.status in {
+            HarnessTurnStatus.RUNNING,
+            HarnessTurnStatus.WAITING_APPROVAL,
+        }:
+            self._release_approval_wait(latest)
+
+    def _cancel_gateway_tool_call(self, call_id: str, reason: str) -> None:
+        """Record a gateway tool call that will never finish as cancelled."""
+
+        try:
+            call = self.store.get(ToolCall, call_id)
+        except NotFoundError:  # diagnostic-expected: no call was reserved yet
+            return
+        if call.status in {
+            ToolCallStatus.COMPLETE,
+            ToolCallStatus.FAILED,
+            ToolCallStatus.DENIED,
+            ToolCallStatus.CANCELLED,
+        }:
+            return
+        self.store.update(
+            ToolCall,
+            call.id,
+            {
+                "status": ToolCallStatus.CANCELLED,
+                "error": reason,
+                "completed_at": utc_now(),
+            },
+            expected_revision=call.revision,
+        )
+
+    def _release_approval_wait(self, turn: HarnessTurn) -> None:
+        """Return a turn to running unless another request still waits on it."""
+
         latest = self.store.get(HarnessTurn, turn.id)
         if latest.status not in {
             HarnessTurnStatus.RUNNING,
@@ -11763,6 +12243,25 @@ class HarnessRuntimeService:
                     caught_error,
                     stage="turn-stop",
                 )
+        self._retire_turn_requests(turn, reason=reason, stopped=True)
+        # Commands, MCP calls and browser actions stop with the turn; left
+        # running they would keep acting and hold the session's gateway.
+        self._cancel_gateway_work(turn.id)
+        return self.store.get(HarnessTurn, turn.id)
+
+    def _retire_turn_requests(
+        self, turn: HarnessTurn, *, reason: str, stopped: bool
+    ) -> None:
+        """Settle the approvals and input requests a finished turn still holds.
+
+        No answer can reach the harness once the turn has ended: a pending card
+        would take a decision that does nothing, and its waiter would hold the
+        session's serial gateway until a reconnect. Stop records them
+        cancelled; any other end expires them. Each waiter receives a denial,
+        which releases it like any decision.
+        """
+
+        owners = {turn.id, turn.run_id, turn.chat_turn_id} - {None}
         for approval_id, future in list(self._approval_futures.items()):
             try:
                 approval = self.store.get(Approval, approval_id)
@@ -11775,7 +12274,7 @@ class HarnessRuntimeService:
                     stage="harnesses",
                 )
                 continue
-            if approval.run_id not in {turn.run_id, turn.chat_turn_id}:
+            if approval.run_id not in owners:
                 continue
             self._approval_futures.pop(approval_id, None)
             self._broker_approval_ids.discard(approval_id)
@@ -11784,9 +12283,12 @@ class HarnessRuntimeService:
                     Approval,
                     approval.id,
                     {
-                        "status": ApprovalStatus.CANCELLED,
+                        "status": ApprovalStatus.CANCELLED
+                        if stopped
+                        else ApprovalStatus.EXPIRED,
                         "decided_at": utc_now(),
                         "decision_note": reason[:1_000],
+                        **({} if stopped else {"decided_by": "system"}),
                     },
                     expected_revision=approval.revision,
                 )
@@ -11797,7 +12299,9 @@ class HarnessRuntimeService:
                         ToolCall,
                         call.id,
                         {
-                            "status": ToolCallStatus.DENIED,
+                            "status": ToolCallStatus.DENIED
+                            if stopped
+                            else ToolCallStatus.CANCELLED,
                             "error": reason[:1_000],
                             "completed_at": utc_now(),
                         },
@@ -11807,29 +12311,32 @@ class HarnessRuntimeService:
                 future.set_result(
                     HarnessPermissionDecision(allowed=False, reason=reason)
                 )
-        pending_interactions = [
-            interaction
-            for interaction in self.store.list_entities(
-                HarnessInteraction, engagement_id=turn.engagement_id, limit=1_000
-            )
-            if interaction.harness_turn_id == turn.id
-            and interaction.status == HarnessInteractionStatus.PENDING
-        ]
+        pending_interactions = self.store.find_entities(
+            HarnessInteraction,
+            {
+                "harness_turn_id": turn.id,
+                "status": HarnessInteractionStatus.PENDING.value,
+            },
+            engagement_id=turn.engagement_id,
+        )
         for interaction in pending_interactions:
             interaction_future = self._interaction_futures.pop(interaction.id, None)
             self.store.update(
                 HarnessInteraction,
                 interaction.id,
                 {
-                    "status": HarnessInteractionStatus.CANCELLED,
+                    "status": HarnessInteractionStatus.CANCELLED
+                    if stopped
+                    else HarnessInteractionStatus.EXPIRED,
                     "resolved_at": utc_now(),
                     "metadata": {**interaction.metadata, "reason": reason[:1_000]},
                 },
                 expected_revision=interaction.revision,
             )
             if interaction_future is not None and not interaction_future.done():
-                interaction_future.set_result({"action": "cancel", "response": {}})
-        return self.store.get(HarnessTurn, turn.id)
+                interaction_future.set_result(
+                    {"action": "cancel" if stopped else "expire", "response": {}}
+                )
 
     def attach_run_to_chat(self, run_id: str) -> ChatSession:
         run = self.store.get(AgentRun, run_id)
@@ -11839,10 +12346,12 @@ class HarnessRuntimeService:
             )
         existing = [
             item
-            for item in self.store.list_entities(
-                ChatSession, engagement_id=run.engagement_id, limit=1_000
+            for item in self.store.find_entities(
+                ChatSession,
+                {"harness_session_id": run.harness_session_id},
+                engagement_id=run.engagement_id,
             )
-            if item.harness_session_id == run.harness_session_id
+            if item.metadata.get("temporary_assistant") is not True
         ]
         if existing:
             return existing[0]
@@ -11876,10 +12385,10 @@ class HarnessRuntimeService:
         ]
         turns = [
             turn
-            for turn in self.store.list_entities(
-                HarnessTurn, engagement_id=run.engagement_id, limit=1_000
+            for turn in self.store.find_entities(
+                HarnessTurn, {"run_id": run.id}, engagement_id=run.engagement_id
             )
-            if turn.run_id == run.id and turn.response
+            if turn.response
         ]
         if turns:
             messages.append(
@@ -12253,6 +12762,9 @@ class HarnessRuntimeService:
             )
         components = self._ensure_oci_components(session)
         if components is not None:
+            harness_kind = self.store.get(
+                HarnessProfile, current.harness_profile_id
+            ).kind
             for actual_name, spec in sorted(components.specs.items()):
                 if spec.budget_class != "execution":
                     continue
@@ -12260,6 +12772,14 @@ class HarnessRuntimeService:
                 stem = re.sub(r"[^a-zA-Z0-9_.-]+", "_", actual_name).strip("_.-")
                 gateway_name = f"runtime_{digest}_{(stem or 'tool')[:80]}"
                 oci_mapping[gateway_name] = actual_name
+                foreground_limit_ms = _foreground_timeout_limit_ms(spec, harness_kind)
+                foreground_note = (
+                    f" Foreground runs stop after {foreground_limit_ms // 60_000} "
+                    "minutes here; use background=true for longer work."
+                    if foreground_limit_ms is not None
+                    and "background" in spec.input_schema.get("properties", {})
+                    else ""
+                )
                 tools.append(
                     {
                         "name": gateway_name,
@@ -12270,6 +12790,7 @@ class HarnessRuntimeService:
                             "result is a nebula.tool-result/v2 receipt; inspect it with "
                             "tool_output.search or tool_output.read. Nebula supplies "
                             "idempotency internally; never add idempotency_key or _meta."
+                            + foreground_note
                         )[:10_000],
                         "inputSchema": _gateway_oci_input_schema(spec),
                         "annotations": {
@@ -12476,6 +12997,20 @@ class HarnessRuntimeService:
             if name not in _GATEWAY_RETRIEVAL_SCHEMAS:
                 Draft7Validator(schema).validate(arguments)
             result = await self._gateway_call_unwrapped(session, name, arguments)
+        except asyncio.CancelledError as exc:
+            current = asyncio.current_task()
+            if current is None or current.cancelling():
+                raise
+            # Stop or the turn's end cancelled the work, not this request:
+            # answer it so the serial gateway serves the next call.
+            failure = tool_failure(spec, arguments, exc, phase="after_execution")
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps(failure, sort_keys=True)}
+                ],
+                "structuredContent": failure,
+                "isError": True,
+            }
         except Exception as exc:  # diagnostic-expected: tool_failure records the original exception and effective schema below.
             phase = (
                 "before_execution"
@@ -12582,8 +13117,12 @@ class HarnessRuntimeService:
                 runtime_session_kind="harness",
                 runtime_session_id=session.id,
             )
-            async with self._gateway_execution_gate(turn):
-                result = await components.broker.execute(invocation, components.scope)
+
+            async def execute_companion() -> ToolExecutionResult:
+                async with self._gateway_execution_gate(turn):
+                    return await components.broker.execute(invocation, components.scope)
+
+            result = await self._run_gateway_work(session, turn, execute_companion())
             return {
                 "content": [
                     {"type": "text", "text": json.dumps(result.output)},
@@ -12602,8 +13141,69 @@ class HarnessRuntimeService:
             return await self._gateway_subagent(session, turn, name, arguments)
         if name in _GATEWAY_AGENT_MESSAGE_NAMES:
             return await self._gateway_agent_message(session, turn, name, arguments)
-        async with self._gateway_execution_gate(turn):
-            return await self._gateway_action_call(session, turn, name, arguments)
+
+        async def execute_action() -> dict[str, Any]:
+            async with self._gateway_execution_gate(turn):
+                return await self._gateway_action_call(session, turn, name, arguments)
+
+        return await self._run_gateway_work(session, turn, execute_action())
+
+    async def _run_gateway_work(
+        self,
+        session: HarnessSession,
+        turn: HarnessTurn,
+        work: Coroutine[Any, Any, _GatewayResult],
+    ) -> _GatewayResult:
+        """Run one long gateway call as a task Stop and the turn's end can cancel.
+
+        The gateway answers one request at a time, so a command, MCP call or
+        browser action outliving its turn, or the harness's own tool timeout,
+        would hold every later Nebula tool call on this session behind it.
+        Knowledge, retrieval, subagent and agent-message calls are bounded and
+        stay inline; ``subagent.wait`` already ends shortly after a Stop.
+        """
+
+        # diagnostic-expected: awaited below; Stop, the turn's end or the harness deadline cancels it.
+        task = asyncio.create_task(work, name=f"harness-gateway-{turn.id}")
+        running = self._gateway_work.setdefault(turn.id, set())
+        running.add(task)
+        budget = _gateway_call_budget_seconds(
+            self.store.get(HarnessProfile, session.harness_profile_id).kind
+        )
+        try:
+            done, _ = await asyncio.wait({task}, timeout=budget)
+            if not done:
+                task.cancel()
+                # Let the tool record its cancellation, and a command stop,
+                # before the call answers.
+                await asyncio.wait({task}, timeout=GATEWAY_CANCEL_GRACE_SECONDS)
+                if not task.done() or task.cancelled():
+                    raise TimeoutError(
+                        f"the call ran past the {round(budget or 0)} s harness tool limit"
+                    )
+            return task.result()
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                # The gateway request itself is going away; so does its work.
+                task.cancel()
+            raise
+        finally:
+            running.discard(task)
+            if not running and self._gateway_work.get(turn.id) is running:
+                self._gateway_work.pop(turn.id, None)
+            if not task.done():
+                task.add_done_callback(_consume_gateway_work)
+
+    def _cancel_gateway_work(self, turn_id: str) -> list[asyncio.Task[Any]]:
+        """Cancel the gateway work a turn left running; return it to await."""
+
+        tasks = [
+            task for task in self._gateway_work.get(turn_id, ()) if not task.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        return tasks
 
     async def _gateway_subagent(
         self,
@@ -12891,6 +13491,8 @@ class HarnessRuntimeService:
             arguments = dict(arguments)
             if spec is not None and "cwd" in spec.path_arguments:
                 arguments["cwd"] = "."
+            if spec is not None:
+                arguments = self._bounded_foreground_timeout(session, spec, arguments)
             target_gate = self._gateway_target_gate(
                 session, turn, oci_tool_name, arguments
             )
@@ -12919,7 +13521,13 @@ class HarnessRuntimeService:
                 arguments=_bounded(arguments, limit=MAX_TOOL_ARGUMENT_TEXT),
             ),
         )
-        decision = await ticket.decision
+        try:
+            decision = await ticket.decision
+        except asyncio.CancelledError:
+            self._abandon_gateway_approval(
+                turn, ticket.approval_id, ticket.tool_call_id
+            )
+            raise
         if not decision.allowed or not ticket.tool_call_id:
             detail = decision.reason or "Denied by Nebula policy"
             return {
@@ -12945,6 +13553,11 @@ class HarnessRuntimeService:
                 tool_name=tool.name,
                 arguments=arguments,
             )
+        except asyncio.CancelledError:
+            self._cancel_gateway_tool_call(
+                call.id, "The harness turn ended before the MCP call finished."
+            )
+            raise
         except (
             Exception
         ) as exc:  # diagnostic-expected: converted to a bounded MCP result
@@ -13045,6 +13658,31 @@ class HarnessRuntimeService:
             "structuredContent": receipt.as_model_result(),
             "isError": is_error,
         }
+
+    def _bounded_foreground_timeout(
+        self, session: HarnessSession, spec: ToolSpec, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Keep a foreground command inside the harness's own tool timeout.
+
+        The command runtime then times the command out itself and keeps its
+        captured output, instead of the harness abandoning a call that keeps
+        running and holds the session's serial gateway. Background commands
+        return at once and keep their own limit.
+        """
+
+        limit_ms = _foreground_timeout_limit_ms(
+            spec, self.store.get(HarnessProfile, session.harness_profile_id).kind
+        )
+        if limit_ms is None or arguments.get("background") is True:
+            return arguments
+        requested = arguments.get("timeout_ms")
+        if (
+            isinstance(requested, int)
+            and not isinstance(requested, bool)
+            and requested <= limit_ms
+        ):
+            return arguments
+        return {**arguments, "timeout_ms": limit_ms}
 
     async def _gateway_oci_call(
         self,
@@ -13241,7 +13879,11 @@ class HarnessRuntimeService:
         self._waiting_owner(turn, approval_id=approval.id)
 
         future.add_done_callback(lambda done: self._restore_approval_wait(turn, done))
-        return await future
+        try:
+            return await future
+        except asyncio.CancelledError:
+            self._abandon_gateway_approval(turn, approval.id, approval.tool_call_id)
+            raise
 
     async def _gateway_retrieval(
         self, turn: HarnessTurn, name: str, arguments: dict[str, Any]
@@ -13862,7 +14504,13 @@ class HarnessRuntimeService:
             list_tools=gateway_catalog,
             call_tool=gateway_call,
         )
-        launch = await gateway.start()
+        # A session offered no Nebula tools (conversation naming) starts no
+        # gateway shim; its directory still holds the private vendor workspace.
+        launch = (
+            await gateway.start()
+            if session.metadata.get("nebula_gateway") is not False
+            else None
+        )
         self._gateways[session.id] = gateway
         execution_mode = _session_execution_mode(session)
         isolated_workspace = (
@@ -13901,7 +14549,7 @@ class HarnessRuntimeService:
                         )
 
         try:
-            catalog = gateway_catalog({})
+            catalog = gateway_catalog({}) if launch is not None else {"tools": []}
             gateway_tools = tuple(
                 {
                     "name": str(tool.get("name") or ""),
@@ -13916,7 +14564,9 @@ class HarnessRuntimeService:
                     session=session,
                     workspace=isolated_workspace,
                     mcp_profiles=(),
-                    gateway_config=launch.runtime_config(),
+                    gateway_config=(
+                        launch.runtime_config() if launch is not None else {}
+                    ),
                     gateway_tools=gateway_tools,
                     credential_store=self.credential_store,
                     permission_handler=permission_handler,
@@ -14565,6 +15215,36 @@ class HarnessRuntimeService:
             risk = RiskClass.WORKSPACE_WRITE
         return mode, server, tool, risk, rationale
 
+    def _turn_tool_calls(
+        self, turn: HarnessTurn, *, statuses: Sequence[ToolCallStatus]
+    ) -> list[ToolCall]:
+        """Return this turn's tool calls in ``statuses``, oldest first.
+
+        Filtered in SQL: a scan of the project's first 1,000 tool calls stops
+        seeing the current turn once a project holds more, so every native or
+        MCP event would open a second ledger row. A chat turn's calls carry
+        its conversation id, which is indexed; a mission turn falls back to
+        the project's rows filtered by the turn id.
+        """
+
+        wanted = [status.value for status in statuses]
+        candidates = (
+            self.store.list_session_entities(
+                ToolCall, turn.chat_session_id, statuses=wanted
+            )
+            if turn.chat_session_id
+            else self.store.find_entities(
+                ToolCall,
+                {"metadata.harness_turn_id": turn.id, "status": wanted},
+                engagement_id=turn.engagement_id,
+            )
+        )
+        return [
+            call
+            for call in candidates
+            if call.metadata.get("harness_turn_id") == turn.id
+        ]
+
     def _record_tool_event(
         self, turn: HarnessTurn, session: HarnessSession, event: HarnessEvent
     ) -> HarnessEvent:
@@ -14616,18 +15296,17 @@ class HarnessRuntimeService:
             return event
         existing = [
             call
-            for call in self.store.list_entities(
-                ToolCall, engagement_id=turn.engagement_id, limit=1_000
+            for call in self._turn_tool_calls(
+                turn,
+                statuses=(
+                    ToolCallStatus.PROPOSED,
+                    ToolCallStatus.WAITING_APPROVAL,
+                    ToolCallStatus.APPROVED,
+                    ToolCallStatus.RUNNING,
+                    ToolCallStatus.CANCELLED,
+                ),
             )
-            if call.metadata.get("harness_turn_id") == turn.id
-            and call.mcp_server_id == server.id
-            and call.mcp_tool_name == event.tool_name
-            and call.status
-            not in {
-                ToolCallStatus.COMPLETE,
-                ToolCallStatus.FAILED,
-                ToolCallStatus.DENIED,
-            }
+            if call.mcp_server_id == server.id and call.mcp_tool_name == event.tool_name
         ]
         call: ToolCall | None = existing[-1] if existing else None
         if call is None:
@@ -14699,18 +15378,16 @@ class HarnessRuntimeService:
         )
         pending = [
             call
-            for call in self.store.list_entities(
-                ToolCall, engagement_id=turn.engagement_id, limit=1_000
+            for call in self._turn_tool_calls(
+                turn,
+                statuses=(
+                    ToolCallStatus.PROPOSED,
+                    ToolCallStatus.WAITING_APPROVAL,
+                    ToolCallStatus.APPROVED,
+                    ToolCallStatus.RUNNING,
+                ),
             )
-            if call.metadata.get("harness_turn_id") == turn.id
-            and call.mcp_server_id is None
-            and call.status
-            not in {
-                ToolCallStatus.COMPLETE,
-                ToolCallStatus.FAILED,
-                ToolCallStatus.DENIED,
-                ToolCallStatus.CANCELLED,
-            }
+            if call.mcp_server_id is None
         ]
         call = next(
             (
@@ -15552,9 +16229,14 @@ class HarnessRuntimeService:
     def _attached_chats(self, harness_session_id: str) -> list[ChatSession]:
         return [
             chat
-            for chat in self.store.list_entities(ChatSession, limit=1_000)
-            if chat.backend == ChatBackend.HARNESS
-            and chat.harness_session_id == harness_session_id
+            for chat in self.store.find_entities(
+                ChatSession,
+                {
+                    "backend": ChatBackend.HARNESS.value,
+                    "harness_session_id": harness_session_id,
+                },
+            )
+            if chat.metadata.get("temporary_assistant") is not True
         ]
 
     def _append_chat_handoff(

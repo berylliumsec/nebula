@@ -44,6 +44,8 @@ from .storage import NebulaStore
 
 # A frozen Core relaunch may need one-file extraction and platform verification.
 GATEWAY_STARTUP_TIMEOUT_SECONDS = 30.0
+# How long Codex waits for one Nebula gateway call before abandoning it.
+GATEWAY_TOOL_TIMEOUT_SECONDS = 900.0
 MAX_MCP_TOOL_RESPONSE_BYTES = 100 * 1024 * 1024
 # A one-file Core unpacks its whole runtime (hundreds of MB) before Python
 # starts. Its bootloader reuses the running Core's unpacked directory for a
@@ -979,7 +981,7 @@ class McpGatewayLaunch:
                 "transport": McpTransport.STDIO.value,
                 "required": True,
                 "startup_timeout_seconds": GATEWAY_STARTUP_TIMEOUT_SECONDS,
-                "tool_timeout_seconds": 900.0,
+                "tool_timeout_seconds": GATEWAY_TOOL_TIMEOUT_SECONDS,
                 "enabled_tools": [],
                 "disabled_tools": [],
                 "command": self.command,
@@ -1176,6 +1178,21 @@ class McpGatewaySession:
                     if asyncio.iscoroutine(result):
                         result = await result
                     response = {"id": request_id, "result": result}
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is None or current.cancelling():
+                        # The gateway itself is closing.
+                        raise
+                    # Only this request's work was cancelled (a stopped turn or
+                    # a late approval decision). The authenticated connection is
+                    # single-use, so answer the request and keep serving.
+                    response = {
+                        "id": request_id,
+                        "error": {
+                            "message": "the gateway request was cancelled",
+                            "type": "CancelledError",
+                        },
+                    }
                 except (
                     Exception
                 ) as exc:  # diagnostic-expected: serialized as a bounded gateway error
@@ -1201,6 +1218,7 @@ class McpGatewaySession:
 
 
 __all__ = [
+    "GATEWAY_TOOL_TIMEOUT_SECONDS",
     "MAX_MCP_MESSAGE_BYTES",
     "MCP_PROTOCOL_VERSION",
     "McpGatewayLaunch",

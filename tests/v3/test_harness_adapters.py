@@ -2632,9 +2632,13 @@ def test_grok_receives_project_gateway_on_create_and_resume(tmp_path, resumed):
             if name == "session/prompt"
         ]
         assert len(prompts) == 2
+        first, second = prompts
+        assert "private scratch, not the project workspace" in first
+        assert "workspace.read" in first
+        # ACP keeps the session's conversation: the instructions travel once
+        # per connection, not with every prompt.
+        assert second == "Check it again"
         for prompt in prompts:
-            assert "private scratch, not the project workspace" in prompt
-            assert "workspace.read" in prompt
             assert "fixture-token" not in prompt
         await connection.close()
 

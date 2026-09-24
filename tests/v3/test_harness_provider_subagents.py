@@ -578,6 +578,22 @@ def test_subagent_tools_follow_the_chat_setting(tmp_path):
             SUBAGENT_TOOLS
         )
 
+        # Unchecking Subagents saves the choice on the conversation, as the
+        # composer's settings update does; the binding follows that choice.
+        saved = store.get(ChatSession, parent_chat.id)
+        store.update(
+            ChatSession,
+            saved.id,
+            {
+                "metadata": {
+                    key: value
+                    for key, value in saved.metadata.items()
+                    if key != "provider_subagent"
+                }
+            },
+            expected_revision=saved.revision,
+        )
+
         # A turn without the setting refuses the tools even on an old catalog.
         async def stale(connection: ScriptedConnection, prompt: str) -> str:
             del prompt
@@ -1032,6 +1048,48 @@ def test_harness_gets_unread_subagent_messages_at_its_next_turn(tmp_path):
             == ChatSubagentMessageStatus.DELIVERED
         )
         await runtime.start_chat_turn(second.id)
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_binding_follows_saved_choice_not_a_transient_ready_flag(tmp_path):
+    """A send that omits the saved subagent choice must not drop the binding.
+
+    The composer leaves the choice out while a model's tool check is still
+    loading after a reload. Rebinding the vendor session from that transient
+    request removed the subagent tools, reopened the connection, and then
+    reopened it again at the next send. The binding follows the conversation's
+    saved choice instead, so one send opens one connection.
+    """
+
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        # First send carries the verified choice and saves it on the chat.
+        parent_chat, _, first = _prepare(runtime, project, harness, "Delegate.")
+        await runtime.start_chat_turn(first.id)
+        assert store.get(ChatSession, parent_chat.id).metadata["provider_subagent"] == (
+            SETTING
+        )
+        assert len(adapter.opens) == 1
+
+        # A later send omits the choice (composer still verifying the model).
+        _, chat_turn, second = _prepare(
+            runtime,
+            project,
+            harness,
+            "Keep going.",
+            chat_id=parent_chat.id,
+            setting=None,
+        )
+        # The saved choice is reapplied, so the turn keeps subagents ...
+        assert second.metadata["provider_subagent"] == SETTING
+        assert chat_turn.request_snapshot["provider_subagent"] == SETTING
+        session = store.get(HarnessSession, second.harness_session_id)
+        assert session.metadata["provider_subagent"] == SETTING
+        await runtime.start_chat_turn(second.id)
+        # ... and the connection is reused rather than reopened twice.
+        assert len(adapter.opens) == 1
         await chat.shutdown()
 
     asyncio.run(scenario())
