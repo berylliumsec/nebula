@@ -45,6 +45,7 @@ from nebula.v3.domain import (
     ToolCallOrigin,
     ToolCallStatus,
     VpnProfile,
+    WorkspaceProvenanceObservation,
     RiskClass,
     utc_now,
 )
@@ -332,6 +333,13 @@ def test_command_tools_run_automatic_project_hooks_before_and_after(tmp_path):
             "process_io",
         ]
         assert events[1]["payload"]["status"] == "completed"
+        assert all(
+            item["workspace_provenance"]["schema"] == "nebula.workspace-provenance/v1"
+            for item in events
+        )
+        assert all(
+            item["workspace_provenance"]["actor_id"] == "chat:chat-1" for item in events
+        )
         executions = store.list_entities(NativeHookExecution)
         assert len(executions) == 4
         assert all(item.owner_id == "chat-1" for item in executions)
@@ -363,6 +371,8 @@ def test_blocking_before_hook_denies_command_before_runtime_execution(tmp_path):
         [call] = store.list_entities(ToolCall)
         assert call.status == ToolCallStatus.DENIED
         assert store.list_entities(CommandExecution) == []
+        [observation] = store.list_entities(WorkspaceProvenanceObservation)
+        assert observation.status == "complete"
 
     asyncio.run(scenario())
 

@@ -114,6 +114,11 @@ from .privacy import ProviderPrivacyViolation, validate_engagement_provider_priv
 from .environments import resolve_ssh_environments
 from .mcp import McpProbeError, catalog_mcp_profiles, resolve_mcp_profiles
 from .native_hooks import NativeHookError, NativeHookRunner, NativeHookSnapshot
+from .workspace_provenance import (
+    PROVENANCE_SCHEMA,
+    WorkspaceProvenanceService,
+    actor_id_for,
+)
 from .operator_help import CORPUS_ID, search_operator_help
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
 from .providers import (
@@ -7599,6 +7604,69 @@ class ChatService:
             return
         if turn is None or session is None or prepared.engagement_id is None:
             raise ChatError("native hook execution requires a durable project turn")
+        actor_id = actor_id_for(
+            self.store,
+            owner_kind="chat",
+            owner_id=session.id,
+            chat_session_id=session.id,
+        )
+        workspace_provenance: dict[str, Any]
+        try:
+            workspace = self.workspace_resolver(prepared.engagement_id)
+            provenance = WorkspaceProvenanceService(self.store)
+            if event_name == "chat.turn.started":
+                observation = provenance.begin(
+                    workspace,
+                    engagement_id=prepared.engagement_id,
+                    scope_kind="turn",
+                    scope_id=turn.id,
+                    actor_id=actor_id,
+                    owner_kind="chat",
+                    owner_id=session.id,
+                    chat_session_id=session.id,
+                    chat_turn_id=turn.id,
+                )
+            else:
+                try:
+                    observation = provenance.finish(
+                        workspace,
+                        engagement_id=prepared.engagement_id,
+                        scope_kind="turn",
+                        scope_id=turn.id,
+                    )
+                except NotFoundError:  # diagnostic-expected: recovery without a start observation uses a same-state baseline
+                    observation = provenance.begin(
+                        workspace,
+                        engagement_id=prepared.engagement_id,
+                        scope_kind="turn",
+                        scope_id=turn.id,
+                        actor_id=actor_id,
+                        owner_kind="chat",
+                        owner_id=session.id,
+                        chat_session_id=session.id,
+                        chat_turn_id=turn.id,
+                    )
+                    observation = provenance.finish(
+                        workspace,
+                        engagement_id=prepared.engagement_id,
+                        scope_kind="turn",
+                        scope_id=turn.id,
+                    )
+            workspace_provenance = provenance.receipt(observation)
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.workspace_provenance.capture_failed",
+                "Workspace provenance could not be captured for a native hook.",
+                exc,
+                stage=event_name,
+            )
+            workspace_provenance = {
+                "schema": PROVENANCE_SCHEMA,
+                "supported": False,
+                "unsupported_reason": "capture_failed",
+                "actor_id": actor_id,
+            }
         executions = [
             item
             for item in self.list_turn_hook_executions(turn.id)
@@ -7637,6 +7705,7 @@ class ChatService:
                     chat_session_id=session.id,
                     chat_turn_id=turn.id,
                     event_name=event_name,
+                    workspace_provenance=workspace_provenance,
                     payload={
                         "provider_id": prepared.provider_profile.id,
                         "model": prepared.resolved_model,
