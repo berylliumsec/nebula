@@ -2,6 +2,7 @@
 //! the later persisted Goal model, after source lookup and identity allocation.
 use super::{ApiError, BodyModel, error, field_error, settings::int_field};
 use serde_json::{Map, Value, json};
+use std::collections::HashSet;
 
 pub(super) fn validate(
     model: &BodyModel,
@@ -75,10 +76,119 @@ pub(super) fn validate(
             ));
         }
     }
+    if *model == BodyModel::GoalConversationCreate {
+        conversation_fields(&mut output, &mut errors, input, fields);
+    }
     if errors.is_empty() {
         Ok(output.into())
     } else {
         Err(ApiError::validation(errors))
+    }
+}
+
+fn conversation_fields(
+    output: &mut Map<String, Value>,
+    errors: &mut Vec<Value>,
+    input: &Value,
+    fields: &Map<String, Value>,
+) {
+    for (name, maximum) in [("engagement_id", 200), ("provider_id", 200), ("model", 500)] {
+        if let Some(value) = fields.get(name) {
+            super::string(
+                output,
+                errors,
+                name,
+                value,
+                false,
+                Some(1),
+                Some(maximum),
+                None,
+            );
+        } else {
+            errors.push(field_error("missing", name, "Field required", input));
+        }
+    }
+    bool_default(output, errors, fields, "tools_enabled");
+    for (name, maximum) in [("mcp_server_ids", 64), ("hook_ids", 32)] {
+        if let Some(value) = fields.get(name) {
+            strings(output, errors, name, value, 0, maximum);
+        } else {
+            output.insert(name.into(), json!([]));
+        }
+    }
+    if let Some(value) = fields
+        .get("reasoning_effort")
+        .filter(|value| !value.is_null())
+    {
+        let expected = "'none', 'minimal', 'low', 'medium', 'high' or 'xhigh'";
+        if value.as_str().is_some_and(|value| {
+            ["none", "minimal", "low", "medium", "high", "xhigh"].contains(&value)
+        }) {
+            output.insert("reasoning_effort".into(), value.clone());
+        } else {
+            errors.push(error(
+                "literal_error",
+                Some("reasoning_effort"),
+                format!("Input should be {expected}"),
+                value,
+                Some(json!({"expected":expected})),
+            ));
+        }
+    } else {
+        output.insert("reasoning_effort".into(), Value::Null);
+    }
+    bool_default(output, errors, fields, "allow_subagents");
+    bool_default(output, errors, fields, "allow_agent_messaging");
+    if let Some(value) = fields
+        .get("max_active_subagents")
+        .filter(|value| !value.is_null())
+    {
+        int_field(output, errors, "max_active_subagents", value, 1, Some(100));
+    } else {
+        output.insert("max_active_subagents".into(), Value::Null);
+    }
+    // The plain BaseModel's after-validator compares exact request strings,
+    // only after every field succeeds. Entity models trim later.
+    if errors.is_empty() {
+        for (name, detail) in [
+            ("mcp_server_ids", "MCP server selection contains duplicates"),
+            ("hook_ids", "hook selection contains duplicates"),
+        ] {
+            let mut unique = HashSet::new();
+            if output[name]
+                .as_array()
+                .expect("validated selection list")
+                .iter()
+                .any(|value| !unique.insert(value.as_str().expect("validated selection string")))
+            {
+                errors.push(error(
+                    "value_error",
+                    None,
+                    format!("Value error, {detail}"),
+                    input,
+                    Some(json!({"error":{}})),
+                ));
+                break;
+            }
+        }
+    }
+}
+
+fn bool_default(
+    output: &mut Map<String, Value>,
+    errors: &mut Vec<Value>,
+    fields: &Map<String, Value>,
+    name: &str,
+) {
+    if let Some(value) = fields.get(name) {
+        match super::boolean(value) {
+            Ok(value) => {
+                output.insert(name.into(), value.into());
+            }
+            Err((kind, message)) => errors.push(field_error(kind, name, message, value)),
+        }
+    } else {
+        output.insert(name.into(), false.into());
     }
 }
 

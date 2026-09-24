@@ -124,6 +124,55 @@ fn retained_entity_and_schedule_validation_matches_python_vectors() {
             case["name"]
         );
     }
+
+    // Direct source observations for ChatSchedule.enabled distinguish exact
+    // signed-integer tokens from floats at the same apparent boundary.
+    let numeric_boolean_input = canonical();
+    for (raw, expected_kind) in [
+        ("-9223372036854775808", "bool_parsing"),
+        ("9223372036854775807", "bool_parsing"),
+        ("-9223372036854775809", "bool_type"),
+        ("9223372036854775808", "bool_type"),
+        ("-9.223372036854776e18", "bool_type"),
+        ("9.223372036854776e18", "bool_type"),
+        ("-9.223372036854775e18", "bool_parsing"),
+        ("9.223372036854775e18", "bool_parsing"),
+        ("-9.223372036854778e18", "bool_type"),
+        ("9.223372036854778e18", "bool_type"),
+        (
+            "100000000000000000000000000000000000000000000000000",
+            "bool_type",
+        ),
+        ("2e20", "bool_type"),
+        ("2", "bool_parsing"),
+        ("1.5", "bool_type"),
+    ] {
+        let value: Value = serde_json::from_str(raw).unwrap();
+        let mut input = numeric_boolean_input.clone();
+        input["enabled"] = value.clone();
+        let report = report(&input);
+        let message = match expected_kind {
+            "bool_parsing" => "Input should be a valid boolean, unable to interpret input",
+            _ => "Input should be a valid boolean",
+        };
+        assert_eq!(
+            serde_json::from_slice::<Value>(&report.to_json_bytes(MAX_RECORD_BYTES).unwrap())
+                .unwrap(),
+            json!([{"type": expected_kind, "loc": ["enabled"], "msg": message, "input": value}]),
+            "enabled={raw}"
+        );
+    }
+    for (raw, expected) in [("0", false), ("1", true), ("-0.0", false), ("1e0", true)] {
+        let mut input = numeric_boolean_input.clone();
+        input["enabled"] = serde_json::from_str(raw).unwrap();
+        let hydrated = hydrate(
+            Model::ChatSchedule,
+            InputOrigin::RetainedJson,
+            &serde_json::to_vec(&input).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(hydrated["enabled"], expected, "enabled={raw}");
+    }
 }
 
 #[test]

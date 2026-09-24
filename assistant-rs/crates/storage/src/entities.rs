@@ -48,6 +48,10 @@ pub use recovery::{
     HookAdoption, RecoveryReceiptKind, RecoveryReceiptRow, RecoveryReceiptSnapshot, RecoveryTurn,
     RecoveryTurnsSnapshot,
 };
+mod conversations;
+pub use conversations::{
+    ConversationDependencies, DependencyReadBudget, HomeResolver, LookupObserver,
+};
 mod settings;
 pub use settings::{McpProfileRow, RawSession};
 
@@ -69,6 +73,12 @@ pub enum Error {
         "Assistant collection exceeds 10,000 records or 16 MiB; use paginated record access to inspect the retained history"
     )]
     ReadLimit,
+    #[error("Assistant dependency hydration is busy; retry after capacity becomes available")]
+    DependencyUnavailable,
+    #[error(
+        "Assistant dependency hydration timed out; retry after the host account service responds"
+    )]
+    DependencyTimeout,
     #[error(
         "assistant storage is closing; inspect durable state before retrying an uncertain mutation"
     )]
@@ -1181,14 +1191,14 @@ async fn update_search(
     let label: String = p["title"]
         .as_str()
         .ok_or(Error::CorruptEnvelope)?
-        .trim()
+        .trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
         .chars()
         .take(500)
         .collect();
     let description: String = p["model"]
         .as_str()
         .ok_or(Error::CorruptEnvelope)?
-        .trim()
+        .trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
         .chars()
         .take(300)
         .collect();

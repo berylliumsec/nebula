@@ -5,6 +5,14 @@ use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
 use jsonschema::Validator;
 use serde_json::Value;
 use std::{collections::HashMap, sync::LazyLock};
+mod profiles;
+
+/// Trusted passive context. Implementations must not resolve credentials or
+/// contact providers; expansion returns the lexical home for one `~` component.
+pub trait DependencyEnvironment {
+    fn now(&mut self) -> DateTime<Utc>;
+    fn expand_user(&mut self, first_component: &str) -> Result<String, RecordError>;
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum DependencyKind {
@@ -16,9 +24,11 @@ pub enum DependencyKind {
     NativeHookExecution,
     HarnessProfile,
     McpServerProfile,
+    Engagement,
+    ProviderProfile,
 }
 impl DependencyKind {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 10] = [
         Self::Approval,
         Self::HarnessInteraction,
         Self::HarnessTurn,
@@ -27,6 +37,8 @@ impl DependencyKind {
         Self::NativeHookExecution,
         Self::HarnessProfile,
         Self::McpServerProfile,
+        Self::Engagement,
+        Self::ProviderProfile,
     ];
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -38,6 +50,8 @@ impl DependencyKind {
             Self::NativeHookExecution => "native_hook_executions",
             Self::HarnessProfile => "harnesses",
             Self::McpServerProfile => "mcp_servers",
+            Self::Engagement => "engagements",
+            Self::ProviderProfile => "providers",
         }
     }
 }
@@ -76,6 +90,13 @@ static SCHEMAS: LazyLock<Result<Value, RecordError>> = LazyLock::new(|| {
             .map_err(|_| RecordError::Schema)?;
     schemas[DependencyKind::McpServerProfile.as_str()] =
         settings["dependency_schemas"][DependencyKind::McpServerProfile.as_str()].clone();
+    let conversations: Value = serde_json::from_str(include_str!(
+        "../../../compatibility/python-goal-conversations.json"
+    ))
+    .map_err(|_| RecordError::Schema)?;
+    for kind in [DependencyKind::Engagement, DependencyKind::ProviderProfile] {
+        schemas[kind.as_str()] = conversations["dependency_schemas"][kind.as_str()].clone();
+    }
     Ok(schemas)
 });
 static VALIDATORS: LazyLock<Result<HashMap<DependencyKind, Validator>, RecordError>> =
@@ -86,6 +107,19 @@ static VALIDATORS: LazyLock<Result<HashMap<DependencyKind, Validator>, RecordErr
                 let mut schema =
                     SCHEMAS.as_ref().map_err(|_| RecordError::Schema)?[kind.as_str()].clone();
                 require_canonical_fields(&mut schema);
+                if kind == DependencyKind::Engagement {
+                    // Pydantic applies this bound before Path.expanduser; a
+                    // trusted expanded home may make the saved path longer.
+                    if let Some(branches) =
+                        schema["properties"]["workspace_path"]["anyOf"].as_array_mut()
+                    {
+                        for branch in branches {
+                            if let Some(object) = branch.as_object_mut() {
+                                object.remove("maxLength");
+                            }
+                        }
+                    }
+                }
                 jsonschema::draft202012::options()
                     .with_format("date-time", recorded_datetime)
                     .should_validate_formats(true)
@@ -110,6 +144,20 @@ impl std::fmt::Debug for StoredDependency {
 }
 impl StoredDependency {
     pub fn decode(kind: DependencyKind, bytes: &[u8]) -> Result<Self, RecordError> {
+        Self::decode_context(kind, bytes, None)
+    }
+    pub fn decode_with_environment(
+        kind: DependencyKind,
+        bytes: &[u8],
+        environment: &mut dyn DependencyEnvironment,
+    ) -> Result<Self, RecordError> {
+        Self::decode_context(kind, bytes, Some(environment))
+    }
+    fn decode_context(
+        kind: DependencyKind,
+        bytes: &[u8],
+        environment: Option<&mut dyn DependencyEnvironment>,
+    ) -> Result<Self, RecordError> {
         if bytes.len() > MAX_RECORD_BYTES {
             return Err(RecordError::TooLarge);
         }
@@ -137,10 +185,26 @@ impl StoredDependency {
         let schema = &SCHEMAS.as_ref().map_err(|_| RecordError::Schema)?[kind.as_str()];
         if kind == DependencyKind::McpServerProfile {
             p = crate::mcp_profile::hydrate(schema, bytes)?;
+        } else if matches!(
+            kind,
+            DependencyKind::Engagement | DependencyKind::ProviderProfile
+        ) {
+            p = profiles::hydrate(schema, bytes, environment)?;
         }
-        fill_defaults(schema, schema, &mut p);
+        if !matches!(
+            kind,
+            DependencyKind::Engagement | DependencyKind::ProviderProfile
+        ) {
+            // Contextual codecs already fill and validate every model field.
+            // Re-normalizing an expanded workspace path would strip characters
+            // introduced by trusted home expansion after the source validator.
+            fill_defaults(schema, schema, &mut p);
+        }
         if !VALIDATORS.as_ref().map_err(|_| RecordError::Schema)?[&kind].is_valid(&p)
-            || p["revision"].as_i64().is_none_or(|r| r < 1)
+            || (!matches!(
+                kind,
+                DependencyKind::Engagement | DependencyKind::ProviderProfile
+            ) && p["revision"].as_i64().is_none_or(|r| r < 1))
         {
             return Err(RecordError::Shape(kind.as_str()));
         }
@@ -229,7 +293,11 @@ impl StoredDependency {
                     ));
                 }
             }
-            DependencyKind::Approval | DependencyKind::ToolCall | DependencyKind::Artifact => {}
+            DependencyKind::Approval
+            | DependencyKind::ToolCall
+            | DependencyKind::Artifact
+            | DependencyKind::Engagement
+            | DependencyKind::ProviderProfile => {}
         }
         Ok(Self { kind, payload: p })
     }

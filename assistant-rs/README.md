@@ -6,7 +6,7 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
 
 - `nebula-assistant-domain`: bounded stream-event types and immutable validation
   of all 13 canonical persisted assistant record kinds, plus deterministic
-  historical field defaults. General request coercion is not implemented.
+  historical field defaults. General request coercion remains incomplete.
 - `nebula-assistant-storage`: SQLite journal with a bounded single writer,
   append-only records, idempotency, commit notifications and bounded replay.
   Its separate `entities` module reads and updates an isolated copy of Nebula's
@@ -360,8 +360,7 @@ The complete finite Goal/ChatTokenUsage model contract preserves typed string
 trimming, nested diagnostics, datetime offsets and validator precedence. Wrapped
 reads accept the same coercions while retaining sanitized errors. Positive
 infinity in historical elapsed values remains an explicit JSON representation
-boundary, not a claimed parity case. New goal-conversation creation, lifecycle
-actions and actual goal execution remain separate integration work.
+boundary, not a claimed parity case. Goal lifecycle actions and actual execution remain separate integration work.
 
 ```sh
 PYTHONPATH=src python -m scripts.capture_assistant_goal_drafts --output assistant-rs/compatibility/python-goal-drafts.json
@@ -371,3 +370,24 @@ Its HTTP oracle compares all entity envelopes, raw unchanged rows, search data,
 protected ledgers, UUID/clock observations and reopened state. The settings and
 goal fixtures share that durable-state harness. Production goal-panel behavior,
 mobile/LAN/reconnect/device testing and throughput measurements remain required.
+
+
+New goal-conversation POST creates the provider Session, search projection and
+Goal draft in one bounded transaction. It preserves project/provider/MCP read
+order, lazy identities and constructor clocks, composer choices and Unicode
+titles. Full immutable project/provider hydration uses trusted host context; no
+provider, hook, tool, workspace or secret is opened. Account resolution releases
+database permits and uses a shared blocking lane (four slots, five-second default
+deadline). Abandoned work retains its slot until completion. Unix home expansion
+is lexical; other platforms currently reject requests needing home expansion.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_goal_conversations --output assistant-rs/compatibility/python-goal-conversations.json
+```
+
+The fixture captures 120 HTTP cases, 78 service cases, 82 project/provider
+vectors, 12 Session constructor vectors and 57 request vectors. Fourteen separate
+observations document strict retained-base and envelope boundaries. Canonical
+dependency rows are temporarily used during inert app construction, then original
+raw rows are restored before each request and snapshot. This isolates request
+compatibility; it does not establish malformed-history startup parity.

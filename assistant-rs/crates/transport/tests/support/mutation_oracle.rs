@@ -18,36 +18,6 @@ fn sql_time(value: &Value) -> String {
         .format("%Y-%m-%d %H:%M:%S%.6f")
         .to_string()
 }
-async fn put(db: &mut SqliteConnection, row: &Value) {
-    let p = &row["payload"];
-    let kind = row["kind"].as_str().unwrap();
-    let session = if [
-        "chat_turns",
-        "chat_schedules",
-        "chat_messages",
-        "chat_goals",
-        "chat_queues",
-        "chat_read_cursors",
-        "chat_decisions",
-        "chat_bookmarks",
-    ]
-    .contains(&kind)
-    {
-        p["session_id"].as_str()
-    } else {
-        p["chat_session_id"].as_str()
-    };
-    let raw = row
-        .get("raw_payload")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| serde_json::to_string(p).unwrap());
-    assert_eq!(serde_json::from_str::<Value>(&raw).unwrap(), *p);
-    sqlx::query("INSERT INTO entities (id,kind,engagement_id,revision,chat_session_id,payload,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)")
-        .bind(p["id"].as_str()).bind(kind).bind(p["engagement_id"].as_str()).bind(p["revision"].as_i64())
-        .bind(session).bind(raw).bind(sql_time(&p["created_at"])).bind(sql_time(&p["updated_at"]))
-        .execute(db).await.unwrap();
-}
 async fn entities(db: &mut SqliteConnection) -> BTreeMap<String, Value> {
     let rows: Vec<String> = sqlx::query_scalar("SELECT json_object('id',id,'kind',kind,'engagement_id',engagement_id,'revision',revision,'automation_run_id',automation_run_id,'automation_session_id',automation_session_id,'automation_status',automation_status,'automation_expires_at',automation_expires_at,'chat_session_id',chat_session_id,'payload',payload,'created_at',created_at,'updated_at',updated_at) FROM entities ORDER BY id")
         .fetch_all(db).await.unwrap();
@@ -92,6 +62,7 @@ fn quoted(name: &str) -> String {
 async fn insert_table(db: &mut SqliteConnection, table: &str, rows: &[Value]) {
     assert!(
         [
+            "entities",
             "search_documents",
             "operation_events",
             "run_events",
@@ -236,16 +207,12 @@ pub async fn run(
         sqlx::query(sql).execute(&mut db).await.unwrap();
     }
     sqlx::query("INSERT INTO schema_versions(version,applied_at) VALUES(5,'2020-01-01 00:00:00.000000'); INSERT INTO alembic_version VALUES('0016_chat_session_lookup')").execute(&mut db).await.unwrap();
-    for field in ["projects", "initial_records", "dependency_records"] {
-        for row in fixture[field].as_array().unwrap() {
-            let mut row = row.clone();
-            let id = row["payload"]["id"].as_str().unwrap();
-            if let Some(raw) = fixture["raw_payloads"].get(id) {
-                row["raw_payload"] = raw.clone();
-            }
-            put(&mut db, &row).await;
-        }
-    }
+    // Use captured envelopes as well as raw payloads. Engagement owns its own
+    // ID, and deliberately malformed fixtures may disagree with projections;
+    // deriving these fields from payloads would silently repair source history.
+    let initial_entities = fixture["initial_entity_rows"].as_array().unwrap();
+    insert_table(&mut db, "entities", initial_entities).await;
+    assert_eq!(entities(&mut db).await, by_id(initial_entities.clone()));
     insert_table(
         &mut db,
         "search_documents",
@@ -512,6 +479,17 @@ pub async fn run(
         .await
         .unwrap();
     assert_eq!(before_reopen, entities(&mut db).await);
+    let expected_envelopes = by_id(fixture["final_entity_rows"].as_array().unwrap().clone());
+    assert_eq!(before_reopen.len(), expected_envelopes.len());
+    for (id, row) in &before_reopen {
+        let mut actual = row.as_object().unwrap().clone();
+        let mut expected = expected_envelopes[id].as_object().unwrap().clone();
+        // Changed JSON payloads have independent semantic assertions below;
+        // unchanged raw bytes are already included in each case's change set.
+        actual.remove("payload");
+        expected.remove("payload");
+        assert_eq!(actual, expected, "final saved envelope {id}");
+    }
     let expected: BTreeMap<_, _> = ["projects", "final_records", "final_dependencies"]
         .into_iter()
         .flat_map(|k| fixture[k].as_array().unwrap())

@@ -22,6 +22,7 @@ use strum::EnumMessage;
 const MAX_ISSUES: usize = 10_000;
 type Result<T> = std::result::Result<T, RecordError>;
 mod goal;
+mod session;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Model {
@@ -29,6 +30,7 @@ pub enum Model {
     ChatSchedule,
     ChatGoal,
     ChatTokenUsage,
+    ChatSession,
 }
 impl Model {
     pub const fn name(self) -> &'static str {
@@ -37,6 +39,7 @@ impl Model {
             Self::ChatSchedule => "ChatSchedule",
             Self::ChatGoal => "ChatGoal",
             Self::ChatTokenUsage => "ChatTokenUsage",
+            Self::ChatSession => "ChatSession",
         }
     }
     fn kind(self) -> &'static str {
@@ -45,6 +48,7 @@ impl Model {
             Self::ChatSchedule => "chat_schedules",
             Self::ChatGoal => "chat_goals",
             Self::ChatTokenUsage => "chat_token_usage",
+            Self::ChatSession => "chat_sessions",
         }
     }
     fn fields(self) -> &'static [Field] {
@@ -53,6 +57,7 @@ impl Model {
             Self::ChatSchedule => &FIELDS,
             Self::ChatGoal => &goal::FIELDS,
             Self::ChatTokenUsage => &goal::USAGE_FIELDS,
+            Self::ChatSession => &session::FIELDS,
         }
     }
 }
@@ -316,6 +321,7 @@ enum FieldType {
     OptionalTime,
     Float,
     GoalStatus,
+    ChatBackend,
     Strings { min: usize, max: usize },
     Dictionaries { max: usize },
     Dictionary,
@@ -424,13 +430,25 @@ pub fn hydrate_created_goal(
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 ) -> Result<Value> {
+    hydrate_created_entity(Model::ChatGoal, bytes, created_at, updated_at)
+}
+
+pub(crate) fn hydrate_created_session(
+    bytes: &[u8],
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+) -> Result<Value> {
+    hydrate_created_entity(Model::ChatSession, bytes, created_at, updated_at)
+}
+
+fn hydrate_created_entity(
+    model: Model,
+    bytes: &[u8],
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+) -> Result<Value> {
     let defaults = json!({"created_at":created_at.to_rfc3339_opts(SecondsFormat::Micros,true),"updated_at":updated_at.to_rfc3339_opts(SecondsFormat::Micros,true),"revision":1});
-    hydrate_inner(
-        Model::ChatGoal,
-        InputOrigin::RetainedJson,
-        bytes,
-        Some(&defaults),
-    )
+    hydrate_inner(model, InputOrigin::RetainedJson, bytes, Some(&defaults))
 }
 
 fn hydrate_inner(
@@ -478,7 +496,10 @@ fn hydrate_inner(
     let base_bytes = input_bytes
         .saturating_add(encoded_len(&keys, MAX_RECORD_BYTES)?)
         .saturating_add(encoded_len(&datetime_fields, MAX_RECORD_BYTES)?);
-    let nested_order = if matches!(model, Model::ChatGoal | Model::ChatTokenUsage) {
+    let nested_order = if matches!(
+        model,
+        Model::ChatGoal | Model::ChatTokenUsage | Model::ChatSession
+    ) {
         goal::nested_orders(bytes, &input, MAX_RECORD_BYTES.saturating_sub(base_bytes))?
     } else {
         Vec::new()
@@ -518,7 +539,9 @@ fn hydrate_inner(
             .get(field.name)
             .or_else(|| factory_defaults.and_then(|v| v.get(field.name)))
         else {
-            if let Some(value) = goal::default(model, *field) {
+            if let Some(value) =
+                session::default(model, *field).or_else(|| goal::default(model, *field))
+            {
                 output.insert(field.name.into(), value);
             } else if field.name == "enabled" {
                 output.insert(field.name.into(), true.into());
@@ -573,6 +596,13 @@ fn hydrate_inner(
     }
     if model == Model::ChatGoal
         && let Some(message) = goal::coherence(&output)
+    {
+        let error = Failure::value(message);
+        report.add(error.kind, None, false, error.msg, error.ctx)?;
+        return report.error();
+    }
+    if model == Model::ChatSession
+        && let Some(message) = session::coherence(&output)
     {
         let error = Failure::value(message);
         report.add(error.kind, None, false, error.msg, error.ctx)?;
@@ -727,6 +757,7 @@ fn validate_field(field: Field, value: &Value) -> FieldResult {
         FieldType::OptionalTime | FieldType::Float | FieldType::GoalStatus => {
             goal::scalar(field.kind, value)
         }
+        FieldType::ChatBackend => session::backend(value),
         FieldType::Strings { .. }
         | FieldType::Dictionaries { .. }
         | FieldType::Dictionary
@@ -734,24 +765,71 @@ fn validate_field(field: Field, value: &Value) -> FieldResult {
     }
 }
 
+/// Scalar coercion shared with the immutable contextual dependency codecs.
+/// Errors remain sanitized; these storage reads do not expose direct reports.
+pub(crate) fn dependency_scalar(schema: &Value, value: &Value) -> Result<Value> {
+    let invalid = || RecordError::Invariant("retained dependency field is invalid");
+    let kind = match schema["type"].as_str() {
+        Some("string") if schema["format"] == "date-time" => {
+            FieldType::Timestamp { schedule: false }
+        }
+        Some("string") if schema["enum"].is_array() => {
+            return if schema["enum"].as_array().unwrap().contains(value) {
+                Ok(value.clone())
+            } else {
+                Err(invalid())
+            };
+        }
+        Some("string") => FieldType::String {
+            min: schema["minLength"].as_u64().unwrap_or(0) as usize,
+            max: schema["maxLength"].as_u64().map(|v| v as usize),
+        },
+        Some("integer") => FieldType::Integer {
+            min: schema["minimum"].as_i64().unwrap_or(0),
+            max: schema["maximum"].as_i64(),
+        },
+        Some("boolean") => FieldType::Boolean,
+        _ => return Ok(value.clone()),
+    };
+    validate_field(
+        Field {
+            name: "dependency",
+            kind,
+            nullable: false,
+        },
+        value,
+    )
+    .map_err(|_| invalid())
+}
+
 fn boolean(value: &Value) -> std::result::Result<bool, Failure> {
     match value {
         Value::Bool(value) => return Ok(*value),
         Value::Number(number) => {
+            // Pydantic extracts exact integer tokens as i64, while float-to-i64
+            // conversion rejects both endpoints. Converting i64::MAX to f64
+            // first would incorrectly classify its rounded value as overflow.
+            let signed_integer = if number.to_string().contains(['.', 'e', 'E']) {
+                number.as_f64().is_some_and(|value| {
+                    value.is_finite()
+                        && value.fract() == 0.0
+                        && value > i64::MIN as f64
+                        && value < i64::MAX as f64
+                })
+            } else {
+                number.as_i64().is_some()
+            };
+            if !signed_integer {
+                return Err(Failure::simple(
+                    "bool_type",
+                    "Input should be a valid boolean",
+                ));
+            }
             if number.as_f64() == Some(1.0) {
                 return Ok(true);
             }
             if number.as_f64() == Some(0.0) {
                 return Ok(false);
-            }
-            if number
-                .as_f64()
-                .is_none_or(|n| !n.is_finite() || n.fract() != 0.0)
-            {
-                return Err(Failure::simple(
-                    "bool_type",
-                    "Input should be a valid boolean",
-                ));
             }
         }
         Value::String(text) => match text.to_ascii_lowercase().as_str() {

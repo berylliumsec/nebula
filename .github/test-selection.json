@@ -1,14 +1,14 @@
 {
-  "change_digest": "e5227a7034721421b30af54fafc215354558f35c6f78f3832141e700227c8c9d",
+  "change_digest": "8fd5f83aa256a75241e9c7448b86d8005cb36f7fcc32720f933726bcf3e34d90",
   "reviewed_by": "Codex with domain, storage and oracle sub-agent review",
-  "reason": "Assistant-only Rust compatibility port. Exact cumulative selections cover implemented records, bounded SQLite persistence, auth/read/recovery/settings routes, Entity/Schedule/Goal/usage diagnostics and existing-conversation Goal configuration. Source captures bind model/request behavior, lazy clocks/identities, exact budgets, raw changes, search and protected ledgers. No execution or whole-product completion claimed.",
-  "exclusions": "38 experimental Assistant route handlers; no shipped Rust entrypoint or production UI. Other areas and desktop-native stay untouched. No real provider/harness/tool/hook execution, dispatch, streaming or live data. Historical nonfinite Goal values remain an explicit source-observed parity gap. New goal-conversation creation, lifecycle actions, complete route/dependency/schema parity, migrations, packaging, browser/mobile/WebKit/LAN/reconnect/device and whole-Assistant performance remain open. Bounds are explicit extensions; Figma visits are design evidence. Browser tests remain unselected until isolated Rust-backed production journeys exist.",
+  "reason": "Assistant-only Rust compatibility port. Exact cumulative selections cover implemented records, bounded SQLite persistence, auth/read/recovery/settings routes, Entity/Schedule/Goal/usage diagnostics, Goal configuration and atomic goal-conversation creation. Source captures bind contextual project/provider hydration, lazy clocks/identities, exact numeric validation, raw changes, search and protected ledgers. Exact library-test support preserves the focused CI boundary. No execution or whole-product completion claimed.",
+  "exclusions": "39 experimental Assistant route handlers; no shipped Rust entrypoint or production UI. Other areas and desktop-native stay untouched. No real provider/harness/tool/hook execution, dispatch, streaming or live data. Historical nonfinite Goal values and strict retained-base/envelope boundaries remain explicit source-observed parity gaps. Lifecycle actions, complete route/dependency/validation coverage, migrations/PostgreSQL, production browser/mobile/WebKit/LAN/device journeys and full performance acceptance remain open. No full suites. Rust compile/list 600 seconds per exact selector, execution 120 seconds per test, CI Rust job 20 minutes. Python local focused run has a 300-second total limit; CI Python uses its existing workflow boundary.",
   "expected_tests": {
-    "python": 58,
+    "python": 61,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 164
+    "assistant_rust": 176
   },
   "python_versions": [
     "3.12"
@@ -30,7 +30,8 @@
     "tests/test_assistant_recovery_contract.py",
     "tests/test_assistant_settings_contract.py",
     "tests/test_assistant_model_validation_contract.py::test_model_validation_oracle_matches_current_python_boundary",
-    "tests/test_assistant_goal_drafts_contract.py::test_goal_drafts_oracle_matches_current_python_assistant_boundary"
+    "tests/test_assistant_goal_drafts_contract.py::test_goal_drafts_oracle_matches_current_python_assistant_boundary",
+    "tests/test_assistant_goal_conversations_contract.py::test_goal_conversations_oracle_matches_current_python_assistant_boundary"
   ],
   "frontend": [],
   "native": [],
@@ -199,6 +200,18 @@
     "nebula-assistant-services/goal_drafts::goal_creation_defers_identity_and_factories_without_repairing_pending_work",
     "nebula-assistant-services/goal_drafts::goal_updates_preserve_budget_precedence_integer_precision_and_owned_state",
     "nebula-assistant-transport/goal_drafts::python_goal_configuration_http_preserves_responses_clocks_and_durable_state",
-    "nebula-assistant-transport/retained_diagnostics::goal_exception_previews_preserve_nested_input_locations_and_order"
+    "nebula-assistant-transport/retained_diagnostics::goal_exception_previews_preserve_nested_input_locations_and_order",
+    "nebula-assistant-domain/goal_conversations::project_provider_hydration_matches_python_contextual_vectors",
+    "nebula-assistant-domain/goal_conversations::dependency_context_is_lazy_ordered_bounded_and_never_implicit",
+    "nebula-assistant-domain/goal_conversations::session_constructor_matches_python_inputs_defaults_and_clock_failures",
+    "nebula-assistant-domain/goal_conversations::contextual_dependency_and_constructor_bounds_preserve_read_contracts",
+    "nebula-assistant-storage/conversations::conversation_dependencies_preserve_source_order_envelopes_and_purity",
+    "nebula-assistant-storage/conversations::conversation_dependency_blocking_admission_survives_timeout_without_reader_leases",
+    "nebula-assistant-storage/conversations::conversation_dependency_budget_bounds_retained_and_defaulted_payloads",
+    "nebula-assistant-services/goal_conversations::python_goal_conversations_match_durable_atomic_creation_and_factory_order",
+    "nebula-assistant-services/goal_conversations::goal_conversation_collisions_rollback_search_and_consume_factories_in_source_order",
+    "nebula-assistant-services/goal_conversations::goal_conversation_titles_and_budget_numbers_preserve_python_boundaries",
+    "nebula-assistant-transport/goal_conversations::python_goal_conversation_http_preserves_atomic_state_and_factory_order",
+    "nebula-assistant-storage/lib::entities::conversations::tests::default_home_expansion_preserves_python_workspace_root_boundary"
   ]
 }

@@ -130,7 +130,7 @@ impl StoredAssistantRecord {
         )
     }
 
-    /// Construct a Goal with already sampled trusted Entity clock factories,
+    /// Construct a Goal or Session with already sampled trusted Entity clock factories,
     /// retaining the original constructor arguments in detailed errors.
     pub fn decode_created_direct(
         kind: AssistantKind,
@@ -138,10 +138,15 @@ impl StoredAssistantRecord {
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
     ) -> Result<Self, RecordError> {
-        if kind != AssistantKind::Goal {
-            return Err(RecordError::UnknownKind);
-        }
-        let payload = crate::model_validation::hydrate_created_goal(bytes, created_at, updated_at)?;
+        let payload = match kind {
+            AssistantKind::Goal => {
+                crate::model_validation::hydrate_created_goal(bytes, created_at, updated_at)?
+            }
+            AssistantKind::Session => {
+                crate::model_validation::hydrate_created_session(bytes, created_at, updated_at)?
+            }
+            _ => return Err(RecordError::UnknownKind),
+        };
         Self::decode(
             kind,
             &serde_json::to_vec(&payload).map_err(|_| RecordError::Json)?,

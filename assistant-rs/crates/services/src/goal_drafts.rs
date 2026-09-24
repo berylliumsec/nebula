@@ -115,14 +115,14 @@ impl GoalDraft {
     }
 }
 #[derive(Serialize)]
-struct GoalConstructor<'a> {
-    id: &'a str,
-    engagement_id: &'a Value,
-    session_id: &'a Value,
+pub(crate) struct GoalConstructor<'a> {
+    pub(crate) id: &'a str,
+    pub(crate) engagement_id: &'a Value,
+    pub(crate) session_id: &'a Value,
     #[serde(flatten)]
-    draft: &'a GoalDraft,
+    pub(crate) draft: &'a GoalDraft,
 }
-fn constructor_bytes(value: &GoalConstructor<'_>) -> Result<Vec<u8>> {
+pub(crate) fn constructor_bytes(value: &GoalConstructor<'_>) -> Result<Vec<u8>> {
     struct Bounded(Vec<u8>);
     impl std::io::Write for Bounded {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -172,7 +172,7 @@ fn storage_error(error: StorageError, kind: Kind, id: &str) -> Error {
         error => error.into(),
     }
 }
-fn constructed(error: RecordError) -> Error {
+pub(crate) fn constructed(error: RecordError) -> Error {
     match error {
         RecordError::ModelValidation(report) => Error::RetainedModelValidation(report),
         RecordError::TooLarge => StorageError::ReadLimit.into(),

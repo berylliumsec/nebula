@@ -52,11 +52,14 @@ async fn atomic_changes_preserve_search_revisions_and_legacy_readability() {
     database(&path).await;
     let store = open(&path).await;
     let results = store.apply(vec![
-        patch(Kind::Session, "fixture-chat_sessions", 2, json!({"title":"  Café 🦀  ","engagement_id":" moved ", "metadata":{"opaque":"  retain  "}})),
+        patch(Kind::Session, "fixture-chat_sessions", 2, json!({"title":"\u{1c} Café 🦀 \u{1f}","model":"\u{1c} model \u{1f}","engagement_id":" moved ", "metadata":{"opaque":"  retain  "}})),
         patch(Kind::Message, "fixture-chat_messages", 2, json!({"session_id":"new-session","metadata":{"retracted_at":"retained"}})),
         Mutation::Create(record(Kind::Bookmark, "new-bookmark")),
     ]).await.unwrap();
-    assert_eq!(results[0].as_ref().unwrap().payload()["title"], "Café 🦀");
+    assert_eq!(
+        results[0].as_ref().unwrap().payload()["title"],
+        "\u{1c} Café 🦀 \u{1f}"
+    );
     assert_eq!(
         results[0].as_ref().unwrap().payload()["metadata"]["opaque"],
         "  retain  "
@@ -69,6 +72,11 @@ async fn atomic_changes_preserve_search_revisions_and_legacy_readability() {
         .unwrap();
     assert_eq!(search.get::<String, _>("label"), "Café 🦀");
     assert_eq!(search.get::<String, _>("project_id"), "moved");
+    assert_eq!(search.get::<String, _>("description"), "model");
+    assert_eq!(
+        results[0].as_ref().unwrap().payload()["model"],
+        "\u{1c} model \u{1f}"
+    );
     assert_eq!(search.get::<i64, _>("revision"), 3);
     store
         .apply(vec![patch(

@@ -3,6 +3,7 @@
 use crate::ApiError;
 use nebula_assistant_services::context::{CursorWrite, DecisionWrite};
 use nebula_assistant_services::generated::GeneratedListRequest;
+use nebula_assistant_services::goal_conversations::GoalConversationCreate;
 use nebula_assistant_services::goal_drafts::{GoalDraft, GoalDraftUpdate};
 use nebula_assistant_services::navigation::{BookmarkWrite, SearchRequest};
 use nebula_assistant_services::results::ResultsQuery;
@@ -28,6 +29,7 @@ pub(crate) enum BodyModel {
     ScheduleWrite,
     GoalCreate,
     GoalUpdate,
+    GoalConversationCreate,
 }
 impl RequestModel for CursorWrite {
     const MODEL: BodyModel = BodyModel::Cursor;
@@ -52,6 +54,9 @@ impl RequestModel for GoalDraft {
 }
 impl RequestModel for GoalDraftUpdate {
     const MODEL: BodyModel = BodyModel::GoalUpdate;
+}
+impl RequestModel for GoalConversationCreate {
+    const MODEL: BodyModel = BodyModel::GoalConversationCreate;
 }
 
 fn error(
@@ -106,7 +111,10 @@ pub(crate) fn validate<T: RequestModel>(input: Value, key_order: &[String]) -> R
                 )
             });
     }
-    if matches!(T::MODEL, BodyModel::GoalCreate | BodyModel::GoalUpdate) {
+    if matches!(
+        T::MODEL,
+        BodyModel::GoalCreate | BodyModel::GoalUpdate | BodyModel::GoalConversationCreate
+    ) {
         return serde_json::from_value(goals::validate(&T::MODEL, &input, fields)?).map_err(|_| {
             ApiError::http(
                 422,
@@ -312,17 +320,26 @@ fn boolean(value: &Value) -> Result<bool, IntegerError> {
     match value {
         Value::Bool(value) => return Ok(*value),
         Value::Number(number) => {
+            // Pydantic converts numeric booleans through a signed i64. Keep
+            // integer spelling: i64::MAX rounds to 2^63 if converted to f64.
+            let signed_integer = if number.to_string().contains(['.', 'e', 'E']) {
+                number.as_f64().is_some_and(|n| {
+                    n.is_finite()
+                        && n.fract() == 0.0
+                        && n > -9_223_372_036_854_775_808.0
+                        && n < 9_223_372_036_854_775_808.0
+                })
+            } else {
+                number.as_i64().is_some()
+            };
+            if !signed_integer {
+                return Err(("bool_type", "Input should be a valid boolean"));
+            }
             if number.as_f64() == Some(1.0) {
                 return Ok(true);
             }
             if number.as_f64() == Some(0.0) {
                 return Ok(false);
-            }
-            if number
-                .as_f64()
-                .is_none_or(|n| !n.is_finite() || n.fract() != 0.0)
-            {
-                return Err(("bool_type", "Input should be a valid boolean"));
             }
         }
         Value::String(text) => match text.to_ascii_lowercase().as_str() {

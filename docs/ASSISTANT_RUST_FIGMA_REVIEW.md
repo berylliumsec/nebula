@@ -154,3 +154,18 @@ Edit limits, with revision conflicts and used-budget guards. New goal-conversati
 creation, execution/interrupt/children, and production browser/device/LAN journeys
 remain open. This visit is design evidence, not an interactive-prototype or UI test.
 The export dimensions and hash are retained in `figma-review.json`.
+
+## New goal-conversation follow-up, September 24
+
+Revisited the live [Start a goal 7:2](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=7-2)
+at 560×615 and visually inspected its fresh export. It exposes objective, token,
+time, step and maximum-active-agent fields, with an explicit Start goal action.
+The current `ProviderGoalPanel` instead offers Save draft; `create_conversation`
+saves the conversation and goal together without dispatch. Preserve that current
+behavior. The frame's manual-resume copy and sample three-agent limit belong to
+an older design generation and do not override current recovery or limit policy.
+
+This visit informs the draft-to-execution boundary. It does not prove that the
+dialog, persistence, selection, execution or restart journeys run against Rust.
+Interactive prototype, production desktop/mobile/LAN and physical-device gates
+remain open. Export identity, dimensions and hash are in `figma-review.json`.

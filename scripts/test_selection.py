@@ -14,7 +14,7 @@ PLAN = ".github/test-selection.json"
 
 
 def assistant_rust_target(value: str) -> tuple[str, str, str]:
-    """Resolve one exact integration test inside the isolated assistant workspace."""
+    """Resolve one exact library or integration test in the assistant workspace."""
     match = re.fullmatch(
         r"(nebula-assistant-(domain|storage|runtime|services|transport|lab))/"
         r"([a-z][a-z0-9_]*)::([A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*)",
@@ -25,7 +25,8 @@ def assistant_rust_target(value: str) -> tuple[str, str, str]:
             "Assistant Rust tests require package/target::exact_test names."
         )
     package, crate, target, test = match.groups()
-    if not Path(f"assistant-rs/crates/{crate}/tests/{target}.rs").is_file():
+    source = "src/lib.rs" if target == "lib" else f"tests/{target}.rs"
+    if not Path(f"assistant-rs/crates/{crate}/{source}").is_file():
         raise ValueError(
             "Assistant Rust test target does not exist in its allowlisted crate."
         )

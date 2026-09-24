@@ -112,6 +112,39 @@ def test_runner_pins_toolchain_and_exact_nonignored_target():
     ]
 
 
+def test_private_library_selection_requires_one_exact_test():
+    name = "entities::conversations::tests::default_home_expansion_preserves_python_workspace_root_boundary"
+    selection = f"nebula-assistant-storage/lib::{name}"
+    receipt = plan()
+    receipt["assistant_rust"] = [selection]
+    assert validate(receipt, "current")["assistant_rust"] == [selection]
+    assert assistant_rust_target(selection) == (
+        "nebula-assistant-storage", "lib", name,
+    )
+    command = cargo_command(selection, "1.94.0", listing=False)
+    assert command == [
+        "cargo", "+1.94.0", "test", "--locked", "--manifest-path",
+        "assistant-rs/Cargo.toml", "-p", "nebula-assistant-storage",
+        "--lib", name, "--", "--exact",
+    ]
+    assert cargo_command(selection, "1.94.0", listing=True) == [*command, "--list"]
+
+
+def test_library_target_requires_library_source_not_an_integration_namesake(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    crate = tmp_path / "assistant-rs/crates/storage"
+    (crate / "tests").mkdir(parents=True)
+    (crate / "tests/lib.rs").touch()
+    selection = "nebula-assistant-storage/lib::module::test"
+    with pytest.raises(ValueError, match="target does not exist"):
+        assistant_rust_target(selection)
+    (crate / "src").mkdir()
+    (crate / "src/lib.rs").touch()
+    assert assistant_rust_target(selection) == (
+        "nebula-assistant-storage", "lib", "module::test",
+    )
+
+
 def test_ci_runs_only_the_validated_receipt_for_assistant():
     ci = (Path(__file__).parents[1] / ".github/workflows/ci.yml").read_text()
     section = ci.split("  assistant-rust:\n")[1].split("  desktop-macos:\n")[0]

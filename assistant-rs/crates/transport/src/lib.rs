@@ -9,7 +9,7 @@ use axum::{
     Router,
     body::{Body, to_bytes},
     extract::{Path, Request, State},
-    http::HeaderValue,
+    http::{HeaderValue, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -22,12 +22,13 @@ use nebula_assistant_services::{
     artifact_preview::ArtifactPreview,
     context::{CursorWrite, DecisionWrite},
     generated::CatalogKind,
+    goal_conversations::GoalConversationCreate,
     goal_drafts::{GoalDraft, GoalDraftUpdate},
     navigation::BookmarkWrite,
     settings::{ScheduleCreate, ScheduleWrite, SettingsWrite},
 };
 use nebula_assistant_storage::entities::{
-    ConnectionObserver, SqliteAssistantStore, StateObservations,
+    ConnectionObserver, ConversationDependencies, SqliteAssistantStore, StateObservations,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -45,6 +46,8 @@ pub struct HttpConfig {
     /// Trusted host identity source; never accepted from request fields.
     pub new_schedule_id: fn() -> String,
     pub new_goal_id: fn() -> String,
+    /// Trusted host home expansion and bounded dependency hydration.
+    pub conversation_dependencies: ConversationDependencies,
     pub artifacts: Option<ArtifactPreview>,
     /// Trusted, synchronous observation of retained harness transport liveness.
     /// Must never start a transport or wait for network/process activity.
@@ -61,6 +64,7 @@ impl HttpConfig {
             clock: Utc::now,
             new_schedule_id: || uuid::Uuid::new_v4().to_string(),
             new_goal_id: || uuid::Uuid::new_v4().to_string(),
+            conversation_dependencies: ConversationDependencies::default(),
             artifacts: None,
             harness_connection: None,
         }
@@ -117,6 +121,10 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
         .route(
             "/api/v1/chat-subagents/{entity_id}",
             get(other_catalog_record),
+        )
+        .route(
+            "/api/v1/chat/goal-conversations",
+            post(create_goal_conversation),
         )
         .route(
             "/api/v1/chat/sessions/{session_id}/goal",
@@ -424,6 +432,23 @@ async fn session_goal(
         .session_goal_with_clock(&session)
         .await;
     reply(request, result)
+}
+async fn create_goal_conversation(State(state): State<AppState>, request: Request) -> Response {
+    let (parts, body) = request.into_parts();
+    let records = AssistantRecords::with_clock(state.store, state.config.clock);
+    let result = match decode::<GoalConversationCreate>(body, state.config.body_bytes).await {
+        Ok(body) => records
+            .create_goal_conversation(
+                body,
+                &state.config.conversation_dependencies,
+                state.config.new_goal_id,
+            )
+            .await
+            .map(|created| created.into_payload())
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply_status(&parts, result, StatusCode::CREATED)
 }
 async fn create_goal(
     State(state): State<AppState>,
@@ -739,6 +764,13 @@ fn reply(request: Request, result: Result<Value, ServiceError>) -> Response {
     api_reply(&parts, result.map_err(ApiError::service))
 }
 fn api_reply(parts: &axum::http::request::Parts, result: Result<Value, ApiError>) -> Response {
+    api_reply_status(parts, result, StatusCode::OK)
+}
+fn api_reply_status(
+    parts: &axum::http::request::Parts,
+    result: Result<Value, ApiError>,
+    success: StatusCode,
+) -> Response {
     let id = parts
         .extensions
         .get::<RequestId>()
@@ -747,7 +779,7 @@ fn api_reply(parts: &axum::http::request::Parts, result: Result<Value, ApiError>
     let feature = route_feature(parts.uri.path());
     match result {
         Ok(value)=>match json_bytes(&value) {
-            Ok(bytes) if bytes.len()<=MAX_RESPONSE_BYTES => ([("content-type","application/json")],bytes).into_response(),
+            Ok(bytes) if bytes.len()<=MAX_RESPONSE_BYTES => (success,[("content-type","application/json")],bytes).into_response(),
             _=>ApiError::http(413,"Assistant response exceeds its configured limit; inspect retained records with pagination").for_feature(feature).response(id,operation.as_deref()),
         },
         Err(error)=>error.for_feature(feature).response(id,operation.as_deref()),

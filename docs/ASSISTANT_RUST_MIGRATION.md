@@ -30,7 +30,7 @@ Branch: `codex/rust-core-rewrite`.
 
 All product journeys remain required and unverified for Rust. Browser/device/LAN
 matrices from the product-quality skill remain mandatory before activating the
-replacement. The experimental Rust router has 38 Assistant handlers; shipped
+replacement. The experimental Rust router has 39 Assistant handlers; shipped
 routes, UI, provider and harness execution have not switched to Rust.
 
 ## Development boundaries
@@ -1005,3 +1005,84 @@ bound regression covers 4,000 duplicate replacements, excessive metadata entries
 and repeated long paths. Scoped Clippy with warnings denied, Ruff, formatting and
 diff checks passed. The cumulative CI selection is 164 exact Rust checks and 58
 Python checks; production browser/device/LAN and performance evidence remain open.
+
+CI for commit `b39591c` passed (run `35957755476`). Downloaded selection and
+Rust receipts share digest `e5227a7034721421b30af54fafc215354558f35c6f78f3832141e700227c8c9d`;
+all 164 unique Rust selections collected and executed once. The Python 3.12 log
+records 58 passing checks in 106.50 seconds. Browser planning/gating passed and
+its execution was skipped under the reviewed selection.
+
+## Atomic goal-conversation creation contract
+
+Journey: from Assistant New chat, configure a goal and composer choices, save,
+select the newly listed conversation, then refresh and recover both the empty
+conversation and its saved goal. Failed creation must leave no new conversation,
+goal or search entry. Core owns durable records and search; React owns unsaved
+choices, and the existing URL/list selection owns visible navigation. Saving
+does not start execution. This increment ports only POST
+`/api/v1/chat/goal-conversations` and its immutable project/provider dependencies.
+
+Preserve full Engagement validation, then full ProviderProfile validation and
+enabled/model guards, then each requested MCP profile in order. Hooks are saved
+choices here. Dependency reads must not open workspaces, resolve credentials,
+contact providers, execute hooks or mutate other product areas. Trusted host
+home expansion is lexical and bounded; account lookup must release database
+permits and use a bounded blocking lane. Missing provider verification timestamps
+consume their trusted factory clocks during dependency hydration in source order.
+Capture existing strict missing-base/envelope boundaries rather than implying
+malformed historical rows already have complete parity.
+
+Allocate one Session identity and its two constructor clocks, validate that
+Session, then allocate the Goal identity and its two clocks. Keep original
+constructor input in diagnostics. Preserve raw request model allowlist comparison,
+later typed string trimming, Python title whitespace/truncation, opaque composer
+metadata and all null/default choices. One bounded transaction inserts Session,
+its search projection and Goal together; collisions or write failures roll back
+all three. Do not add idempotency or dependency rereads absent from the source.
+Search text must match Python trimming, including U+001C through U+001F.
+
+Planned evidence: isolated request/model/dependency and HTTP captures; exact
+lookup/identity/clock order; full raw entity/search/protected-ledger comparisons;
+disabled/missing/malformed dependency precedence; Unicode title and model choices;
+constructor failures; first/second/same-ID collisions; atomic rollback and reopen.
+Select exact new domain/storage/service/transport tests and affected shared search
+regressions, collect counts and refresh the diff-bound receipt before execution.
+Discover/create/select/refresh/failure/retry apply. Sending, streaming, interruption,
+background execution, children and deletion remain separate workflow services.
+Production desktop/mobile Chromium and WebKit, reconnect, keyboard/touch, LAN,
+packaged build and physical-device evidence remain required. The visited Figma
+Assistant and session-details frames are design references, not runtime evidence.
+
+
+This increment now adds the 39th experimental handler. Its frozen fixture has
+120 HTTP cases, 78 service cases, 82 contextual dependency vectors, 12 Session
+constructor vectors and 57 request vectors. All 40 exact selected local Rust
+checks passed; all 24 selected Python checks passed in 27.35 seconds. The latter
+include five source oracles and 19 focused test-selection policy checks. Both
+execution receipts bind digest
+`4f3e45e233f41d36b535a94a5dde46be2b82fdb7072baa5346968e3f2a7baa3b`;
+later changes only record evidence and refresh the cumulative CI selection.
+
+The checks compare identity/clock/lookup order, complete entity/search changes,
+protected ledgers and reopened state. They cover constructor errors, both insert
+collisions, bounded response preflight, read admission, timeout/cancellation slot
+retention, lexical home expansion and untouched prior state. Shared search trimming
+now includes Python's U+001C–U+001F whitespace. Boolean diagnostics distinguish
+exact signed integers from floating-point values at the i64 limits; ordinary
+invalid `2` keeps `bool_parsing`, while overflow/fraction values use `bool_type`.
+
+Fourteen separate observations retain missing-base and envelope gaps. The Python
+app is constructed with canonical dependencies and original raw bytes are restored
+before each request/snapshot. This is request parity after inert construction,
+not malformed-history startup parity. The Rust host resolver defaults to four
+blocking slots and a five-second deadline, releases database permits before work,
+and rejects unsupported non-Unix home expansion. Bounded hydration and strict
+historical envelopes remain explicit compatibility extensions.
+
+The dedicated Assistant selector now supports private `lib::module::exact_test`
+targets, collecting and executing exactly one non-ignored test; integration and
+desktop-native selection contracts stay separate. Cumulative PR coverage selects
+176 exact Rust and 61 Python checks. Figma Start a goal `7:2` was freshly inspected
+at 560×615; its older Start/resume wording differs from current Save draft behavior.
+No production Rust-backed create/select/refresh, mobile/WebKit/LAN/device or
+whole-Assistant performance evidence is implied by these isolated checks.

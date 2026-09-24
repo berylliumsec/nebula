@@ -1121,5 +1121,20 @@
       "Children have Stop agent; skills and checkpoint restore/fork are distinct journeys."
     ],
     "scope": "Fresh live design screenshot visually inspected; no interactive prototype, production Rust UI, mobile, LAN or physical-device evidence."
+  },
+  "goal_conversation_followup": {
+    "reviewed_date": "2026-09-24",
+    "file_key": "tVEa0PXZaa7H4ZLflwgcb7",
+    "node_id": "7:2",
+    "width": 560,
+    "height": 615,
+    "sha256": "b2ded8bf5eebf55777c8085ae7eea19ae9c659f7a3d163c2455426d24ec5d6cd",
+    "observations": [
+      "Start a goal dialog exposes objective, token limit, time limit, step limit and maximum active agents.",
+      "Start goal is an explicit action; the frame says nothing runs before that action.",
+      "The older manual-resume copy and sample three-agent value are not current recovery or concurrency policy."
+    ],
+    "current_authority": "ProviderGoalPanel Save draft and ChatGoalService.create_conversation persist configuration without execution; execution/recovery remain separate services.",
+    "scope": "Fresh live screenshot visually inspected; no interactive prototype or production Rust UI/browser/device/LAN evidence."
   }
 }

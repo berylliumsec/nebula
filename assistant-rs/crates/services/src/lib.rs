@@ -4,6 +4,7 @@ pub mod artifact_preview;
 pub mod catchup;
 pub mod context;
 pub mod generated;
+pub mod goal_conversations;
 pub mod goal_drafts;
 pub mod navigation;
 pub mod plans;
