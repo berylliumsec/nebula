@@ -689,12 +689,8 @@ class BrowserAutomationBroker(ToolBroker):
                         "upstream_proxy_enabled": session.upstream_proxy_enabled,
                         "upstream_proxy_configured": bool(session.upstream_proxy_url),
                     },
-                    "traffic_count": len(
-                        self.store.list_entities(
-                            BrowserTrafficExchange,
-                            engagement_id=session.engagement_id,
-                            limit=1_000,
-                        )
+                    "traffic_count": self.store.count(
+                        BrowserTrafficExchange, engagement_id=session.engagement_id
                     ),
                     "rules": [rule.model_dump(mode="json") for rule in status.rules],
                 }

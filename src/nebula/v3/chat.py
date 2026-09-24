@@ -371,11 +371,12 @@ def resolve_chat_model_content(
             else next(
                 (
                     candidate
-                    for candidate in store.list_entities(
-                        Artifact, engagement_id=engagement_id, limit=1_000
+                    for candidate in store.find_entities(
+                        Artifact,
+                        {"parent_artifact_id": artifact.id},
+                        engagement_id=engagement_id,
                     )
-                    if candidate.parent_artifact_id == artifact.id
-                    and candidate.metadata.get("chat_image_preview") is True
+                    if candidate.metadata.get("chat_image_preview") is True
                 ),
                 None,
             )

@@ -30,6 +30,7 @@ from nebula.v3.scope_import import (
     ScopeImportService,
 )
 from nebula.v3.storage import ConflictError, NebulaStore
+from tests.v3.row_horizon_fixture import seed_older_copies
 
 
 class StructuredProvider:
@@ -343,6 +344,13 @@ def test_scope_import_api_create_list_and_apply(tmp_path):
         ).json()[0]["id"]
         == created["id"]
     )
+    # A Project with a long import history still lists the import just made.
+    seed_older_copies(store, store.get(ScopeImport, created["id"]))
+    listed = client.get(
+        f"/api/v1/engagements/{engagement.id}/scope-imports", headers=headers
+    ).json()
+    assert len(listed) == 1_000
+    assert listed[-1]["id"] == created["id"]
     selected = [
         item["id"]
         for item in created["candidates"]

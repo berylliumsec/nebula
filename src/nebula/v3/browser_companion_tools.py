@@ -95,13 +95,16 @@ def attached_session(
 ) -> str | None:
     if not conversation_id:
         return None
-    sessions = store.list_entities(BrowserSession, engagement_id=project_id, limit=1000)
+    sessions = store.find_entities(
+        BrowserSession,
+        {"metadata.conversation_id": conversation_id},
+        engagement_id=project_id,
+    )
     return next(
         (
             item.id
             for item in sessions
             if item.metadata.get("browser_companion_version") == 1
-            and item.metadata.get("conversation_id") == conversation_id
         ),
         None,
     )

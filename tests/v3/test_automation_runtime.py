@@ -1054,6 +1054,18 @@ certificate
         assert "secret_ref" not in profile
         assert "config" not in profile
         assert profile["available"] is True
+        duplicate = client.post(
+            "/api/v1/vpn-profiles",
+            headers=headers,
+            json={
+                "name": "Same VPN again",
+                "filename": "again.ovpn",
+                "config": config,
+                "persistence": "session",
+            },
+        )
+        assert duplicate.status_code == 409, duplicate.text
+        assert len(client.get("/api/v1/vpn-profiles", headers=headers).json()) == 1
 
         current = client.get(
             f"/api/v1/engagements/{engagement.id}/automation-policy",

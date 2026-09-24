@@ -1127,10 +1127,10 @@ class ExecutionAIService:
     def _mission_context(self, run: AgentRun) -> tuple[str, str, dict[str, Any]]:
         attempts = [
             attempt
-            for attempt in self.store.list_entities(
-                AgentAttempt, engagement_id=run.engagement_id, limit=1_000
+            for attempt in self.store.find_entities(
+                AgentAttempt, {"run_id": run.id}, engagement_id=run.engagement_id
             )
-            if attempt.run_id == run.id and attempt.output is not None
+            if attempt.output is not None
         ]
         payload = {
             "kind": "mission_result",

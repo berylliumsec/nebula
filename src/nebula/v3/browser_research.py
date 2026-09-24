@@ -383,32 +383,32 @@ class BrowserResearchService:
     def workspace(self, engagement_id: str) -> BrowserResearchWorkspace:
         self.security.workspace(engagement_id)
         return BrowserResearchWorkspace(
-            site_nodes=self.store.list_entities(
-                BrowserSiteNode, engagement_id=engagement_id, limit=1_000
+            site_nodes=self.store.list_latest_entities(
+                BrowserSiteNode, engagement_id=engagement_id
             ),
-            site_edges=self.store.list_entities(
-                BrowserSiteEdge, engagement_id=engagement_id, limit=1_000
+            site_edges=self.store.list_latest_entities(
+                BrowserSiteEdge, engagement_id=engagement_id
             ),
-            crawl_jobs=self.store.list_entities(
-                BrowserCrawlJob, engagement_id=engagement_id, limit=1_000
+            crawl_jobs=self.store.list_latest_entities(
+                BrowserCrawlJob, engagement_id=engagement_id
             ),
-            intercepts=self.store.list_entities(
-                BrowserInterceptItem, engagement_id=engagement_id, limit=1_000
+            intercepts=self.store.list_latest_entities(
+                BrowserInterceptItem, engagement_id=engagement_id
             ),
-            repeater_tabs=self.store.list_entities(
-                BrowserRepeaterTab, engagement_id=engagement_id, limit=1_000
+            repeater_tabs=self.store.list_latest_entities(
+                BrowserRepeaterTab, engagement_id=engagement_id
             ),
-            repeater_results=self.store.list_entities(
-                BrowserRepeaterResult, engagement_id=engagement_id, limit=1_000
+            repeater_results=self.store.list_latest_entities(
+                BrowserRepeaterResult, engagement_id=engagement_id
             ),
-            attacks=self.store.list_entities(
-                BrowserAttack, engagement_id=engagement_id, limit=1_000
+            attacks=self.store.list_latest_entities(
+                BrowserAttack, engagement_id=engagement_id
             ),
-            attack_results=self.store.list_entities(
-                BrowserAttackResult, engagement_id=engagement_id, limit=1_000
+            attack_results=self.store.list_latest_entities(
+                BrowserAttackResult, engagement_id=engagement_id
             ),
-            token_analyses=self.store.list_entities(
-                BrowserTokenAnalysis, engagement_id=engagement_id, limit=1_000
+            token_analyses=self.store.list_latest_entities(
+                BrowserTokenAnalysis, engagement_id=engagement_id
             ),
         )
 
@@ -509,18 +509,13 @@ class BrowserResearchService:
             scope, request.url, "browser.target.record", self._passive_risk()
         )
         normalized = self._normalized_site_url(request.url)
-        existing = next(
-            (
-                node
-                for node in self.store.list_entities(
-                    BrowserSiteNode, engagement_id=session.engagement_id, limit=1_000
-                )
-                if node.session_id == session.id
-                and node.method == request.method
-                and node.url == normalized
-            ),
-            None,
+        matches = self.store.find_entities(
+            BrowserSiteNode,
+            {"session_id": session.id, "method": request.method, "url": normalized},
+            engagement_id=session.engagement_id,
+            limit=1,
         )
+        existing = matches[0] if matches else None
         parameters = sorted(
             set(request.parameter_names)
             | {
@@ -624,21 +619,19 @@ class BrowserResearchService:
             raise BrowserWorkflowError(
                 "site-map edge endpoints must belong to the selected session"
             )
-        existing = next(
-            (
-                edge
-                for edge in self.store.list_entities(
-                    BrowserSiteEdge, engagement_id=session.engagement_id, limit=1_000
-                )
-                if edge.session_id == session.id
-                and edge.source_node_id == source.id
-                and edge.target_node_id == target.id
-                and edge.relation == request.relation
-            ),
-            None,
+        existing = self.store.find_entities(
+            BrowserSiteEdge,
+            {
+                "session_id": session.id,
+                "source_node_id": source.id,
+                "target_node_id": target.id,
+                "relation": request.relation,
+            },
+            engagement_id=session.engagement_id,
+            limit=1,
         )
-        if existing is not None:
-            return existing
+        if existing:
+            return existing[0]
         return self._create(
             BrowserSiteEdge(
                 engagement_id=session.engagement_id, **request.model_dump()
@@ -666,11 +659,14 @@ class BrowserResearchService:
             self._active_risk(),
             native_scope_authority=True,
         )
-        for item in self.store.list_entities(
-            BrowserInterceptItem, engagement_id=session.engagement_id, limit=1_000
-        ):
-            if item.transaction_id == request.transaction_id:
-                return item
+        existing = self.store.find_entities(
+            BrowserInterceptItem,
+            {"transaction_id": request.transaction_id},
+            engagement_id=session.engagement_id,
+            limit=1,
+        )
+        if existing:
+            return existing[0]
         item = BrowserInterceptItem(
             engagement_id=session.engagement_id,
             session_id=session.id,
@@ -736,10 +732,10 @@ class BrowserResearchService:
         self, engagement_id: str, actor_id: str = "system"
     ) -> int:
         changed = 0
-        for item in self.store.list_entities(
-            BrowserInterceptItem, engagement_id=engagement_id, limit=1_000
+        for item in self.store.find_entities(
+            BrowserInterceptItem, {"state": "paused"}, engagement_id=engagement_id
         ):
-            if item.state == "paused" and utc_now() >= item.expires_at:
+            if utc_now() >= item.expires_at:
                 self._transition_intercept(
                     item,
                     item.revision,
@@ -902,11 +898,10 @@ class BrowserResearchService:
         tab = self.store.get(BrowserRepeaterTab, tab_id)
         if tab.state in {"queued", "running"}:
             raise BrowserWorkflowError("cancel the Repeater request before deleting it")
-        for result in self.store.list_entities(
-            BrowserRepeaterResult, engagement_id=tab.engagement_id, limit=1_000
+        for result in self.store.find_entities(
+            BrowserRepeaterResult, {"tab_id": tab.id}, engagement_id=tab.engagement_id
         ):
-            if result.tab_id == tab.id:
-                self.store.delete(BrowserRepeaterResult, result.id)
+            self.store.delete(BrowserRepeaterResult, result.id)
         self.store.delete(
             BrowserRepeaterTab, tab.id, expected_revision=expected_revision
         )
@@ -988,20 +983,14 @@ class BrowserResearchService:
             raise BrowserWorkflowError("attack results require a running attack")
         if attack.request_count >= attack.max_requests:
             raise BrowserWorkflowError("attack request budget is exhausted")
-        existing = next(
-            (
-                result
-                for result in self.store.list_entities(
-                    BrowserAttackResult,
-                    engagement_id=attack.engagement_id,
-                    limit=1_000,
-                )
-                if result.attack_id == attack.id and result.sequence == request.sequence
-            ),
-            None,
+        existing = self.store.find_entities(
+            BrowserAttackResult,
+            {"attack_id": attack.id, "sequence": request.sequence},
+            engagement_id=attack.engagement_id,
+            limit=1,
         )
-        if existing is not None:
-            return existing
+        if existing:
+            return existing[0]
         if request.exchange_id:
             exchange = self._owned(
                 BrowserTrafficExchange, request.exchange_id, attack.engagement_id
@@ -1042,11 +1031,12 @@ class BrowserResearchService:
         attack = self.store.get(BrowserAttack, attack_id)
         if attack.state in {"queued", "running", "paused"}:
             raise BrowserWorkflowError("cancel the Intruder attack before deleting it")
-        for result in self.store.list_entities(
-            BrowserAttackResult, engagement_id=attack.engagement_id, limit=1_000
+        for result in self.store.find_entities(
+            BrowserAttackResult,
+            {"attack_id": attack.id},
+            engagement_id=attack.engagement_id,
         ):
-            if result.attack_id == attack.id:
-                self.store.delete(BrowserAttackResult, result.id)
+            self.store.delete(BrowserAttackResult, result.id)
         self.store.delete(BrowserAttack, attack.id, expected_revision=expected_revision)
 
     def decode(self, request: DecoderRequest) -> dict[str, Any]:
@@ -1297,13 +1287,11 @@ class BrowserResearchService:
 
     def export_har(self, engagement_id: str, session_id: str) -> dict[str, Any]:
         session = self._owned(BrowserSession, session_id, engagement_id)
-        exchanges = [
-            exchange
-            for exchange in self.store.list_entities(
-                BrowserTrafficExchange, engagement_id=engagement_id, limit=1_000
-            )
-            if exchange.session_id == session.id
-        ]
+        exchanges = self.store.find_entities(
+            BrowserTrafficExchange,
+            {"session_id": session.id},
+            engagement_id=engagement_id,
+        )
         entries = []
         for exchange in exchanges:
             entries.append(

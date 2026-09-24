@@ -269,23 +269,23 @@ class BrowserAssessmentService:
     async def workspace(self, engagement_id: str) -> BrowserAssessmentWorkspace:
         self.store.get(Engagement, engagement_id)
         return BrowserAssessmentWorkspace(
-            assessments=self.store.list_entities(
-                BrowserAssessment, engagement_id=engagement_id, limit=1_000
+            assessments=self.store.list_latest_entities(
+                BrowserAssessment, engagement_id=engagement_id
             ),
-            steps=self.store.list_entities(
-                BrowserAssessmentStep, engagement_id=engagement_id, limit=1_000
+            steps=self.store.list_latest_entities(
+                BrowserAssessmentStep, engagement_id=engagement_id
             ),
-            login_flows=self.store.list_entities(
-                BrowserLoginFlow, engagement_id=engagement_id, limit=1_000
+            login_flows=self.store.list_latest_entities(
+                BrowserLoginFlow, engagement_id=engagement_id
             ),
-            recipes=self.store.list_entities(
-                BrowserRecipe, engagement_id=engagement_id, limit=1_000
+            recipes=self.store.list_latest_entities(
+                BrowserRecipe, engagement_id=engagement_id
             ),
-            candidates=self.store.list_entities(
-                BrowserIssueCandidate, engagement_id=engagement_id, limit=1_000
+            candidates=self.store.list_latest_entities(
+                BrowserIssueCandidate, engagement_id=engagement_id
             ),
-            validation_grants=self.store.list_entities(
-                BrowserValidationGrant, engagement_id=engagement_id, limit=1_000
+            validation_grants=self.store.list_latest_entities(
+                BrowserValidationGrant, engagement_id=engagement_id
             ),
             profiles=list(BUILTIN_PROFILES),
             engines=await self.engines.capabilities(),
@@ -558,14 +558,14 @@ class BrowserAssessmentService:
         fingerprint = hashlib.sha256(
             json.dumps(digest_payload, sort_keys=True).encode("utf-8")
         ).hexdigest()
-        existing = self.store.list_entities(
+        existing = self.store.find_entities(
             BrowserIssueCandidate,
+            {"deduplication_fingerprint": fingerprint},
             engagement_id=assessment.engagement_id,
-            limit=1_000,
+            limit=1,
         )
-        for candidate in existing:
-            if candidate.deduplication_fingerprint == fingerprint:
-                return candidate
+        if existing:
+            return existing[0]
         candidate = BrowserIssueCandidate(
             engagement_id=assessment.engagement_id,
             deduplication_fingerprint=fingerprint,
@@ -595,20 +595,14 @@ class BrowserAssessmentService:
                     idempotency_key=f"candidate:{fingerprint}",
                 )
         except ConflictError:
-            duplicate = next(
-                (
-                    item
-                    for item in self.store.list_entities(
-                        BrowserIssueCandidate,
-                        engagement_id=assessment.engagement_id,
-                        limit=1_000,
-                    )
-                    if item.deduplication_fingerprint == fingerprint
-                ),
-                None,
+            duplicates = self.store.find_entities(
+                BrowserIssueCandidate,
+                {"deduplication_fingerprint": fingerprint},
+                engagement_id=assessment.engagement_id,
+                limit=1,
             )
-            if duplicate is not None:
-                return duplicate
+            if duplicates:
+                return duplicates[0]
             raise
         return candidate
 
@@ -647,15 +641,11 @@ class BrowserAssessmentService:
             RiskClass.EXPLOITATION,
         )
         now = utc_now()
-        prior_grants = [
-            grant
-            for grant in self.store.list_entities(
-                BrowserValidationGrant,
-                engagement_id=candidate.engagement_id,
-                limit=1_000,
-            )
-            if grant.candidate_id == candidate.id and grant.status == "active"
-        ]
+        prior_grants = self.store.find_entities(
+            BrowserValidationGrant,
+            {"candidate_id": candidate.id, "status": "active"},
+            engagement_id=candidate.engagement_id,
+        )
         live_grants = [grant for grant in prior_grants if grant.expires_at > now]
         if live_grants:
             raise BrowserWorkflowError(

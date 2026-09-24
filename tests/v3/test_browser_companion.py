@@ -8,11 +8,16 @@ from nebula.v3.browser_companion import (
     CompanionAction,
     CompanionRequest,
 )
-from nebula.v3.browser_companion_tools import companion_components, companion_spec
+from nebula.v3.browser_companion_tools import (
+    attached_session,
+    companion_components,
+    companion_spec,
+)
 from nebula.v3.browser_engine import BrowserEngineRegistry
 from nebula.v3.domain import BrowserIdentity, BrowserSession, ChatSession, Engagement
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import InvalidToolArguments
+from tests.v3.row_horizon_fixture import seed_older_copies
 
 
 def setup(tmp_path):
@@ -1135,3 +1140,47 @@ def test_invalidating_approvals_sweeps_stale_running_actions_only(tmp_path):
     assert store.get(CompanionAction, lapsed.id).status == "failed"
     assert store.get(CompanionAction, live.id).status == "running"
     assert store.get(CompanionAction, pending.id).status == "revoked"
+
+
+def test_new_approvals_stay_visible_and_revocable_after_a_page_of_actions(tmp_path):
+    store, project, _, session, service = setup(tmp_path)
+    seed_older_copies(
+        store,
+        CompanionAction(
+            engagement_id=project.id,
+            browser_session_id=session.id,
+            request=CompanionRequest(operation="click", page_revision="old"),
+            status="complete",
+        ),
+    )
+    action = service.propose(
+        session.id, CompanionRequest(operation="click", page_revision="new")
+    )
+
+    listed = service.actions(session.id)
+    assert len(listed) == 1_000
+    assert listed[-1].id == action.id
+    assert listed[-1].status == "pending"
+
+    service.takeover(session.id, True)
+    assert store.get(CompanionAction, action.id).status == "revoked"
+
+
+def test_conversation_browser_is_found_after_a_page_of_project_sessions(tmp_path):
+    store, project, identity, session, service = setup(tmp_path)
+    seed_older_copies(
+        store,
+        BrowserSession(engagement_id=project.id, identity_id=identity.id, name="Tab"),
+    )
+    chat = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Own chat",
+            model="fixture",
+            provider_profile_id="provider",
+        )
+    )
+    service.bind(session.id, chat.id)
+
+    assert attached_session(store, project.id, chat.id) == session.id
+    assert attached_session(store, project.id, "other-chat") is None

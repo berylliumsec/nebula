@@ -410,8 +410,8 @@ class BrowserCompanion:
         async with self._locks.setdefault(project_id, asyncio.Lock()):
             self.store.get(Engagement, project_id)
             adapter = await self.adapter()
-            sessions = self.store.list_entities(
-                BrowserSession, engagement_id=project_id, limit=1000
+            sessions = self.store.find_entities(
+                BrowserSession, {}, engagement_id=project_id
             )
             session = next(
                 (
@@ -667,14 +667,14 @@ class BrowserCompanion:
         return result
 
     def actions(self, session_id: str) -> list[CompanionAction]:
+        """The session's latest actions, oldest first, for the approval view."""
+
         session = self.session(session_id)
-        return [
-            item
-            for item in self.store.list_entities(
-                CompanionAction, engagement_id=session.engagement_id, limit=1000
-            )
-            if item.browser_session_id == session_id
-        ]
+        return self.store.list_latest_entities(
+            CompanionAction,
+            {"browser_session_id": session_id},
+            engagement_id=session.engagement_id,
+        )
 
     def turn_active(self, chat_turn_id: str | None) -> bool:
         if chat_turn_id is None:
@@ -731,8 +731,13 @@ class BrowserCompanion:
         ``running`` rows left behind by an interrupted turn or a Core restart
         are moved to ``failed`` so they read as terminal instead of in flight.
         """
+        session = self.session(session_id)
         now = datetime.now(timezone.utc)
-        for action in self.actions(session_id):
+        for action in self.store.find_entities(
+            CompanionAction,
+            {"browser_session_id": session_id, "status": ["pending", "running"]},
+            engagement_id=session.engagement_id,
+        ):
             if action.status == "pending":
                 status = "revoked"
             elif action.status == "running" and self._running_is_stale(action, now):

@@ -414,11 +414,13 @@ class BrowserSecurityService:
 
     def workspace(self, engagement_id: str) -> BrowserWorkspace:
         self.store.get(Engagement, engagement_id)
-        identities = self.store.list_entities(
-            BrowserIdentity, engagement_id=engagement_id, limit=1_000
+        # Every identity and session stays selectable, and the defaults below
+        # are only created when the Project truly has none.
+        identities = self.store.find_entities(
+            BrowserIdentity, {}, engagement_id=engagement_id
         )
-        sessions = self.store.list_entities(
-            BrowserSession, engagement_id=engagement_id, limit=1_000
+        sessions = self.store.find_entities(
+            BrowserSession, {}, engagement_id=engagement_id
         )
         identities = [
             item
@@ -454,17 +456,17 @@ class BrowserSecurityService:
         return BrowserWorkspace(
             identities=identities,
             sessions=sessions,
-            traffic=self.store.list_entities(
-                BrowserTrafficExchange, engagement_id=engagement_id, limit=1_000
+            traffic=self.store.list_latest_entities(
+                BrowserTrafficExchange, engagement_id=engagement_id
             ),
-            frames=self.store.list_entities(
-                BrowserWebSocketFrame, engagement_id=engagement_id, limit=1_000
+            frames=self.store.list_latest_entities(
+                BrowserWebSocketFrame, engagement_id=engagement_id
             ),
-            actions=self.store.list_entities(
-                BrowserAction, engagement_id=engagement_id, limit=1_000
+            actions=self.store.list_latest_entities(
+                BrowserAction, engagement_id=engagement_id
             ),
-            handoffs=self.store.list_entities(
-                BrowserHandoff, engagement_id=engagement_id, limit=1_000
+            handoffs=self.store.list_latest_entities(
+                BrowserHandoff, engagement_id=engagement_id
             ),
         )
 
