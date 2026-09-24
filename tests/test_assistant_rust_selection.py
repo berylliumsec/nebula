@@ -51,6 +51,9 @@ def test_exact_assistant_selection_is_separate_from_native():
         "nebula-assistant-transport", "http",
         "python_authentication_oracle_matches_http_status_headers_and_bodies",
     )
+    assert assistant_rust_target(
+        "nebula-assistant-integrations/lib::protocol::exact_case"
+    ) == ("nebula-assistant-integrations", "lib", "protocol::exact_case")
 
 
 @pytest.mark.parametrize(
@@ -64,6 +67,8 @@ def test_exact_assistant_selection_is_separate_from_native():
         "nebula-assistant-storage/journal::--ignored",
         "nebula-assistant-storage/missing::test",
         "nebula-assistant-storage/journal::test --skip other",
+        "nebula-assistant-integrations/../protocol::test",
+        "nebula-assistant-integrations/lib::*",
     ],
 )
 def test_broad_missing_or_injected_selection_is_rejected(selection):

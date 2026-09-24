@@ -179,3 +179,14 @@ message-level Fork conversation here likewise retains shared files. Checkpoint
 restore and an isolation selector are separate capabilities; this API increment
 must not imply that it implements either. The screenshot hash is unchanged from
 the prior live export. This is design inspection, not a production workflow test.
+
+## Execution follow-up, September 24
+
+Revisited live [desktop chat 4:73](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-73)
+at 1440×1121, [mobile chat 7:113](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=7-113)
+at 320×844, and [restart recovery 7:5](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=7-5)
+at 560×286. Interrupt and consequential approval state remain visible at both
+sizes. Older manual-resume copy does not override the current receipt-based
+recovery requirements. Fresh export identities are recorded in `figma-review.json`.
+This is visual design evidence; production execution, interaction, reconnect,
+mobile browser, LAN and physical-device checks remain open.

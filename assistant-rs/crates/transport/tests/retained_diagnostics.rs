@@ -289,3 +289,37 @@ fn fork_exception_previews_preserve_direct_and_typed_constructor_inputs() {
     assert!(previews >= 40);
     assert!(typed_previews >= 1);
 }
+
+#[test]
+fn completion_exception_previews_preserve_python_order_and_value_errors() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../../compatibility/python-execution.json")).unwrap();
+    for case in fixture["request_vectors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["expected"]["accepted"] == false)
+    {
+        let Err(RecordError::ModelValidation(report)) = hydrate(
+            Model::ChatCompletionRequest,
+            InputOrigin::RetainedJson,
+            case["raw_input"].as_str().unwrap().as_bytes(),
+        ) else {
+            panic!("expected report");
+        };
+        assert_eq!(
+            retained::request_exception_prefix(&report),
+            case["expected"]["request_exception_preview"]
+                .as_str()
+                .unwrap(),
+            "{}",
+            case["name"]
+        );
+        assert_eq!(
+            retained::exception_prefix(&report),
+            case["expected"]["exception_preview"].as_str().unwrap(),
+            "{}",
+            case["name"]
+        );
+    }
+}

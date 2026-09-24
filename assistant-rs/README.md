@@ -13,6 +13,9 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
   current SQLite schema, preserving revisions, lookup and search projections.
 - `nebula-assistant-runtime`: fair project/parent/session queue selection;
   waits release execution slots while retaining session ownership. No execution.
+- `nebula-assistant-integrations`: bounded OpenAI-compatible HTTP and SSE,
+  pooled connections, explicit retry boundaries and cancellation. Parsed tools
+  remain inert. See its README for supported protocol shapes and remaining gaps.
 - `nebula-assistant-services`: saved-context mutations, active decision snapshots,
   revision history, atomic project promotion, per-device read cursors, transcript
   navigation, project message search, durable bookmarks, conversation catalogs,
@@ -57,6 +60,13 @@ The fair queue is an in-memory policy, not durable admission. Pending/parked wor
 blocks new admission at 2,048; 128 already-running turns have reserved parking
 capacity, so at most 2,176 entries can remain tracked. Removing cancelled work
 eagerly clears queue indices. Work identifiers and grouping fields are bounded.
+
+Provider execution components now include full completion-request and Turn model
+hydration, fenced SQLite admission/claim/answer/completion/release commands,
+read-only recovery classification, and lifetime-accounted result records. These
+components are not yet connected to the queue, replay receipts, preparation or
+HTTP completion routes. See `../docs/ASSISTANT_RUST_EXECUTION.md`; a successful
+component test does not establish a running Rust conversation.
 
 `records::StoredAssistantRecord::decode` preserves opaque JSON metadata and large
 integers, checks the captured storage schemas, and enforces the Python model's

@@ -1,6 +1,6 @@
-//! Ordered diagnostics for retained Entity, Schedule, Goal and usage models.
+//! Ordered diagnostics for retained Assistant models and completion requests.
 //!
-//! This is not request validation or a general Pydantic interpreter. No factory
+//! This is a bounded set of source contracts, not a general Pydantic interpreter. No factory
 //! runs while reading retained data; constructors receive explicit factory
 //! outputs. Reports share their input and never expose
 //! it through Debug/Display; only their explicit Serialize interface emits it.
@@ -21,9 +21,11 @@ use strum::EnumMessage;
 
 const MAX_ISSUES: usize = 10_000;
 type Result<T> = std::result::Result<T, RecordError>;
+pub mod completion;
 mod fork;
 mod goal;
 mod session;
+mod turn;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum Model {
@@ -32,11 +34,16 @@ pub enum Model {
     ChatGoal,
     ChatTokenUsage,
     ChatSession,
+    ChatTurn,
     ChatMessage,
     ChatContentBlock,
     ChatCitation,
     ChatDecision,
     HarnessSession,
+    ChatCompletionRequest,
+    ChatRequestMessage,
+    ChatContextAttachment,
+    PendingProviderSubagent,
 }
 impl Model {
     pub const fn name(self) -> &'static str {
@@ -46,11 +53,16 @@ impl Model {
             Self::ChatGoal => "ChatGoal",
             Self::ChatTokenUsage => "ChatTokenUsage",
             Self::ChatSession => "ChatSession",
+            Self::ChatTurn => "ChatTurn",
             Self::ChatMessage => "ChatMessage",
             Self::ChatContentBlock => "ChatContentBlock",
             Self::ChatCitation => "ChatCitation",
             Self::ChatDecision => "ChatDecision",
             Self::HarnessSession => "HarnessSession",
+            Self::ChatCompletionRequest => "ChatCompletionRequest",
+            Self::ChatRequestMessage => "ChatRequestMessage",
+            Self::ChatContextAttachment => "ChatContextAttachment",
+            Self::PendingProviderSubagent => "PendingProviderSubagent",
         }
     }
     fn kind(self) -> &'static str {
@@ -60,11 +72,16 @@ impl Model {
             Self::ChatGoal => "chat_goals",
             Self::ChatTokenUsage => "chat_token_usage",
             Self::ChatSession => "chat_sessions",
+            Self::ChatTurn => "chat_turns",
             Self::ChatMessage => "chat_messages",
             Self::ChatContentBlock => "chat_content_blocks",
             Self::ChatCitation => "chat_citations",
             Self::ChatDecision => "chat_decisions",
             Self::HarnessSession => "harness_sessions",
+            Self::ChatCompletionRequest => "chat_completion_requests",
+            Self::ChatRequestMessage => "chat_request_messages",
+            Self::ChatContextAttachment => "chat_context_attachments",
+            Self::PendingProviderSubagent => "pending_provider_subagents",
         }
     }
     fn fields(self) -> &'static [Field] {
@@ -74,17 +91,28 @@ impl Model {
             Self::ChatGoal => &goal::FIELDS,
             Self::ChatTokenUsage => &goal::USAGE_FIELDS,
             Self::ChatSession => &session::FIELDS,
+            Self::ChatTurn => &turn::FIELDS,
             Self::ChatMessage => &fork::MESSAGE_FIELDS,
             Self::ChatContentBlock => &fork::BLOCK_FIELDS,
             Self::ChatCitation => &fork::CITATION_FIELDS,
             Self::ChatDecision => &fork::DECISION_FIELDS,
             Self::HarnessSession => &fork::HARNESS_FIELDS,
+            Self::ChatCompletionRequest => &completion::FIELDS,
+            Self::ChatRequestMessage => &completion::MESSAGE_FIELDS,
+            Self::ChatContextAttachment => &completion::ATTACHMENT_FIELDS,
+            Self::PendingProviderSubagent => &completion::PENDING_FIELDS,
         }
     }
     fn is_entity(self) -> bool {
         !matches!(
             self,
-            Self::ChatTokenUsage | Self::ChatContentBlock | Self::ChatCitation
+            Self::ChatTokenUsage
+                | Self::ChatContentBlock
+                | Self::ChatCitation
+                | Self::ChatCompletionRequest
+                | Self::ChatRequestMessage
+                | Self::ChatContextAttachment
+                | Self::PendingProviderSubagent
         )
     }
 }
@@ -371,6 +399,7 @@ impl<'de> Deserialize<'de> for Keys {
 
 #[derive(Clone, Copy)]
 enum FieldType {
+    Request(completion::RequestField),
     String {
         min: usize,
         max: Option<usize>,
@@ -560,6 +589,28 @@ pub fn hydrate_fork_created(
     ) {
         return Err(RecordError::UnknownKind);
     }
+    hydrate_created_with_defaults(model, bytes, defaults, typed_paths)
+}
+
+/// Turn construction with explicit factory outputs and optional validated Usage
+/// provenance. Retained reads never gain access to these factory defaults.
+pub fn hydrate_created_turn(
+    bytes: &[u8],
+    defaults: &CreatedEntityDefaults,
+    typed_paths: &[TypedModelPath],
+) -> Result<Value> {
+    if defaults.last_activity_at.is_some() {
+        return Err(RecordError::Invariant("Turn has no last-activity factory"));
+    }
+    hydrate_created_with_defaults(Model::ChatTurn, bytes, defaults, typed_paths)
+}
+
+fn hydrate_created_with_defaults(
+    model: Model,
+    bytes: &[u8],
+    defaults: &CreatedEntityDefaults,
+    typed_paths: &[TypedModelPath],
+) -> Result<Value> {
     let mut factories = json!({"created_at":defaults.created_at.to_rfc3339_opts(SecondsFormat::Micros,true),"updated_at":defaults.updated_at.to_rfc3339_opts(SecondsFormat::Micros,true),"revision":1});
     if let Some(id) = &defaults.id {
         if id.len() > MAX_RECORD_BYTES {
@@ -656,14 +707,14 @@ fn hydrate_context(
     let mut typed_models = typed_paths.to_vec();
     typed_models.sort_unstable_by(|left, right| left.path.cmp(&right.path));
     for (index, entry) in typed_models.iter().enumerate() {
-        let clone_field = model == Model::ChatMessage
+        let clone_field = matches!(model, Model::ChatMessage | Model::ChatTurn)
             && match (entry.model, entry.path.as_slice()) {
                 (Model::ChatTokenUsage, [Location::Field(field)]) => field == "usage",
                 (Model::ChatContentBlock, [Location::Field(field), Location::Index(_)]) => {
-                    field == "content_blocks"
+                    model == Model::ChatMessage && field == "content_blocks"
                 }
                 (Model::ChatCitation, [Location::Field(field), Location::Index(_)]) => {
-                    field == "citations"
+                    model == Model::ChatMessage && field == "citations"
                 }
                 _ => false,
             };
@@ -767,6 +818,8 @@ fn hydrate_context(
             } else if let Some(value) = session::default(model, *field)
                 .or_else(|| goal::default(model, *field))
                 .or_else(|| fork::default(model, *field))
+                .or_else(|| completion::default(model, *field))
+                .or_else(|| turn::default(model, *field))
             {
                 output.insert(field.name.into(), value);
             } else if field.name == "enabled" {
@@ -835,6 +888,18 @@ fn hydrate_context(
         return report.error();
     }
     if let Some(message) = fork::coherence(model, &output) {
+        let error = Failure::value(message);
+        report.add(error.kind, None, false, error.msg, error.ctx)?;
+        return report.error();
+    }
+    if model == Model::ChatTurn
+        && let Some(message) = turn::coherence(&output)
+    {
+        let error = Failure::value(message);
+        report.add(error.kind, None, false, error.msg, error.ctx)?;
+        return report.error();
+    }
+    if let Some(message) = completion::coherence(model, &output) {
         let error = Failure::value(message);
         report.add(error.kind, None, false, error.msg, error.ctx)?;
         return report.error();
@@ -994,6 +1059,7 @@ fn validate_field(field: Field, value: &Value) -> FieldResult {
         | FieldType::Literal(_)
         | FieldType::Pattern { .. } => fork::scalar(field.kind, value),
         FieldType::Strings { .. }
+        | FieldType::Request(_)
         | FieldType::Dictionaries { .. }
         | FieldType::Dictionary
         | FieldType::Usage

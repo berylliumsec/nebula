@@ -1180,3 +1180,15 @@ was rerun and passed in 8.21 seconds. Tests include 1,003-message sequence ties,
 complete-read limits, per-stage collisions, failed vendor cleanup, legacy Session
 coercion, cancellation under SQLite contention, bounded detached work and reopen.
 No production UI, provider execution or whole-Assistant performance is inferred.
+
+## Provider execution components
+
+The next increment adds the request and Turn model boundary, bounded fenced
+execution writer commands and the first OpenAI-compatible network adapter.
+The [execution contract](ASSISTANT_RUST_EXECUTION.md) records the operator journey,
+state authorities, exact component evidence and unresolved runtime work. The
+experimental route inventory remains at 40; the shipped application still uses
+Python. Additive provider replay/receipt schema installation has not occurred.
+Provider transport tests contact harmless local fixtures only. PostgreSQL,
+historical migration, complete replay/cutover and production browser acceptance
+remain required before the Assistant replacement can be marked complete.

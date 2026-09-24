@@ -56,6 +56,7 @@ mod settings;
 pub use settings::{McpProfileRow, RawSession};
 mod fork;
 pub use fork::{ForkHarness, ForkRecord};
+pub mod execution;
 
 const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MUTATIONS: usize = 64;
@@ -109,6 +110,18 @@ pub enum Error {
     ProtectedField,
     #[error("assistant revision is exhausted")]
     RevisionExhausted,
+    #[error("{0}")]
+    ExecutionConflict(String),
+    #[error("{0}")]
+    ExecutionUnsupported(&'static str),
+    #[error("{0}")]
+    ExecutionUncertain(&'static str),
+    #[error("retained execution state is invalid")]
+    ExecutionInvalidState,
+    #[error(
+        "retained Assistant execution results are at capacity; release unused results and retry"
+    )]
+    ExecutionResultCapacity,
     #[error(transparent)]
     Record(#[from] RecordError),
     #[error("stored Assistant model is corrupt")]
@@ -153,6 +166,8 @@ pub struct Config {
     pub readers: u32,
     pub read_capacity: usize,
     pub page_bytes: usize,
+    /// Encoded canonical values plus retained raw JSON held by execution results.
+    pub execution_result_bytes: usize,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -162,6 +177,7 @@ impl Default for Config {
             readers: 4,
             read_capacity: 128,
             page_bytes: 4 * 1024 * 1024,
+            execution_result_bytes: 64 * 1024 * 1024,
         }
     }
 }
@@ -172,6 +188,7 @@ impl Config {
             || !(1..=16).contains(&self.readers)
             || !(self.readers as usize..=4096).contains(&self.read_capacity)
             || !(1..=16 * 1024 * 1024).contains(&self.page_bytes)
+            || !(1..=256 * 1024 * 1024).contains(&self.execution_result_bytes)
         {
             return Err(Error::InvalidBounds);
         }
@@ -262,6 +279,7 @@ pub struct Admission {
     pub available_queue_entries: usize,
     pub available_bytes: usize,
     pub available_reads: usize,
+    pub available_execution_result_bytes: usize,
 }
 
 struct WriteRequest {
@@ -276,6 +294,7 @@ enum Command {
     Recover(recovery::RepairRequest),
     Settings(settings::SettingsRequest),
     Fork(fork::ForkRequest),
+    Execution(execution::Request),
     TouchDevice {
         id: String,
         revision: i64,
@@ -292,6 +311,7 @@ pub struct SqliteAssistantStore {
     readers: SqlitePool,
     bytes: Arc<Semaphore>,
     read_slots: Arc<Semaphore>,
+    execution_results: Arc<Semaphore>,
     fork_slots: Arc<Semaphore>,
     fork_workflows: Arc<Semaphore>,
     closing: Arc<AtomicBool>,
@@ -306,6 +326,7 @@ impl SqliteAssistantStore {
             available_queue_entries: self.commands.capacity(),
             available_bytes: self.bytes.available_permits(),
             available_reads: self.read_slots.available_permits(),
+            available_execution_result_bytes: self.execution_results.available_permits(),
         }
     }
 
@@ -355,6 +376,7 @@ impl SqliteAssistantStore {
             readers,
             bytes: Arc::new(Semaphore::new(config.queued_bytes)),
             read_slots: Arc::new(Semaphore::new(config.read_capacity)),
+            execution_results: Arc::new(Semaphore::new(config.execution_result_bytes)),
             fork_slots: Arc::new(Semaphore::new(config.readers.min(4) as usize)),
             fork_workflows: Arc::new(Semaphore::new(4)),
             closing,
@@ -1009,6 +1031,16 @@ async fn writer(
             }
             Command::Fork(request) => {
                 let result = fork::write(&mut connection, &request.operation).await;
+                let _ = request.reply.send(result);
+            }
+            Command::Execution(request) => {
+                let result = execution::write(
+                    &mut connection,
+                    &request.operation,
+                    &request.clock,
+                    &request.results,
+                )
+                .await;
                 let _ = request.reply.send(result);
             }
             Command::TouchDevice {

@@ -1150,5 +1150,31 @@
     ],
     "current_authority": "SessionsPage Fork conversation here and Python session-fork route; preserve shared files and separate record commits.",
     "scope": "Fresh live screenshot visually inspected; no interactive prototype or production Rust-backed browser/mobile/LAN/device evidence."
+  },
+  "execution_followup": {
+    "inspected_on": "2026-09-24",
+    "inspection": "Fresh live screenshots visually inspected for desktop/mobile Interrupt and consequential-state visibility, and restart uncertainty; current recovery contract supersedes older manual-resume copy.",
+    "frames": [
+      {
+        "node_id": "4:73",
+        "width": 1440,
+        "height": 1121,
+        "sha256": "03452936363eeab0203bfa965a365763f5ac64142270d6d7058ed479d2c51c5a"
+      },
+      {
+        "node_id": "7:113",
+        "width": 320,
+        "height": 844,
+        "sha256": "cc787d0f44ac12651a6a9ee9d4229c0a494ed67f85886a805ea88775f1afeb98"
+      },
+      {
+        "node_id": "7:5",
+        "width": 560,
+        "height": 286,
+        "sha256": "44e4d91ebf4a8665ffa3d103e85fa6cc4a587450901604423131b1c228841130"
+      }
+    ],
+    "production_workflow_exercised": false,
+    "prototype_clickthrough_exercised": false
   }
 }

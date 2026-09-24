@@ -1,14 +1,14 @@
 {
-  "change_digest": "ee58bcffd11e5c6ecb6b0735c2b764057bb1a8e9b69084b879b857dd5de62937",
-  "reviewed_by": "Codex with domain, storage and oracle sub-agent review",
-  "reason": "Cumulative Assistant-only Rust replacement: exact tests cover introduced domain, persistence, fair queue/journal policy, saved context/navigation/catalogs/catch-up/results/status/plans/subagents/state/recovery/settings/goal services and authenticated transport. Adds12 focused fork checks for both backends, complete bounded reads, typed constructor diagnostics, raw/narrow writes, sequential commits/cleanup, legacy hydration, and detached cancellation. Python captures verify source contracts and selection guards; local fork work ran46 exact Rust checks and5 source oracles with corrected paired-device coverage.",
-  "exclusions": "No full suites or unrelated product areas. Desktop-native/frontend/Playwright are unselected because this PR adds no shipped Rust-backed UI; production mobile/WebKit/LAN/device and whole-Assistant performance gates remain open. No live state, providers, tools, helper processes or workspace mutation. Rust collection/compile600s per exact selector, execution120s each; CI Rust job20min. PythonCI uses existingworkflow boundaries; local focusedforkrecaptures were bounded300s total.",
+  "change_digest": "ee17c4adc54d1d4d9f603e0ef9ab2ad73103696cce891a6bf6638b0649993bcc",
+  "reviewed_by": "Codex using current Assistant source captures, independent writer/provider review and shared validator impact review",
+  "reason": "Assistant-only cumulative PR selection: preserve previously reviewed exact domain/storage/runtime/service/HTTP compatibility checks and add22 execution-component checks for complete request/Turn hydration, fenced SQLite commit phases/result lifetimes, and bounded OpenAI-compatible network/protocol behavior. Three source oracles and two new selection guard cases bring Python coverage to67. Local current increment passed39 unique Rust and24 Python checks after correcting two test-only representation assumptions.",
+  "exclusions": "No full suites or automatic scope expansion. Shipped entrypoints/UI remain Python; browser, frontend, desktop-native, live state, real provider accounts/tools and whole-Assistant performance are excluded and not claimed. Rust exact collection600s and execution120s each, CI Rust job20min; local Python run300s; CI selects Python3.12 only and its Python job declares no explicit timeout. Other runtimes are omitted. SQLite fixtures are isolated; provider HTTP fixtures use harmless loopback only. Historical SQLite/PostgreSQL/checkpoint migrations, continuous Rust execution/replay, production desktop/mobile/LAN/physical-device gates remain open.",
   "expected_tests": {
-    "python": 62,
+    "python": 67,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 188
+    "assistant_rust": 210
   },
   "python_versions": [
     "3.12"
@@ -32,7 +32,10 @@
     "tests/test_assistant_model_validation_contract.py::test_model_validation_oracle_matches_current_python_boundary",
     "tests/test_assistant_goal_drafts_contract.py::test_goal_drafts_oracle_matches_current_python_assistant_boundary",
     "tests/test_assistant_goal_conversations_contract.py::test_goal_conversations_oracle_matches_current_python_assistant_boundary",
-    "tests/test_assistant_forks_contract.py::test_forks_oracle_matches_current_python_assistant_boundary"
+    "tests/test_assistant_forks_contract.py::test_forks_oracle_matches_current_python_assistant_boundary",
+    "tests/test_assistant_execution_contract.py::test_execution_oracle_matches_current_python_assistant_boundary",
+    "tests/test_assistant_turn_validation_contract.py::test_turn_validation_oracle_matches_current_python_models",
+    "tests/v3/test_assistant_rust_provider_protocol.py::test_committed_assistant_provider_protocol_matches_python_source"
   ],
   "frontend": [],
   "native": [],
@@ -225,6 +228,28 @@
     "nebula-assistant-services/fork::forks_copy_complete_history_with_exact_ties_and_shared_opaque_provenance",
     "nebula-assistant-services/fork::cancelled_fork_callers_keep_bounded_workflows_until_commits_and_cleanup_finish",
     "nebula-assistant-transport/fork::python_fork_http_preserves_both_backends_committed_prefixes_and_factory_order",
-    "nebula-assistant-transport/retained_diagnostics::fork_exception_previews_preserve_direct_and_typed_constructor_inputs"
+    "nebula-assistant-transport/retained_diagnostics::fork_exception_previews_preserve_direct_and_typed_constructor_inputs",
+    "nebula-assistant-domain/completion::completion_requests_preserve_python_models_and_ordered_diagnostics",
+    "nebula-assistant-domain/completion::completion_validation_bounds_shared_input_and_preserves_context_bytes",
+    "nebula-assistant-transport/lib::completion_tests::completion_decode_matches_python_request_errors_and_root_shapes",
+    "nebula-assistant-transport/retained_diagnostics::completion_exception_previews_preserve_python_order_and_value_errors",
+    "nebula-assistant-domain/turn_validation::turn_retained_and_writer_hydration_match_python_vectors",
+    "nebula-assistant-domain/turn_validation::turn_constructor_defaults_and_typed_usage_match_python",
+    "nebula-assistant-domain/turn_validation::turn_missing_retained_identity_never_runs_factories",
+    "nebula-assistant-domain/turn_validation::turn_validation_preserves_order_bigints_and_redacts_bounded_reports",
+    "nebula-assistant-storage/execution::python_execution_commit_phases_match_source_and_survive_each_reopen",
+    "nebula-assistant-storage/execution::execution_admission_and_claims_are_atomic_under_contention",
+    "nebula-assistant-storage/execution::execution_recovery_preserves_saved_answers_and_newer_operator_settings",
+    "nebula-assistant-storage/execution::execution_terminal_notes_are_atomic_and_never_duplicate_retained_answers",
+    "nebula-assistant-storage/execution::execution_limits_and_cancelled_admission_preserve_acknowledged_state",
+    "nebula-assistant-storage/execution::execution_result_leases_bound_replies_reads_and_capacity_rollback",
+    "nebula-assistant-storage/execution::execution_turn_reads_hydrate_historical_fields_and_preserve_error_boundaries",
+    "nebula-assistant-integrations/protocol::provider_payloads_and_completion_fields_match_source_vectors",
+    "nebula-assistant-integrations/protocol::incremental_sse_framing_matches_source_across_byte_boundaries",
+    "nebula-assistant-integrations/protocol::provider_stream_vectors_preserve_channels_terminal_evidence_and_error_classes",
+    "nebula-assistant-integrations/protocol::reasoning_and_protocol_bounds_preserve_content_without_leaking_debug",
+    "nebula-assistant-integrations/http::pooled_http_preserves_endpoint_credentials_and_disables_redirect_retries",
+    "nebula-assistant-integrations/http::provider_retries_only_before_output_and_keeps_parent_cancellation_independent",
+    "nebula-assistant-integrations/http::bounded_stream_cancellation_releases_admission_and_connection_without_leaking_payload"
   ]
 }

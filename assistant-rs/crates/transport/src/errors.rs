@@ -1,3 +1,4 @@
+mod request;
 mod retained;
 
 use axum::{
@@ -34,12 +35,13 @@ pub(crate) struct ApiError {
 enum ErrorDetail {
     Value(Value),
     Retained(Box<ValidationReport>),
+    Request(request::RequestReport),
 }
 impl ErrorDetail {
     fn as_str(&self) -> Option<&str> {
         match self {
             Self::Value(value) => value.as_str(),
-            Self::Retained(_) => None,
+            Self::Retained(_) | Self::Request(_) => None,
         }
     }
 }
@@ -139,6 +141,16 @@ impl ApiError {
             exception,
         }
     }
+    pub(crate) fn request_validation(report: ValidationReport) -> Self {
+        let exception = retained::request_exception_prefix(&report);
+        Self {
+            status: 422,
+            detail: ErrorDetail::Request(request::RequestReport(Box::new(report))),
+            code: "api.request_validation".into(),
+            feature: "chat",
+            exception,
+        }
+    }
     fn retained_validation(report: ValidationReport) -> Self {
         let exception = retained::exception_prefix(&report);
         Self {
@@ -169,7 +181,7 @@ impl ApiError {
     }
     pub(crate) fn storage(error: StorageError) -> Self {
         match error {
-            StorageError::Capacity => Self::capacity(),
+            StorageError::Capacity | StorageError::ExecutionResultCapacity => Self::capacity(),
             StorageError::RetainedModelValidation(report) => Self::retained_validation(report),
             StorageError::AlreadyExists(_) => {
                 Self::named(409, error.to_string(), "storage.conflict_error", "storage")

@@ -1,6 +1,9 @@
 //! Python-compatible JSON field validation for Assistant context requests.
 //! Unknown fields retain the existing BaseModel behavior: they are ignored.
 use crate::ApiError;
+use nebula_assistant_domain::{
+    model_validation::completion::CompletionRequest, records::RecordError,
+};
 use nebula_assistant_services::context::{CursorWrite, DecisionWrite};
 use nebula_assistant_services::fork::ForkRequest;
 use nebula_assistant_services::generated::GeneratedListRequest;
@@ -20,6 +23,14 @@ pub(crate) use settings::key_order;
 
 pub(crate) trait RequestModel: serde::de::DeserializeOwned {
     const MODEL: BodyModel;
+    fn from_validated(value: Value) -> Result<Self, ApiError> {
+        serde_json::from_value(value).map_err(|_| {
+            ApiError::http(
+                422,
+                "Assistant request cannot be represented by its validated contract",
+            )
+        })
+    }
 }
 #[derive(PartialEq)]
 pub(crate) enum BodyModel {
@@ -33,6 +44,7 @@ pub(crate) enum BodyModel {
     GoalUpdate,
     GoalConversationCreate,
     Fork,
+    Completion,
 }
 impl RequestModel for CursorWrite {
     const MODEL: BodyModel = BodyModel::Cursor;
@@ -63,6 +75,32 @@ impl RequestModel for GoalConversationCreate {
 }
 impl RequestModel for ForkRequest {
     const MODEL: BodyModel = BodyModel::Fork;
+}
+impl RequestModel for CompletionRequest {
+    const MODEL: BodyModel = BodyModel::Completion;
+    fn from_validated(value: Value) -> Result<Self, ApiError> {
+        let Value::Object(fields) = value else {
+            return Err(ApiError::http(
+                422,
+                "Assistant completion request must be an object",
+            ));
+        };
+        Ok(Self { fields })
+    }
+}
+pub(crate) fn completion(bytes: &[u8]) -> Result<Value, ApiError> {
+    match CompletionRequest::parse(bytes) {
+        Ok(request) => Ok(Value::Object(request.fields)),
+        Err(RecordError::ModelValidation(report)) => Err(ApiError::request_validation(report)),
+        Err(RecordError::TooLarge) => Err(ApiError::http(
+            413,
+            "Assistant request exceeds its validation memory limit",
+        )),
+        Err(_) => Err(ApiError::http(
+            422,
+            "Assistant request does not match its expected JSON fields",
+        )),
+    }
 }
 
 fn error(
@@ -105,6 +143,11 @@ pub(crate) fn validate<T: RequestModel>(input: Value, key_order: &[String]) -> R
             None,
         )]));
     };
+    if T::MODEL == BodyModel::Completion {
+        // The raw-byte entry point has already hydrated the full model so
+        // nested input and extra-field ordering remain source-compatible.
+        return T::from_validated(input);
+    }
     if T::MODEL == BodyModel::Fork {
         return serde_json::from_value(fork::validate(fields, key_order)?).map_err(|_| {
             ApiError::http(

@@ -1,6 +1,8 @@
 //! Initial Assistant HTTP routes. No listener or shipped entry point is enabled
 //! by this library; a host must supply its trusted scheme and existing store.
 mod auth;
+#[cfg(test)]
+mod completion_tests;
 mod errors;
 mod validation;
 pub use auth::Authentication;
@@ -766,7 +768,21 @@ async fn decode<T: validation::RequestModel>(body: Body, limit: usize) -> Result
     let bytes = to_bytes(body, limit)
         .await
         .map_err(|_| ApiError::http(413, "Assistant request body exceeds its configured limit"))?;
-    let value = if bytes.is_empty() {
+    let value = if T::MODEL == validation::BodyModel::Completion && !bytes.is_empty() {
+        // Preserve the raw input order for nested validation diagnostics.
+        // Root null/non-object handling still follows the common HTTP boundary.
+        let root: Value = serde_json::from_slice(&bytes).map_err(|_| {
+            ApiError::http(
+                422,
+                "Assistant request does not match its expected JSON fields",
+            )
+        })?;
+        if root.is_object() {
+            validation::completion(&bytes)?
+        } else {
+            root
+        }
+    } else if bytes.is_empty() {
         Value::Null
     } else {
         serde_json::from_slice(&bytes).map_err(|_| {

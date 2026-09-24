@@ -1,0 +1,5830 @@
+{
+  "schema": "nebula.assistant.provider-protocol.v1",
+  "source_sha256": {
+    "src/nebula/v3/providers.py": "3bfffb0d9cce98f6d9747c3e9a52a71767fa3752a08916efda7ddca980cfac88",
+    "src/nebula/v3/inline_reasoning.py": "17ce8d9076270162171e55f1ff461d77ddf59c82ee917af19e41588fd4951f77",
+    "src/nebula/v3/tool_markup.py": "4d4f271f8fdccfa61bca6c6679ba88ee8fa26e40624cc14af9765a4136ddfb49"
+  },
+  "config": {
+    "id": "fixture-provider",
+    "kind": "openai_compatible",
+    "flavor": "custom",
+    "base_url": "https://fixture.invalid",
+    "default_model": "fixture-model",
+    "capabilities": {
+      "tools": true,
+      "strict_tools": true,
+      "structured_output": true
+    },
+    "options": {
+      "retry_attempts": 1
+    }
+  },
+  "request": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Hello"
+      }
+    ],
+    "model": "fixture-model",
+    "instructions": null,
+    "tools": [],
+    "tool_results": [],
+    "tool_choice": "auto",
+    "max_output_tokens": null,
+    "temperature": null,
+    "parallel_tool_calls": false,
+    "response_schema": null,
+    "reasoning_effort": null,
+    "reasoning_max_tokens": null,
+    "metadata": {}
+  },
+  "payloads": [
+    {
+      "name": "ordinary",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "custom",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "fixture-model",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": null,
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "fixture-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "instructions",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "custom",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "fixture-model",
+        "instructions": "  Preserve spacing  ",
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": 31,
+        "temperature": 0.5,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": null,
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "fixture-model",
+          "messages": [
+            {
+              "role": "system",
+              "content": "  Preserve spacing  "
+            },
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "max_tokens": 31,
+          "temperature": 0.5
+        }
+      }
+    },
+    {
+      "name": "o-series",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "custom",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "o3-mini",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": 31,
+        "temperature": 0.5,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "high",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "o3-mini",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "max_completion_tokens": 31,
+          "reasoning_effort": "high"
+        }
+      }
+    },
+    {
+      "name": "gpt5",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "custom",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "gpt-5.1",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": 31,
+        "temperature": 0.5,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": null,
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "gpt-5.1",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "max_completion_tokens": 31
+        }
+      }
+    },
+    {
+      "name": "reasoning-deepseek-none",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "deepseek",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "deepseek-v3.2",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "none",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "deepseek-v3.2",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "thinking": {
+            "type": "disabled"
+          }
+        }
+      }
+    },
+    {
+      "name": "reasoning-deepseek-minimal",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "deepseek",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "deepseek-v3.2",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "minimal",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "deepseek-v3.2",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "thinking": {
+            "type": "enabled"
+          },
+          "reasoning_effort": "low"
+        }
+      }
+    },
+    {
+      "name": "reasoning-deepseek-medium",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "deepseek",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "deepseek-v3.2",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "medium",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "deepseek-v3.2",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "thinking": {
+            "type": "enabled"
+          },
+          "reasoning_effort": "high"
+        }
+      }
+    },
+    {
+      "name": "reasoning-deepseek-xhigh",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "deepseek",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "deepseek-v3.2",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "xhigh",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "deepseek-v3.2",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "thinking": {
+            "type": "enabled"
+          },
+          "reasoning_effort": "max"
+        }
+      }
+    },
+    {
+      "name": "reasoning-vllm-none",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "vllm",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "Qwen3-32B",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "none",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "Qwen3-32B",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "chat_template_kwargs": {
+            "enable_thinking": false
+          }
+        }
+      }
+    },
+    {
+      "name": "reasoning-vllm-minimal",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "vllm",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "Qwen3-32B",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "minimal",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "Qwen3-32B",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          }
+        }
+      }
+    },
+    {
+      "name": "reasoning-vllm-medium",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "vllm",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "Qwen3-32B",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "medium",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "Qwen3-32B",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          }
+        }
+      }
+    },
+    {
+      "name": "reasoning-vllm-xhigh",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "vllm",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "Qwen3-32B",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "xhigh",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "Qwen3-32B",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          }
+        }
+      }
+    },
+    {
+      "name": "reasoning-sglang-none",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "sglang",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "glm-4.5",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "none",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "glm-4.5",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "chat_template_kwargs": {
+            "enable_thinking": false
+          }
+        }
+      }
+    },
+    {
+      "name": "reasoning-sglang-minimal",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "sglang",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "glm-4.5",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "minimal",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "glm-4.5",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          }
+        }
+      }
+    },
+    {
+      "name": "reasoning-sglang-medium",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "sglang",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "glm-4.5",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "medium",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "glm-4.5",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          }
+        }
+      }
+    },
+    {
+      "name": "reasoning-sglang-xhigh",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "sglang",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "glm-4.5",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "xhigh",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "glm-4.5",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "chat_template_kwargs": {
+            "enable_thinking": true
+          }
+        }
+      }
+    },
+    {
+      "name": "reasoning-ollama-none",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "ollama",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "deepseek-v3.1",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "none",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "deepseek-v3.1",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "reasoning_effort": "none"
+        }
+      }
+    },
+    {
+      "name": "reasoning-ollama-minimal",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "ollama",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "deepseek-v3.1",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "minimal",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "deepseek-v3.1",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "reasoning_effort": "low"
+        }
+      }
+    },
+    {
+      "name": "reasoning-ollama-medium",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "ollama",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "deepseek-v3.1",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "medium",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "deepseek-v3.1",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "reasoning_effort": "medium"
+        }
+      }
+    },
+    {
+      "name": "reasoning-ollama-xhigh",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "ollama",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "deepseek-v3.1",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "xhigh",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "deepseek-v3.1",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "reasoning_effort": "max"
+        }
+      }
+    },
+    {
+      "name": "openrouter",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "openrouter",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "fixture-model",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "high",
+        "reasoning_max_tokens": 100,
+        "metadata": {
+          "chat_session_id": "session"
+        }
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "fixture-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "session_id": "session",
+          "reasoning": {
+            "exclude": false,
+            "effort": "high",
+            "max_tokens": 100
+          },
+          "plugins": [
+            {
+              "id": "context-compression",
+              "enabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "openrouter-unsupported-reasoning",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "openrouter",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {
+          "fixture-model": [
+            "temperature"
+          ]
+        },
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "fixture-model",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "high",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "fixture-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "reasoning": {
+            "exclude": false
+          },
+          "plugins": [
+            {
+              "id": "context-compression",
+              "enabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "openrouter-mandatory",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "openrouter",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": [
+          "fixture-model"
+        ]
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "fixture-model",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": "none",
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "fixture-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "reasoning": {
+            "exclude": false
+          },
+          "plugins": [
+            {
+              "id": "context-compression",
+              "enabled": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "parts",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "custom",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Image"
+              },
+              {
+                "type": "image",
+                "media_type": "image/png",
+                "data": "ZmFrZQ=="
+              },
+              {
+                "type": "unknown"
+              }
+            ]
+          }
+        ],
+        "model": "fixture-model",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": null,
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "fixture-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Image"
+                },
+                {
+                  "type": "image_url",
+                  "image_url": {
+                    "url": "data:image/png;base64,ZmFrZQ=="
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "inert-tools",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "custom",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "fixture-model",
+        "instructions": null,
+        "tools": [
+          {
+            "name": "fixture.echo",
+            "description": "Harmless protocol declaration",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            },
+            "strict": true
+          }
+        ],
+        "tool_results": [],
+        "tool_choice": "required",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": true,
+        "response_schema": null,
+        "reasoning_effort": null,
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "fixture-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "fixture_echo",
+                "description": "Harmless protocol declaration",
+                "parameters": {
+                  "type": "object",
+                  "properties": {},
+                  "required": [],
+                  "additionalProperties": false
+                }
+              }
+            }
+          ],
+          "tool_choice": "required"
+        }
+      }
+    },
+    {
+      "name": "strict-tools",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "openai",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "fixture-model",
+        "instructions": null,
+        "tools": [
+          {
+            "name": "fixture.echo",
+            "description": "Harmless protocol declaration",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "required": [],
+              "additionalProperties": false
+            },
+            "strict": true
+          }
+        ],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": null,
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "fixture-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "parallel_tool_calls": false,
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "fixture_echo",
+                "description": "Harmless protocol declaration",
+                "parameters": {
+                  "type": "object",
+                  "properties": {},
+                  "required": [],
+                  "additionalProperties": false
+                },
+                "strict": true
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "vllm-grammar",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "vllm",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "fixture-model",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "reasoning_effort": null,
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": true,
+        "payload": {
+          "model": "fixture-model",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Hello"
+            }
+          ],
+          "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+              "name": "nebula_response",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "disabled",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "custom",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": false,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "fixture-model",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": null,
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": false,
+        "class": "ProviderError",
+        "event": {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider 'fixture-provider' is disabled",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      }
+    },
+    {
+      "name": "model-denied",
+      "config": {
+        "id": "fixture-provider",
+        "kind": "openai_compatible",
+        "flavor": "custom",
+        "base_url": "https://fixture.invalid",
+        "default_model": "fixture-model",
+        "model_allowlist": [
+          "other"
+        ],
+        "api_key_env": null,
+        "extra_headers": {},
+        "timeout_seconds": 120.0,
+        "local": false,
+        "data_residency": null,
+        "data_retention": null,
+        "enabled": true,
+        "capabilities": {
+          "streaming": true,
+          "tools": true,
+          "strict_tools": true,
+          "parallel_tools": false,
+          "structured_output": true,
+          "vision": false,
+          "documents": false,
+          "audio": false,
+          "embeddings": false,
+          "reasoning_controls": false,
+          "usage": true,
+          "context_window": null,
+          "max_output_tokens": null
+        },
+        "options": {
+          "retry_attempts": 1
+        },
+        "model_parameters": {},
+        "reasoning_mandatory_models": []
+      },
+      "request": {
+        "messages": [
+          {
+            "role": "user",
+            "content": "Hello"
+          }
+        ],
+        "model": "fixture-model",
+        "instructions": null,
+        "tools": [],
+        "tool_results": [],
+        "tool_choice": "auto",
+        "max_output_tokens": null,
+        "temperature": null,
+        "parallel_tool_calls": false,
+        "response_schema": null,
+        "reasoning_effort": null,
+        "reasoning_max_tokens": null,
+        "metadata": {}
+      },
+      "expected": {
+        "accepted": false,
+        "class": "ProviderError",
+        "event": {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "model 'fixture-model' is not allowed by provider 'fixture-provider'",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      }
+    }
+  ],
+  "completions": [
+    {
+      "name": "plain",
+      "body": "{\"id\": \"req-1\", \"model\": \"reported\", \"choices\": [{\"message\": {\"content\": \" Hello \"}, \"finish_reason\": \"stop\"}], \"usage\": {\"prompt_tokens\": 2, \"completion_tokens\": 3}}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "reported",
+          "text": "Hello",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 2,
+            "output_tokens": 3,
+            "total_tokens": 5
+          },
+          "finish_reason": "stop",
+          "provider_request_id": "req-1"
+        }
+      }
+    },
+    {
+      "name": "usage-big",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"usage\": {\"prompt_tokens\": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000, \"completion_tokens\": 3, \"total_tokens\": null}}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Done",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000,
+            "output_tokens": 3,
+            "total_tokens": 10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "usage-types",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"usage\": {\"prompt_tokens\": true, \"completion_tokens\": 3.9, \"total_tokens\": 0}}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Done",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 3,
+            "total_tokens": 3
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "reasoning-precedence",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Answer\", \"reasoning_content\": \"First\", \"reasoning\": \"Duplicate\", \"reasoning_details\": [{\"text\": \"Duplicate\"}]}}]}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Answer",
+          "reasoning": "First",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "reasoning-details",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Answer\", \"reasoning_details\": [{\"type\": \"reasoning.encrypted\", \"text\": \"hidden\"}, {\"summary\": \"First\"}, \"Second\"]}}]}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Answer",
+          "reasoning": "First\nSecond",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "inline",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"<think>Reason</think> Answer\"}}]}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Answer",
+          "reasoning": "Reason",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "refusal-content",
+      "body": "{\"choices\": [{\"message\": {\"content\": null, \"refusal\": \"I cannot do that.\"}, \"finish_reason\": \"stop\"}]}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "I cannot do that.",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": "stop",
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "null-lists",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\", \"tool_calls\": null}}], \"usage\": null}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Done",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "nonobject-choice",
+      "body": "{\"choices\": [null]}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "missing-choice",
+      "body": "{}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "inert-call",
+      "body": "{\"choices\": [{\"message\": {\"content\": null, \"tool_calls\": [{\"id\": \"call-1\", \"function\": {\"name\": \"fixture.echo\", \"arguments\": \"{\\\"value\\\":1}\"}}]}, \"finish_reason\": \"tool_calls\"}]}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "",
+          "reasoning": "",
+          "tool_calls": [
+            {
+              "id": "call-1",
+              "name": "fixture.echo",
+              "arguments": {
+                "value": 1
+              }
+            }
+          ],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": "tool_calls",
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "repeated-arguments",
+      "body": "{\"choices\": [{\"message\": {\"tool_calls\": [{\"id\": \"call-1\", \"function\": {\"name\": \"fixture.echo\", \"arguments\": \"{\\\"value\\\":1}{\\\"value\\\":1}\"}}]}}]}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "",
+          "reasoning": "",
+          "tool_calls": [
+            {
+              "id": "call-1",
+              "name": "fixture.echo",
+              "arguments": {
+                "value": 1
+              }
+            }
+          ],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "bad-arguments",
+      "body": "{\"choices\": [{\"message\": {\"tool_calls\": [{\"id\": \"call-1\", \"function\": {\"name\": \"fixture.echo\", \"arguments\": \"{\\\"value\\\":\"}}]}}]}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "",
+          "reasoning": "",
+          "tool_calls": [
+            {
+              "id": "call-1",
+              "name": "fixture.echo",
+              "arguments": {},
+              "invalid_reason": "arguments were not valid JSON: Expecting value: line 1 column 10 (char 9)"
+            }
+          ],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "field-model-null",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"model\": null}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Done",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "field-model-empty",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"model\": \"\"}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Done",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "field-model-zero",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"model\": 0}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Done",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "field-model-integer",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"model\": 123}",
+      "expected": {
+        "accepted": false,
+        "class": "ValidationError",
+        "event": {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nmodel\n  Input should be a valid string [type=string_type, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      }
+    },
+    {
+      "name": "field-model-object",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"model\": {\"field\": true}}",
+      "expected": {
+        "accepted": false,
+        "class": "ValidationError",
+        "event": {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nmodel\n  Input should be a valid string [type=string_type, input_value={'field': True}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      }
+    },
+    {
+      "name": "field-id-null",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"id\": null}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Done",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "field-id-empty",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"id\": \"\"}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Done",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": ""
+        }
+      }
+    },
+    {
+      "name": "field-id-zero",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"id\": 0}",
+      "expected": {
+        "accepted": false,
+        "class": "ValidationError",
+        "event": {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nprovider_request_id\n  Input should be a valid string [type=string_type, input_value=0, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      }
+    },
+    {
+      "name": "field-id-integer",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"id\": 123}",
+      "expected": {
+        "accepted": false,
+        "class": "ValidationError",
+        "event": {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nprovider_request_id\n  Input should be a valid string [type=string_type, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      }
+    },
+    {
+      "name": "field-id-object",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}}], \"id\": {\"field\": true}}",
+      "expected": {
+        "accepted": false,
+        "class": "ValidationError",
+        "event": {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nprovider_request_id\n  Input should be a valid string [type=string_type, input_value={'field': True}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      }
+    },
+    {
+      "name": "field-finish_reason-null",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}, \"finish_reason\": null}]}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Done",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": null,
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "field-finish_reason-empty",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}, \"finish_reason\": \"\"}]}",
+      "expected": {
+        "accepted": true,
+        "response": {
+          "provider_id": "fixture-provider",
+          "model": "fixture-model",
+          "text": "Done",
+          "reasoning": "",
+          "tool_calls": [],
+          "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+          },
+          "finish_reason": "",
+          "provider_request_id": null
+        }
+      }
+    },
+    {
+      "name": "field-finish_reason-zero",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}, \"finish_reason\": 0}]}",
+      "expected": {
+        "accepted": false,
+        "class": "ValidationError",
+        "event": {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nfinish_reason\n  Input should be a valid string [type=string_type, input_value=0, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      }
+    },
+    {
+      "name": "field-finish_reason-integer",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}, \"finish_reason\": 123}]}",
+      "expected": {
+        "accepted": false,
+        "class": "ValidationError",
+        "event": {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nfinish_reason\n  Input should be a valid string [type=string_type, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      }
+    },
+    {
+      "name": "field-finish_reason-object",
+      "body": "{\"choices\": [{\"message\": {\"content\": \"Done\"}, \"finish_reason\": {\"field\": true}}]}",
+      "expected": {
+        "accepted": false,
+        "class": "ValidationError",
+        "event": {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nfinish_reason\n  Input should be a valid string [type=string_type, input_value={'field': True}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      }
+    }
+  ],
+  "framing": [
+    {
+      "name": "crlf-1",
+      "chunks_hex": [
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "7b",
+        "22",
+        "61",
+        "22",
+        "3a",
+        "31",
+        "7d",
+        "0d",
+        "0a",
+        "0d",
+        "0a"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "crlf-7",
+      "chunks_hex": [
+        "646174613a207b",
+        "2261223a317d0d",
+        "0a0d0a"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "crlf-17",
+      "chunks_hex": [
+        "646174613a207b2261223a317d0d0a0d0a"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "cr-1",
+      "chunks_hex": [
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "7b",
+        "22",
+        "61",
+        "22",
+        "3a",
+        "31",
+        "7d",
+        "0d",
+        "0d"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "cr-7",
+      "chunks_hex": [
+        "646174613a207b",
+        "2261223a317d0d",
+        "0d"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "cr-15",
+      "chunks_hex": [
+        "646174613a207b2261223a317d0d0d"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "lf-1",
+      "chunks_hex": [
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "7b",
+        "22",
+        "61",
+        "22",
+        "3a",
+        "31",
+        "7d",
+        "0a",
+        "0a"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "lf-7",
+      "chunks_hex": [
+        "646174613a207b",
+        "2261223a317d0a",
+        "0a"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "lf-15",
+      "chunks_hex": [
+        "646174613a207b2261223a317d0a0a"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "unicode-lines-1",
+      "chunks_hex": [
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "7b",
+        "22",
+        "74",
+        "65",
+        "78",
+        "74",
+        "22",
+        "3a",
+        "22",
+        "61",
+        "e2",
+        "80",
+        "a8",
+        "62",
+        "e2",
+        "80",
+        "a9",
+        "63",
+        "c2",
+        "85",
+        "64",
+        "e2",
+        "98",
+        "83",
+        "22",
+        "7d",
+        "0a",
+        "0a"
+      ],
+      "frames": [
+        "{\"text\":\"a b cd☃\"}"
+      ]
+    },
+    {
+      "name": "unicode-lines-7",
+      "chunks_hex": [
+        "646174613a207b",
+        "2274657874223a",
+        "2261e280a862e2",
+        "80a963c28564e2",
+        "9883227d0a0a"
+      ],
+      "frames": [
+        "{\"text\":\"a b cd☃\"}"
+      ]
+    },
+    {
+      "name": "unicode-lines-34",
+      "chunks_hex": [
+        "646174613a207b2274657874223a2261e280a862e280a963c28564e29883227d0a0a"
+      ],
+      "frames": [
+        "{\"text\":\"a b cd☃\"}"
+      ]
+    },
+    {
+      "name": "multiline-1",
+      "chunks_hex": [
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "7b",
+        "0a",
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "22",
+        "61",
+        "22",
+        "3a",
+        "31",
+        "7d",
+        "0a",
+        "0a"
+      ],
+      "frames": [
+        "{\n\"a\":1}"
+      ]
+    },
+    {
+      "name": "multiline-7",
+      "chunks_hex": [
+        "646174613a207b",
+        "0a646174613a20",
+        "2261223a317d0a",
+        "0a"
+      ],
+      "frames": [
+        "{\n\"a\":1}"
+      ]
+    },
+    {
+      "name": "multiline-22",
+      "chunks_hex": [
+        "646174613a207b0a646174613a202261223a317d0a0a"
+      ],
+      "frames": [
+        "{\n\"a\":1}"
+      ]
+    },
+    {
+      "name": "gateway-lines-1",
+      "chunks_hex": [
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "7b",
+        "22",
+        "61",
+        "22",
+        "3a",
+        "31",
+        "7d",
+        "0a",
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "7b",
+        "22",
+        "62",
+        "22",
+        "3a",
+        "32",
+        "7d",
+        "0a",
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "5b",
+        "44",
+        "4f",
+        "4e",
+        "45",
+        "5d",
+        "0a",
+        "0a"
+      ],
+      "frames": [
+        "{\"a\":1}",
+        "{\"b\":2}",
+        "[DONE]"
+      ]
+    },
+    {
+      "name": "gateway-lines-7",
+      "chunks_hex": [
+        "646174613a207b",
+        "2261223a317d0a",
+        "646174613a207b",
+        "2262223a327d0a",
+        "646174613a205b",
+        "444f4e455d0a0a"
+      ],
+      "frames": [
+        "{\"a\":1}",
+        "{\"b\":2}",
+        "[DONE]"
+      ]
+    },
+    {
+      "name": "gateway-lines-42",
+      "chunks_hex": [
+        "646174613a207b2261223a317d0a646174613a207b2262223a327d0a646174613a205b444f4e455d0a0a"
+      ],
+      "frames": [
+        "{\"a\":1}",
+        "{\"b\":2}",
+        "[DONE]"
+      ]
+    },
+    {
+      "name": "comments-1",
+      "chunks_hex": [
+        "3a",
+        "20",
+        "68",
+        "65",
+        "6c",
+        "6c",
+        "6f",
+        "0a",
+        "69",
+        "64",
+        "3a",
+        "20",
+        "39",
+        "39",
+        "0a",
+        "72",
+        "65",
+        "74",
+        "72",
+        "79",
+        "3a",
+        "20",
+        "31",
+        "0a",
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "70",
+        "69",
+        "6e",
+        "67",
+        "0a",
+        "0a"
+      ],
+      "frames": [
+        "ping"
+      ]
+    },
+    {
+      "name": "comments-7",
+      "chunks_hex": [
+        "3a2068656c6c6f",
+        "0a69643a203939",
+        "0a72657472793a",
+        "20310a64617461",
+        "3a2070696e670a",
+        "0a"
+      ],
+      "frames": [
+        "ping"
+      ]
+    },
+    {
+      "name": "comments-36",
+      "chunks_hex": [
+        "3a2068656c6c6f0a69643a2039390a72657472793a20310a646174613a2070696e670a0a"
+      ],
+      "frames": [
+        "ping"
+      ]
+    },
+    {
+      "name": "error-text-1",
+      "chunks_hex": [
+        "65",
+        "76",
+        "65",
+        "6e",
+        "74",
+        "3a",
+        "20",
+        "65",
+        "72",
+        "72",
+        "6f",
+        "72",
+        "0a",
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "62",
+        "75",
+        "73",
+        "79",
+        "0a",
+        "0a"
+      ],
+      "frames": [
+        "{\"error\": {\"message\": \"busy\"}}"
+      ]
+    },
+    {
+      "name": "error-text-7",
+      "chunks_hex": [
+        "6576656e743a20",
+        "6572726f720a64",
+        "6174613a206275",
+        "73790a0a"
+      ],
+      "frames": [
+        "{\"error\": {\"message\": \"busy\"}}"
+      ]
+    },
+    {
+      "name": "error-text-25",
+      "chunks_hex": [
+        "6576656e743a206572726f720a646174613a20627573790a0a"
+      ],
+      "frames": [
+        "{\"error\": {\"message\": \"busy\"}}"
+      ]
+    },
+    {
+      "name": "error-object-1",
+      "chunks_hex": [
+        "65",
+        "76",
+        "65",
+        "6e",
+        "74",
+        "3a",
+        "20",
+        "65",
+        "72",
+        "72",
+        "6f",
+        "72",
+        "0a",
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "7b",
+        "22",
+        "63",
+        "6f",
+        "64",
+        "65",
+        "22",
+        "3a",
+        "35",
+        "30",
+        "33",
+        "2c",
+        "22",
+        "6d",
+        "65",
+        "73",
+        "73",
+        "61",
+        "67",
+        "65",
+        "22",
+        "3a",
+        "22",
+        "62",
+        "75",
+        "73",
+        "79",
+        "22",
+        "7d",
+        "0a",
+        "0a"
+      ],
+      "frames": [
+        "{\"error\": {\"code\": 503, \"message\": \"busy\"}}"
+      ]
+    },
+    {
+      "name": "error-object-7",
+      "chunks_hex": [
+        "6576656e743a20",
+        "6572726f720a64",
+        "6174613a207b22",
+        "636f6465223a35",
+        "30332c226d6573",
+        "73616765223a22",
+        "62757379227d0a",
+        "0a"
+      ],
+      "frames": [
+        "{\"error\": {\"code\": 503, \"message\": \"busy\"}}"
+      ]
+    },
+    {
+      "name": "error-object-50",
+      "chunks_hex": [
+        "6576656e743a206572726f720a646174613a207b22636f6465223a3530332c226d657373616765223a2262757379227d0a0a"
+      ],
+      "frames": [
+        "{\"error\": {\"code\": 503, \"message\": \"busy\"}}"
+      ]
+    },
+    {
+      "name": "empty-data-1",
+      "chunks_hex": [
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "0a",
+        "0a"
+      ],
+      "frames": [
+        ""
+      ]
+    },
+    {
+      "name": "empty-data-7",
+      "chunks_hex": [
+        "646174613a0a0a"
+      ],
+      "frames": [
+        ""
+      ]
+    },
+    {
+      "name": "empty-data-7",
+      "chunks_hex": [
+        "646174613a0a0a"
+      ],
+      "frames": [
+        ""
+      ]
+    },
+    {
+      "name": "eof-tail-1",
+      "chunks_hex": [
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "7b",
+        "22",
+        "61",
+        "22",
+        "3a",
+        "31",
+        "7d"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "eof-tail-7",
+      "chunks_hex": [
+        "646174613a207b",
+        "2261223a317d"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "eof-tail-13",
+      "chunks_hex": [
+        "646174613a207b2261223a317d"
+      ],
+      "frames": [
+        "{\"a\":1}"
+      ]
+    },
+    {
+      "name": "malformed-utf8-1",
+      "chunks_hex": [
+        "64",
+        "61",
+        "74",
+        "61",
+        "3a",
+        "20",
+        "7b",
+        "22",
+        "74",
+        "65",
+        "78",
+        "74",
+        "22",
+        "3a",
+        "22",
+        "ff",
+        "22",
+        "7d",
+        "0a",
+        "0a"
+      ],
+      "frames": [
+        "{\"text\":\"�\"}"
+      ]
+    },
+    {
+      "name": "malformed-utf8-7",
+      "chunks_hex": [
+        "646174613a207b",
+        "2274657874223a",
+        "22ff227d0a0a"
+      ],
+      "frames": [
+        "{\"text\":\"�\"}"
+      ]
+    },
+    {
+      "name": "malformed-utf8-20",
+      "chunks_hex": [
+        "646174613a207b2274657874223a22ff227d0a0a"
+      ],
+      "frames": [
+        "{\"text\":\"�\"}"
+      ]
+    }
+  ],
+  "streams": [
+    {
+      "name": "text",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22726f6c65223a",
+        "2022617373697374616e74227d",
+        "2c202266696e6973685f726561",
+        "736f6e223a206e756c6c7d5d7d",
+        "0a0a646174613a207b22696422",
+        "3a20227265712d31222c20226d",
+        "6f64656c223a20226669787475",
+        "72652d6d6f64656c222c202263",
+        "686f69636573223a205b7b2264",
+        "656c7461223a207b22636f6e74",
+        "656e74223a20222048656c6c6f",
+        "227d2c202266696e6973685f72",
+        "6561736f6e223a206e756c6c7d",
+        "5d7d0a0a646174613a207b2269",
+        "64223a20227265712d31222c20",
+        "226d6f64656c223a2022666978",
+        "747572652d6d6f64656c222c20",
+        "2263686f69636573223a205b7b",
+        "2264656c7461223a207b22636f",
+        "6e74656e74223a202220776f72",
+        "6c6420227d2c202266696e6973",
+        "685f726561736f6e223a202273",
+        "746f70227d5d7d0a0a64617461",
+        "3a205b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": " Hello",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": " world ",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Hello world",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": "stop",
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "finish-only",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a2022446f6e65227d2c20",
+        "2266696e6973685f726561736f",
+        "6e223a202273746f70227d5d7d",
+        "0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": "stop",
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "done-only",
+      "chunks_hex": [
+        "646174613a205b444f4e455d0a",
+        "0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": null,
+            "provider_request_id": null
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "incomplete",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a20225061727469616c22",
+        "7d2c202266696e6973685f7265",
+        "61736f6e223a206e756c6c7d5d",
+        "7d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Partial",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider stream ended before the reply completed: no finish reason or [DONE] frame arrived",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "reasoning",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22726561736f6e",
+        "696e675f636f6e74656e74223a",
+        "2022526561736f6e222c202272",
+        "6561736f6e696e67223a202244",
+        "75706c6963617465227d2c2022",
+        "66696e6973685f726561736f6e",
+        "223a206e756c6c7d5d7d0a0a64",
+        "6174613a207b226964223a2022",
+        "7265712d31222c20226d6f6465",
+        "6c223a2022666978747572652d",
+        "6d6f64656c222c202263686f69",
+        "636573223a205b7b2264656c74",
+        "61223a207b22636f6e74656e74",
+        "223a2022416e73776572227d2c",
+        "202266696e6973685f72656173",
+        "6f6e223a202273746f70227d5d",
+        "7d0a0a646174613a205b444f4e",
+        "455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "reasoning_delta",
+          "delta": "Reason",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Answer",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Answer",
+            "reasoning": "Reason",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": "stop",
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "inline",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a20223c746869227d2c20",
+        "2266696e6973685f726561736f",
+        "6e223a206e756c6c7d5d7d0a0a",
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a20226e6b3e526561736f",
+        "6e3c2f7468227d2c202266696e",
+        "6973685f726561736f6e223a20",
+        "6e756c6c7d5d7d0a0a64617461",
+        "3a207b226964223a2022726571",
+        "2d31222c20226d6f64656c223a",
+        "2022666978747572652d6d6f64",
+        "656c222c202263686f69636573",
+        "223a205b7b2264656c7461223a",
+        "207b22636f6e74656e74223a20",
+        "22696e6b3e20416e7377657222",
+        "7d2c202266696e6973685f7265",
+        "61736f6e223a202273746f7022",
+        "7d5d7d0a0a646174613a205b44",
+        "4f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "reasoning_delta",
+          "delta": "Reason",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Answer",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Answer",
+            "reasoning": "Reason",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": "stop",
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "late-usage",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a2022446f6e65227d2c20",
+        "2266696e6973685f726561736f",
+        "6e223a202273746f70227d5d7d",
+        "0a0a646174613a207b22696422",
+        "3a206e756c6c2c20226d6f6465",
+        "6c223a206e756c6c2c20226368",
+        "6f69636573223a205b5d2c2022",
+        "7573616765223a207b2270726f",
+        "6d70745f746f6b656e73223a20",
+        "322c2022636f6d706c6574696f",
+        "6e5f746f6b656e73223a20337d",
+        "7d0a0a646174613a205b444f4e",
+        "455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 2,
+              "output_tokens": 3,
+              "total_tokens": 5
+            },
+            "finish_reason": "stop",
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "keepalive",
+      "chunks_hex": [
+        "646174613a2070696e670a0a64",
+        "6174613a20340a0a646174613a",
+        "206e756c6c0a0a646174613a20",
+        "7b226964223a20227265712d31",
+        "222c20226d6f64656c223a2022",
+        "666978747572652d6d6f64656c",
+        "222c202263686f69636573223a",
+        "205b7b2264656c7461223a207b",
+        "22636f6e74656e74223a202244",
+        "6f6e65227d2c202266696e6973",
+        "685f726561736f6e223a202273",
+        "746f70227d5d7d0a0a64617461",
+        "3a205b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": "stop",
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "malformed-object",
+      "chunks_hex": [
+        "646174613a207b696e76616c69",
+        "640a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider sent a malformed stream chunk: Expecting property name enclosed in double quotes",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": "response"
+        }
+      ]
+    },
+    {
+      "name": "error",
+      "chunks_hex": [
+        "646174613a207b226572726f72",
+        "223a207b22636f6465223a2035",
+        "30332c20226d65737361676522",
+        "3a202262757379227d7d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider reported an error while streaming: busy",
+          "context_length_exceeded": false,
+          "retryable": true,
+          "tool_call_rejected": false,
+          "error_kind": "overloaded"
+        }
+      ]
+    },
+    {
+      "name": "context",
+      "chunks_hex": [
+        "646174613a207b226572726f72",
+        "223a207b22636f6465223a2022",
+        "636f6e746578745f6c656e6774",
+        "685f6578636565646564222c20",
+        "226d657373616765223a202263",
+        "6f6e74657874206c656e677468",
+        "206578636565646564227d7d0a",
+        "0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider reported an error while streaming: context length exceeded",
+          "context_length_exceeded": true,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": "context_length"
+        }
+      ]
+    },
+    {
+      "name": "filter",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b7d2c202266696e",
+        "6973685f726561736f6e223a20",
+        "22636f6e74656e745f66696c74",
+        "6572227d5d7d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider blocked the response: content filter stopped the reply",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": "refusal"
+        }
+      ]
+    },
+    {
+      "name": "unknown-finish",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a2022446f6e65227d2c20",
+        "2266696e6973685f726561736f",
+        "6e223a2022656e645f7475726e",
+        "227d5d7d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": "end_turn",
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "inert-fragments",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22746f6f6c5f63",
+        "616c6c73223a205b7b22696e64",
+        "6578223a20302c20226964223a",
+        "202263616c6c2d31222c202266",
+        "756e6374696f6e223a207b226e",
+        "616d65223a2022666978747572",
+        "652e6563686f222c2022617267",
+        "756d656e7473223a20227b5c22",
+        "76616c75655c223a227d7d5d7d",
+        "2c202266696e6973685f726561",
+        "736f6e223a206e756c6c7d5d7d",
+        "0a0a646174613a207b22696422",
+        "3a20227265712d31222c20226d",
+        "6f64656c223a20226669787475",
+        "72652d6d6f64656c222c202263",
+        "686f69636573223a205b7b2264",
+        "656c7461223a207b22746f6f6c",
+        "5f63616c6c73223a205b7b2269",
+        "6e646578223a20302c20226675",
+        "6e6374696f6e223a207b226172",
+        "67756d656e7473223a2022317d",
+        "227d7d5d7d2c202266696e6973",
+        "685f726561736f6e223a202274",
+        "6f6f6c5f63616c6c73227d5d7d",
+        "0a0a646174613a205b444f4e45",
+        "5d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "tool_call",
+          "delta": null,
+          "tool_call": {
+            "id": "call-1",
+            "name": "fixture.echo",
+            "arguments": {
+              "value": 1
+            }
+          },
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "",
+            "reasoning": "",
+            "tool_calls": [
+              {
+                "id": "call-1",
+                "name": "fixture.echo",
+                "arguments": {
+                  "value": 1
+                }
+              }
+            ],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": "tool_calls",
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-model-null",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a206e756c6c2c202263",
+        "686f69636573223a205b7b2264",
+        "656c7461223a207b22636f6e74",
+        "656e74223a2022446f6e65227d",
+        "2c202266696e6973685f726561",
+        "736f6e223a206e756c6c7d5d7d",
+        "0a0a646174613a205b444f4e45",
+        "5d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": null,
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-model-empty",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a2022222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a2022446f6e65227d2c20",
+        "2266696e6973685f726561736f",
+        "6e223a206e756c6c7d5d7d0a0a",
+        "646174613a205b444f4e455d0a",
+        "0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": null,
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-model-zero",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a20302c202263686f69",
+        "636573223a205b7b2264656c74",
+        "61223a207b22636f6e74656e74",
+        "223a2022446f6e65227d2c2022",
+        "66696e6973685f726561736f6e",
+        "223a206e756c6c7d5d7d0a0a64",
+        "6174613a205b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": null,
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-model-integer",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a203132332c20226368",
+        "6f69636573223a205b7b226465",
+        "6c7461223a207b22636f6e7465",
+        "6e74223a2022446f6e65227d2c",
+        "202266696e6973685f72656173",
+        "6f6e223a206e756c6c7d5d7d0a",
+        "0a646174613a205b444f4e455d",
+        "0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nmodel\n  Input should be a valid string [type=string_type, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-model-object",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a207b226669656c6422",
+        "3a20747275657d2c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a2022446f6e65227d2c20",
+        "2266696e6973685f726561736f",
+        "6e223a206e756c6c7d5d7d0a0a",
+        "646174613a205b444f4e455d0a",
+        "0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nmodel\n  Input should be a valid string [type=string_type, input_value={'field': True}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-id-null",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "6e756c6c2c20226d6f64656c22",
+        "3a2022666978747572652d6d6f",
+        "64656c222c202263686f696365",
+        "73223a205b7b2264656c746122",
+        "3a207b22636f6e74656e74223a",
+        "2022446f6e65227d2c20226669",
+        "6e6973685f726561736f6e223a",
+        "206e756c6c7d5d7d0a0a646174",
+        "613a205b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": null,
+            "provider_request_id": null
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-id-empty",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "22222c20226d6f64656c223a20",
+        "22666978747572652d6d6f6465",
+        "6c222c202263686f6963657322",
+        "3a205b7b2264656c7461223a20",
+        "7b22636f6e74656e74223a2022",
+        "446f6e65227d2c202266696e69",
+        "73685f726561736f6e223a206e",
+        "756c6c7d5d7d0a0a646174613a",
+        "205b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": null,
+            "provider_request_id": null
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-id-zero",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "302c20226d6f64656c223a2022",
+        "666978747572652d6d6f64656c",
+        "222c202263686f69636573223a",
+        "205b7b2264656c7461223a207b",
+        "22636f6e74656e74223a202244",
+        "6f6e65227d2c202266696e6973",
+        "685f726561736f6e223a206e75",
+        "6c6c7d5d7d0a0a646174613a20",
+        "5b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": null,
+            "provider_request_id": null
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-id-integer",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "3132332c20226d6f64656c223a",
+        "2022666978747572652d6d6f64",
+        "656c222c202263686f69636573",
+        "223a205b7b2264656c7461223a",
+        "207b22636f6e74656e74223a20",
+        "22446f6e65227d2c202266696e",
+        "6973685f726561736f6e223a20",
+        "6e756c6c7d5d7d0a0a64617461",
+        "3a205b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nprovider_request_id\n  Input should be a valid string [type=string_type, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-id-object",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "7b226669656c64223a20747275",
+        "657d2c20226d6f64656c223a20",
+        "22666978747572652d6d6f6465",
+        "6c222c202263686f6963657322",
+        "3a205b7b2264656c7461223a20",
+        "7b22636f6e74656e74223a2022",
+        "446f6e65227d2c202266696e69",
+        "73685f726561736f6e223a206e",
+        "756c6c7d5d7d0a0a646174613a",
+        "205b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nprovider_request_id\n  Input should be a valid string [type=string_type, input_value={'field': True}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-finish_reason-null",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a2022446f6e65227d2c20",
+        "2266696e6973685f726561736f",
+        "6e223a206e756c6c7d5d7d0a0a",
+        "646174613a205b444f4e455d0a",
+        "0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": null,
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-finish_reason-empty",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a2022446f6e65227d2c20",
+        "2266696e6973685f726561736f",
+        "6e223a2022227d5d7d0a0a6461",
+        "74613a205b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": null,
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-finish_reason-zero",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a2022446f6e65227d2c20",
+        "2266696e6973685f726561736f",
+        "6e223a20307d5d7d0a0a646174",
+        "613a205b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": null,
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-finish_reason-integer",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a2022446f6e65227d2c20",
+        "2266696e6973685f726561736f",
+        "6e223a203132337d5d7d0a0a64",
+        "6174613a205b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nfinish_reason\n  Input should be a valid string [type=string_type, input_value=123, input_type=int]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "field-finish_reason-object",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "227265712d31222c20226d6f64",
+        "656c223a202266697874757265",
+        "2d6d6f64656c222c202263686f",
+        "69636573223a205b7b2264656c",
+        "7461223a207b22636f6e74656e",
+        "74223a2022446f6e65227d2c20",
+        "2266696e6973685f726561736f",
+        "6e223a207b226669656c64223a",
+        "20747275657d7d5d7d0a0a6461",
+        "74613a205b444f4e455d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "1 validation error for ModelResponse\nfinish_reason\n  Input should be a valid string [type=string_type, input_value={'field': True}, input_type=dict]\n    For further information visit https://errors.pydantic.dev/2.13/v/string_type",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "invalid-fields-overwritten",
+      "chunks_hex": [
+        "646174613a207b226964223a20",
+        "332c20226d6f64656c223a2034",
+        "2c202263686f69636573223a20",
+        "5b7b2266696e6973685f726561",
+        "736f6e223a20377d5d7d0a0a64",
+        "6174613a207b226964223a2022",
+        "7265712d31222c20226d6f6465",
+        "6c223a2022666978747572652d",
+        "6d6f64656c222c202263686f69",
+        "636573223a205b7b2264656c74",
+        "61223a207b22636f6e74656e74",
+        "223a2022446f6e65227d2c2022",
+        "66696e6973685f726561736f6e",
+        "223a202273746f70227d5d7d0a",
+        "0a646174613a205b444f4e455d",
+        "0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "text_delta",
+          "delta": "Done",
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "completed",
+          "delta": null,
+          "tool_call": null,
+          "response": {
+            "provider_id": "fixture-provider",
+            "model": "fixture-model",
+            "text": "Done",
+            "reasoning": "",
+            "tool_calls": [],
+            "usage": {
+              "input_tokens": 0,
+              "output_tokens": 0,
+              "total_tokens": 0
+            },
+            "finish_reason": "stop",
+            "provider_request_id": "req-1"
+          },
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "error-generic",
+      "chunks_hex": [
+        "646174613a207b226572726f72",
+        "223a207b226d65737361676522",
+        "3a2022756e6b6e6f776e227d7d",
+        "0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider reported an error while streaming: unknown",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "error-quota-status",
+      "chunks_hex": [
+        "646174613a207b226572726f72",
+        "223a207b22636f6465223a2034",
+        "32392c202274797065223a2022",
+        "696e73756666696369656e745f",
+        "71756f7461227d7d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider reported an error while streaming",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": "quota"
+        }
+      ]
+    },
+    {
+      "name": "error-quota-no-status",
+      "chunks_hex": [
+        "646174613a207b226572726f72",
+        "223a207b22636f6465223a2022",
+        "696e73756666696369656e745f",
+        "71756f7461227d7d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider reported an error while streaming",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "error-context-code",
+      "chunks_hex": [
+        "646174613a207b226572726f72",
+        "223a207b22636f6465223a2022",
+        "6d61785f746f6b656e735f6578",
+        "636565646564227d7d0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider reported an error while streaming",
+          "context_length_exceeded": true,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": "context_length"
+        }
+      ]
+    },
+    {
+      "name": "error-transient-numeric-other",
+      "chunks_hex": [
+        "646174613a207b226572726f72",
+        "223a207b22636f6465223a2034",
+        "31382c202274797065223a2022",
+        "6f7665726c6f61646564227d7d",
+        "0a0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider reported an error while streaming",
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        }
+      ]
+    },
+    {
+      "name": "error-upstream-context",
+      "chunks_hex": [
+        "646174613a207b226572726f72",
+        "223a207b22636f6465223a2035",
+        "30332c20226d65737361676522",
+        "3a202250726f76696465722072",
+        "657475726e6564206572726f72",
+        "222c20226d6574616461746122",
+        "3a207b22726177223a20226d61",
+        "78696d756d20636f6e74657874",
+        "2072656163686564227d7d7d0a",
+        "0a"
+      ],
+      "events": [
+        {
+          "type": "started",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": null,
+          "context_length_exceeded": false,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": null
+        },
+        {
+          "type": "error",
+          "delta": null,
+          "tool_call": null,
+          "response": null,
+          "error": "provider reported an error while streaming: Provider returned error (upstream: maximum context reached)",
+          "context_length_exceeded": true,
+          "retryable": false,
+          "tool_call_rejected": false,
+          "error_kind": "context_length"
+        }
+      ]
+    }
+  ],
+  "reasoning": [
+    {
+      "model": "fixture-model",
+      "text": "  <think>Reason</think> Answer",
+      "split": [
+        "Reason",
+        " Answer"
+      ],
+      "pieces": [
+        [
+          "reasoning",
+          "R"
+        ],
+        [
+          "reasoning",
+          "e"
+        ],
+        [
+          "reasoning",
+          "a"
+        ],
+        [
+          "reasoning",
+          "s"
+        ],
+        [
+          "reasoning",
+          "o"
+        ],
+        [
+          "reasoning",
+          "n"
+        ],
+        [
+          "text",
+          "A"
+        ],
+        [
+          "text",
+          "n"
+        ],
+        [
+          "text",
+          "s"
+        ],
+        [
+          "text",
+          "w"
+        ],
+        [
+          "text",
+          "e"
+        ],
+        [
+          "text",
+          "r"
+        ]
+      ]
+    },
+    {
+      "model": "fixture-model",
+      "text": "prefix <think>quoted</think>",
+      "split": [
+        "",
+        "prefix <think>quoted</think>"
+      ],
+      "pieces": [
+        [
+          "text",
+          "p"
+        ],
+        [
+          "text",
+          "r"
+        ],
+        [
+          "text",
+          "e"
+        ],
+        [
+          "text",
+          "f"
+        ],
+        [
+          "text",
+          "i"
+        ],
+        [
+          "text",
+          "x"
+        ],
+        [
+          "text",
+          " "
+        ],
+        [
+          "text",
+          "<"
+        ],
+        [
+          "text",
+          "t"
+        ],
+        [
+          "text",
+          "h"
+        ],
+        [
+          "text",
+          "i"
+        ],
+        [
+          "text",
+          "n"
+        ],
+        [
+          "text",
+          "k"
+        ],
+        [
+          "text",
+          ">"
+        ],
+        [
+          "text",
+          "q"
+        ],
+        [
+          "text",
+          "u"
+        ],
+        [
+          "text",
+          "o"
+        ],
+        [
+          "text",
+          "t"
+        ],
+        [
+          "text",
+          "e"
+        ],
+        [
+          "text",
+          "d"
+        ],
+        [
+          "text",
+          "<"
+        ],
+        [
+          "text",
+          "/"
+        ],
+        [
+          "text",
+          "t"
+        ],
+        [
+          "text",
+          "h"
+        ],
+        [
+          "text",
+          "i"
+        ],
+        [
+          "text",
+          "n"
+        ],
+        [
+          "text",
+          "k"
+        ],
+        [
+          "text",
+          ">"
+        ]
+      ]
+    },
+    {
+      "model": "deepseek-r1",
+      "text": "Reason</think>Answer",
+      "split": [
+        "Reason",
+        "Answer"
+      ],
+      "pieces": [
+        [
+          "reasoning",
+          "Reason"
+        ],
+        [
+          "text",
+          "A"
+        ],
+        [
+          "text",
+          "n"
+        ],
+        [
+          "text",
+          "s"
+        ],
+        [
+          "text",
+          "w"
+        ],
+        [
+          "text",
+          "e"
+        ],
+        [
+          "text",
+          "r"
+        ]
+      ]
+    },
+    {
+      "model": "fixture-model",
+      "text": "<thinking>unfinished",
+      "split": [
+        "unfinished",
+        ""
+      ],
+      "pieces": [
+        [
+          "reasoning",
+          "u"
+        ],
+        [
+          "reasoning",
+          "n"
+        ],
+        [
+          "reasoning",
+          "f"
+        ],
+        [
+          "reasoning",
+          "i"
+        ],
+        [
+          "reasoning",
+          "n"
+        ],
+        [
+          "reasoning",
+          "i"
+        ],
+        [
+          "reasoning",
+          "s"
+        ],
+        [
+          "reasoning",
+          "h"
+        ],
+        [
+          "reasoning",
+          "e"
+        ],
+        [
+          "reasoning",
+          "d"
+        ]
+      ]
+    },
+    {
+      "model": "qwen3-thinking",
+      "text": "No closing tag",
+      "split": [
+        "",
+        "No closing tag"
+      ],
+      "pieces": [
+        [
+          "text",
+          "No closing tag"
+        ]
+      ]
+    }
+  ],
+  "unsupported_contracts": [
+    "signed tool-result replay",
+    "JSON-object instruction rendering",
+    "full serialized tool markup recovery",
+    "vendor raw error-detail wording",
+    "arbitrary provider charset decoding",
+    "native non-OpenAI-compatible adapters"
+  ]
+}

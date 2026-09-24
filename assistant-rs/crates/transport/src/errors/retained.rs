@@ -105,6 +105,96 @@ pub(super) fn exception_prefix(report: &ValidationReport) -> String {
     let _ = render(report, &mut output);
     output.text
 }
+pub(super) fn request_exception_prefix(report: &ValidationReport) -> String {
+    let mut output = Prefix::new();
+    let _ = request_render(report, &mut output);
+    output.text
+}
+fn request_render(report: &ValidationReport, output: &mut Prefix) -> fmt::Result {
+    writeln!(
+        output,
+        "{} validation error{}:",
+        report.len(),
+        if report.len() == 1 { "" } else { "s" }
+    )?;
+    for (index, issue) in report.issues().enumerate() {
+        if index != 0 {
+            output.write_char('\n')?;
+        }
+        output.write_str("  {'type': ")?;
+        string_repr(issue.kind, output)?;
+        output.write_str(", 'loc': ('body'")?;
+        for part in issue.loc {
+            output.write_str(", ")?;
+            match part {
+                Location::Field(field) => string_repr(field, output)?,
+                Location::Index(index) => write!(output, "{index}")?,
+            }
+        }
+        if issue.loc.is_empty() {
+            output.write_char(',')?;
+        }
+        output.write_str("), 'msg': ")?;
+        string_repr(issue.msg, output)?;
+        output.write_str(", 'input': ")?;
+        repr(
+            issue.input,
+            output,
+            report,
+            &mut issue.input_path.to_vec(),
+            false,
+        )?;
+        if let Some(ctx) = issue.ctx {
+            output.write_str(", 'ctx': ")?;
+            if issue.kind == "value_error" {
+                output.write_str("{'error': ValueError(")?;
+                string_repr(
+                    issue.msg.strip_prefix("Value error, ").unwrap_or(issue.msg),
+                    output,
+                )?;
+                output.write_str(")}")?;
+            } else {
+                // Error context is constructed by the model; its schema order
+                // is independent of any operator dictionary at the same path.
+                context_repr(ctx, output)?;
+            }
+        }
+        output.write_char('}')?;
+    }
+    Ok(())
+}
+fn context_repr(ctx: &Value, output: &mut Prefix) -> fmt::Result {
+    let object = ctx.as_object().ok_or(fmt::Error)?;
+    output.write_char('{')?;
+    let order = [
+        "field_type",
+        "min_length",
+        "max_length",
+        "actual_length",
+        "expected",
+        "class_name",
+        "pattern",
+        "ge",
+        "le",
+    ];
+    for (index, key) in order
+        .into_iter()
+        .filter(|key| object.contains_key(*key))
+        .enumerate()
+    {
+        if index != 0 {
+            output.write_str(", ")?;
+        }
+        string_repr(key, output)?;
+        output.write_str(": ")?;
+        match &object[key] {
+            Value::String(text) => string_repr(text, output)?,
+            Value::Number(number) => write!(output, "{number}")?,
+            _ => return Err(fmt::Error),
+        }
+    }
+    output.write_char('}')
+}
 fn render(report: &ValidationReport, output: &mut Prefix) -> fmt::Result {
     writeln!(
         output,
@@ -178,7 +268,7 @@ fn float_number(number: &serde_json::Number) -> bool {
 }
 fn repr(
     value: &Value,
-    output: &mut ReprPreview,
+    output: &mut impl Write,
     report: &ValidationReport,
     path: &mut Vec<Location>,
     datetime: bool,
@@ -281,7 +371,7 @@ fn repr(
         }
     }
 }
-fn string_repr(text: &str, output: &mut ReprPreview) -> fmt::Result {
+fn string_repr(text: &str, output: &mut impl Write) -> fmt::Result {
     let quote = if text.contains('\'') && !text.contains('"') {
         '"'
     } else {
@@ -320,7 +410,7 @@ fn string_repr(text: &str, output: &mut ReprPreview) -> fmt::Result {
     output.write_str(&text[start..])?;
     output.write_char(quote)
 }
-fn datetime_repr(text: &str, output: &mut ReprPreview) -> fmt::Result {
+fn datetime_repr(text: &str, output: &mut impl Write) -> fmt::Result {
     let aware = DateTime::parse_from_rfc3339(text).ok();
     let naive = match &aware {
         Some(time) => time.naive_local(),

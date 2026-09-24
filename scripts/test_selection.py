@@ -16,7 +16,7 @@ PLAN = ".github/test-selection.json"
 def assistant_rust_target(value: str) -> tuple[str, str, str]:
     """Resolve one exact library or integration test in the assistant workspace."""
     match = re.fullmatch(
-        r"(nebula-assistant-(domain|storage|runtime|services|transport|lab))/"
+        r"(nebula-assistant-(domain|storage|runtime|services|transport|integrations|lab))/"
         r"([a-z][a-z0-9_]*)::([A-Za-z_][A-Za-z_0-9]*(?:::[A-Za-z_][A-Za-z_0-9]*)*)",
         value,
     )

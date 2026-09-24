@@ -242,7 +242,9 @@ pub(super) fn nested(
             if let Some(value) = goal::validate(*field, value, child, report)? {
                 output.insert(field.name.into(), value);
             }
-        } else if let Some(value) = default(model, *field).or_else(|| goal::default(model, *field))
+        } else if let Some(value) = default(model, *field)
+            .or_else(|| goal::default(model, *field))
+            .or_else(|| completion::default(model, *field))
         {
             output.insert(field.name.into(), value);
         } else if field.nullable {
@@ -275,6 +277,9 @@ pub(super) fn nested(
         return Ok(None);
     }
     if let Some(message) = coherence(model, &output) {
+        return fail(report, path, Failure::value(message));
+    }
+    if let Some(message) = completion::coherence(model, &output) {
         return fail(report, path, Failure::value(message));
     }
     Ok(Some(output.into()))

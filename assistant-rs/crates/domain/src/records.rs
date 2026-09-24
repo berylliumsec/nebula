@@ -108,6 +108,35 @@ pub struct StoredAssistantRecord {
 }
 
 impl StoredAssistantRecord {
+    /// Complete Turn model at the execution boundary. Other services retain
+    /// their existing error/decoding surfaces until their own parity review.
+    pub fn decode_execution_turn_direct(
+        bytes: &[u8],
+        origin: crate::model_validation::InputOrigin,
+    ) -> Result<Self, RecordError> {
+        let payload = crate::model_validation::hydrate(
+            crate::model_validation::Model::ChatTurn,
+            origin,
+            bytes,
+        )?;
+        Self::decode(
+            AssistantKind::Turn,
+            &serde_json::to_vec(&payload).map_err(|_| RecordError::Json)?,
+        )
+    }
+
+    pub fn decode_execution_turn_created(
+        bytes: &[u8],
+        defaults: &crate::model_validation::CreatedEntityDefaults,
+        typed_paths: &[crate::model_validation::TypedModelPath],
+    ) -> Result<Self, RecordError> {
+        let payload = crate::model_validation::hydrate_created_turn(bytes, defaults, typed_paths)?;
+        Self::decode(
+            AssistantKind::Turn,
+            &serde_json::to_vec(&payload).map_err(|_| RecordError::Json)?,
+        )
+    }
+
     /// Direct model boundary used only by transcript forks. Other retained
     /// readers preserve their existing strict decoding and error surfaces.
     pub fn decode_fork_persisted_direct(

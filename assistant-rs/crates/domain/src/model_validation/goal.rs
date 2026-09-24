@@ -419,6 +419,7 @@ pub(super) fn validate(
         return Ok(Some(Value::Null));
     }
     match field.kind {
+        FieldType::Request(kind) => completion::validate(kind, value, path, report),
         FieldType::Usage => {
             if report.model_input_at(&path) == Some(Model::ChatTokenUsage) {
                 return fork::nested(Model::ChatTokenUsage, value, path, report);
@@ -551,7 +552,7 @@ pub(super) fn validate(
     }
 }
 
-fn float_number(value: &Value) -> std::result::Result<f64, Failure> {
+pub(super) fn float_number(value: &Value) -> std::result::Result<f64, Failure> {
     match value {
         Value::Bool(v) => Ok(if *v { 1.0 } else { 0.0 }),
         Value::Number(n) => Ok(n.as_f64().unwrap_or_else(|| {
