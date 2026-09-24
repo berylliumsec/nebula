@@ -126,6 +126,10 @@ async def serve(socket_path: Path, token: str) -> int:
                 if len(line) > MAX_MCP_MESSAGE_BYTES:
                     raise ValueError("MCP request exceeded 4 MiB")
                 message = json.loads(line)
+                if isinstance(message, dict) and "id" not in message:
+                    # A notification (initialized, cancelled, ...) takes no
+                    # answer; a reply with a null id is a protocol error.
+                    continue
                 request_id = message.get("id")
                 method = message.get("method")
                 if method == "initialize":

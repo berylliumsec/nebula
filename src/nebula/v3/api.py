@@ -9134,6 +9134,9 @@ def create_app(
                                     "specific 2-6 word title with no quotes, markdown, or trailing punctuation.\n\n"
                                     f"Operator request:\n{naming_prompt[:4_000]}\n\nAssistant response:\n{message.content[:4_000]}"
                                 ),
+                                # Naming is text only; skip the gateway shim
+                                # and command runtime a cold session would start.
+                                nebula_tools=False,
                             )
                             title = (
                                 sanitize_display_text(naming_turn.response or "")

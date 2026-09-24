@@ -47,7 +47,6 @@ BOUNDED_KINDS = {
 # Temporary: other open pull requests replace the one-page lookups in these
 # modules. Remove each entry once its branch merges.
 PENDING_MODULES = {
-    "harnesses.py": "owned by claude/harness-lifecycle",
     "missions.py": "owned by claude/mission-recovery",
 }
 

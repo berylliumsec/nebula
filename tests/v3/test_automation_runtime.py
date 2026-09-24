@@ -1672,6 +1672,55 @@ def test_host_command_timeout_and_exact_approval_are_enforced(tmp_path):
     asyncio.run(scenario())
 
 
+def test_cancelled_foreground_command_stops_its_process(tmp_path):
+    """Stop cancels the caller of a foreground command; the command stops too.
+
+    Cancelling the wait used to cancel finalization as well, which also
+    disarmed the timeout, so the process ran on with nobody reading it.
+    """
+
+    async def scenario():
+        manager, store, _, engagement, _ = runtime(tmp_path)
+        manager.update_project_policy(
+            engagement.id,
+            execution_mode="host",
+            host_access_acknowledged=True,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=False,
+            runner_profile_id=None,
+            max_timeout_ms=60_000,
+        )
+        marker = tmp_path / "command-finished"
+        command = asyncio.create_task(
+            manager.run_command(
+                engagement_id=engagement.id,
+                owner_kind="api",
+                owner_id="host-cancel",
+                request=RunCommandRequest(command=f"sleep 1; touch {marker}"),
+            )
+        )
+        for _ in range(200):
+            if store.list_entities(CommandExecution):
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.1)
+        command.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await command
+        (execution,) = store.list_entities(CommandExecution)
+        for _ in range(200):
+            execution = store.get(CommandExecution, execution.id)
+            if execution.status != CommandExecutionStatus.RUNNING:
+                break
+            await asyncio.sleep(0.01)
+        assert execution.status == CommandExecutionStatus.CANCELLED
+        await asyncio.sleep(1.5)
+        assert not marker.exists()
+        await manager.close_session(execution.session_id)
+
+    asyncio.run(scenario())
+
+
 def test_host_scope_expiry_closes_running_commands(tmp_path):
     from datetime import timedelta
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sys
 import threading
@@ -42,6 +43,7 @@ from nebula.v3.domain import (
     ChatSession,
     ChatTokenUsage,
     ChatTurn,
+    ChatTurnStatus,
     BrowserIdentity,
     BrowserSession,
     Engagement,
@@ -71,8 +73,10 @@ from nebula.v3.domain import (
     McpTransport,
     RunBudget,
     RunStatus,
+    RiskClass,
     ScopePolicy,
     ToolCall,
+    ToolCallOrigin,
     ToolCallStatus,
     utc_now,
 )
@@ -4460,3 +4464,499 @@ def test_remote_endpoint_rejects_local_account_home():
             endpoint="unix:///tmp/test.sock",
             home_directory="/tmp/account",
         )
+
+
+def _seed_project_tool_calls(store, engagement_id: str, count: int) -> None:
+    """Fill the project's oldest tool-call page so a page scan misses new rows."""
+
+    with store.transaction() as transaction:
+        for index in range(count):
+            transaction.add(
+                ToolCall(
+                    id=f"older-call-{index:05d}",
+                    engagement_id=engagement_id,
+                    run_id="older-run",
+                    origin=ToolCallOrigin.CHAT,
+                    tool_name="run_command",
+                    status=ToolCallStatus.COMPLETE,
+                    risk_class=RiskClass.LOCAL_READ,
+                    arguments={},
+                    started_at=utc_now(),
+                )
+            )
+
+
+def test_native_tool_event_keeps_one_ledger_row_past_the_first_page(tmp_path):
+    """HARN-1: a native tool leaves one COMPLETE row, not a stuck duplicate.
+
+    The turn's ToolCall was looked up among the project's oldest 1,000 calls,
+    so in a busy project the started/completed events each created a new row
+    (a stuck RUNNING one and a COMPLETE one) and doubled the tool counter.
+    """
+
+    class NativeToolConnection(FakeConnection):
+        async def run_turn(self, prompt, *, model, images=None):
+            yield HarnessEvent(type="started", external_session_id="vendor-1")
+            for kind in ("tool_started", "tool_completed"):
+                yield HarnessEvent(
+                    type=kind,
+                    server_id="codex",
+                    tool_name="commandExecution",
+                    item_id="item-42",
+                    payload={"arguments": {"command": "ls"}, "result": "ok"},
+                )
+            yield HarnessEvent(type="completed", message="done")
+
+    class NativeAdapter(FakeAdapter):
+        async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+            connection = NativeToolConnection(request)
+            self.connections.append(connection)
+            return connection
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        runtime.adapter_factory = lambda _: NativeAdapter()
+        _seed_project_tool_calls(store, engagement.id, 1_000)
+        _chat, chat_turn, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="List files",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=None,
+        )
+        await runtime.start_chat_turn(turn.id)
+        native_rows = [
+            call
+            for call in store.find_entities(
+                ToolCall, {"metadata.harness_turn_id": turn.id}
+            )
+        ]
+        assert [row.status for row in native_rows] == [ToolCallStatus.COMPLETE]
+        assert store.get(ChatTurn, chat_turn.id).execution_tool_calls == 1
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_startup_settles_the_newest_turn_past_the_first_page(tmp_path):
+    """HARN-2: restart recovery settles a RUNNING turn beyond the oldest page."""
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        _chat, _chat_turn, first = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="seed",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=None,
+        )
+        session_id = store.get(HarnessTurn, first.id).harness_session_id
+        with store.transaction() as transaction:
+            for index in range(1_000):
+                transaction.add(
+                    HarnessTurn(
+                        id=f"older-turn-{index:04d}",
+                        engagement_id=engagement.id,
+                        harness_session_id=session_id,
+                        origin=HarnessTurnOrigin.ANALYSIS,
+                        prompt="older",
+                        status=HarnessTurnStatus.COMPLETE,
+                    )
+                )
+        running = store.create(
+            HarnessTurn(
+                id="newest-running",
+                engagement_id=engagement.id,
+                harness_session_id=session_id,
+                origin=HarnessTurnOrigin.CHAT,
+                chat_session_id=first.chat_session_id,
+                chat_turn_id=first.chat_turn_id,
+                prompt="live",
+                status=HarnessTurnStatus.RUNNING,
+            )
+        )
+        restarted = HarnessRuntimeService(
+            store,
+            credential_store=CredentialStore(),
+            workspace_resolver=lambda _: tmp_path,
+            adapter_factory=lambda _: FakeAdapter(),
+        )
+        await restarted.startup()
+        assert (
+            store.get(HarnessTurn, running.id).status == HarnessTurnStatus.INTERRUPTED
+        )
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_and_restart_settle_a_turn_still_connecting(tmp_path):
+    """HARN-3: a turn interrupted while connecting must not reserve the chat."""
+
+    class SlowOpenAdapter(FakeAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.opened = asyncio.Event()
+
+        async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+            self.opened.set()
+            await asyncio.sleep(30)
+            return await super().open(request)
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        adapter = SlowOpenAdapter()
+        runtime.adapter_factory = lambda _: adapter
+        chat, chat_turn, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="hello",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=None,
+        )
+        runtime.start_chat_turn(turn.id)
+        await asyncio.wait_for(adapter.opened.wait(), 5)
+        await runtime.shutdown()
+        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.INTERRUPTED
+        assert store.get(ChatTurn, chat_turn.id).status == ChatTurnStatus.INTERRUPTED
+
+        # A fresh Core over the same store keeps it settled and free.
+        restarted = HarnessRuntimeService(
+            store,
+            credential_store=CredentialStore(),
+            workspace_resolver=lambda _: tmp_path,
+            adapter_factory=lambda _: FakeAdapter(),
+        )
+        await restarted.startup()
+        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.INTERRUPTED
+        activity = restarted.session_activity(turn.harness_session_id)
+        assert activity.busy is False
+
+        # The next message continues the same vendor session, no parallel fork.
+        _chat, _owner, follow_up = restarted.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="next",
+            chat_session_id=chat.id,
+            harness_session_id=None,
+            mcp_server_ids=None,
+        )
+        assert follow_up.harness_session_id == turn.harness_session_id
+        assert follow_up.metadata.get("forked_from_session_id") is None
+
+    asyncio.run(scenario())
+
+
+def test_session_rollover_closes_the_superseded_vendor_session(tmp_path):
+    """HARN-6: an edited conversation closes the vendor session it moved off."""
+
+    async def scenario() -> None:
+        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        chat, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="one",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=None,
+        )
+        await runtime.start_chat_turn(turn.id)
+        first_session = turn.harness_session_id
+        assert first_session in runtime._connections
+
+        chat = runtime.rewind_chat_session(store.get(ChatSession, chat.id))
+        _, _, turn2 = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="two",
+            chat_session_id=chat.id,
+            harness_session_id=None,
+            mcp_server_ids=None,
+        )
+        await runtime.start_chat_turn(turn2.id)
+        assert turn2.harness_session_id != first_session
+
+        for _ in range(200):
+            if first_session not in runtime._connections:
+                break
+            await asyncio.sleep(0.01)
+        assert first_session not in runtime._connections
+        assert first_session not in runtime._gateways
+        assert (
+            store.get(HarnessSession, first_session).status
+            == HarnessSessionStatus.CLOSED
+        )
+        # The live session and connection are untouched.
+        assert turn2.harness_session_id in runtime._connections
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_late_approval_decision_does_not_break_the_gateway(tmp_path):
+    """HARN-4: a decision after the turn ended must not kill the gateway.
+
+    A gateway approval used to wait unbounded. When Codex timed the tool out
+    and completed the turn, the pending approval stayed; a later decision
+    cancelled its waiter and the CancelledError escaped the gateway server,
+    closing its single-use socket so every later tool call failed.
+    """
+
+    phase: dict[str, object] = {}
+
+    class VendorConnection(FakeConnection):
+        client: GatewayClient | None = None
+
+        async def run_turn(self, prompt, *, model, images=None):
+            config = self.request.gateway_config["nebula"]
+            if VendorConnection.client is None:
+                VendorConnection.client = GatewayClient(
+                    Path(config["args"][config["args"].index("--socket") + 1]),
+                    config["env"]["NEBULA_MCP_GATEWAY_TOKEN"],
+                )
+            client = VendorConnection.client
+            yield HarnessEvent(type="started", external_session_id="vendor-1")
+            tools = await client.request("tools/list", {})
+            if phase.get("turn") == 1:
+                delete = next(
+                    item["name"]
+                    for item in tools["tools"]
+                    if item["name"].endswith("delete_file")
+                )
+                phase["call"] = asyncio.ensure_future(
+                    client.request(
+                        "tools/call", {"name": delete, "arguments": {"path": "x"}}
+                    )
+                )
+                # The vendor's own tool timeout fires before the operator decides.
+                await asyncio.wait({phase["call"]}, timeout=0.5)
+                yield HarnessEvent(type="completed", message="tool timed out")
+                return
+            phase["second_tools"] = len(tools["tools"])
+            yield HarnessEvent(type="completed", message="ok")
+
+    class VendorAdapter(FakeAdapter):
+        async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+            self.opens.append(request)
+            connection = VendorConnection(request)
+            self.connections.append(connection)
+            return connection
+
+    async def scenario() -> None:
+        store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
+        vendor = VendorAdapter()
+        runtime.adapter_factory = lambda _: vendor
+        phase["turn"] = 1
+        chat, chat_turn, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="delete it",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[mcp.id],
+        )
+        await runtime.start_chat_turn(turn.id)
+        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
+
+        # The turn's end expired its pending approval and released the waiter.
+        pending = [
+            approval
+            for approval in store.list_entities(Approval, limit=100)
+            if approval.status == ApprovalStatus.PENDING
+        ]
+        assert pending == []
+        assert runtime._approval_futures == {}
+        # The orphaned vendor call is answered with a denial, not a dead socket.
+        orphan = phase["call"]
+        orphan_result = await asyncio.wait_for(orphan, 2)  # type: ignore[arg-type]
+        assert orphan_result["isError"] is True
+
+        # A late operator decision on the expired approval is a safe no-op.
+        expired = next(
+            approval
+            for approval in store.list_entities(Approval, limit=100)
+            if approval.tool_call_id
+        )
+        assert expired.status == ApprovalStatus.EXPIRED
+        decided = store.update(
+            Approval,
+            expired.id,
+            {"status": ApprovalStatus.APPROVED, "decided_by": "operator"},
+            expected_revision=expired.revision,
+        )
+        # A late decision is a safe no-op: it records a failed delivery instead
+        # of cancelling a live waiter and closing the gateway socket.
+        with contextlib.suppress(Exception):
+            await runtime.resolve_approval(decided)
+
+        # The gateway still works: the next turn lists tools over the same
+        # connection instead of failing on a dead socket.
+        phase["turn"] = 2
+        _, chat_turn2, turn2 = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="next",
+            chat_session_id=chat.id,
+            harness_session_id=None,
+            mcp_server_ids=None,
+        )
+        await runtime.start_chat_turn(turn2.id)
+        assert len(vendor.opens) == 1
+        assert store.get(HarnessTurn, turn2.id).status == HarnessTurnStatus.COMPLETE
+        assert phase["second_tools"]
+        assert VendorConnection.client is not None
+        await VendorConnection.client.close()
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_stop_cancels_in_flight_gateway_command(tmp_path):
+    """HARN-5: Stop cancels a gateway call that is still running.
+
+    A gateway call runs in the gateway server's task, not the turn task, so a
+    command, MCP call or browser action used to keep running after Stop and
+    hold the session's serial gateway. The call is now a task Stop cancels.
+    """
+
+    running = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def blocking_call(*args, **kwargs):
+        del args, kwargs
+        running.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    async def scenario() -> None:
+        store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
+        _chat, chat_turn, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Inspect through MCP",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[mcp.id],
+        )
+        session = store.get(HarnessSession, turn.harness_session_id)
+        selected = next(
+            item["name"]
+            for item in runtime._gateway_catalog(session)["tools"]
+            if item["name"].startswith("mcp_") and item["name"].endswith("read_file")
+        )
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=turn.id, connection=None, task=None
+        )
+        runtime.mcp_service.call_tool = blocking_call  # type: ignore[method-assign]
+
+        # diagnostic-expected: awaited below after Stop cancels it.
+        call = asyncio.ensure_future(
+            runtime._gateway_call(session, selected, {"path": "one"})
+        )
+        await asyncio.wait_for(running.wait(), 5)
+        # The call is tracked as this turn's gateway work.
+        assert runtime._gateway_work.get(turn.id)
+
+        await runtime.cancel_turn(turn.id, reason="Operator stop")
+        await asyncio.wait_for(cancelled.wait(), 5)
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await asyncio.wait_for(call, 5)
+        # The tracked work is cleared and the read ToolCall is not left running.
+        assert not runtime._gateway_work.get(turn.id)
+        row = next(
+            item
+            for item in store.find_entities(
+                ToolCall, {"metadata.harness_turn_id": turn.id}
+            )
+            if item.mcp_server_id == mcp.id
+        )
+        assert row.status not in {ToolCallStatus.RUNNING, ToolCallStatus.APPROVED}
+        runtime._active.pop(session.id, None)
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_naming_analysis_skips_the_gateway_and_command_runtime(tmp_path):
+    """HARN-14: a text-only analysis session starts no gateway shim."""
+
+    captured: dict[str, object] = {}
+
+    class RecordingConnection(FakeConnection):
+        async def run_turn(self, prompt, *, model, images=None):
+            yield HarnessEvent(type="started", external_session_id="vendor-1")
+            yield HarnessEvent(type="message_delta", delta="Title")
+            yield HarnessEvent(type="completed", message="Retry boundary fix")
+
+    class RecordingAdapter(FakeAdapter):
+        async def open(self, request: AdapterOpenRequest) -> HarnessConnection:
+            captured["gateway_config"] = request.gateway_config
+            captured["gateway_tools"] = request.gateway_tools
+            connection = RecordingConnection(request)
+            self.connections.append(connection)
+            return connection
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        runtime.adapter_factory = lambda _: RecordingAdapter()
+        turn = await runtime.analyze_structured(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Name this",
+            nebula_tools=False,
+        )
+        assert turn.status == HarnessTurnStatus.COMPLETE
+        assert captured["gateway_config"] == {}
+        assert captured["gateway_tools"] == ()
+        # The analysis session was closed and left no gateway behind.
+        assert runtime._gateways == {}
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_steer_after_turn_completes_reports_inactive_not_failure(tmp_path):
+    """HARN-14: a steer that races turn completion is not a hard failure."""
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        _chat, _owner, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="work",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=None,
+        )
+
+        class RacingConnection:
+            async def steer(self, text: str) -> None:
+                del text
+                # The turn completes between the active check and the steer.
+                runtime._active.pop(turn.harness_session_id, None)
+                raise HarnessTransportError("Codex finished the turn before the input")
+
+        runtime._active[turn.harness_session_id] = SimpleNamespace(
+            turn_id=turn.id, connection=RacingConnection(), task=None
+        )
+        # steer_turn maps the race to a not-active state, not a transport error.
+        with pytest.raises(harness_module.HarnessStateError):
+            await runtime.steer_turn(turn.id, "late guidance", actor_id="operator")
+
+    asyncio.run(scenario())

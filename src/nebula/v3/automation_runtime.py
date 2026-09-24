@@ -1534,7 +1534,18 @@ class AutomationRuntimeManager:
                 chat_session_id=chat_session_id,
                 chat_turn_id=chat_turn_id,
             )
-        await process.final_task
+        try:
+            # Shielded: cancelling the caller must not cancel finalization,
+            # which would leave the process running with no timeout either.
+            await asyncio.shield(process.final_task)
+        except asyncio.CancelledError:
+            # The caller stopped waiting (an operator Stop, or a turn that
+            # ended). A foreground command has no one left to read its
+            # result, so it stops too and finalizes as cancelled.
+            if not process.final_task.done():
+                process.forced_status = CommandExecutionStatus.CANCELLED
+                await asyncio.shield(process.backend.terminate())
+            raise
         return await self._poll(managed, process, MAX_POLL_BYTES)
 
     def accept_results(
