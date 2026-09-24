@@ -32,7 +32,7 @@ describes the remaining evidence, not tests already run against a Rust assistant
 | [Elapsed time](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=81-128): stream, stop, inspect usage | Durable elapsed and approval-wait time remain distinct from tokens | Stored timing fields preserved; producer timing and UI pending |
 | [Compact controls](https://www.figma.com/design/d7kSLlFfaUiDLE2GybUNqE?node-id=16-2): search, bookmark, catch up | Core messages/bookmarks/cursors are authoritative; pending actions stay visible | Rust transcript/search/bookmark services and authenticated HTTP are implemented with a 112-case Python navigation oracle; cursor HTTP has isolated authentication/durability evidence. Catch-up and turn-summary reads have 78-case differential HTTP evidence, including acknowledgment without hiding pending actions. Shipped integration and production UI parity pending |
 | [Session details](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-77): goal, limits, skills, checkpoints, fork | Durable goals and lineage; frozen permissions; restore cannot overwrite newer edits | Goal/child/schedule and raw catalog reads have a 153-case Python HTTP oracle; response-only live elapsed preserves saved usage and lineage. Mutations, execution, remaining dependencies and production UI pending |
-| [Subagents](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=21-2): inspect, wait, approve, stop | Children retain parent identity; waits release execution capacity; pending approval is visible | Record checks and isolated queue policy exist; durable admission, delivery and execution pending |
+| [Subagents](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=21-2): inspect, wait, approve, stop | Children retain parent identity; waits release execution capacity; pending approval is visible | Retained child views have a 73-case Python HTTP/header oracle covering recovery, approvals, questions, usage and elapsed time. Isolated queue policy exists; durable admission, actions, delivery and execution pending |
 | [Nested chats](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=120-85): select child, open parent | Sidebar and banner preserve the parent/child relationship after refresh | Canonical IDs retained; snapshot projection and UI integration pending |
 | [Peer messaging](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=124-113): enable, discover, send, receive | Explicit opt-in, same project, one durable message/transcript entry, no idle-peer wake-up | Record endpoint/delivery invariants ported; transactional delivery and authorization pending |
 | [Action states](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-19): approval, failure, retry, restart | Decisions remain visible; trustworthy receipts settle effects; unknown outcomes are not replayed | Record claim/status validation only; full recovery and cancellation pending |
@@ -64,6 +64,14 @@ No new Figma visit or browser run is implied by this increment. Existing UI
 `ProviderGoalPanel.activeSeconds` adds active time already included by the GET,
 and `ProviderGoalChildren` hides child-read errors as an empty list. These are
 unresolved production-journey blockers, not behaviors proved correct by API parity.
+
+The retained subagent view now returns child references, recorded/live usage,
+questions, approvals and recovery display without changing records or settling
+receipts. Its 73-case oracle preserves 191 Assistant and six Approval records,
+including conditional missing-reference behavior and the no-store header. The
+current client drops question, reasoning effort and rounds; read parity does not
+resolve that visibility gap or prove approve/reply/stop/open-child journeys.
+Those actions and the production matrix remain outstanding.
 
 ## Resolve conflicting design generations
 

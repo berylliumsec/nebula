@@ -111,6 +111,10 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
             "/api/v1/chat/sessions/{session_id}/schedule",
             get(session_schedule),
         )
+        .route(
+            "/api/v1/chat/sessions/{session_id}/subagents",
+            get(session_subagents),
+        )
         .route("/api/v1/chat/sessions/{session_id}/catch-up", get(catch_up))
         .route("/api/v1/chat/session-activity", get(session_activity))
         .route("/api/v1/chat/sessions/{session_id}/queue", get(saved_queue))
@@ -402,6 +406,23 @@ async fn session_schedule(
 ) -> Response {
     let result = state.services.session_schedule(&session).await;
     reply(request, result)
+}
+async fn session_subagents(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let result = state
+        .services
+        .subagents(&session, (state.config.clock)())
+        .await;
+    let mut response = reply(request, result);
+    if response.status().is_success() {
+        response
+            .headers_mut()
+            .insert("cache-control", HeaderValue::from_static("no-store"));
+    }
+    response
 }
 async fn catalog_messages(State(state): State<AppState>, request: Request) -> Response {
     catalog(state, CatalogKind::Messages, request).await

@@ -38,6 +38,8 @@ mod status;
 pub use status::{ActivitySnapshot, QueueSnapshot, TurnHooksSnapshot};
 mod plans;
 pub use plans::{GoalChildrenSnapshot, SessionPlansSnapshot};
+mod subagents;
+pub use subagents::{RawSubagentTurn, SubagentSnapshot, SubagentViewRow};
 
 const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MUTATIONS: usize = 64;
@@ -865,11 +867,14 @@ fn sql_time(value: &Value) -> Result<String> {
         .to_string())
 }
 fn decode_row(row: SqliteRow) -> Result<StoredAssistantRecord> {
+    decode_row_ref(&row)
+}
+fn decode_row_ref(row: &SqliteRow) -> Result<StoredAssistantRecord> {
     let size: i64 = row.try_get("payload_bytes")?;
     if size < 0 || size as u64 > MAX_RECORD_BYTES as u64 {
         return Err(RecordError::TooLarge.into());
     }
-    let payload: String = row.try_get("payload")?;
+    let payload: &str = row.try_get("payload")?;
     let kind = AssistantKind::try_from(row.try_get::<&str, _>("kind")?)?;
     let record = StoredAssistantRecord::decode_persisted(kind, payload.as_bytes())?;
     let p = record.payload();

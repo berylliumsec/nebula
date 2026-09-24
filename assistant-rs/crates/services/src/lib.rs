@@ -8,6 +8,7 @@ pub mod navigation;
 pub mod plans;
 pub mod results;
 pub mod status;
+pub mod subagents;
 mod unicode_casefold;
 
 use chrono::{DateTime, SecondsFormat, Utc};

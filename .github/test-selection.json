@@ -1,14 +1,14 @@
 {
-  "change_digest": "5b867bc4adb9539f7a362bf7a63ac3e5db947f7bdc83713d2c8cb083ff2b869f",
-  "reviewed_by": "Codex Assistant retained-plan review with independent storage and service agents",
-  "reason": "Cumulative Assistant-only port: 103 exact Rust tests and 52 Python checks across nine selected feature/policy files. Current increment adds eight Rust tests for schedule timestamp hydration, complete goal/schedule snapshots, global child validation, 1,001-row catalogs and aggregate row/byte limits, fixed-clock pure projections and reopen, and 153-case Python HTTP parity including generated API error namespaces. Local selection includes eight new tests plus 33 affected regressions: 15 HTTP, seven domain records, nine storage entities and two catalog tests (41 total). Shared persisted decoder, complete-page allowlist and route/error contexts justify those regressions. Local Python selects plans capture and Python-Rust-Python storage interop (two). Each Rust test collects exactly once; compile/list bounded600 seconds per command, execution120 seconds per test, Python300 seconds. No full suites.",
-  "exclusions": "Twenty-nine experimental Assistant handlers only. No shipped launch, production UI, other product areas, desktop-native, goal/schedule execution, child dispatch, or queue/hooks/command execution. State and pending-effect reconciliation remain unported. Historical/PostgreSQL/checkpoint migration, full route parity, production browser/device/LAN/reconnect, packaging and whole-Assistant performance remain open. Complete-read bounds, consistent snapshots and missing-hook-time refusal are explicit extensions. Malformed session-linked goal/schedule and hook schema failures use sanitized500 rather than exact Python422 validation detail. Goal UI elapsed double counting and hidden child-read failures remain production acceptance blockers. No live state or full suites.",
+  "change_digest": "b03422b31c1f190aa446b735940e98d05c5b1127068559a4e603467465531e25",
+  "reviewed_by": "Codex Assistant child-view review with independent storage and service agents",
+  "reason": "Cumulative Assistant-only port: 111 exact Rust tests and 53 Python checks across ten selected feature/policy files. Current increment adds eight Rust tests for complete batched child-view snapshots, conditional dependencies, shared read and expanded response limits, retained raw JSON, source ordering/Unicode/float/integer/time behavior, recovery and usage overlays, purity/reopen, and 73-case Python HTTP/header parity. Local selection is eight new plus 25 affected regressions: 16 HTTP and 9 storage entities (33 total); the shared HTTP oracle helper and borrowed-row decoder extraction justify those regressions. Local Python selects subagent capture and Python-Rust-Python storage handoff (two). Each Rust test collects once; compile/list 600 seconds per command, execution 120 seconds per test; Python 300 seconds. No full suites.",
+  "exclusions": "Thirty experimental Assistant handlers only. No shipped launch, production UI, other areas, desktop-native, execution, child dispatch, delivery, approval/stop actions or pending-effect reconciliation. Historical/PostgreSQL/checkpoint migration, full route parity, production browser/device/LAN/reconnect, packaging and whole-Assistant performance remain open. Consistent complete snapshots and explicit read/response bounds are compatibility extensions. Malformed persisted schema errors use sanitized 500 rather than exact Python 422 details; missing hook times are refused. Goal UI elapsed double counting/hidden child-goal errors and subagent client omission of question/reasoning/rounds remain production blockers. Raw history rendering uses Unicode 15 matching Python 3.12. No live state or full suites.",
   "expected_tests": {
-    "python": 52,
+    "python": 53,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 103
+    "assistant_rust": 111
   },
   "python_versions": [
     "3.12"
@@ -24,7 +24,8 @@
     "tests/test_assistant_read_contracts.py",
     "tests/test_assistant_results_contract.py",
     "tests/test_assistant_status_contract.py",
-    "tests/test_assistant_plans_contract.py"
+    "tests/test_assistant_plans_contract.py",
+    "tests/test_assistant_subagents_contract.py"
   ],
   "frontend": [],
   "native": [],
@@ -132,6 +133,14 @@
     "nebula-assistant-services/plans::python_plans_oracle_matches_retained_projections_and_catalogs",
     "nebula-assistant-services/plans::plan_clocks_preserve_stored_elapsed_revisions_and_schedules_after_reopen",
     "nebula-assistant-services/plans::child_plan_response_limits_preserve_complete_stored_rows",
-    "nebula-assistant-transport/http::python_plans_http_oracle_preserves_goals_schedules_catalogs_and_saved_state"
+    "nebula-assistant-transport/http::python_plans_http_oracle_preserves_goals_schedules_catalogs_and_saved_state",
+    "nebula-assistant-storage/subagents::subagent_snapshot_preserves_scopes_conditional_reads_raw_order_and_purity",
+    "nebula-assistant-storage/subagents::subagent_snapshot_batches_complete_collections_beyond_one_thousand",
+    "nebula-assistant-storage/subagents::subagent_snapshot_limits_cover_roots_raw_history_and_conditional_dependencies",
+    "nebula-assistant-services/subagents::python_subagent_oracle_matches_retained_display_and_errors",
+    "nebula-assistant-services/subagents::subagent_clocks_preserve_recovery_usage_and_raw_state_after_reopen",
+    "nebula-assistant-services/subagents::subagent_repr_expansion_fails_without_partial_results_or_writes",
+    "nebula-assistant-services/subagents::subagent_renderer_preserves_order_unicode15_and_float_spelling",
+    "nebula-assistant-transport/http::python_subagents_http_oracle_preserves_child_views_headers_and_saved_state"
   ]
 }

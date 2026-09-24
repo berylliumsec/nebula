@@ -17,12 +17,12 @@ See `../docs/ASSISTANT_RUST_MIGRATION.md` for the acceptance contract and gaps.
   revision history, atomic project promotion, per-device read cursors, transcript
   navigation, project message search, durable bookmarks, conversation catalogs,
   catch-up, retained Results/context-source reads, activity, saved queues, hook
-  summaries, goals, child goals and schedules. Source
+  summaries, goals, child goals, schedules and retained subagent views. Source
   and session revisions are rechecked inside the bounded writer transaction.
 - `nebula-assistant-transport`: experimental Axum routes for saved-context GET/PUT
   and read-cursor PUT, transcript/search GET, bookmark GET/PUT, conversation
   catalogs, catch-up/summary, Results/context-source, activity, saved queue,
-  hook-summary, goal/children and schedule GET, with
+  hook-summary, goal/children, schedule and subagent-view GET, with
   bearer/paired-device authentication. No shipped entry
   point mounts this router yet. Typed request coercion and error envelopes have
   Python-oracle coverage; complete route and production parity are open.
@@ -238,4 +238,17 @@ do not start, pause, resume or execute goals, schedules or children.
 
 ```sh
 PYTHONPATH=src python -m scripts.capture_assistant_plans --output assistant-rs/compatibility/python-plans.json
+```
+
+Subagent views use one complete snapshot with batched conditional dependency
+reads. They retain restart-recovery display, approval and question details, saved
+versus live usage, source ordering and model fallbacks. Raw turn JSON preserves
+insertion order where Python renders opaque history values as text. Rendering
+matches Python 3.12 / Unicode 15 printability and retains arbitrary-size integer
+counters. Raw history copies, repeated dependencies and expanded responses count
+toward explicit limits. Views return `Cache-Control: no-store`; reads never deliver
+messages, settle receipts, or start/stop children.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_subagents --output assistant-rs/compatibility/python-subagents.json
 ```

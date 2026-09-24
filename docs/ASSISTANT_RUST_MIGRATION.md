@@ -30,7 +30,7 @@ Branch: `codex/rust-core-rewrite`.
 
 All product journeys remain required and unverified for Rust. Browser/device/LAN
 matrices from the product-quality skill remain mandatory before activating the
-replacement. The experimental Rust router has twenty-nine Assistant handlers; shipped
+replacement. The experimental Rust router has thirty Assistant handlers; shipped
 routes, UI, provider and harness execution have not switched to Rust.
 
 ## Development boundaries
@@ -567,3 +567,52 @@ unchanged claims/counters/watermarks and reopen. Independent review caught and
 corrected a shared error-feature regression before execution. No selected test
 failed. Cumulative CI selection is 103 exact Rust tests and 52 Python checks;
 production integration, malformed-record error detail and performance remain open.
+
+## Retained subagent view contract
+
+Journey: select a parent conversation, inspect child progress, usage, approvals,
+questions and restart recovery, then refresh or reopen without losing the saved
+relationship. The Figma Subagents and Nested chats journeys remain the product
+references. Core Subagent, child Turn, Approval, SubagentMessage and optional child
+Session records own the displayed state; the observation clock affects elapsed
+time only. Reading must not mark reports/messages delivered, settle effects,
+change usage/claims/watermarks, start a child, or invoke providers or tools.
+
+Preserve parent lookup, complete parent-linked rows independent of project,
+started-time/ID ordering, conditional dependency reads, missing-reference fallbacks,
+strict restart-recovery predicates, live usage overlay only for stored running
+children, recorded terminal times, last-four steps, Python whitespace/detail
+truncation, approval/question precedence and legacy model fallback. Return the
+source `Cache-Control: no-store` header. A consistent bounded snapshot replaces
+separate legacy reads; oversized complete results fail explicitly, never truncate.
+Opaque history string conversion and timestamp forms need differential evidence;
+unimplemented malformed-record parity must remain identified as a gap.
+
+Planned evidence: isolated fixed-clock Python HTTP capture, bounded storage reads,
+conditional corruption/scope checks, complete collections beyond 1,000 rows,
+service output/usage/time comparisons, raw-record and reopen purity, HTTP headers
+and authentication, plus directly affected regressions with an exact receipt.
+Stop/approve/reply/delivery actions and production browser/device/LAN/reconnect
+acceptance remain separate required gates. The existing client drops question,
+reasoning effort and rounds from this response; API parity cannot establish that
+those controls are visible to operators.
+
+Implemented with a parent-first, bounded read snapshot and batched dependency
+lookups. Deferred decoding errors are consumed in projection order; conditional
+reads do not validate irrelevant approvals, messages or child sessions. Repeated
+references and the retained raw turn copy count toward the common 10,000-row /
+16-MiB budget. Source dict insertion order, Python 3.12 / Unicode 15 rendering,
+float spelling and arbitrary-size integer additions preserve opaque history and
+usage values. A hash index avoids quadratic key lookup while parsing history.
+The response has its own 16-MiB bound, including string-escape expansion.
+
+Local evidence: all 33 selected Rust tests passed (eight new, sixteen existing
+HTTP and nine entity-store regressions), plus the Python subagent capture and
+Python/Rust storage-handoff checks. The 73-case HTTP fixture includes 69 service
+comparisons and keeps all 191 Assistant and six Approval records unchanged; raw
+turn spelling and projection watermarks remain unchanged after reads and reopen.
+Other cases cover batched collections beyond 1,000 rows, conditional corruption,
+all approval statuses, recovery versus terminal receipts, large token counters,
+Unicode whitespace, timestamps and response expansion. No selected test failed.
+Cumulative CI selection is 111 exact Rust and 53 Python checks. Production
+journeys, actions/delivery, full error parity and performance remain unverified.

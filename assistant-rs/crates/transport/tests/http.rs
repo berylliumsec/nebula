@@ -856,6 +856,29 @@ async fn read_oracle(oracle: Value, expected_cases: usize, observed_clock: fn() 
     }
     let mut options = config();
     options.clock = observed_clock;
+    if let Some(payloads) = oracle["raw_payloads"].as_object() {
+        // Canonical JSON equality cannot retain insertion order inside opaque
+        // history values. Preserve the Python database spelling where a view
+        // intentionally renders those values with Python's str/repr rules.
+        let mut connection = raw(&path).await;
+        for (id, payload) in payloads {
+            let original = payload.as_str().unwrap();
+            let saved = store.get(Kind::Turn, id).await.unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(original).unwrap(),
+                *saved.payload()
+            );
+            let changed =
+                sqlx::query("UPDATE entities SET payload=? WHERE kind='chat_turns' AND id=?")
+                    .bind(original)
+                    .bind(id)
+                    .execute(&mut connection)
+                    .await
+                    .unwrap();
+            assert_eq!(changed.rows_affected(), 1);
+        }
+        connection.close().await.unwrap();
+    }
     let previews = if let Some(blobs) = oracle["artifact_blobs"].as_array() {
         let root = temp.path().join("artifacts");
         std::fs::create_dir_all(&root).unwrap();
@@ -920,6 +943,13 @@ async fn read_oracle(oracle: Value, expected_cases: usize, observed_clock: fn() 
         }
         let response = app.clone().oneshot(input).await.unwrap();
         let status = response.status().as_u16();
+        if let Some(expected) = case.get("expected_cache_control") {
+            let actual = response
+                .headers()
+                .get("cache-control")
+                .map(|s| s.to_str().unwrap());
+            assert_eq!(json!(actual), *expected, "cache header: {}", case["name"]);
+        }
         let actual = navigation_normalize(value(response).await, &stamps);
         assert_eq!(
             json!({"status":status,"body":actual}),
@@ -1037,6 +1067,16 @@ async fn python_plans_http_oracle_preserves_goals_schedules_catalogs_and_saved_s
     read_oracle(
         serde_json::from_str(include_str!("../../../compatibility/python-plans.json")).unwrap(),
         153,
+        catchup_now,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn python_subagents_http_oracle_preserves_child_views_headers_and_saved_state() {
+    read_oracle(
+        serde_json::from_str(include_str!("../../../compatibility/python-subagents.json")).unwrap(),
+        73,
         catchup_now,
     )
     .await;
