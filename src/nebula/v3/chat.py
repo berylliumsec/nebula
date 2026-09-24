@@ -1704,6 +1704,12 @@ class ChatService:
                 if self.has_active_provider_turn(waiting_turn.id):
                     continue
                 try:
+                    self._materialize_callback_result(
+                        waiting_turn,
+                        pending_entry,
+                        execution,
+                        callback_received=callback_ready,
+                    )
                     resumed.append(
                         self.start_provider_turn(self.prepare_resume(waiting_turn.id))
                     )
@@ -7591,6 +7597,42 @@ class ChatService:
                 },
             )
             return
+        turn, entry, output = self._materialize_callback_result(
+            turn,
+            entry,
+            execution,
+            callback_received=callback_received,
+        )
+        prepared.turn = turn
+        yield (
+            "tool_completed",
+            {
+                "type": "tool_completed",
+                "turn_id": turn.id,
+                "tool_call_id": entry["tool_call_id"],
+                "capability": entry["name"],
+                "display_name": entry.get("display_name"),
+                "status": entry["status"],
+                "summary": entry["result_summary"],
+                "evidence_ids": [],
+                "result_artifact_id": None,
+                "artifacts": [],
+                "receipt": output,
+                "step": entry["step"],
+            },
+        )
+
+    def _materialize_callback_result(
+        self,
+        turn: ChatTurn,
+        entry: dict[str, Any],
+        execution: CommandExecution,
+        *,
+        callback_received: bool,
+    ) -> tuple[ChatTurn, dict[str, Any], dict[str, Any]]:
+        """Commit one callback outcome before any competing wake can route."""
+
+        entry = dict(entry)
         if callback_received:
             output = {
                 "schema": "nebula.tool-result/v2",
@@ -7676,24 +7718,7 @@ class ChatService:
             entry,
             status=ChatTurnStatus.ROUTING,
         )
-        prepared.turn = turn
-        yield (
-            "tool_completed",
-            {
-                "type": "tool_completed",
-                "turn_id": turn.id,
-                "tool_call_id": entry["tool_call_id"],
-                "capability": entry["name"],
-                "display_name": entry.get("display_name"),
-                "status": entry["status"],
-                "summary": entry.get("result_summary") or entry["provider_result"],
-                "evidence_ids": entry.get("evidence_ids", []),
-                "result_artifact_id": entry.get("result_artifact_id"),
-                "artifacts": entry.get("artifacts", []),
-                "receipt": output,
-                "step": entry["step"],
-            },
-        )
+        return turn, entry, output
 
     async def _resume_subagent_wait(
         self,

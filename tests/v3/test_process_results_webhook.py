@@ -315,19 +315,12 @@ def test_terminal_background_process_without_callback_becomes_unknown_failure(
         )
         assert chat.reconcile_waiting_callbacks() == [turn.id]
         assert resumed == [turn.id]
-
-        prepared = type("Prepared", (), {})()
-        prepared.turn = turn
-        events = []
-        async for item in chat._resume_callback_result(prepared, turn):
-            events.append(item)
-        assert events[0][0] == "tool_completed"
-        receipt = events[0][1]["receipt"]
+        latest = store.get(ChatTurn, turn.id)
+        receipt = json.loads(latest.tool_history[-1]["provider_result"])
         assert receipt["schema"] == "nebula.tool-failure/v1"
         assert receipt["category"] == "missing_callback"
         assert receipt["side_effects"] == "unknown"
         assert receipt["retry_safe"] is False
-        latest = store.get(ChatTurn, turn.id)
         assert latest.status == ChatTurnStatus.ROUTING
         assert latest.tool_history[-1]["status"] == "failed"
         durable_call = store.get(DurableToolCall, call.id)
