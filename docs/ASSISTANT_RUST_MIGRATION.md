@@ -757,3 +757,30 @@ Assistant performance still require their acceptance gates. Existing malformed
 retained-model validation-envelope gaps remain. Bounded input, transaction and
 response behavior are explicit compatibility extensions; no complete product
 journey or speedup is claimed by these isolated tests.
+
+
+## Upstream integration after recorded-effect adoption
+
+The branch integrates origin/main `e7d821ef01d16f4c8ea8e22eed4bcec744e3e099`.
+A fresh isolated capture retains the same 85 mounted Assistant routes, 13 entity
+schemas and OpenAPI contract. The original inventory remains the historical
+`b5bab4372871a0fa3fe91968c95d73903796ab56` snapshot; refreshed service/model/storage
+oracles record current source hashes separately. Hash changes are reviewed against
+all non-hash fixture content before accepting them.
+
+Upstream adds actor-scoped workspace provenance around native hooks. The remaining
+Rust execution port must preserve those observations and hook payloads. The new
+`workspace_provenance_observations` kind has a session lookup projection, but is
+absent from Python's explicit session/run deletion predicates. Those observations
+survive deletion and remain project dependents; the future deletion port must
+preserve that retention behavior. Retained read, display-state
+and recorded-effect adoption logic is unchanged by this upstream integration.
+No Rust implementation of provenance capture, hook execution or session deletion
+is claimed here.
+
+All 14 refreshed fixture files differ only in source hashes. Post-integration
+validation passed 14 exact Rust record/HTTP checks and 15 exact Python oracle/
+storage-handoff checks (52.10 seconds). This additional run verifies the new source
+baseline; the earlier 63-test recovery run still covers unchanged reducer/storage
+behavior. Cumulative CI retains 132 Rust and 55 Python selections. No broader
+suite or production workflow ran during this integration.

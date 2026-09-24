@@ -5828,5 +5828,5 @@
   "format": "nebula.assistant-record-oracle/v1",
   "schema_sha256": "9596160d712abcfdf6cbc67e06b5bb85cc44d524d473cf8820030aad7040b688",
   "scope": "canonical model_dump JSON; excludes request coercion and historical defaults",
-  "source_sha256": "37c393be699b94a229192972ef5623e00bd8359b8e60e15b361d2903155f1cd8"
+  "source_sha256": "dd8984f6c4540e8046e2cd937a1925165933bae761c76a232e65a63e90fcdb64"
 }

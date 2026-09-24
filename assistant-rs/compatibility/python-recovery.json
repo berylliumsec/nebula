@@ -41792,10 +41792,10 @@
   ],
   "source_sha256": {
     "src/nebula/v3/api.py": "064e0fd6840d45d9e5b9b8ad4d3be2a422638277091baefdf2164fee896b9fcb",
-    "src/nebula/v3/chat.py": "cfca180209633886729e7704abfabb55991077a9f703da4de0d3bd51cf38ded8",
+    "src/nebula/v3/chat.py": "ed3b1b8ebc0e23a7998864105f68223dc4f07d250c0b0589a9b8b69cdcad8c9a",
     "src/nebula/v3/database.py": "1fb0429f4acc3294b3311ed6382cfee1875a5f69e39978723bfb7625d66bfef8",
-    "src/nebula/v3/domain.py": "37c393be699b94a229192972ef5623e00bd8359b8e60e15b361d2903155f1cd8",
-    "src/nebula/v3/storage.py": "551685e63f310546b1e7b97921c16d6a3227284cfc3eba0c54f5898c3a50b362",
+    "src/nebula/v3/domain.py": "dd8984f6c4540e8046e2cd937a1925165933bae761c76a232e65a63e90fcdb64",
+    "src/nebula/v3/storage.py": "1eb90d54a711e2ced692efdab6b47f764d017963bea029c76bebe1cc5256cfb2",
     "src/nebula/v3/tool_results.py": "60a4ac712949a57a4a6d7fd32296ae9f2515d904c696c6d7d028ce4223267702"
   },
   "tool_repair_vectors": [
