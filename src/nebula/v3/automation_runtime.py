@@ -777,6 +777,7 @@ class _ManagedSession:
 SessionFactory = Callable[[SessionLaunch], Awaitable[RuntimeBackendSession]]
 RuntimeResolver = Callable[[str], Awaitable[Any]]
 CachedRuntimeProvider = Callable[[], dict[str, Any] | None]
+ProcessTerminalObserver = Callable[[str], object]
 
 
 def resolve_callback_origin(*, host: str, port: int, tls: bool = False) -> str:
@@ -826,6 +827,7 @@ class AutomationRuntimeManager:
         session_factory: SessionFactory | None = None,
         credential_store: CredentialStore | None = None,
         callback_origin: str | None = None,
+        process_terminal_observer: ProcessTerminalObserver | None = None,
     ) -> None:
         if runtime_image is None and runtime_resolver is None:
             raise ValueError("automation runtime requires an image or Kali resolver")
@@ -849,6 +851,7 @@ class AutomationRuntimeManager:
         self.callback_origin = (
             callback_origin or os.getenv("NEBULA_CALLBACK_ORIGIN") or ""
         ).rstrip("/")
+        self.process_terminal_observer = process_terminal_observer
         self.capture_root = self.data_root / "automation-runtime" / "captures"
         self.capture_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.capture_root.chmod(0o700)
@@ -860,6 +863,13 @@ class AutomationRuntimeManager:
         self._prepared_runner_profile_id: str | None = None
         self._prepared_runner_profile_revision: int | None = None
         self._refresh_cached_runtime()
+
+    def bind_process_terminal_observer(
+        self, observer: ProcessTerminalObserver | None
+    ) -> None:
+        """Notify an owner after a durable background process becomes terminal."""
+
+        self.process_terminal_observer = observer
 
     @property
     def binary_inventory(self) -> tuple[dict[str, str], ...]:
@@ -2180,6 +2190,17 @@ class AutomationRuntimeManager:
                 },
                 expected_revision=current.revision,
             )
+            if process.execution.background and self.process_terminal_observer:
+                try:
+                    self.process_terminal_observer(process.execution.process_id)
+                except Exception as exc:
+                    record_caught_exception(
+                        "runtime",
+                        "runtime.background_process_owner_notify_failed",
+                        "A terminal background process could not notify its durable owner; reconciliation will retry.",
+                        exc,
+                        stage="process-finalize",
+                    )
             return process.execution
 
     @staticmethod

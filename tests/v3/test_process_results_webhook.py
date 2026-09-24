@@ -17,8 +17,12 @@ from nebula.v3.domain import (
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
+    RiskClass,
     ProviderProfile,
     ScopePolicy,
+    ToolCall as DurableToolCall,
+    ToolCallOrigin,
+    ToolCallStatus,
     utc_now,
 )
 from nebula.v3.providers import ModelMessage, ModelRequest, ToolCall
@@ -188,6 +192,147 @@ def test_results_webhook_resumes_waiting_provider_turn(tmp_path):
         latest = store.get(ChatTurn, waiting.id)
         assert latest.status == ChatTurnStatus.ROUTING
         assert latest.tool_history[-1]["status"] == "complete"
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_terminal_background_process_without_callback_becomes_unknown_failure(
+    tmp_path,
+):
+    """A dead callback producer must not leave its tool and turn looking live."""
+
+    async def scenario():
+        manager, store, artifacts, engagement, sessions = runtime(tmp_path)
+        manager.callback_origin = "http://10.0.0.8:8765"
+        policy = manager.project_policy(engagement.id)
+        manager.update_project_policy(
+            engagement.id,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=True,
+            runner_profile_id="runner",
+            max_timeout_ms=30_000,
+            expected_revision=policy.revision,
+        )
+        profile = store.create(
+            ProviderProfile(
+                id="provider-missing-callback",
+                name="Local",
+                provider_type="vllm",
+                is_local=True,
+                model_allowlist=["model-a"],
+                metadata={"default_model": "model-a"},
+            )
+        )
+        chat = ChatService(
+            store,
+            provider_factory=lambda _: FakeProvider(profile.id, local=True),
+            workspace_resolver=lambda _: tmp_path / "workspaces" / engagement.id,
+        )
+        session = store.create(
+            ChatSession(
+                id="session-missing-callback",
+                engagement_id=engagement.id,
+                title="Missing callback",
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        turn = store.create(
+            ChatTurn(
+                id="turn-missing-callback",
+                engagement_id=engagement.id,
+                session_id=session.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                status=ChatTurnStatus.WAITING_CALLBACK,
+                request_snapshot={
+                    "model_request": {"model": "model-a", "messages": []}
+                },
+            )
+        )
+        call = store.create(
+            DurableToolCall(
+                id="tool-missing-callback",
+                engagement_id=engagement.id,
+                run_id=turn.id,
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=session.id,
+                chat_turn_id=turn.id,
+                tool_name="run_command",
+                status=ToolCallStatus.RUNNING,
+                risk_class=RiskClass.ACTIVE_SCAN,
+                arguments={"command": "wait-forever", "background": True},
+                started_at=utc_now(),
+            )
+        )
+        notified: list[str] = []
+        manager.bind_process_terminal_observer(notified.append)
+        started = await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="chat",
+            owner_id=session.id,
+            request=RunCommandRequest(command="wait-forever", background=True),
+            tool_call_id=call.id,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+        )
+        turn = store.update(
+            ChatTurn,
+            turn.id,
+            {
+                "tool_history": [
+                    {
+                        "step": 0,
+                        "model_call_id": "call-1",
+                        "tool_call_id": call.id,
+                        "name": "run_command",
+                        "status": "waiting_callback",
+                        "process_id": started.process_id,
+                        "results_url": started.results_url,
+                        "arguments": {
+                            "command": "wait-forever",
+                            "background": True,
+                        },
+                    }
+                ]
+            },
+            expected_revision=turn.revision,
+        )
+
+        await sessions[0].processes[0].terminate()
+        managed = manager._processes[started.process_id]
+        assert managed.final_task is not None
+        execution = await managed.final_task
+        assert execution.status.value == "failed"
+        assert execution.metadata.get("results_received") is not True
+        assert notified == [started.process_id]
+
+        resumed: list[str] = []
+        chat.prepare_resume = lambda turn_id: turn_id  # type: ignore[method-assign]
+        chat.start_provider_turn = (  # type: ignore[method-assign]
+            lambda prepared, **_kwargs: resumed.append(prepared) or prepared
+        )
+        assert chat.reconcile_waiting_callbacks() == [turn.id]
+        assert resumed == [turn.id]
+
+        prepared = type("Prepared", (), {})()
+        prepared.turn = turn
+        events = []
+        async for item in chat._resume_callback_result(prepared, turn):
+            events.append(item)
+        assert events[0][0] == "tool_completed"
+        receipt = events[0][1]["receipt"]
+        assert receipt["schema"] == "nebula.tool-failure/v1"
+        assert receipt["category"] == "missing_callback"
+        assert receipt["side_effects"] == "unknown"
+        assert receipt["retry_safe"] is False
+        latest = store.get(ChatTurn, turn.id)
+        assert latest.status == ChatTurnStatus.ROUTING
+        assert latest.tool_history[-1]["status"] == "failed"
+        durable_call = store.get(DurableToolCall, call.id)
+        assert durable_call.status == ToolCallStatus.FAILED
+        assert durable_call.result == receipt
         await chat.shutdown()
 
     asyncio.run(scenario())

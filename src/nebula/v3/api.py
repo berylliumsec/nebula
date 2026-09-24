@@ -1795,6 +1795,10 @@ def create_app(
         workspace_resolver=native_workspace,
         managed_skill_root=managed_skill_root,
     )
+    if automation_runtime is not None:
+        automation_runtime.bind_process_terminal_observer(
+            provider_chat.continue_after_tool_callback
+        )
 
     from .chat_catchup import catchup_router
     from .chat_decisions import decisions_router
@@ -2117,6 +2121,16 @@ def create_app(
                             "A chat restart recovery pass failed; the next pass retries.",
                             exc,
                             stage="restart-recovery",
+                        )
+                    try:
+                        provider_chat.reconcile_waiting_callbacks()
+                    except Exception as exc:
+                        record_caught_exception(
+                            "chat",
+                            "chat.callback_recovery_tick_failed",
+                            "A callback reconciliation pass failed; the next pass retries.",
+                            exc,
+                            stage="callback-recovery",
                         )
 
             schedule_loop = create_diagnostic_task(

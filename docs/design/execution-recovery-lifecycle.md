@@ -135,6 +135,7 @@ failure has been enumerated.
 | D12 | Goal claim clears while old work is still returning | Turn and goal claim generations fence continuation writes; result ledgers remain append-only evidence for the original invocation. | worker-owner and Core auto-resume gate cases |
 | D13 | Mission supervisor stops with effects in flight | Core queues the same durable checkpoint, preserves unknown effect IDs as audit decisions, and lets the deterministic ledger key refuse replay. | Mission classifier/checkpoint tests and production LAN Core-restart browser case |
 | D14 | Browser presented per-effect recovery actions | Restart recovery is read-only status; Core owns reconciliation and no per-agent clicks are rendered. | desktop/mobile zero-click recovery cases |
+| D15 | A background callback producer becomes terminal without posting its result | Core wakes the waiting turn from the terminal `CommandExecution`, records the effect as unknown and non-replayable, and settles the child/parent hierarchy through the normal provider path. | `test_terminal_background_process_without_callback_becomes_unknown_failure` plus live stale-tree repair |
 
 ## Target production contract
 
@@ -163,6 +164,10 @@ failure has been enumerated.
    resumes the child and waiting parent, then charges the goal once.
 8. **Keep the UI authoritative.** The recovery notice reports automatic work
    and contains no classification or Resume controls. Core state removes it.
+9. **Bound callback leases by producer liveness.** A process callback wait is
+   live only while its durable producer is running. Terminal producers without
+   callback results become explicit unknown effects; they cannot leave the tool,
+   turn, or subagent presented as active.
 
 ## Implemented recovery sequence
 
