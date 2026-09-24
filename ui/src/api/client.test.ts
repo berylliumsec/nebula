@@ -451,6 +451,21 @@ describe("ApiClient", () => {
     });
   });
 
+  it("maps durable provider queue state", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "turn-queued", session_id: "session-1", revision: 1, status: "queued",
+      queued_at: "2026-09-24T12:00:00Z", admitted_at: null,
+      queue_position: 3, capacity_lane: "direct", tool_call_ids: [],
+      recovery_blocked: false, unresolved_tool_call_ids: [], unresolved_hook_execution_ids: [],
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.getPendingChatTurn("session-1")).resolves.toMatchObject({
+      id: "turn-queued", status: "queued", queuedAt: "2026-09-24T12:00:00Z",
+      queuePosition: 3, capacityLane: "direct",
+    });
+  });
+
   it("maps, lists, and reconciles uncertain hook outcomes without replay", async () => {
     const responses = [
       new Response(JSON.stringify({

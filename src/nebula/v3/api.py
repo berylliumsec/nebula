@@ -967,6 +967,10 @@ class ChatTurnSummary(NebulaModel):
     # The transcript counts up from here while the turn runs.
     started_at: datetime
     status: ChatTurnStatus
+    queued_at: datetime | None = None
+    admitted_at: datetime | None = None
+    queue_position: int | None = None
+    capacity_lane: str | None = None
     content: str = ""
     reasoning: str = ""
     approval_id: str | None = None
@@ -3566,6 +3570,7 @@ def create_app(
                 else "unavailable"
             ),
             "api_version": "v1",
+            "scheduler": provider_chat.provider_scheduler.metrics(),
             "diagnostics": {
                 **diagnostic_health,
                 "browser_event_ingress": (
@@ -9640,7 +9645,7 @@ def create_app(
         turn = service.pending_turn(session_id)
         if turn is None:
             turn = service.recoverable_final_answer_turn(session_id)
-        return _chat_turn_summary(turn) if turn is not None else None
+        return _chat_turn_summary(chat_service(), turn) if turn is not None else None
 
     @app.post(
         f"{API_PREFIX}/chat/turns/{{turn_id}}/cancel",
@@ -9654,8 +9659,10 @@ def create_app(
             await harness_runtime.cancel_turn(
                 turn.harness_turn_id, reason="Stopped by operator"
             )
-            return _chat_turn_summary(store.get(ChatTurn, turn.id))
-        return _chat_turn_summary(await chat_service().stop_provider_turn(turn_id))
+            return _chat_turn_summary(chat_service(), store.get(ChatTurn, turn.id))
+        return _chat_turn_summary(
+            chat_service(), await chat_service().stop_provider_turn(turn_id)
+        )
 
     @app.post(
         f"{API_PREFIX}/chat/turns/{{turn_id}}/reconcile-tool",
@@ -9667,13 +9674,14 @@ def create_app(
         turn_id: str, request: ChatToolReconciliationRequest
     ) -> ChatTurnSummary:
         return _chat_turn_summary(
+            chat_service(),
             chat_service().reconcile_interrupted_tool(
                 turn_id,
                 request.tool_call_id,
                 outcome=request.outcome,
                 detail=request.detail,
                 expected_revision=request.expected_revision,
-            )
+            ),
         )
 
     @app.post(
@@ -9686,13 +9694,14 @@ def create_app(
         turn_id: str, request: ChatHookReconciliationRequest
     ) -> ChatTurnSummary:
         return _chat_turn_summary(
+            chat_service(),
             chat_service().reconcile_interrupted_hook(
                 turn_id,
                 request.hook_execution_id,
                 outcome=request.outcome,
                 detail=request.detail,
                 expected_revision=request.expected_revision,
-            )
+            ),
         )
 
     @app.get(
@@ -12217,7 +12226,7 @@ def _setup_server_sent_event(event: SetupEvent) -> bytes:
     return (f"id: {event.sequence}\nevent: setup\ndata: {encoded}\n\n").encode()
 
 
-def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:
+def _chat_turn_summary(service: ChatService, turn: ChatTurn) -> ChatTurnSummary:
     recovery = turn.request_snapshot.get("recovery", {})
     unresolved = (
         recovery.get("unknown_tool_call_ids", [])
@@ -12231,16 +12240,21 @@ def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:
         and isinstance(recovery.get("unknown_hook_execution_ids", []), list)
         else []
     )
+    history = service.turn_ledger.history(turn)
     return ChatTurnSummary(
         id=turn.id,
         session_id=turn.session_id,
         started_at=turn.created_at,
         status=turn.status,
+        queued_at=turn.queued_at,
+        admitted_at=turn.admitted_at,
+        queue_position=service.provider_scheduler.position(turn.id),
+        capacity_lane=turn.capacity_lane,
         content=turn.content,
         reasoning=turn.reasoning,
         approval_id=turn.approval_id,
         harness_turn_id=turn.harness_turn_id,
-        tool_call_ids=turn.tool_call_ids,
+        tool_call_ids=service.turn_ledger.tool_call_ids(turn),
         revision=turn.revision,
         error=turn.error,
         recovery_blocked=bool(unresolved or unresolved_hooks),
@@ -12251,7 +12265,7 @@ def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:
         results_url=next(
             (
                 str(item.get("results_url"))
-                for item in reversed(turn.tool_history)
+                for item in reversed(history)
                 if item.get("status") == "waiting_callback" and item.get("results_url")
             ),
             None,
@@ -12259,7 +12273,7 @@ def _chat_turn_summary(turn: ChatTurn) -> ChatTurnSummary:
         process_id=next(
             (
                 str(item.get("process_id"))
-                for item in reversed(turn.tool_history)
+                for item in reversed(history)
                 if item.get("status") == "waiting_callback" and item.get("process_id")
             ),
             None,

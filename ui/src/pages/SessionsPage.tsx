@@ -2839,7 +2839,9 @@ export function SessionsPage() {
           createdAt: pendingTurn.startedAt ?? new Date().toISOString(),
           citations: [],
           state: pendingTurn.status === "waiting_approval" ? "waiting_approval" : ["interrupted", "failed"].includes(pendingTurn.status) ? "error" : "streaming",
-          detail: ["interrupted", "failed"].includes(pendingTurn.status) ? pendingTurn.error : undefined,
+          detail: pendingTurn.status === "queued"
+            ? `Waiting for Core capacity${pendingTurn.queuePosition ? ` · position ${pendingTurn.queuePosition}` : ""}`
+            : ["interrupted", "failed"].includes(pendingTurn.status) ? pendingTurn.error : undefined,
           durable: false,
         }]);
         setToolCards([...restoredToolCards, ...pendingTurn.toolCallIds.map((toolCallId) => ({
@@ -2879,6 +2881,7 @@ export function SessionsPage() {
           });
         } else {
           setPendingResponse(undefined);
+          activeProviderTurnIdRef.current = pendingTurn.id;
           setSending(true);
           const restoreController = new AbortController();
           abortRef.current = restoreController;
@@ -3231,6 +3234,22 @@ export function SessionsPage() {
       setSessionId(streamEvent.sessionId);
       openSessionChatView(streamEvent.sessionId, true);
       void refreshSessions();
+    }
+    if (streamEvent.type === "queued") {
+      activeProviderTurnIdRef.current = streamEvent.turnId;
+      setMessages((current) => current.map((message) => message.id === assistantId
+        ? {
+          ...message,
+          state: "streaming",
+          detail: `${streamEvent.detail}${streamEvent.queuePosition ? ` · position ${streamEvent.queuePosition}` : ""}`,
+        }
+        : message));
+    }
+    if (streamEvent.type === "admitted") {
+      activeProviderTurnIdRef.current = streamEvent.turnId;
+      setMessages((current) => current.map((message) => message.id === assistantId
+        ? { ...message, state: "streaming", detail: undefined }
+        : message));
     }
     if (streamEvent.type === "started") {
       if (request.backend === "provider" && streamEvent.turnId) {
@@ -4868,10 +4887,10 @@ export function SessionsPage() {
                         {interaction.containsSecret && <small>Secret answer is forwarded in memory and will not be persisted.</small>}
                         <div><button className="button secondary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "decline")}>Decline</button><button className="button primary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "answer")}>Submit</button></div>
                       </div>)}
-                      {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {waitingCallback?.assistantId === message.id ? "Waiting for command results" : runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : "Waiting for provider"}</div>}
+                      {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {waitingCallback?.assistantId === message.id ? "Waiting for command results" : runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : message.detail ?? "Waiting for provider"}</div>}
                       {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && pendingResponseActive && <div className="chat-approval-card" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Approval required"><strong>Approval required</strong><AssistantApprovalDetails request={pendingResponse.approval} /><div>{pendingSshApproval && <button className="button quiet" type="button" disabled={approvalDecisionBusy} title={`Stop asking before commands on ${pendingSshApproval.label}, then run this one`} onClick={() => void alwaysAllowSshHost(pendingSshApproval.alias)}>Always allow on this host</button>}<button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
                       {message.state === "cancelled" && <small className="muted" role="status">Stopped{message.elapsedMs !== undefined ? ` · ${formatTurnElapsed(message.elapsedMs)}` : ""}</small>}
-                      {message.detail && message.state !== "cancelled" && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}
+                      {message.detail && message.state === "error" && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}
                       {runtimeKind === "harness" && ["error", "cancelled"].includes(message.state) && message.harnessTurnId && <button className="button quiet" type="button" disabled={harnessControlBusy} onClick={() => void retryHarnessMessage(message)}>Retry as linked turn</button>}
                       {api && sessionId && message.durable && message.role === "assistant" && <ChatEvidence key={message.id} api={api} sessionId={sessionId} messageId={message.id} onResults={() => updateSearchParams(next => {next.set("drawer", "results");})} />}
                       {message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}

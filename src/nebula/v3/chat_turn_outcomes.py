@@ -74,7 +74,9 @@ def _step_line(entry: dict[str, Any]) -> str:
     return f"- {label} → {outcome}"
 
 
-def turn_outcome_text(turn: ChatTurn) -> str:
+def turn_outcome_text(
+    turn: ChatTurn, *, history: list[dict[str, Any]] | None = None
+) -> str:
     """The note Core saves for a turn that failed or stopped before answering."""
 
     reason = _clip(turn.error or "", _REASON_CHARS)
@@ -99,7 +101,11 @@ def turn_outcome_text(turn: ChatTurn) -> str:
                     candidate,
                 ]
             )
-    steps = [entry for entry in turn.tool_history if isinstance(entry, dict)]
+    steps = [
+        entry
+        for entry in (turn.tool_history if history is None else history)
+        if isinstance(entry, dict)
+    ]
     omitted = max(0, len(steps) - _STEP_LIMIT)
     shown = steps[omitted:]
     completed = [entry for entry in shown if entry.get("provider_result") is not None]
@@ -116,7 +122,9 @@ def turn_outcome_text(turn: ChatTurn) -> str:
     return note if len(note) <= _NOTE_CHARS else note[: _NOTE_CHARS - 1] + "…"
 
 
-def turn_outcome_metadata(turn: ChatTurn) -> dict[str, Any]:
+def turn_outcome_metadata(
+    turn: ChatTurn, *, history: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     """Metadata in the shape of a completed turn's answer, plus the outcome."""
 
     return {
@@ -124,7 +132,11 @@ def turn_outcome_metadata(turn: ChatTurn) -> dict[str, Any]:
         "chat_turn_id": turn.id,
         "turn_status": turn.status.value,
         "interrupted": True,
-        "tool_call_ids": list(turn.tool_call_ids),
+        "tool_call_ids": [
+            str(item["tool_call_id"])
+            for item in (turn.tool_history if history is None else history)
+            if isinstance(item, dict) and item.get("tool_call_id")
+        ],
         "tool_results": [
             {
                 "tool_call_id": item.get("tool_call_id"),
@@ -136,7 +148,7 @@ def turn_outcome_metadata(turn: ChatTurn) -> dict[str, Any]:
                 "result_artifact_id": item.get("result_artifact_id"),
                 "artifacts": item.get("artifacts", []),
             }
-            for item in turn.tool_history
+            for item in (turn.tool_history if history is None else history)
             if isinstance(item, dict)
         ],
     }

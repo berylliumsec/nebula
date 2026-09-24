@@ -63,6 +63,7 @@ from .tools import (
     ToolExecutionResult,
     ToolInvocation,
     ToolSpec,
+    ParallelismPolicy,
 )
 from .policy import PolicyDecision, PolicyEffect
 
@@ -155,6 +156,7 @@ def command_specs(
         ),
         ToolSpec(
             name="tool_output.search",
+            parallelism=ParallelismPolicy.SAFE_READ,
             description="Search immutable output from a completed command.",
             input_schema={
                 "type": "object",
@@ -176,6 +178,7 @@ def command_specs(
         ),
         ToolSpec(
             name="tool_output.read",
+            parallelism=ParallelismPolicy.SAFE_READ,
             description="Read a bounded redacted excerpt from one command artifact.",
             input_schema={
                 "type": "object",
@@ -196,6 +199,7 @@ def command_specs(
         ),
         ToolSpec(
             name="workspace.search",
+            parallelism=ParallelismPolicy.SAFE_READ,
             description="Search an authorized project file or directory. Budget exhaustion preserves partial results with incomplete status and narrowing guidance.",
             input_schema={
                 "type": "object",
@@ -220,6 +224,7 @@ def command_specs(
         ),
         ToolSpec(
             name="workspace.read",
+            parallelism=ParallelismPolicy.SAFE_READ,
             description="Read a bounded redacted excerpt from a project file.",
             input_schema={
                 "type": "object",

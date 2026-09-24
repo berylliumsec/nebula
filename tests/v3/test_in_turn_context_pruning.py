@@ -170,25 +170,39 @@ def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
     requests = _turn_requests(provider)
     for request in requests:
         assert estimate_model_request(request) <= _capacity(prepared, request)
-    routing = [r for r in requests if r.tool_choice == ToolChoice.REQUIRED]
+    routing = [r for r in requests if r.tool_choice == ToolChoice.AUTO]
     synthesis = [r for r in requests if r.tool_choice == ToolChoice.NONE]
     assert len(routing) == 21 and len(synthesis) == 1
-    # Every call keeps its result, in order, under its own id.
+    # Before checkpointing every prior call is replayed. Once the deterministic
+    # checkpoint is present, only the latest eight provider groups remain full.
     for step, request in enumerate(routing):
-        assert [r.call_id for r in request.tool_results] == [
-            f"call-{index}" for index in range(1, step + 1)
-        ]
+        expected = [f"call-{index}" for index in range(1, step + 1)]
+        replayed = [result.call_id for result in request.tool_results]
+        assert replayed == expected or replayed == expected[-8:]
+        if replayed != expected:
+            assert "EARLIER TOOL HISTORY CHECKPOINT" in (request.instructions or "")
     for request in (routing[-1], synthesis[0]):
         results = request.tool_results
         cleared = [result for result in results if _cleared(result)]
-        # The oldest results are the cleared ones; the newest are whole.
-        assert 0 < len(cleared) < len(results)
+        # Checkpointing can make receipt clearing unnecessary. Otherwise the
+        # oldest replayed results are the cleared ones and the newest are whole.
+        if not cleared:
+            assert len(results) <= 8
+            assert "EARLIER TOOL HISTORY CHECKPOINT" in (request.instructions or "")
+            assert results[-1].output["observations"]
+            continue
+        assert len(cleared) < len(results)
         assert results[: len(cleared)] == cleared
         assert results[-1].output["observations"]
         first = cleared[0].output
-        assert first["tool_call_id"] == turn.tool_history[0]["tool_call_id"]
-        assert first["artifact_ids"] == ["artifact-1"]
-        assert first["summary"] == turn.tool_history[0]["result_summary"]
+        first_entry = next(
+            entry
+            for entry in turn.tool_history
+            if entry["model_call_id"] == results[0].call_id
+        )
+        assert first["tool_call_id"] == first_entry["tool_call_id"]
+        assert first["artifact_ids"] == [first_entry["result_artifact_id"]]
+        assert first["summary"] == first_entry["result_summary"]
         assert "tool_output.read" in first["note"]
         assert "tool_output.search" in first["note"]
         assert not cleared[0].is_error
@@ -356,13 +370,14 @@ def test_context_rejection_after_a_tool_step_clears_results_and_retries(tmp_path
     assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
     assert [call.arguments["value"] for call in broker.calls] == ["1", "2"]
     # Routing step 3 and the synthesis were each rejected once, then retried.
-    assert [body.get("tool_choice") for body in rejected] == ["required", "none"]
+    # OpenAI-compatible automatic routing omits tool_choice on the wire.
+    assert [body.get("tool_choice") for body in rejected] == [None, "none"]
     retried = [
         body
         for body in accepted
         if sum(message["role"] == "tool" for message in body["messages"]) == 2
     ]
-    assert [body.get("tool_choice") for body in retried] == ["required", "none"]
+    assert [body.get("tool_choice") for body in retried] == [None, "none"]
     for body in retried:
         first, second = [
             json.loads(message["content"])

@@ -100,6 +100,12 @@ class IdempotencyBehavior(str, Enum):
     NON_IDEMPOTENT = "non_idempotent"
 
 
+class ParallelismPolicy(str, Enum):
+    SERIAL = "serial"
+    SAFE_READ = "safe_read"
+    DISTINCT_TARGET = "distinct_target"
+
+
 class ToolSpec(BaseModel):
     """Security and data contract for a fixed or MCP capability."""
 
@@ -119,6 +125,7 @@ class ToolSpec(BaseModel):
     timeout_seconds: int = Field(default=300, ge=1, le=86_400)
     parser: str | None = None
     idempotency: IdempotencyBehavior = IdempotencyBehavior.SAFE
+    parallelism: ParallelismPolicy = ParallelismPolicy.SERIAL
     target_argument: str | None = None
     port_argument: str | None = None
     path_arguments: list[str] = Field(default_factory=list)
@@ -191,6 +198,19 @@ class ToolSpec(BaseModel):
             "required", []
         ):
             raise ValueError("target_argument must be required by the input schema")
+        if self.parallelism != ParallelismPolicy.SERIAL and (
+            self.idempotency != IdempotencyBehavior.SAFE
+            or self.filesystem_access == "workspace_write"
+            or self.requires_approval
+        ):
+            raise ValueError(
+                "parallel tools must be idempotent, approval-free, and non-mutating"
+            )
+        if (
+            self.parallelism == ParallelismPolicy.DISTINCT_TARGET
+            and not self.target_argument
+        ):
+            raise ValueError("distinct-target parallelism requires target_argument")
         return self
 
 
