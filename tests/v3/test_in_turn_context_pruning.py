@@ -148,6 +148,17 @@ def _cleared(result) -> bool:
     return isinstance(result.output, dict) and result.output.get("output_cleared")
 
 
+def _checkpointed(request: ModelRequest) -> bool:
+    """Whether the tool-history checkpoint rides with the last user message."""
+
+    last = request.messages[-1]
+    return (
+        last.role == "user"
+        and "EARLIER TOOL HISTORY CHECKPOINT" in str(last.content)
+        and "EARLIER TOOL HISTORY CHECKPOINT" not in (request.instructions or "")
+    )
+
+
 def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
     """HIST-3: 20 × 7 KB results on a 32K window used to fail after 13 calls."""
 
@@ -174,21 +185,23 @@ def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
     synthesis = [r for r in requests if r.tool_choice == ToolChoice.NONE]
     assert len(routing) == 21 and len(synthesis) == 1
     # Before checkpointing every prior call is replayed. Once the deterministic
-    # checkpoint is present, only the latest eight provider groups remain full.
+    # checkpoint is present, the newest calls after it remain full: at least
+    # the latest eight provider groups. The routing instructions never change.
+    assert len({request.instructions for request in routing}) == 1
     for step, request in enumerate(routing):
         expected = [f"call-{index}" for index in range(1, step + 1)]
         replayed = [result.call_id for result in request.tool_results]
-        assert replayed == expected or replayed == expected[-8:]
+        assert replayed == expected[len(expected) - len(replayed) :]
         if replayed != expected:
-            assert "EARLIER TOOL HISTORY CHECKPOINT" in (request.instructions or "")
+            assert len(replayed) >= 8
+            assert _checkpointed(request)
     for request in (routing[-1], synthesis[0]):
         results = request.tool_results
         cleared = [result for result in results if _cleared(result)]
         # Checkpointing can make receipt clearing unnecessary. Otherwise the
         # oldest replayed results are the cleared ones and the newest are whole.
         if not cleared:
-            assert len(results) <= 8
-            assert "EARLIER TOOL HISTORY CHECKPOINT" in (request.instructions or "")
+            assert _checkpointed(request)
             assert results[-1].output["observations"]
             continue
         assert len(cleared) < len(results)

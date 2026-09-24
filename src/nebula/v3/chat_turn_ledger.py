@@ -5,21 +5,45 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from .database import ChatTurnCheckpointRow, ChatTurnStepEventRow, Database
 from .domain import ChatTurn, utc_now
 
+# The checkpoint advances in blocks: once this many steps, or this many
+# tokens of them, have left the recent window since the last advance.
 CHECKPOINT_STEP_INTERVAL = 16
 CHECKPOINT_TOKEN_TRIGGER = 24_000
 CHECKPOINT_TOKEN_LIMIT = 4_000
 CHECKPOINT_BYTE_LIMIT = 16 * 1024
-REPLAY_TOKEN_LIMIT = 48_000
 RECENT_RESPONSE_GROUPS = 8
+CHECKPOINT_SCHEMA = "nebula.chat-turn-checkpoint/v2"
+_CHECKPOINT_STEP_FIELDS = [
+    "number",
+    "tool_index",
+    "state",
+    "summary",
+    "artifacts",
+    "failure",
+]
+# A v1 checkpoint, written while failed and denied steps were replayed whole
+# on every request, never covered one of them.
+_V1_UNCOVERED_STATUSES = frozenset({"failed", "denied"})
+# A step still waiting on the operator or a callback is never folded.
+PENDING_STATUSES = frozenset({"waiting_approval", "waiting_callback"})
+# Replay fields every row of one step repeats: the issuing response's
+# reasoning and prose and the call's own signature. The step's first row keeps
+# them; a later row that repeats them verbatim names that row
+# (``replay_from``).
+SHARED_REPLAY_FIELDS = ("reasoning_state", "response_text", "provider_metadata")
+_REPLAY_FROM = "replay_from"
+_FAILURE_SCHEMA = "nebula.tool-failure/v1"
+_RESTART_UNKNOWN_SCHEMA = "nebula.restart-uncertain/v1"
 
 
 def _canonical(value: Any) -> bytes:
@@ -36,12 +60,99 @@ def _event_type(entry: dict[str, Any]) -> str:
     return str(entry.get("status") or "recorded")[:80]
 
 
+def _step(entry: Mapping[str, Any]) -> int:
+    return int(entry.get("step", 0))
+
+
+def _step_ranges(steps: Iterable[int]) -> list[list[int]]:
+    """``steps`` as sorted, inclusive ``[first, last]`` runs."""
+
+    ranges: list[list[int]] = []
+    for step in sorted(set(steps)):
+        if ranges and ranges[-1][1] == step - 1:
+            ranges[-1][1] = step
+        else:
+            ranges.append([step, step])
+    return ranges
+
+
+def _decoded(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        decoded = json.loads(value)
+    except (
+        json.JSONDecodeError
+    ):  # diagnostic-expected: a legacy result has no failure facts to fold
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def _failure_facts(entry: Mapping[str, Any]) -> dict[str, Any] | None:
+    """What a folded failure still tells the model, without its output.
+
+    The arguments digest identifies the exact call that failed; the rest is
+    Core's own classification from the failure envelope (never tool text),
+    so the model can tell a correctable input from an effect it must not
+    repeat.
+    """
+
+    if str(entry.get("status") or "complete") == "complete":
+        return None
+    facts: dict[str, Any] = {
+        "arguments_sha256": hashlib.sha256(
+            _canonical(entry.get("arguments") or {})
+        ).hexdigest()[:16]
+    }
+    result = _decoded(entry.get("provider_result")) or {}
+    if result.get("schema") == _FAILURE_SCHEMA:
+        for key in ("category", "problem", "invalid_input", "side_effects"):
+            value = result.get(key)
+            if isinstance(value, str) and value:
+                facts[key] = value[:120]
+        if isinstance(result.get("retry_safe"), bool):
+            facts["retry_safe"] = result["retry_safe"]
+    if (
+        entry.get("recovered_from_restart_unknown") is True
+        or result.get("schema") == _RESTART_UNKNOWN_SCHEMA
+    ):
+        facts.update(
+            {
+                "category": "outcome_unknown",
+                "side_effects": "unknown",
+                "retry_safe": False,
+            }
+        )
+    return facts
+
+
 @dataclass(frozen=True)
 class TurnCheckpoint:
     through_step: int
     summary: dict[str, Any]
     digest: str
     token_estimate: int
+
+    def covers(self, entry: Mapping[str, Any]) -> bool:
+        """Whether ``entry`` is folded into this checkpoint rather than replayed."""
+
+        step = _step(entry)
+        ranges = self.summary.get("covered_steps")
+        if isinstance(ranges, list):
+            return any(
+                isinstance(item, list)
+                and len(item) == 2
+                and isinstance(item[0], int)
+                and isinstance(item[1], int)
+                and item[0] <= step <= item[1]
+                for item in ranges
+            )
+        # v1: every step through the boundary except the ones it replayed.
+        return step <= self.through_step and entry.get("status") not in (
+            PENDING_STATUSES | _V1_UNCOVERED_STATUSES
+        )
 
 
 class ChatTurnLedger:
@@ -86,6 +197,73 @@ class ChatTurnLedger:
                     idempotency_key=f"legacy:{int(entry.get('step', 0))}:0",
                     event_type="legacy_imported",
                 )
+
+    @staticmethod
+    def _stored_payload(
+        session: Session, turn_id: str, step: int, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """``payload`` without the replay state its step already holds.
+
+        A step is recorded as an intent before the broker runs it and again
+        with its result, and both carry the issuing response's reasoning.
+        The first copy is kept; a later row that repeats it names that row,
+        so the reasoning is stored once however often the step changes.
+        """
+
+        payload.pop(_REPLAY_FROM, None)
+        shared = {
+            field: payload[field] for field in SHARED_REPLAY_FIELDS if field in payload
+        }
+        if not shared:
+            return payload
+        holder = session.scalar(
+            select(ChatTurnStepEventRow)
+            .where(
+                ChatTurnStepEventRow.turn_id == turn_id,
+                ChatTurnStepEventRow.step == step,
+            )
+            .order_by(ChatTurnStepEventRow.sequence.desc())
+            .limit(1)
+        )
+        reference = holder.payload.get(_REPLAY_FROM) if holder is not None else None
+        if isinstance(reference, int) and not isinstance(reference, bool):
+            holder = session.scalar(
+                select(ChatTurnStepEventRow).where(
+                    ChatTurnStepEventRow.turn_id == turn_id,
+                    ChatTurnStepEventRow.sequence == reference,
+                )
+            )
+        if holder is None:
+            return payload
+        held = {
+            field: holder.payload[field]
+            for field in SHARED_REPLAY_FIELDS
+            if field in holder.payload
+        }
+        if held != shared:
+            return payload
+        stored = {
+            key: value
+            for key, value in payload.items()
+            if key not in SHARED_REPLAY_FIELDS
+        }
+        stored[_REPLAY_FROM] = holder.sequence
+        return stored
+
+    @staticmethod
+    def _resolved(
+        payload: Mapping[str, Any], rows: Mapping[int, ChatTurnStepEventRow]
+    ) -> dict[str, Any]:
+        """A stored row as the step entry it records, shared replay state included."""
+
+        entry = dict(payload)
+        reference = entry.pop(_REPLAY_FROM, None)
+        holder = rows.get(reference) if isinstance(reference, int) else None
+        if holder is not None:
+            for field in SHARED_REPLAY_FIELDS:
+                if field in holder.payload and field not in entry:
+                    entry[field] = holder.payload[field]
+        return entry
 
     def append(
         self,
@@ -134,7 +312,9 @@ class ChatTurnLedger:
                 tool_call_id=(
                     str(entry["tool_call_id"]) if entry.get("tool_call_id") else None
                 ),
-                payload=json.loads(_canonical(entry)),
+                payload=self._stored_payload(
+                    session, turn_id, step, json.loads(_canonical(entry))
+                ),
                 occurred_at=utc_now(),
                 idempotency_key=key,
             )
@@ -160,10 +340,40 @@ class ChatTurnLedger:
         rows = self._rows(turn.id)
         if not rows:
             return [dict(item) for item in turn.tool_history if isinstance(item, dict)]
-        latest: dict[int, tuple[int, dict[str, Any]]] = {}
+        by_sequence = {row.sequence: row for row in rows}
+        latest: dict[int, ChatTurnStepEventRow] = {}
         for row in rows:
-            latest[row.step] = (row.sequence, dict(row.payload))
-        return [payload for _, payload in sorted(latest.values())]
+            latest[row.step] = row
+        return [
+            self._resolved(row.payload, by_sequence)
+            for row in sorted(latest.values(), key=lambda row: row.sequence)
+        ]
+
+    def event(self, turn_id: str, idempotency_key: str) -> dict[str, Any] | None:
+        """The step entry one row recorded, shared replay state included."""
+
+        with self.database.session() as session:
+            row = session.scalar(
+                select(ChatTurnStepEventRow).where(
+                    ChatTurnStepEventRow.turn_id == turn_id,
+                    ChatTurnStepEventRow.idempotency_key == idempotency_key,
+                )
+            )
+            if row is None:
+                return None
+            reference = row.payload.get(_REPLAY_FROM)
+            holder = (
+                session.scalar(
+                    select(ChatTurnStepEventRow).where(
+                        ChatTurnStepEventRow.turn_id == turn_id,
+                        ChatTurnStepEventRow.sequence == reference,
+                    )
+                )
+                if isinstance(reference, int) and not isinstance(reference, bool)
+                else None
+            )
+            rows = {holder.sequence: holder} if holder is not None else {}
+            return self._resolved(row.payload, rows)
 
     def tool_call_ids(self, turn: ChatTurn) -> list[str]:
         return [
@@ -198,8 +408,21 @@ class ChatTurnLedger:
         )
 
     def compacted_history(
-        self, turn: ChatTurn
+        self, turn: ChatTurn, *, advance: bool = False
     ) -> tuple[TurnCheckpoint | None, list[dict[str, Any]]]:
+        """The turn's checkpoint and the entries replayed whole after it.
+
+        Every step outside the latest ``RECENT_RESPONSE_GROUPS`` response
+        groups, failed and denied ones included, can be folded into compact
+        receipts; only a step still waiting stays whole. The checkpoint
+        advances in blocks, when ``CHECKPOINT_STEP_INTERVAL`` steps or
+        ``CHECKPOINT_TOKEN_TRIGGER`` tokens of them are left unfolded, or
+        when ``advance`` asks because the request outgrew its target. Between
+        advances the checkpoint and every replayed entry stay byte-identical,
+        so each request extends the one before it and a provider's prefix
+        cache keeps serving all but the newest step.
+        """
+
         history = self.history(turn)
         if not history:
             return None, []
@@ -209,26 +432,20 @@ class ChatTurnLedger:
             if group not in groups:
                 groups.append(group)
         keep_groups = set(groups[-RECENT_RESPONSE_GROUPS:])
-        protected_steps = {
-            int(entry.get("step", 0))
-            for entry in history
-            if entry.get("status")
-            in {"waiting_approval", "waiting_callback", "failed", "denied"}
-        }
         fold = [
             entry
             for entry in history
             if self._group(entry) not in keep_groups
-            and int(entry.get("step", 0)) not in protected_steps
+            and entry.get("status") not in PENDING_STATUSES
         ]
         checkpoint = self.latest_checkpoint(turn.id)
         uncheckpointed = [
             entry
             for entry in fold
-            if checkpoint is None or int(entry.get("step", 0)) > checkpoint.through_step
+            if checkpoint is None or not checkpoint.covers(entry)
         ]
         should_checkpoint = bool(uncheckpointed) and (
-            checkpoint is not None
+            advance
             or len(uncheckpointed) >= CHECKPOINT_STEP_INTERVAL
             or _token_estimate(uncheckpointed) >= CHECKPOINT_TOKEN_TRIGGER
         )
@@ -236,19 +453,13 @@ class ChatTurnLedger:
             checkpoint = self._write_checkpoint(turn.id, fold)
         if checkpoint is None:
             return None, history
-        replay = [
-            entry
-            for entry in history
-            if int(entry.get("step", 0)) > checkpoint.through_step
-            or int(entry.get("step", 0)) in protected_steps
-        ]
-        return checkpoint, replay
+        return checkpoint, [entry for entry in history if not checkpoint.covers(entry)]
 
     def _write_checkpoint(
         self, turn_id: str, entries: Iterable[dict[str, Any]]
     ) -> TurnCheckpoint:
         entries = list(entries)
-        through_step = max(int(item.get("step", 0)) for item in entries)
+        through_step = max(_step(item) for item in entries)
         tools: list[str] = []
         steps: list[list[Any]] = []
         for item in entries:
@@ -256,12 +467,11 @@ class ChatTurnLedger:
             if tool not in tools:
                 tools.append(tool)
             receipt: list[Any] = [
-                int(item.get("step", 0)),
+                _step(item),
                 tools.index(tool),
                 str(item.get("status") or "complete")[:40],
             ]
-            if item.get("result_summary"):
-                receipt.append(str(item["result_summary"])[:80])
+            result_summary = str(item.get("result_summary") or "")[:80]
             references = [
                 str(ref.get("artifact_id"))[:120]
                 for ref in item.get("artifacts") or []
@@ -269,25 +479,55 @@ class ChatTurnLedger:
             ][:8]
             if item.get("result_artifact_id"):
                 references.insert(0, str(item["result_artifact_id"])[:120])
-            if references:
-                if len(receipt) == 3:
-                    receipt.append("")
-                receipt.append(references)
+            failure = _failure_facts(item)
+            if failure and failure.get("problem") == item.get("result_summary"):
+                del failure["problem"]
+            # Trailing fields are left off; an empty placeholder keeps the
+            # position of a later one.
+            trailing: list[Any] = [result_summary, references, failure]
+            while trailing and not trailing[-1]:
+                trailing.pop()
+            receipt.extend(
+                value if value else ([] if index == 1 else "")
+                for index, value in enumerate(trailing)
+            )
             steps.append(receipt)
         digest = hashlib.sha256(_canonical(entries)).hexdigest()
         summary: dict[str, Any] = {
-            "schema": "nebula.chat-turn-checkpoint/v1",
+            "schema": CHECKPOINT_SCHEMA,
             "through_step": through_step,
+            "covered_steps": _step_ranges(_step(item) for item in entries),
             "step_count": len(steps),
             "tools": tools,
-            "step_fields": ["number", "tool_index", "state", "summary", "artifacts"],
+            "step_fields": list(_CHECKPOINT_STEP_FIELDS),
             "steps": steps,
             "integrity_sha256": digest,
-            "note": "Full outputs remain available through their tool-call and artifact references.",
+            "note": (
+                "Full outputs remain available through their tool-call and "
+                "artifact references. A failure's arguments_sha256 identifies "
+                "the exact arguments that failed."
+            ),
         }
-        while len(_canonical(summary)) > CHECKPOINT_BYTE_LIMIT and summary["steps"]:
-            summary["steps"] = summary["steps"][1:]
-            summary["omitted_steps"] = len(steps) - len(summary["steps"])
+        # Over the bound, the oldest successful receipts go first: a failure
+        # is what the model must not repeat blindly.
+        excess = len(_canonical(summary)) - CHECKPOINT_BYTE_LIMIT
+        if excess > 0:
+            failed = len(_CHECKPOINT_STEP_FIELDS)
+            order = [i for i, item in enumerate(steps) if len(item) < failed] + [
+                i for i, item in enumerate(steps) if len(item) == failed
+            ]
+            # The count that replaces the dropped receipts costs a few bytes.
+            excess += len(f',"omitted_steps":{len(steps)}')
+            dropped: set[int] = set()
+            for index in order:
+                if excess <= 0:
+                    break
+                dropped.add(index)
+                excess -= len(_canonical(steps[index])) + 1
+            summary["steps"] = [
+                item for index, item in enumerate(steps) if index not in dropped
+            ]
+            summary["omitted_steps"] = len(dropped)
         token_estimate = min(CHECKPOINT_TOKEN_LIMIT, _token_estimate(summary))
         checkpoint = TurnCheckpoint(through_step, summary, digest, token_estimate)
         with self.database.session() as session:
@@ -297,18 +537,26 @@ class ChatTurnLedger:
                     ChatTurnCheckpointRow.through_step == through_step,
                 )
             )
-            if exists is None:
-                session.add(
-                    ChatTurnCheckpointRow(
-                        id=str(uuid4()),
-                        turn_id=turn_id,
-                        through_step=through_step,
-                        summary=summary,
-                        digest=digest,
-                        token_estimate=token_estimate,
-                        created_at=utc_now(),
-                    )
+            if exists is not None:
+                # The boundary is already recorded; replay keeps using that
+                # record so every request after it stays identical.
+                return TurnCheckpoint(
+                    through_step=exists.through_step,
+                    summary=dict(exists.summary),
+                    digest=exists.digest,
+                    token_estimate=exists.token_estimate,
                 )
+            session.add(
+                ChatTurnCheckpointRow(
+                    id=str(uuid4()),
+                    turn_id=turn_id,
+                    through_step=through_step,
+                    summary=summary,
+                    digest=digest,
+                    token_estimate=token_estimate,
+                    created_at=utc_now(),
+                )
+            )
         return checkpoint
 
 

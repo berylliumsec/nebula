@@ -3305,6 +3305,8 @@ class ChatTokenUsage(NebulaModel):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     total_tokens: int = Field(default=0, ge=0)
+    # The part of ``input_tokens`` the provider served from its prompt cache.
+    cached_input_tokens: int = Field(default=0, ge=0)
 
 
 class ScopeImportCandidate(NebulaModel):
@@ -3766,6 +3768,8 @@ class ChatTurn(Entity):
     admitted_at: datetime | None = None
     capacity_lane: Literal["direct", "background"] = "direct"
     ledger_sequence: int = Field(default=0, ge=0)
+    # No longer written: the turn ledger's checkpoint rows are the authority.
+    # Kept so turns that recorded it still validate.
     checkpoint_through_step: int = Field(default=0, ge=0)
     tools_enabled: bool = False
     max_tool_calls: int | None = Field(default=None, ge=0)

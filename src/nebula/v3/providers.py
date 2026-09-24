@@ -632,6 +632,9 @@ class ModelUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    # The part of ``input_tokens`` the route served from its prompt cache,
+    # when it says; zero otherwise.
+    cached_input_tokens: int = 0
 
 
 # The validation context key under which an adapter hands its request to the
@@ -2120,10 +2123,17 @@ def _openai_usage(usage: Any) -> ModelUsage:
         return ModelUsage()
     prompt = _token_count(usage.get("prompt_tokens"))
     completion = _token_count(usage.get("completion_tokens"))
+    details = usage.get("prompt_tokens_details")
+    # OpenAI and OpenRouter report cache hits in the prompt details, DeepSeek
+    # in a field of its own.
+    cached = (
+        _token_count(details.get("cached_tokens")) if isinstance(details, dict) else 0
+    ) or _token_count(usage.get("prompt_cache_hit_tokens"))
     return ModelUsage(
         input_tokens=prompt,
         output_tokens=completion,
         total_tokens=_token_count(usage.get("total_tokens")) or prompt + completion,
+        cached_input_tokens=min(cached, prompt) if prompt else cached,
     )
 
 
