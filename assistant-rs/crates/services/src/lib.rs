@@ -3,6 +3,7 @@
 pub mod artifact_preview;
 pub mod catchup;
 pub mod context;
+pub mod execution_context;
 pub mod fork;
 pub mod generated;
 pub mod goal_conversations;

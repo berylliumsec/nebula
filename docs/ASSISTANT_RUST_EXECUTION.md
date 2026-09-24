@@ -145,3 +145,65 @@ credential resolution, substantive-chat naming, durable event/dispatch receipts,
 per-session workers and the public completion/Stop/reconnect routes remain open.
 No additional mounted handler, production Rust journey or measured speedup is
 claimed by this increment.
+
+CI for `bdb1003` passed (run `35971438240`): 210 unique exact Rust checks and
+67 Python checks on Python 3.12, the latter in 132.05 seconds. Downloaded selection
+and Rust execution receipts match digest
+`ee17c4adc54d1d4d9f603e0ef9ab2ad73103696cce891a6bf6638b0649993bcc`.
+Python 3.11/3.13 were explicitly omitted. Browser plan/gate run `35971438234`
+passed with Playwright execution skipped. These checks bind the committed
+execution components, not the following uncommitted integration work.
+
+## Next integration boundaries
+
+The next change connects the prerequisites for durable queued work: explicit
+schema installation on isolated recognized databases, non-dispatchable queue
+reservations, pure context/history preparation, and bounded source-shaped SSE
+encoding. Schema recognition and a scheduler reservation alone never authorize
+provider dispatch. The operator invariants above remain the acceptance contract.
+SQLite owns atomic evidence/epoch changes; FairQueue owns ordering and capacity;
+source preparation owns prompt/history semantics; immutable encoded events own
+the bytes later committed and replayed. Public diagnostics receive identities
+once, before commit. Slow viewers never own a provider receiver.
+
+Planned focused evidence covers migration-marker preservation and refusal of
+unknown schemas, update/restore/delete epoch tracking, out-of-order admission
+commits within a Session, stale reservation tickets, Python context/history
+vectors, exact public event bytes, bounded encoding and unsequenced terminal
+snapshots. Collect and review exact selectors before execution. Runtime dispatch,
+crash-safe receipt transitions and production browser journeys remain separate
+required work.
+
+Twenty-one exact checks passed for these three foundations under digest
+`dc871b9aab1c7450fe5dc9d4f6fa9e7e23172e15429123bb3bcefe9a1138900c`:
+14 reservation/fairness checks, four schema checks and three SSE codec checks.
+The schema preserves legacy markers/rows and refuses unknown or partial owned
+DDL. Seven owned tables use WITHOUT ROWID; watched legacy identities use an
+indexed physical locator to detect replacement even when recursive triggers are
+disabled. Tests cover negative rowids, automatic allocation, replacement of two
+watched identities and rollback on epoch exhaustion. Physical locators remain
+derived: maintenance/rebuild/cutover must reconcile them before the future
+runtime uses evidence. No production extension was installed.
+
+The event codec preserves raw JSON order/number spelling and committed SSE bytes,
+assigns only JavaScript-safe positive cursors, rejects ambiguous/injectable frame
+fields, and leaves terminal snapshots unsequenced. It owns neither database
+commits nor permission to publish. The reservation policy holds pending capacity
+without making uncommitted work runnable; queue-bound generations prevent stale
+tickets from affecting a reused work identity.
+
+Four additional exact Rust preparation checks and one Python source recapture
+passed under digest
+`885d59616db75bcde61c6a454a0d194af53dcb40eb99032086e01bebbf3a9baa`.
+The Python check ran in 2.21 seconds using the existing read-only CPython 3.12
+environment. The 99-vector corpus covers context limits/catalog lookup, UTF-8
+estimates, visible/replaced/outcome history, selected-context reconstruction and
+assistant-message joins. Capture requires Unicode 15.0.0; explicit Kawi and Nag
+Mundari digit cases distinguish that baseline from Python 3.11 / Unicode 14.
+Static tables are compared in full. No source comparison is skipped.
+
+Together these local selections executed 25 unique Rust tests and one Python
+test for this increment. They do not connect admission to workers or establish
+stream publication/recovery. The ledger command engine and supervisor-owned
+admission controller are the next integration steps. Production UI, historical
+migrations, full provider/harness coverage and performance gates remain open.

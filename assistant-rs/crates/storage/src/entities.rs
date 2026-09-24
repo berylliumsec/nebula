@@ -57,6 +57,7 @@ pub use settings::{McpProfileRow, RawSession};
 mod fork;
 pub use fork::{ForkHarness, ForkRecord};
 pub mod execution;
+pub mod provider_ledger;
 
 const MAX_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MUTATIONS: usize = 64;

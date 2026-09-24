@@ -68,6 +68,18 @@ components are not yet connected to the queue, replay receipts, preparation or
 HTTP completion routes. See `../docs/ASSISTANT_RUST_EXECUTION.md`; a successful
 component test does not establish a running Rust conversation.
 
+`FairQueue::reserve/commit/abort` now separates pending capacity from dispatchable
+work, preserving Session order even when admission commits arrive out of order.
+`provider_ledger::install/inspect` defines an explicit additive SQLite extension;
+normal store opening never installs it. `provider_stream` retains bounded JSON/SSE
+bytes for future committed replay. These APIs do not create execution authority.
+
+`execution_context` ports pure text history merging, stored-context reconstruction,
+context limits and token estimates. Its 99-vector oracle explicitly targets
+CPython 3.12 / Unicode 15.0.0, including numeric descriptors outside Unicode 14.
+Inputs must already be hydrated and authorized; image/tool projections, compaction,
+privacy resolution and the preparation orchestrator remain separate work.
+
 `records::StoredAssistantRecord::decode` preserves opaque JSON metadata and large
 integers, checks the captured storage schemas, and enforces the Python model's
 cross-field invariants. Validators are compiled once and shared across readers;

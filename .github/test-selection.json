@@ -1,14 +1,14 @@
 {
-  "change_digest": "ee17c4adc54d1d4d9f603e0ef9ab2ad73103696cce891a6bf6638b0649993bcc",
+  "change_digest": "a5390c74d8a0e6594a75793da5afcdac54d2a4a24bc733c5e4165914f5442564",
   "reviewed_by": "Codex using current Assistant source captures, independent writer/provider review and shared validator impact review",
-  "reason": "Assistant-only cumulative PR selection: preserve previously reviewed exact domain/storage/runtime/service/HTTP compatibility checks and add22 execution-component checks for complete request/Turn hydration, fenced SQLite commit phases/result lifetimes, and bounded OpenAI-compatible network/protocol behavior. Three source oracles and two new selection guard cases bring Python coverage to67. Local current increment passed39 unique Rust and24 Python checks after correcting two test-only representation assumptions.",
-  "exclusions": "No full suites or automatic scope expansion. Shipped entrypoints/UI remain Python; browser, frontend, desktop-native, live state, real provider accounts/tools and whole-Assistant performance are excluded and not claimed. Rust exact collection600s and execution120s each, CI Rust job20min; local Python run300s; CI selects Python3.12 only and its Python job declares no explicit timeout. Other runtimes are omitted. SQLite fixtures are isolated; provider HTTP fixtures use harmless loopback only. Historical SQLite/PostgreSQL/checkpoint migrations, continuous Rust execution/replay, production desktop/mobile/LAN/physical-device gates remain open.",
+  "reason": "Assistant-only cumulative PR selection: retain the reviewed exact domain/storage/runtime/service/HTTP and selection-guard checks. Add 17 exact Rust checks for non-dispatchable queue reservations and Session ordering, additive provider-ledger schema/epoch preservation, bounded immutable SSE encoding, and pure context/history preparation. The new Python recapture binds 99 preparation vectors and Unicode 15 tables to CPython 3.12. Local evidence for this increment: 25 unique Rust checks (including eight existing fairness regressions) and one Python check passed. Cumulative collection: 227 exact Rust and 68 Python tests.",
+  "exclusions": "No full suites or automatic scope expansion. Rust selector compile/collection is limited to 600 seconds and execution to 120 seconds each; CI Rust job is limited to 20 minutes. Local Python recapture limit was 120 seconds; CI selects Python 3.12 only and declares no explicit Python job timeout. Other Python versions are omitted. SQLite fixtures are isolated and provider protocol tests use harmless loopback simulators. Shipped entrypoints/UI still use Python; no new completion handler or live state changes. Frontend, desktop-native, production Chromium/WebKit, LAN/physical-device, real provider/tool, historical SQLite/PostgreSQL/checkpoint migration and whole-Assistant performance gates remain open.",
   "expected_tests": {
-    "python": 67,
+    "python": 68,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 210
+    "assistant_rust": 227
   },
   "python_versions": [
     "3.12"
@@ -35,7 +35,8 @@
     "tests/test_assistant_forks_contract.py::test_forks_oracle_matches_current_python_assistant_boundary",
     "tests/test_assistant_execution_contract.py::test_execution_oracle_matches_current_python_assistant_boundary",
     "tests/test_assistant_turn_validation_contract.py::test_turn_validation_oracle_matches_current_python_models",
-    "tests/v3/test_assistant_rust_provider_protocol.py::test_committed_assistant_provider_protocol_matches_python_source"
+    "tests/v3/test_assistant_rust_provider_protocol.py::test_committed_assistant_provider_protocol_matches_python_source",
+    "tests/test_assistant_execution_context_contract.py::test_execution_context_oracle_matches_python_source"
   ],
   "frontend": [],
   "native": [],
@@ -250,6 +251,23 @@
     "nebula-assistant-integrations/protocol::reasoning_and_protocol_bounds_preserve_content_without_leaking_debug",
     "nebula-assistant-integrations/http::pooled_http_preserves_endpoint_credentials_and_disables_redirect_retries",
     "nebula-assistant-integrations/http::provider_retries_only_before_output_and_keeps_parent_cancellation_independent",
-    "nebula-assistant-integrations/http::bounded_stream_cancellation_releases_admission_and_connection_without_leaking_payload"
+    "nebula-assistant-integrations/http::bounded_stream_cancellation_releases_admission_and_connection_without_leaking_payload",
+    "nebula-assistant-runtime/lib::tests::generation_exhaustion_preserves_existing_reservations_and_indices",
+    "nebula-assistant-runtime/reservations::reservation_capacity_precedes_commit_and_cannot_be_bypassed",
+    "nebula-assistant-runtime/reservations::out_of_order_commits_preserve_session_order_across_projects_and_groups",
+    "nebula-assistant-runtime/reservations::generation_tickets_reject_stale_cross_queue_and_post_commit_operations",
+    "nebula-assistant-runtime/reservations::abort_and_terminal_removal_prune_session_and_fairness_indices",
+    "nebula-assistant-runtime/reservations::parked_owner_preserves_order_when_reservations_commit_late",
+    "nebula-assistant-storage/provider_ledger::provider_ledger_install_reopen_preserves_legacy_rows_and_markers",
+    "nebula-assistant-storage/provider_ledger::provider_ledger_refuses_partial_unknown_or_changed_schema_without_writes",
+    "nebula-assistant-storage/provider_ledger::provider_ledger_epochs_detect_update_restore_delete_reinsert_and_rollback",
+    "nebula-assistant-storage/provider_ledger::provider_ledger_constraints_preserve_immutable_evidence_and_budget_bounds",
+    "nebula-assistant-domain/provider_stream::provider_sse_bytes_and_terminal_snapshots_match_python_journeys",
+    "nebula-assistant-domain/provider_stream::provider_sse_rejects_ambiguous_fields_and_control_line_injection",
+    "nebula-assistant-domain/provider_stream::provider_sse_bounds_encoded_bytes_and_preserves_numeric_and_unicode_identity",
+    "nebula-assistant-services/execution_context::python_context_limits_and_catalog_match_source",
+    "nebula-assistant-services/execution_context::python_text_estimates_match_source",
+    "nebula-assistant-services/execution_context::python_visible_history_merge_and_joins_match_source",
+    "nebula-assistant-services/execution_context::text_preparation_bounds_and_unsupported_projections_are_explicit"
   ]
 }
