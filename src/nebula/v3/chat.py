@@ -1665,12 +1665,13 @@ class ChatService:
         ):
             offset += len(waiting_page)
             for waiting_turn in waiting_page:
+                history = self._turn_history(waiting_turn)
+                self._reconcile_terminal_callback_tool_calls(history)
                 if (
                     waiting_turn.backend != ChatBackend.PROVIDER
                     or waiting_turn.status != ChatTurnStatus.WAITING_CALLBACK
                 ):
                     continue
-                history = self._turn_history(waiting_turn)
                 pending_entry = history[-1] if history else {}
                 process_id = pending_entry.get("process_id")
                 if not isinstance(process_id, str) or not process_id:
@@ -1722,6 +1723,39 @@ class ChatService:
                         stage="callback-recovery",
                     )
         return resumed
+
+    def _reconcile_terminal_callback_tool_calls(
+        self, history: list[dict[str, Any]]
+    ) -> None:
+        """Close callback tool rows even after their owning turn has settled."""
+
+        from .automation_runtime import AutomationRuntimeManager
+
+        for item in history:
+            if item.get("status") != "waiting_callback" or item.get("subagent_wait"):
+                continue
+            process_id = item.get("process_id")
+            if not isinstance(process_id, str) or not process_id:
+                continue
+            try:
+                execution = self.store.get(
+                    CommandExecution,
+                    AutomationRuntimeManager._execution_id(process_id),
+                )
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: old callback record has no producer ledger
+                continue
+            callback_received = bool(execution.metadata.get("results_received"))
+            if not callback_received and not self._callback_producer_terminal(
+                execution
+            ):
+                continue
+            self._finalize_callback_tool_call(
+                item,
+                execution,
+                callback_received=callback_received,
+            )
 
     def resume_turns_stopped_by_core(self) -> list[str]:
         """Automatically reconcile and resume turns owned by the previous Core.
@@ -7633,6 +7667,34 @@ class ChatService:
         """Commit one callback outcome before any competing wake can route."""
 
         entry = dict(entry)
+        output, failed = self._finalize_callback_tool_call(
+            entry,
+            execution,
+            callback_received=callback_received,
+        )
+        entry.update(
+            {
+                "status": "failed" if failed else "complete",
+                "provider_result": serialize_model_result(output),
+                "result_summary": output.get("summary") or output["problem"],
+            }
+        )
+        turn = self._update_tool_step(
+            turn,
+            entry,
+            status=ChatTurnStatus.ROUTING,
+        )
+        return turn, entry, output
+
+    def _finalize_callback_tool_call(
+        self,
+        entry: dict[str, Any],
+        execution: CommandExecution,
+        *,
+        callback_received: bool,
+    ) -> tuple[dict[str, Any], bool]:
+        """Project a terminal callback producer into its durable tool row."""
+
         if callback_received:
             output = {
                 "schema": "nebula.tool-result/v2",
@@ -7679,32 +7741,31 @@ class ChatService:
                 "exit_code": execution.exit_code,
             }
             failed = True
-        entry.update(
-            {
-                "status": "failed" if failed else "complete",
-                "provider_result": serialize_model_result(output),
-                "result_summary": output.get("summary") or output["problem"],
-            }
-        )
         from .domain import ToolCall
 
         tool_call_id = entry.get("tool_call_id")
         if isinstance(tool_call_id, str):
             try:
                 call = self.store.get(ToolCall, tool_call_id)
-                self.store.update(
-                    ToolCall,
-                    call.id,
-                    {
-                        "status": ToolCallStatus.FAILED
-                        if failed
-                        else ToolCallStatus.COMPLETE,
-                        "completed_at": utc_now(),
-                        "result": output,
-                        "error": execution.error or output.get("problem"),
-                    },
-                    expected_revision=call.revision,
-                )
+                if call.status not in {
+                    ToolCallStatus.COMPLETE,
+                    ToolCallStatus.FAILED,
+                    ToolCallStatus.DENIED,
+                    ToolCallStatus.CANCELLED,
+                }:
+                    self.store.update(
+                        ToolCall,
+                        call.id,
+                        {
+                            "status": ToolCallStatus.FAILED
+                            if failed
+                            else ToolCallStatus.COMPLETE,
+                            "completed_at": utc_now(),
+                            "result": output,
+                            "error": execution.error or output.get("problem"),
+                        },
+                        expected_revision=call.revision,
+                    )
             except Exception as exc:
                 record_caught_exception(
                     "chat",
@@ -7713,12 +7774,7 @@ class ChatService:
                     exc,
                     stage="callback",
                 )
-        turn = self._update_tool_step(
-            turn,
-            entry,
-            status=ChatTurnStatus.ROUTING,
-        )
-        return turn, entry, output
+        return output, failed
 
     async def _resume_subagent_wait(
         self,

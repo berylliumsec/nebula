@@ -326,6 +326,57 @@ def test_terminal_background_process_without_callback_becomes_unknown_failure(
         durable_call = store.get(DurableToolCall, call.id)
         assert durable_call.status == ToolCallStatus.FAILED
         assert durable_call.result == receipt
+
+        # A competing wake may have settled the turn before startup recovery
+        # revisits the old callback step. The durable tool row must still close.
+        settled_call = store.create(
+            DurableToolCall(
+                id="tool-settled-missing-callback",
+                engagement_id=engagement.id,
+                run_id="turn-settled-missing-callback",
+                origin=ToolCallOrigin.CHAT,
+                chat_session_id=session.id,
+                chat_turn_id="turn-settled-missing-callback",
+                tool_name="run_command",
+                status=ToolCallStatus.RUNNING,
+                risk_class=RiskClass.ACTIVE_SCAN,
+                arguments={"command": "wait-forever", "background": True},
+                started_at=utc_now(),
+            )
+        )
+        store.create(
+            ChatTurn(
+                id="turn-settled-missing-callback",
+                engagement_id=engagement.id,
+                session_id=session.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                status=ChatTurnStatus.COMPLETE,
+                request_snapshot={
+                    "model_request": {"model": "model-a", "messages": []}
+                },
+                tool_history=[
+                    {
+                        "step": 0,
+                        "model_call_id": "call-settled",
+                        "tool_call_id": settled_call.id,
+                        "name": "run_command",
+                        "status": "waiting_callback",
+                        "process_id": started.process_id,
+                        "arguments": {
+                            "command": "wait-forever",
+                            "background": True,
+                        },
+                    }
+                ],
+            )
+        )
+        chat.reconcile_waiting_callbacks()
+        settled_call = store.get(DurableToolCall, settled_call.id)
+        assert settled_call.status == ToolCallStatus.FAILED
+        assert isinstance(settled_call.result, dict)
+        assert settled_call.result["category"] == "missing_callback"
+        assert settled_call.result["side_effects"] == "unknown"
         await chat.shutdown()
 
     asyncio.run(scenario())

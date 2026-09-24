@@ -135,7 +135,7 @@ failure has been enumerated.
 | D12 | Goal claim clears while old work is still returning | Turn and goal claim generations fence continuation writes; result ledgers remain append-only evidence for the original invocation. | worker-owner and Core auto-resume gate cases |
 | D13 | Mission supervisor stops with effects in flight | Core queues the same durable checkpoint, preserves unknown effect IDs as audit decisions, and lets the deterministic ledger key refuse replay. | Mission classifier/checkpoint tests and production LAN Core-restart browser case |
 | D14 | Browser presented per-effect recovery actions | Restart recovery is read-only status; Core owns reconciliation and no per-agent clicks are rendered. | desktop/mobile zero-click recovery cases |
-| D15 | A background callback producer becomes terminal without posting its result | Core records the effect as unknown and non-replayable in the turn history and tool ledger before it wakes the waiting turn, then settles the child/parent hierarchy through the normal provider path. | `test_terminal_background_process_without_callback_becomes_unknown_failure` plus live stale-tree repair |
+| D15 | A background callback producer becomes terminal without posting its result | Core records the effect as unknown and non-replayable in the turn history and tool ledger before it wakes the waiting turn, then settles the child/parent hierarchy through the normal provider path. Periodic reconciliation also closes a stale tool row after a competing wake has already settled the turn. | `test_terminal_background_process_without_callback_becomes_unknown_failure` plus live stale-tree repair |
 
 ## Target production contract
 
