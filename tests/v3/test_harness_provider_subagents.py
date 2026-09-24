@@ -965,7 +965,9 @@ def test_harness_answers_a_subagent_question_with_subagent_message(tmp_path):
 
         child_turn = store.get(ChatTurn, record.child_turn_id)
         (entry,) = [
-            item for item in child_turn.tool_history if item["name"] == "message_parent"
+            item
+            for item in chat._turn_history(child_turn)
+            if item["name"] == "message_parent"
         ]
         assert "Use staging." in entry["provider_result"]
         await chat.shutdown()
@@ -1027,7 +1029,9 @@ def test_harness_gets_unread_subagent_messages_at_its_next_turn(tmp_path):
         # Asked while the harness was idle: the child went on without waiting.
         child_turn = store.get(ChatTurn, record.child_turn_id)
         (entry,) = [
-            item for item in child_turn.tool_history if item["name"] == "message_parent"
+            item
+            for item in chat._turn_history(child_turn)
+            if item["name"] == "message_parent"
         ]
         assert "not working right now" in entry["provider_result"]
         (question,) = store.list_entities(ChatSubagentMessage)
