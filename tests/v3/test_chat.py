@@ -2929,8 +2929,12 @@ def test_long_durable_chat_uses_a_bounded_user_led_model_context(tmp_path, monke
 
     stream_events = asyncio.run(collect_stream())
     done = next(payload for name, payload in stream_events if name == "done")
-    assert streamed.context_usage.total_tokens > 0
-    assert done["context_usage"]["total_tokens"] == streamed.context_usage.total_tokens
+    # The first snapshot still covers everything before this turn's tail, so
+    # the turn keeps it and spends nothing compacting the archive again.
+    assert streamed.context_snapshot is not None
+    assert streamed.context_snapshot.id == prepared.context_snapshot.id
+    assert streamed.context_usage.total_tokens == 0
+    assert done["context_usage"] is None
     assert len(ChatService(store).session_messages(session.id)) == 1_006
 
 

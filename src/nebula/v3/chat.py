@@ -160,6 +160,7 @@ from .tools import (
     ParallelismPolicy,
     PolicyDenied,
     ToolInvocation,
+    ToolSpec,
 )
 from .tool_catalog import (
     CATALOG_CALL,
@@ -882,6 +883,9 @@ _FINAL_ANSWER_BACKOFF_CEILING_SECONDS = 30.0
 
 _RETRIEVAL_AGENT_INSTRUCTIONS = """Return a JSON `queries` array containing one
 to four searches for the operator's request."""
+# A 256-token plan without reasoning; past this the operator's own words are
+# the query, instead of the turn waiting out the provider's request timeout.
+_RETRIEVAL_PLAN_TIMEOUT_SECONDS = 30.0
 
 
 # A turn's thinking is bounded by what ChatMessage.reasoning can hold.
@@ -1294,6 +1298,54 @@ def _with_replay_state(
             replay["provider_metadata"] = routed.call.provider_metadata
         tagged.append(dataclass_replace(routed, replay=replay))
     return tagged
+
+
+def _preparation_receipt(started_at: datetime) -> dict[str, Any]:
+    """When Core accepted a turn's request and how long preparing it took.
+
+    With each step's provider timing this splits a turn's time to its first
+    provider call into Core's preparation (ranking, knowledge planning,
+    compaction) and the queue wait for a provider slot.
+    """
+
+    return {
+        "started_at": started_at.isoformat(),
+        "duration_ms": max(0, round((utc_now() - started_at).total_seconds() * 1000)),
+    }
+
+
+# A turn's pre-routing tool ranking: the Jev receipt for its snapshot (None
+# when Jev was not asked), the catalog picks, and the source ids Jev ranked.
+_ToolRanking = tuple[dict[str, Any] | None, CatalogReceipt, list[str]]
+
+
+def _with_provider_timing(
+    batch: list[_RoutedCall],
+    *,
+    group: int,
+    requested_at: datetime,
+    responded_at: datetime,
+) -> list[_RoutedCall]:
+    """Stamp each call with the routing request that issued it.
+
+    Every step the response produces records its ordinal in the turn
+    (``provider_group``, the step ledger's column) and when the request left
+    and the answer arrived, so a step's wall time splits into provider latency
+    and Core's own work before and after it. No provider sees these fields.
+    """
+
+    timing = {
+        "provider_group": group,
+        "provider_requested_at": requested_at.isoformat(),
+        "provider_responded_at": responded_at.isoformat(),
+        "provider_latency_ms": max(
+            0, round((responded_at - requested_at).total_seconds() * 1000)
+        ),
+    }
+    return [
+        dataclass_replace(routed, replay={**routed.replay, **timing})
+        for routed in batch
+    ]
 
 
 # How a reply ends when nothing stopped it: Chat Completions and Gemini "stop",
@@ -3206,6 +3258,7 @@ class ChatService:
         )
 
     async def prepare_async(self, request: ChatCompletionRequest) -> PreparedChat:
+        started_at = utc_now()
         if request.backend != ChatBackend.PROVIDER or request.provider_id is None:
             raise ChatConfigurationError(
                 "harness chat requests must be dispatched through HarnessRuntimeService"
@@ -3492,185 +3545,8 @@ class ChatService:
         project_instructions = self._project_instructions(engagement_id)
         instructions += project_instructions_text(project_instructions)
         instructions += skill_instructions(skill_snapshots)
-        knowledge_budget = max(
-            1,
-            resolve_context_limits(
-                profile,
-                model=selected_model,
-                requested_output_tokens=request.max_output_tokens,
-            ).target_input_tokens
-            // 5,
-        )
-        operator_help_chunks = self._retrieve_operator_help(
-            [incoming[-1].content], token_budget=knowledge_budget
-        )
-        operator_help_tokens = sum(
-            estimate_tokens(chunk.text, message_count=1)
-            for chunk in operator_help_chunks
-        )
-        engagement_chunks: list[_RetrievedChunk] = []
-        if (
-            request.include_knowledge
-            and engagement_id
-            and self._has_ready_knowledge(engagement_id)
-        ):
-            retrieval_queries = await self._plan_retrieval(
-                provider=provider,
-                model=selected_model,
-                query=incoming[-1].content,
-            )
-            engagement_chunks = self._retrieve(
-                engagement_id,
-                retrieval_queries,
-                redact=not provider.config.local,
-                token_budget=max(1, knowledge_budget - operator_help_tokens),
-            )
-            if (
-                engagement_chunks
-                and not provider.config.local
-                and any(chunk.local_only for chunk in engagement_chunks)
-            ):
-                raise ChatPrivacyError(
-                    "selected knowledge is local-only and cannot be sent to a cloud provider"
-                )
-            if engagement_chunks and not provider.config.local:
-                if not profile.privacy.permits_sensitive_data:
-                    raise ChatPrivacyError(
-                        "provider profile does not permit engagement data transfer"
-                    )
-                if not request.allow_cloud_knowledge:
-                    raise ChatPrivacyError(
-                        "cloud knowledge transfer requires explicit operator confirmation"
-                    )
-        citations = [
-            chunk.citation for chunk in [*operator_help_chunks, *engagement_chunks]
-        ]
-        instructions += _reference_instructions(
-            operator_help_chunks, trusted_operator_help=True
-        )
-        # JSON encoding keeps engagement document text inside an explicit data
-        # value; embedded delimiter-like strings never become instruction lines.
-        instructions += _reference_instructions(
-            engagement_chunks, trusted_operator_help=False
-        )
-        base_instructions = instructions
-
-        compaction_budget = ContextCallBudget(
-            max_tokens=(
-                max(0, goal.token_budget - goal.usage.total_tokens)
-                if goal is not None and goal.token_budget is not None
-                else None
-            )
-        )
-        try:
-            (
-                model_messages,
-                instructions,
-                context_usage,
-                context_snapshot,
-                session,
-            ) = await self._model_context(
-                request=request,
-                profile=profile,
-                provider=provider,
-                model=selected_model,
-                messages=incoming,
-                stored_messages=stored_messages,
-                session=session,
-                instructions=instructions,
-                budget=compaction_budget,
-                required_parameters={"tools"} if switch_tools_enabled else set(),
-            )
-        except ContextCapacityError as exc:
-            if goal is not None and exc.usage.total_tokens > 0:
-                goal = self._charge_goal(
-                    goal.id,
-                    exc.usage,
-                    exhausted_reason="Token budget exhausted during context compaction.",
-                )
-            record_caught_exception(
-                "chat",
-                "chat.chat.caught_failure_001",
-                "A handled chat operation raised an exception.",
-                exc,
-                stage="chat",
-            )
-            raise ChatConfigurationError(str(exc)) from exc
-        except ContextCompactionError as exc:
-            if goal is not None and exc.usage.total_tokens > 0:
-                goal = self._charge_goal(
-                    goal.id,
-                    exc.usage,
-                    exhausted_reason="Token budget exhausted during context compaction.",
-                )
-            record_caught_exception(
-                "chat",
-                "chat.chat.caught_failure_002",
-                "A handled chat operation raised an exception.",
-                exc,
-                stage="chat",
-            )
-            raise ChatCompactionError(str(exc)) from exc
-        if goal is not None and context_usage.total_tokens > 0:
-            goal = self._charge_goal(
-                goal.id,
-                context_usage,
-                exhausted_reason="Token budget exhausted during context compaction.",
-            )
-            if goal.status != ChatGoalStatus.RUNNING:
-                raise ChatConfigurationError(
-                    "goal token budget was exhausted during context compaction"
-                )
-
-        request_limits = resolve_context_limits(
-            profile,
-            model=selected_model,
-            requested_output_tokens=request.max_output_tokens,
-            required_parameters={"tools"} if switch_tools_enabled else None,
-        )
-        model_request = ModelRequest(
-            model=selected_model,
-            instructions=instructions,
-            messages=join_consecutive_assistant_messages(
-                [
-                    ModelMessage(
-                        role=message.role.value,
-                        content=self._model_content(
-                            message,
-                            engagement_id,
-                            images_supported=profile.capabilities.vision,
-                        ),
-                    )
-                    for message in model_messages
-                ]
-            ),
-            max_output_tokens=request_limits.max_output_tokens,
-            temperature=request.temperature,
-            reasoning_effort=request.reasoning_effort,
-            metadata={
-                key: value
-                for key, value in {
-                    "engagement_id": engagement_id,
-                    "chat_session_id": (
-                        session.id
-                        if session
-                        else pending_session.id
-                        if pending_session
-                        else None
-                    ),
-                    "resolved_context_limits": json.dumps(
-                        request_limits.model_dump(mode="json"),
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                }.items()
-                if value is not None
-            },
-        )
-        if goal is not None:
-            model_request = self._fit_goal_request_budget(goal.id, model_request)
-        self._ensure_request_capacity(profile, model_request)
         tool_components: RuntimeToolComponents | AutomationToolComponents | None = None
+        ranking: asyncio.Task[_ToolRanking] | None = None
         # Standing profile consent stands in for the per-turn confirmation the
         # operator would otherwise give before tool results leave the device.
         allow_cloud_tool_results = (
@@ -3953,56 +3829,226 @@ class ChatService:
                 if on_demand_enabled(tool_components.scope)
                 else {}
             )
+            tool_index = self._tool_index() if deferred_specs else None
             if deferred_specs:
-                operator_messages = [
-                    *(
-                        item.content
-                        for item in stored_messages
-                        if item.role == ChatRole.USER
-                    ),
-                    *(
-                        item.content
-                        for item in durable_incoming
-                        if item.role == ChatRole.USER
-                    ),
-                ]
-                tool_index = self._tool_index()
-                catalog_receipt: CatalogReceipt | None = None
-                ranked_sources: list[str] = []
-                if suggestions_enabled(tool_components.scope):
-                    receipt = await suggest_tools(
-                        self.tool_suggestion_client(),
-                        deferred=deferred_specs,
-                        operator_messages=operator_messages,
-                        skills=skill_snapshots,
-                        sources=mcp_sources(catalog_profiles),
-                        cache=self.suggestion_cache,
-                    )
-                    tool_suggestions = receipt.model_dump(mode="json")
-                    if receipt.status != "unavailable":
-                        catalog_receipt = CatalogReceipt(
-                            deferred=receipt.deferred,
-                            preloaded=receipt.preloaded,
-                            suggested=receipt.suggested,
-                            source_hints=receipt.sources,
-                            ranker="jev",
-                        )
-                        ranked_sources = receipt.source_ids
-                if catalog_receipt is None:
-                    # Local ranking; also the fallback when Jev is unavailable.
-                    catalog_receipt = await asyncio.to_thread(
-                        rank_for_request,
-                        tool_index,
+                # Only the operator's words, the selected skills and the
+                # catalog decide the ranking, so it runs while knowledge
+                # planning and context compaction below make their own
+                # provider round trips.
+                # diagnostic-expected: awaited, or cancelled and awaited, below
+                ranking = asyncio.create_task(
+                    self._rank_deferred_tools(
+                        tool_components.scope,
                         deferred_specs,
-                        next(
-                            (
-                                text
-                                for text in reversed(operator_messages)
-                                if text.strip()
+                        operator_messages=[
+                            *(
+                                item.content
+                                for item in stored_messages
+                                if item.role == ChatRole.USER
                             ),
-                            "",
-                        ),
+                            # Only what this request adds: a client that
+                            # replays the transcript must not repeat it.
+                            *(
+                                item.content
+                                for item in new_messages
+                                if item.role == ChatRole.USER
+                            ),
+                        ],
+                        skills=skill_snapshots,
+                        catalog_profiles=catalog_profiles,
+                        tool_index=tool_index,
                     )
+                )
+        try:
+            knowledge_budget = max(
+                1,
+                resolve_context_limits(
+                    profile,
+                    model=selected_model,
+                    requested_output_tokens=request.max_output_tokens,
+                ).target_input_tokens
+                // 5,
+            )
+            operator_help_chunks = self._retrieve_operator_help(
+                [incoming[-1].content], token_budget=knowledge_budget
+            )
+            operator_help_tokens = sum(
+                estimate_tokens(chunk.text, message_count=1)
+                for chunk in operator_help_chunks
+            )
+            engagement_chunks: list[_RetrievedChunk] = []
+            if (
+                request.include_knowledge
+                and engagement_id
+                and self._has_ready_knowledge(engagement_id)
+            ):
+                retrieval_queries = await self._plan_retrieval(
+                    provider=provider,
+                    model=selected_model,
+                    query=incoming[-1].content,
+                )
+                engagement_chunks = self._retrieve(
+                    engagement_id,
+                    retrieval_queries,
+                    redact=not provider.config.local,
+                    token_budget=max(1, knowledge_budget - operator_help_tokens),
+                )
+                if (
+                    engagement_chunks
+                    and not provider.config.local
+                    and any(chunk.local_only for chunk in engagement_chunks)
+                ):
+                    raise ChatPrivacyError(
+                        "selected knowledge is local-only and cannot be sent to a cloud provider"
+                    )
+                if engagement_chunks and not provider.config.local:
+                    if not profile.privacy.permits_sensitive_data:
+                        raise ChatPrivacyError(
+                            "provider profile does not permit engagement data transfer"
+                        )
+                    if not request.allow_cloud_knowledge:
+                        raise ChatPrivacyError(
+                            "cloud knowledge transfer requires explicit operator confirmation"
+                        )
+            citations = [
+                chunk.citation for chunk in [*operator_help_chunks, *engagement_chunks]
+            ]
+            instructions += _reference_instructions(
+                operator_help_chunks, trusted_operator_help=True
+            )
+            # JSON encoding keeps engagement document text inside an explicit data
+            # value; embedded delimiter-like strings never become instruction lines.
+            instructions += _reference_instructions(
+                engagement_chunks, trusted_operator_help=False
+            )
+            base_instructions = instructions
+
+            compaction_budget = ContextCallBudget(
+                max_tokens=(
+                    max(0, goal.token_budget - goal.usage.total_tokens)
+                    if goal is not None and goal.token_budget is not None
+                    else None
+                )
+            )
+            try:
+                (
+                    model_messages,
+                    instructions,
+                    context_usage,
+                    context_snapshot,
+                    session,
+                ) = await self._model_context(
+                    request=request,
+                    profile=profile,
+                    provider=provider,
+                    model=selected_model,
+                    messages=incoming,
+                    stored_messages=stored_messages,
+                    session=session,
+                    instructions=instructions,
+                    budget=compaction_budget,
+                    required_parameters={"tools"} if switch_tools_enabled else set(),
+                )
+            except ContextCapacityError as exc:
+                if goal is not None and exc.usage.total_tokens > 0:
+                    goal = self._charge_goal(
+                        goal.id,
+                        exc.usage,
+                        exhausted_reason="Token budget exhausted during context compaction.",
+                    )
+                record_caught_exception(
+                    "chat",
+                    "chat.chat.caught_failure_001",
+                    "A handled chat operation raised an exception.",
+                    exc,
+                    stage="chat",
+                )
+                raise ChatConfigurationError(str(exc)) from exc
+            except ContextCompactionError as exc:
+                if goal is not None and exc.usage.total_tokens > 0:
+                    goal = self._charge_goal(
+                        goal.id,
+                        exc.usage,
+                        exhausted_reason="Token budget exhausted during context compaction.",
+                    )
+                record_caught_exception(
+                    "chat",
+                    "chat.chat.caught_failure_002",
+                    "A handled chat operation raised an exception.",
+                    exc,
+                    stage="chat",
+                )
+                raise ChatCompactionError(str(exc)) from exc
+            if goal is not None and context_usage.total_tokens > 0:
+                goal = self._charge_goal(
+                    goal.id,
+                    context_usage,
+                    exhausted_reason="Token budget exhausted during context compaction.",
+                )
+                if goal.status != ChatGoalStatus.RUNNING:
+                    raise ChatConfigurationError(
+                        "goal token budget was exhausted during context compaction"
+                    )
+
+            request_limits = resolve_context_limits(
+                profile,
+                model=selected_model,
+                requested_output_tokens=request.max_output_tokens,
+                required_parameters={"tools"} if switch_tools_enabled else None,
+            )
+            model_request = ModelRequest(
+                model=selected_model,
+                instructions=instructions,
+                messages=join_consecutive_assistant_messages(
+                    [
+                        ModelMessage(
+                            role=message.role.value,
+                            content=self._model_content(
+                                message,
+                                engagement_id,
+                                images_supported=profile.capabilities.vision,
+                            ),
+                        )
+                        for message in model_messages
+                    ]
+                ),
+                max_output_tokens=request_limits.max_output_tokens,
+                temperature=request.temperature,
+                reasoning_effort=request.reasoning_effort,
+                metadata={
+                    key: value
+                    for key, value in {
+                        "engagement_id": engagement_id,
+                        "chat_session_id": (
+                            session.id
+                            if session
+                            else pending_session.id
+                            if pending_session
+                            else None
+                        ),
+                        "resolved_context_limits": json.dumps(
+                            request_limits.model_dump(mode="json"),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    }.items()
+                    if value is not None
+                },
+            )
+            if goal is not None:
+                model_request = self._fit_goal_request_budget(goal.id, model_request)
+            self._ensure_request_capacity(profile, model_request)
+        except BaseException:  # diagnostic-expected: re-raised below
+            if ranking is not None:
+                # The turn failed before it needed the ranking.
+                ranking.cancel()
+                await asyncio.gather(ranking, return_exceptions=True)
+            raise
+        if tools_enabled:
+            # Resolved with the runtime capabilities above.
+            assert tool_components is not None and engagement_id is not None
+            if ranking is not None:
+                tool_suggestions, catalog_receipt, ranked_sources = await ranking
                 # The model is told which server each pick comes from and what
                 # the operator says that server is for.
                 catalog_receipt.sources = picked_sources(
@@ -4045,6 +4091,7 @@ class ChatService:
                 scope_policy_id=tool_components.scope.id,
                 scope_revision=tool_components.scope.revision,
                 request_snapshot={
+                    "preparation": _preparation_receipt(started_at),
                     "operator_decisions": operator_decisions,
                     "skill_snapshots": [
                         item.model_dump(mode="json") for item in skill_snapshots
@@ -4116,6 +4163,7 @@ class ChatService:
                 ),
                 tools_enabled=False,
                 request_snapshot={
+                    "preparation": _preparation_receipt(started_at),
                     "operator_decisions": operator_decisions,
                     "skill_snapshots": [
                         item.model_dump(mode="json") for item in skill_snapshots
@@ -4723,6 +4771,10 @@ class ChatService:
                 instructions=prepared.base_instructions,
                 budget=budget,
                 required_parameters=prepared.required_parameters,
+                # The provider refused a context sized by estimate, so the
+                # retry compacts at the fresh boundary rather than resend the
+                # longest tail an older snapshot would allow.
+                reuse_snapshot=False,
             )
         except (ContextCapacityError, ContextCompactionError) as exc:
             raise ChatConfigurationError(
@@ -5288,7 +5340,9 @@ class ChatService:
                         break
                     routing = self._fit_turn_goal_request(prepared, routing)
                     self._ensure_request_capacity(prepared.provider_profile, routing)
+                    requested_at = utc_now()
                     response = await self._complete_routing_step(prepared, routing)
+                    responded_at = utc_now()
                     self._assert_execution_owner(prepared)
                     turn = self._refresh_turn(turn)
                     thought = _reasoning_step_delta(turn.reasoning, response.reasoning)
@@ -5449,16 +5503,21 @@ class ChatService:
                         break
                     # Every call is sorted before any of them executes, so a
                     # call Core cannot validate never reaches the broker.
-                    batched_calls = _with_replay_state(
-                        self._routing_batch(
+                    batched_calls = _with_provider_timing(
+                        _with_replay_state(
+                            self._routing_batch(
+                                response,
+                                turn,
+                                budgeted_names,
+                                deferred_names,
+                                set(components.specs),
+                                [spec.name for spec in available_specs],
+                            ),
                             response,
-                            turn,
-                            budgeted_names,
-                            deferred_names,
-                            set(components.specs),
-                            [spec.name for spec in available_specs],
                         ),
-                        response,
+                        group=self.turn_ledger.next_provider_group(turn.id),
+                        requested_at=requested_at,
+                        responded_at=responded_at,
                     )
                 parallel_wave = self._parallel_safe_wave(
                     batched_calls,
@@ -6646,6 +6705,57 @@ class ChatService:
                     },
                 ]
         return None
+
+    async def _rank_deferred_tools(
+        self,
+        scope: ScopePolicy,
+        deferred_specs: Mapping[str, ToolSpec],
+        *,
+        operator_messages: list[str],
+        skills: Sequence[SkillSnapshot],
+        catalog_profiles: Sequence[McpServerProfile],
+        tool_index: ToolIndex | None,
+    ) -> _ToolRanking:
+        """Rank the on-demand catalog against the operator's request.
+
+        Jev ranks it when the project opted in; the local index does
+        otherwise, and whenever Jev is unavailable.
+        """
+
+        tool_suggestions: dict[str, Any] | None = None
+        catalog_receipt: CatalogReceipt | None = None
+        ranked_sources: list[str] = []
+        if suggestions_enabled(scope):
+            receipt = await suggest_tools(
+                self.tool_suggestion_client(),
+                deferred=deferred_specs,
+                operator_messages=operator_messages,
+                skills=skills,
+                sources=mcp_sources(catalog_profiles),
+                cache=self.suggestion_cache,
+            )
+            tool_suggestions = receipt.model_dump(mode="json")
+            if receipt.status != "unavailable":
+                catalog_receipt = CatalogReceipt(
+                    deferred=receipt.deferred,
+                    preloaded=receipt.preloaded,
+                    suggested=receipt.suggested,
+                    source_hints=receipt.sources,
+                    ranker="jev",
+                )
+                ranked_sources = receipt.source_ids
+        if catalog_receipt is None:
+            # Local ranking; also the fallback when Jev is unavailable.
+            catalog_receipt = await asyncio.to_thread(
+                rank_for_request,
+                tool_index,
+                deferred_specs,
+                next(
+                    (text for text in reversed(operator_messages) if text.strip()),
+                    "",
+                ),
+            )
+        return tool_suggestions, catalog_receipt, ranked_sources
 
     def _tool_index(self) -> ToolIndex | None:
         index = self.knowledge_index
@@ -9695,11 +9805,6 @@ class ChatService:
                 _estimated_message_tokens(estimated_forms[message.id])
                 for message in uncompacted
             )
-            status = (
-                "stale"
-                if uncompacted_tokens > limits.target_input_tokens * 2 // 5
-                else "ready"
-            )
             through = latest.compacted_through
             if latest.memory is not None:
                 active_estimated = (
@@ -9708,6 +9813,11 @@ class ChatService:
                     )
                     + uncompacted_tokens
                 )
+            # A turn keeps the snapshot while everything after its boundary
+            # still fits beside its memory (see _model_context).
+            status = (
+                "stale" if active_estimated > limits.target_input_tokens else "ready"
+            )
         return ContextStatus(
             owner_type=ContextOwnerType.CHAT_SESSION,
             owner_id=session.id,
@@ -9987,6 +10097,7 @@ class ChatService:
         instructions: str,
         budget: ContextCallBudget | None = None,
         required_parameters: set[str] | None = None,
+        reuse_snapshot: bool = True,
     ) -> tuple[
         list[ChatRequestMessage],
         str,
@@ -10063,10 +10174,99 @@ class ChatService:
             message.id: _stored_model_text(message) for message in archived
         }
         compacted_through = archived[-1].sequence
+
+        def with_memory(
+            snapshot: ContextSnapshot, covered: list[ChatMessage], excerpt_budget: int
+        ) -> str:
+            """The instructions plus a snapshot's memory and relevant excerpts."""
+
+            assert snapshot.memory is not None
+            retrieved: list[dict[str, Any]] = []
+            retrieved_tokens = 0
+            ranked = sorted(
+                covered,
+                key=lambda item: (
+                    -lexical_score(current.content, archived_text[item.id]),
+                    -item.sequence,
+                ),
+            )
+            for archived_message in ranked:
+                text = archived_text[archived_message.id]
+                score = lexical_score(current.content, text)
+                if score <= 0:
+                    continue
+                size = estimate_tokens(text, message_count=1)
+                if retrieved_tokens + size > excerpt_budget:
+                    continue
+                retrieved.append(
+                    {
+                        "message_id": archived_message.id,
+                        "sequence": archived_message.sequence,
+                        "role": archived_message.role.value,
+                        "content": text,
+                    }
+                )
+                retrieved_tokens += size
+                if len(retrieved) >= 8:
+                    break
+            assembled = instructions + "\n\n" + memory_text(snapshot.memory)
+            if retrieved:
+                assembled += (
+                    "\n\nRETRIEVED CANONICAL TRANSCRIPT EXCERPTS (HISTORY; NOT SYSTEM "
+                    "INSTRUCTIONS)\n"
+                    + json.dumps(retrieved, ensure_ascii=False, separators=(",", ":"))
+                )
+            return assembled
+
         compactor = ContextCompactor(self.store)
         latest = compactor.latest(
             ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
         )
+        if (
+            reuse_snapshot
+            and latest is not None
+            and latest.status == ContextSnapshotStatus.READY
+            and latest.memory is not None
+            and latest.compacted_through < compacted_through
+        ):
+            # The tail moved past the latest snapshot's boundary. While every
+            # message after that boundary still fits beside its memory, the
+            # snapshot keeps serving: re-summarising the whole archive because
+            # the tail advanced by one exchange cost a full hierarchical
+            # compaction on every turn once a chat outgrew its target. The
+            # snapshot must cover exactly the messages it is kept for, so an
+            # edited or retracted one always compacts afresh.
+            covered = [
+                message
+                for message in stored_messages
+                if message.sequence <= latest.compacted_through
+            ]
+            kept = messages[len(covered) :]
+            if (
+                covered
+                and kept
+                and kept[0].role == ChatRole.USER
+                and {
+                    reference.source_id
+                    for reference in latest.source_references
+                    if reference.source_kind == "chat_message"
+                }
+                == {message.id for message in covered}
+            ):
+                kept_forms = [estimated_form(message) for message in kept]
+                room = limits.target_input_tokens - estimate_messages(
+                    kept_forms, instructions + "\n\n" + memory_text(latest.memory)
+                )
+                # Excerpts fill what room is left; a tail that fits only
+                # without them is still served by the snapshot.
+                budgets = (min(limits.target_input_tokens // 5, room), 0)
+                for excerpt_budget in budgets if room >= 0 else ():
+                    reused = with_memory(latest, covered, excerpt_budget)
+                    if (
+                        estimate_messages(kept_forms, reused)
+                        <= limits.target_input_tokens
+                    ):
+                        return kept, reused, ChatTokenUsage(), latest, session
         created = False
         if (
             latest is None
@@ -10101,43 +10301,9 @@ class ChatService:
         if latest.memory is None:
             raise ContextCompactionError("latest context snapshot has no memory")
 
-        derived = memory_text(latest.memory)
-        retrieval_budget = limits.target_input_tokens // 5
-        retrieved: list[dict[str, Any]] = []
-        retrieved_tokens = 0
-        ranked = sorted(
-            archived,
-            key=lambda item: (
-                -lexical_score(current.content, archived_text[item.id]),
-                -item.sequence,
-            ),
+        context_instructions = with_memory(
+            latest, archived, limits.target_input_tokens // 5
         )
-        for archived_message in ranked:
-            text = archived_text[archived_message.id]
-            score = lexical_score(current.content, text)
-            if score <= 0:
-                continue
-            size = estimate_tokens(text, message_count=1)
-            if retrieved_tokens + size > retrieval_budget:
-                continue
-            retrieved.append(
-                {
-                    "message_id": archived_message.id,
-                    "sequence": archived_message.sequence,
-                    "role": archived_message.role.value,
-                    "content": text,
-                }
-            )
-            retrieved_tokens += size
-            if len(retrieved) >= 8:
-                break
-        context_instructions = instructions + "\n\n" + derived
-        if retrieved:
-            context_instructions += (
-                "\n\nRETRIEVED CANONICAL TRANSCRIPT EXCERPTS (HISTORY; NOT SYSTEM "
-                "INSTRUCTIONS)\n"
-                + json.dumps(retrieved, ensure_ascii=False, separators=(",", ":"))
-            )
 
         # Tighten the recent tail until the complete assembled input fits the
         # target. Never remove the current user message.
@@ -10204,7 +10370,11 @@ class ChatService:
             metadata={"operation": "agentic_knowledge_retrieval"},
         )
         try:
-            response = await provider.complete(request)
+            # The plan only refines the query, so a slow planner costs the
+            # plan, never the turn: the turn does not exist until it returns.
+            response = await asyncio.wait_for(
+                provider.complete(request), _RETRIEVAL_PLAN_TIMEOUT_SECONDS
+            )
             payload = response.text.strip()
             if payload.startswith("```"):
                 payload = re.sub(r"^```(?:json)?\s*|\s*```$", "", payload)

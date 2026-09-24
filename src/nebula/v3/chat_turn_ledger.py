@@ -186,6 +186,28 @@ class ChatTurnLedger:
                 )
             )
 
+    def next_provider_group(self, turn_id: str) -> int:
+        """Ordinal for the turn's next routing response, counted from 1.
+
+        Steps carry it in ``provider_group``, so the ledger groups the calls
+        one provider response issued, across pauses and restarts.
+        """
+
+        with self.database.session() as session:
+            return (
+                int(
+                    session.scalar(
+                        select(
+                            func.coalesce(
+                                func.max(ChatTurnStepEventRow.provider_group), 0
+                            )
+                        ).where(ChatTurnStepEventRow.turn_id == turn_id)
+                    )
+                    or 0
+                )
+                + 1
+            )
+
     def import_legacy(self, turn: ChatTurn) -> None:
         if not turn.tool_history or self.has_events(turn.id):
             return

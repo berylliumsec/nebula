@@ -1113,6 +1113,41 @@ def _native_http_timeout(config: ProviderConfig) -> httpx.Timeout:
     return httpx.Timeout(read, connect=min(_NATIVE_CONNECT_TIMEOUT_SECONDS, read))
 
 
+@dataclass(frozen=True)
+class _InferenceDeadline:
+    """One non-streamed generation's allowance, shared by its resends.
+
+    The request timeout is how long one generation may take (a thinking
+    model's whole answer arrives as one body, #498). Automatic resends used to
+    get a fresh allowance each, so a stalled upstream held the turn, and its
+    provider slot, for ``attempts`` allowances: 3 x 600 s, about 30 minutes,
+    before the operator saw a failure. A resend now gets only what is left of
+    the first allowance, and none is started once it is spent.
+    """
+
+    seconds: float
+    expires_at: float
+
+    @classmethod
+    def start(cls, config: ProviderConfig) -> _InferenceDeadline:
+        seconds = _native_request_timeout(config)
+        return cls(seconds, asyncio.get_running_loop().time() + seconds)
+
+    def remaining(self) -> float:
+        return self.expires_at - asyncio.get_running_loop().time()
+
+    def admits(self, delay: float) -> bool:
+        """Whether a resend after ``delay`` still has time to answer."""
+
+        return self.remaining() - delay > 0
+
+    def spent(self) -> ProviderOverloadedError:
+        return ProviderOverloadedError(
+            "provider request timed out: no answer within the "
+            f"{self.seconds:g} s request allowance"
+        )
+
+
 def _retry_after_seconds(response: httpx.Response) -> float | None:
     """Read a Retry-After header in either seconds or HTTP-date form."""
 
@@ -1203,18 +1238,36 @@ async def _send_with_retry(
     to exhaustion, while a refused connection is still retried. ``inspect``
     reads a successful response for a failure its body reports (an error
     object inside an HTTP 200); a transient one is retried like its status.
+    Model inference resends share the first attempt's request allowance (see
+    ``_InferenceDeadline``).
     """
 
     policy = retry_policy(config)
+    deadline = (
+        _InferenceDeadline.start(config)
+        if operation in _MODEL_INFERENCE_OPERATIONS
+        else None
+    )
     attempt = 1
     while True:
         status_code: int | None = None
         try:
-            response = await send()
+            if deadline is None or attempt == 1:
+                response = await send()
+            else:
+                try:
+                    async with asyncio.timeout(deadline.remaining()):
+                        response = await send()
+                except TimeoutError as exc:
+                    # diagnostic-expected: raised as the exhausted allowance
+                    raise _exhausted(deadline.spent(), attempt) from exc
         except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
             # A connection that was never established cannot have reached the
             # provider, so the same request is safe to send again.
-            if attempt >= policy.attempts:
+            delay = _retry_delay(policy, attempt, None)
+            if attempt >= policy.attempts or (
+                deadline is not None and not deadline.admits(delay)
+            ):
                 raise _transport_failure(exc) from exc
             record_caught_exception(
                 "providers",
@@ -1223,7 +1276,6 @@ async def _send_with_retry(
                 exc,
                 stage="providers",
             )
-            delay = _retry_delay(policy, attempt, None)
         except httpx.HTTPError as exc:
             # Anything after the connection opened (a read timeout, a torn
             # body) may have reached the provider. Only model inference is
@@ -1240,11 +1292,14 @@ async def _send_with_retry(
             ):
                 raise _transport_failure(exc) from exc
             interrupted = _interrupted_transport(exc)
-            if attempt >= policy.attempts:
+            delay = _retry_delay(policy, attempt, None)
+            if attempt >= policy.attempts or (
+                deadline is not None and not deadline.admits(delay)
+            ):
+                # A read timeout that spent the whole allowance lands here.
                 raise (
                     _exhausted(interrupted, attempt) if attempt > 1 else interrupted
                 ) from exc
-            delay = _retry_delay(policy, attempt, None)
         else:
             error: ProviderError | None
             if response.is_error:
@@ -1253,12 +1308,14 @@ async def _send_with_retry(
                 error = inspect(response) if inspect is not None else None
             if not isinstance(error, ProviderOverloadedError):
                 return response
-            if attempt >= policy.attempts:
+            delay = _retry_delay(policy, attempt, error.retry_after)
+            if attempt >= policy.attempts or (
+                deadline is not None and not deadline.admits(delay)
+            ):
                 if attempt == 1:
                     return response
                 raise _exhausted(error, attempt)
             status_code = error.status_code
-            delay = _retry_delay(policy, attempt, error.retry_after)
         _record_retry(
             config,
             operation=operation,
@@ -5513,27 +5570,32 @@ class BedrockProvider(ModelProvider):
             inference["temperature"] = request.temperature
         if inference:
             kwargs["inferenceConfig"] = inference
-        # botocore would otherwise resend a whole generation up to five times
-        # after its 60 s read timeout; Nebula's retry policy decides instead.
-        client_config = BotocoreConfig(
-            connect_timeout=_NATIVE_CONNECT_TIMEOUT_SECONDS,
-            read_timeout=_native_request_timeout(self.config),
-            retries={"mode": "standard", "max_attempts": 1},
-        )
 
-        def invoke() -> dict[str, Any]:
+        def invoke(read_timeout: float) -> dict[str, Any]:
+            # botocore would otherwise resend a whole generation up to five
+            # times after its 60 s read timeout; Nebula's retry policy decides
+            # instead.
             client = boto3.client(
                 "bedrock-runtime",
                 region_name=self.config.options.get("region"),
-                config=client_config,
+                config=BotocoreConfig(
+                    connect_timeout=min(_NATIVE_CONNECT_TIMEOUT_SECONDS, read_timeout),
+                    read_timeout=read_timeout,
+                    retries={"mode": "standard", "max_attempts": 1},
+                ),
             )
             return client.converse(**kwargs)
 
         policy = retry_policy(self.config)
+        # Resends share the first attempt's allowance, as in _send_with_retry.
+        deadline = _InferenceDeadline.start(self.config)
         attempt = 1
         while True:
             try:
-                data = await asyncio.to_thread(invoke)
+                data = await asyncio.to_thread(
+                    invoke,
+                    deadline.seconds if attempt == 1 else deadline.remaining(),
+                )
                 break
             except Exception as exc:
                 record_caught_exception(
@@ -5546,11 +5608,11 @@ class BedrockProvider(ModelProvider):
                 failure = _bedrock_failure(exc)
                 if not isinstance(failure, ProviderOverloadedError):
                     raise failure from exc
-                if attempt >= policy.attempts:
+                delay = _retry_delay(policy, attempt, None)
+                if attempt >= policy.attempts or not deadline.admits(delay):
                     if attempt > 1:
                         raise _exhausted(failure, attempt) from exc
                     raise failure from exc
-                delay = _retry_delay(policy, attempt, None)
                 _record_retry(
                     self.config,
                     operation="converse",
