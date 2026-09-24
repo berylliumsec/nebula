@@ -11,9 +11,9 @@ Whole-Core migration, missions, browser research, reporting, and other workbench
 areas are excluded. Shared changes are limited to focused build/test wiring.
 
 Compatibility capture baseline: `b5bab4372871a0fa3fe91968c95d73903796ab56`.
-Current integration base: `d2d1ba62e3ad96c966a6612f1a446f6798e96c37`, freshly
-verified against origin/main. The intervening queue-controls change affects only
-UI files and its test receipt; the Assistant Python/Rust sources are unchanged.
+Current integration base: `e7d821ef01d16f4c8ea8e22eed4bcec744e3e099`, verified
+against origin/main on September 24. The upstream workspace-provenance execution
+dependency and its non-cascading session/run deletion behavior remain inventoried.
 Branch: `codex/rust-core-rewrite`.
 
 ## Operator acceptance contract
@@ -30,7 +30,7 @@ Branch: `codex/rust-core-rewrite`.
 
 All product journeys remain required and unverified for Rust. Browser/device/LAN
 matrices from the product-quality skill remain mandatory before activating the
-replacement. The experimental Rust router has thirty Assistant handlers; shipped
+replacement. The experimental Rust router has 38 Assistant handlers; shipped
 routes, UI, provider and harness execution have not switched to Rust.
 
 ## Development boundaries
@@ -910,6 +910,12 @@ change. Both exact Python oracle checks passed in 11.27 seconds. Scoped Clippy,
 Ruff, formatting and diff checks passed. The cumulative selection is 152 exact
 Rust tests and 57 Python checks; uploaded CI evidence belongs to its pushed commit.
 
+CI for commit `52f08c8` passed (run `35952781108`). Downloaded selection and
+Rust receipts share digest `9611c5cdb816e4a6ae341381e0a09aca4eec5635da86986e58702ad2e4eaf6f0`;
+152 unique Rust selections each collected and executed once. The Python 3.12 log
+records 57 passing checks in 67.38 seconds. Browser planning passed; its execution
+was skipped under the explicit selection.
+
 Detailed retained diagnostics beyond Entity/Schedule, strict missing-factory
 boundaries, nested opaque dictionary order in diagnostic display previews and
 Python environment overrides of error-display URLs remain explicit limitations.
@@ -917,3 +923,85 @@ This increment adds no routes or shipped execution. Goal configuration mutations
 provider/harness execution, durable dispatch/recovery, streaming, migration,
 packaging, production browser/device/LAN journeys and performance gates remain
 required for the complete Assistant rewrite.
+
+## Existing-conversation goal configuration contract
+
+Journey: open an existing Assistant conversation, save a goal through the goal
+panel, edit its objective/criteria/limits, refresh and see the durable draft or
+updated configuration. A stale edit retains the source conflict and latest-state
+retry path. Saved configuration does not start or resume execution. This increment
+ports POST and PATCH `/api/v1/chat/sessions/{session_id}/goal`; atomic creation of a
+new conversation and goal follows after its project/provider dependency codecs.
+
+Core owns the Session, complete ordered goal collection, configuration, revision,
+usage and execution claims. React owns unsaved inputs. Creation requires provider
+backend but no provider availability lookup or pending-turn reconciliation. Preserve
+the existing second Session read, all-candidate validation, absence/multiplicity
+checks and delayed UUID/timestamp allocation. The absence check is outside the
+insert transaction in Python; this increment preserves that race instead of
+claiming singleton admission. Updating replaces the seven configuration fields,
+including defaults for omitted plan and budgets, while retaining lifecycle,
+usage, children, skills, metadata and execution ownership. Revision, terminal
+state and step/child/time/token budget refusals retain source precedence. Exact
+integer comparisons and microsecond elapsed arithmetic preserve limit decisions.
+
+Request strings are untrimmed plain-BaseModel inputs with ignored extras. Entity
+construction trims typed strings later, so a whitespace-only objective fails at
+the model boundary after its source UUID allocation. Detailed Goal hydration adds
+its ordered fields, nested usage, nullable times and coherence validators to the
+bounded diagnostic foundation. Wrapped reads remain sanitized; direct candidate
+and merged-writer validation retain source errors. The writer compares a fresh
+revision, samples its clock inside the transaction, preserves unchanged opaque
+fields and rolls back entity/search changes together on failure.
+
+Planned evidence: isolated Python model/request/HTTP captures, exact UUID and clock
+observations, complete raw entity/search/protected-ledger deltas, retained claims,
+nonterminal edits, budget equality and precision, stale/conflicting/malformed
+candidates, writer failure and reopen. Select exact domain/storage/service/HTTP
+regressions and collect counts before execution. Saving, selection, refresh,
+failure and retry apply; stream/interrupt/background/child dispatch and delete
+remain separate execution work. Production goal-panel desktop/mobile/LAN,
+reconnect, keyboard/touch and physical-device gates remain required for product
+completion. The previously visited Figma session-details frame is the design
+reference; this contract does not claim a new prototype or browser run.
+
+The implementation now includes both configuration mutations, bringing the
+experimental route inventory to 38. The capture contains 133 HTTP cases, 93 service
+operations, 162 finite Goal/usage model vectors and 50 request vectors. Typed
+strings and dictionary keys normalize at the model boundary; unchanged opaque
+fragments and transformed dictionary insertion/collision order survive writes.
+Clock observations bind identity allocation, constructor defaults, live elapsed
+and writer timing separately. Shared elapsed arithmetic truncates both operands
+to microseconds and rounds wide-span division once, matching Python. Complete
+Goal reads charge materialized defaults against the aggregate read bound.
+
+Positive infinity remains a precise historical-data parity gap. Python accepts
+a retained infinite elapsed value, rejects finite time budgets with 409, and can
+commit an unlimited-budget edit containing literal `Infinity` while returning
+JSON `null`. Rust currently refuses that representation. Two model observations
+and three isolated HTTP observations retain this source behavior separately from
+the finite corpus; it is not counted as passing parity. Source concurrent creation
+still uses separate absence checks and insertion; no singleton guarantee is added.
+
+The live Figma session-details frame `4:77` was revisited on September 24 at
+1440×1180. Its visible goal progress/usage, Edit limits, distinct Interrupt and child
+Stop controls confirm the configuration/execution boundary. This remains design
+evidence; no production Rust UI, prototype interaction or browser/device/LAN
+acceptance is implied.
+
+All 49 unique selected local Rust checks passed, including all 133 HTTP cases,
+93 service cases, 162 finite model vectors and 86 Goal/usage diagnostic previews.
+Four exact Python oracle checks passed in 27.68 seconds. The focused runs exposed
+and corrected loss of large integer spelling at request deserialization and
+nested dictionary order in diagnostics. Test-only corrections compare declared
+floats by exact bits, avoid SQLite fixture REAL rounding, and recognize the new
+earlier hydrated-default read bound. Existing Entity/Schedule diagnostics and
+selected settings, read, auth, storage and resource-limit regressions passed.
+
+Nested Goal/usage order capture includes unknown fields, arrays and duplicate-key
+replacement. It bounds retained order metadata before cloning, releases replaced
+subtrees, sorts paths once and uses binary search during rendering. The existing
+bound regression covers 4,000 duplicate replacements, excessive metadata entries
+and repeated long paths. Scoped Clippy with warnings denied, Ruff, formatting and
+diff checks passed. The cumulative CI selection is 164 exact Rust checks and 58
+Python checks; production browser/device/LAN and performance evidence remain open.

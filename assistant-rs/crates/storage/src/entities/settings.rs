@@ -1,8 +1,15 @@
-//! Saved Assistant preferences and schedule configuration only. No dispatch.
+//! Saved Assistant preferences, goal and schedule configuration. No dispatch.
 use super::*;
 use nebula_assistant_domain::dependencies::{DependencyKind, StoredDependency};
+use serde::{
+    Deserialize, Deserializer,
+    de::{IgnoredAny, MapAccess, Visitor},
+};
 use serde_json::value::RawValue;
-use std::{collections::HashMap, io::Write};
+use std::{
+    collections::{HashMap, HashSet},
+    io::Write,
+};
 
 pub struct RawSession {
     pub record: StoredAssistantRecord,
@@ -146,6 +153,27 @@ impl SqliteAssistantStore {
             .await?
             .record)
     }
+    /// Replace only goal configuration. Lifecycle, usage and execution claims
+    /// remain owned by their separate state transitions.
+    pub async fn patch_goal_config(
+        &self,
+        id: &str,
+        expected_revision: String,
+        changes: Map<String, Value>,
+        clock: Arc<StateClock>,
+    ) -> Result<StoredAssistantRecord> {
+        Ok(self
+            .patch_settings(
+                AssistantKind::Goal,
+                id,
+                expected_revision,
+                changes,
+                None,
+                clock,
+            )
+            .await?
+            .record)
+    }
     async fn patch_settings(
         &self,
         kind: AssistantKind,
@@ -163,12 +191,22 @@ impl SqliteAssistantStore {
         {
             return Err(Error::InvalidBounds);
         }
-        let allowed = if kind == AssistantKind::Session {
-            &["title", "metadata"][..]
-        } else {
-            &["enabled", "paused_by", "skip_reason", "next_run_at"][..]
+        let allowed = match kind {
+            AssistantKind::Session => &["title", "metadata"][..],
+            AssistantKind::Schedule => &["enabled", "paused_by", "skip_reason", "next_run_at"][..],
+            AssistantKind::Goal => &[
+                "objective",
+                "completion_criteria",
+                "plan",
+                "token_budget",
+                "time_budget_seconds",
+                "step_budget",
+                "child_budget",
+            ][..],
+            _ => return Err(Error::ProtectedField),
         };
         if changes.keys().any(|key| !allowed.contains(&key.as_str()))
+            || kind == AssistantKind::Goal && changes.len() != allowed.len()
             || kind == AssistantKind::Session
                 && !changes.get("metadata").is_some_and(Value::is_object)
         {
@@ -250,11 +288,94 @@ impl Output {
 fn write_value(output: &mut Output, value: &Value) -> Result<()> {
     serde_json::to_writer(output, value).map_err(|_| Error::ReadLimit)
 }
+#[derive(Clone, Copy)]
+enum Preserve {
+    Plain,
+    Provider,
+    Goal,
+}
+struct Keys(Vec<String>);
+impl<'de> Deserialize<'de> for Keys {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        struct KeyVisitor;
+        impl<'de> Visitor<'de> for KeyVisitor {
+            type Value = Keys;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a saved dictionary")
+            }
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> std::result::Result<Keys, A::Error> {
+                let mut keys = Vec::new();
+                let mut seen = HashSet::new();
+                while let Some((key, _)) = map.next_entry::<String, IgnoredAny>()? {
+                    if seen.insert(key.clone()) {
+                        keys.push(key);
+                    }
+                }
+                Ok(Keys(keys))
+            }
+        }
+        deserializer.deserialize_map(KeyVisitor)
+    }
+}
+/// Typed dictionary keys are stripped by the Goal model. Keep their first
+/// normalized insertion position and last colliding value, as Python does;
+/// values themselves are opaque Any data and retain their raw representation.
+fn typed_dictionary(output: &mut Output, source: &str, next: &Value) -> Result<()> {
+    let raw: HashMap<String, &RawValue> = serde_json::from_str(source)?;
+    let Keys(keys) = serde_json::from_str(source)?;
+    let mut positions = HashMap::new();
+    let mut entries = Vec::new();
+    for key in keys {
+        let normalized = key.trim().to_owned();
+        let value = *raw.get(&key).ok_or(Error::CorruptEnvelope)?;
+        if let Some(&position) = positions.get(&normalized) {
+            entries[position] = (normalized, value);
+        } else {
+            positions.insert(normalized.clone(), entries.len());
+            entries.push((normalized, value));
+        }
+    }
+    let next = next.as_object().ok_or(Error::CorruptEnvelope)?;
+    if next.len() != entries.len() {
+        return Err(Error::CorruptEnvelope);
+    }
+    output.bytes(b"{")?;
+    for (index, (key, raw)) in entries.iter().enumerate() {
+        if index != 0 {
+            output.bytes(b",")?;
+        }
+        if next.get(key) != Some(&serde_json::from_str::<Value>(raw.get())?) {
+            return Err(Error::CorruptEnvelope);
+        }
+        write_value(output, &Value::String(key.clone()))?;
+        output.bytes(b":")?;
+        output.bytes(raw.get().as_bytes())?;
+    }
+    output.bytes(b"}")
+}
+fn goal_dictionaries(output: &mut Output, source: &str, next: &Value) -> Result<()> {
+    let raw: Vec<&RawValue> = serde_json::from_str(source)?;
+    let next = next.as_array().ok_or(Error::CorruptEnvelope)?;
+    if raw.len() != next.len() {
+        return Err(Error::CorruptEnvelope);
+    }
+    output.bytes(b"[")?;
+    for (index, (raw, next)) in raw.iter().zip(next).enumerate() {
+        if index != 0 {
+            output.bytes(b",")?;
+        }
+        typed_dictionary(output, raw.get(), next)?;
+    }
+    output.bytes(b"]")
+}
 fn preserved_object(
     output: &mut Output,
     source: &str,
     next: &Map<String, Value>,
-    nested_provider: bool,
+    preserve: Preserve,
 ) -> Result<()> {
     let before: Value = serde_json::from_str(source)?;
     let raw: HashMap<String, &RawValue> = serde_json::from_str(source)?;
@@ -267,7 +388,23 @@ fn preserved_object(
         output.bytes(b":")?;
         if before.get(key) == Some(value) {
             output.bytes(raw.get(key).ok_or(Error::CorruptEnvelope)?.get().as_bytes())?;
-        } else if nested_provider
+        } else if matches!(preserve, Preserve::Goal) && key == "metadata" && before[key].is_object()
+        {
+            typed_dictionary(
+                output,
+                raw.get(key).ok_or(Error::CorruptEnvelope)?.get(),
+                value,
+            )?;
+        } else if matches!(preserve, Preserve::Goal)
+            && ["completion_evidence", "skill_snapshots"].contains(&key.as_str())
+            && before[key].is_array()
+        {
+            goal_dictionaries(
+                output,
+                raw.get(key).ok_or(Error::CorruptEnvelope)?.get(),
+                value,
+            )?;
+        } else if matches!(preserve, Preserve::Provider)
             && key == "provider_subagent"
             && before[key].is_object()
             && value.is_object()
@@ -276,7 +413,7 @@ fn preserved_object(
                 output,
                 raw.get(key).ok_or(Error::CorruptEnvelope)?.get(),
                 value.as_object().ok_or(Error::CorruptEnvelope)?,
-                false,
+                Preserve::Plain,
             )?;
         } else {
             write_value(output, value)?;
@@ -310,7 +447,7 @@ fn session_json(current_raw: &str, initial_raw: &str, next: &Value, id: &str) ->
                 &mut output,
                 initial_raw.get(key).map_or("{}", |raw| raw.get()),
                 value.as_object().ok_or(Error::CorruptEnvelope)?,
-                true,
+                Preserve::Provider,
             )?;
         } else if current.get(key) == Some(value) {
             output.bytes(raw.get(key).ok_or(Error::CorruptEnvelope)?.get().as_bytes())?;
@@ -356,8 +493,21 @@ pub(super) async fn write(
     payload["updated_at"] = (request.clock)()
         .to_rfc3339_opts(SecondsFormat::Micros, true)
         .into();
-    let encoded = serde_json::to_vec(&payload)?;
-    let record = if request.kind == AssistantKind::Schedule {
+    let encoded = if request.kind == AssistantKind::Goal {
+        // model_dump preserves insertion order inside unchanged opaque values.
+        // Keep those fragments both for merged-model diagnostics and the commit.
+        let mut output = Output(Vec::new());
+        preserved_object(
+            &mut output,
+            row.try_get("payload")?,
+            payload.as_object().ok_or(Error::CorruptEnvelope)?,
+            Preserve::Goal,
+        )?;
+        output.0
+    } else {
+        serde_json::to_vec(&payload)?
+    };
+    let record = if matches!(request.kind, AssistantKind::Schedule | AssistantKind::Goal) {
         match StoredAssistantRecord::decode_updated_direct(request.kind, &encoded)
             .map_err(direct_record_error)
         {
@@ -382,6 +532,15 @@ pub(super) async fn write(
             record.payload(),
             &request.id,
         )?
+    } else if request.kind == AssistantKind::Goal {
+        let mut output = Output(Vec::new());
+        preserved_object(
+            &mut output,
+            row.try_get("payload")?,
+            record.payload().as_object().ok_or(Error::CorruptEnvelope)?,
+            Preserve::Goal,
+        )?;
+        String::from_utf8(output.0).map_err(|_| Error::CorruptEnvelope)?
     } else {
         serde_json::to_string(record.payload())?
     };

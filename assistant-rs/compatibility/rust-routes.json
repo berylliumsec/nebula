@@ -182,6 +182,16 @@
       "method": "POST",
       "path": "/api/v1/chat/sessions/{session_id}/schedule/actions",
       "status": "experimental"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/chat/sessions/{session_id}/goal",
+      "status": "experimental"
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v1/chat/sessions/{session_id}/goal",
+      "status": "experimental"
     }
   ],
   "evidence": [
@@ -199,7 +209,8 @@
     "nebula-assistant-transport/http: seventeen exact existing integration tests passed; transport/session_state adds the 81-case and queued writer-fault comparison",
     "python-recovery.json: 194 captured pending-turn/session-hook HTTP cases, 132 receipt vectors, 13 serialization vectors and 123 tool/hook phase vectors; exact adopted records and unresolved effects",
     "python-settings.json: 173 settings/schedule HTTP captures, 113 service cases, 74 MCP hydration vectors and 57 request vectors; includes archive-before-schedule-error and writer rollback controls",
-    "python-model-validation.json: 145 ordered Entity/Schedule validation vectors and 8 explicitly separate factory-default observations; bounded shared-input diagnostics"
+    "python-model-validation.json: 145 ordered Entity/Schedule validation vectors and 8 explicitly separate factory-default observations; bounded shared-input diagnostics",
+    "python-goal-drafts.json: 133 existing-conversation Goal HTTP captures, 93 service cases, 162 finite Goal/usage model vectors and 50 request vectors; separate 2 model and 3 HTTP nonfinite observations document an explicit parity gap"
   ],
   "remaining_gates": [
     "JSON syntax, content-type and method edge cases",
@@ -210,11 +221,12 @@
     "Whole-Assistant route coverage and performance acceptance",
     "Full shared project schema validation and production search-load measurements",
     "Malformed hook schemas: Rust sanitizes failure rather than returning the exact Python 422 validation detail",
-    "Other malformed session-linked model schemas, including goals: detailed Python validation envelopes remain incomplete beyond Entity/Schedule",
+    "Other malformed session-linked model schemas: detailed Python validation envelopes remain incomplete beyond Entity/Schedule/Goal/ChatTokenUsage",
     "Goal UI elapsed-time double counting and child-read failure visibility",
     "Subagent client omits question, reasoning effort and rounds; actions and production journey remain incomplete",
     "Malformed session-state dependency schemas use sanitized failure instead of detailed Python model-validation envelopes; resource bounds and strict watermark validity are explicit extensions",
     "Recorded-effect adoption has bounded snapshot/transaction/serialization extensions; real execution/restart recovery, production reconnect and complete malformed-record error parity remain open",
-    "Retained identity/revision/timestamp factories remain refused; nested opaque dictionary order and nonstandard environment settings in validation-display guidance are not fully represented"
+    "Retained identity/revision/timestamp factories remain refused; nested opaque dictionary order and nonstandard environment settings in validation-display guidance are not fully represented",
+    "Nonfinite historical Goal elapsed values: source permits infinity, but canonical Rust JSON cannot yet preserve its read/write behavior"
   ]
 }

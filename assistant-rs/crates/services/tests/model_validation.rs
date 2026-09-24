@@ -104,9 +104,9 @@ async fn retained_validation_services_preserve_catalog_and_plan_exception_origin
                     chrono::DateTime::from_timestamp(0, 0).unwrap()
                 )
                 .await,
-            Err(Error::LegacyUnhandled)
+            Err(Error::RetainedModelValidation(_))
         ),
-        "unimplemented direct Goal diagnostics retain their existing classification"
+        "direct Goal diagnostics escape while catalogue errors stay wrapped"
     );
     assert!(matches!(
         services.catalog_record(CatalogKind::Goals, "goal").await,

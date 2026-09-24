@@ -1,14 +1,14 @@
 {
-  "change_digest": "9611c5cdb816e4a6ae341381e0a09aca4eec5635da86986e58702ad2e4eaf6f0",
+  "change_digest": "e5227a7034721421b30af54fafc215354558f35c6f78f3832141e700227c8c9d",
   "reviewed_by": "Codex with domain, storage and oracle sub-agent review",
-  "reason": "Assistant-only Rust compatibility port. Cumulative exact checks cover implemented records, SQLite persistence, auth/read/recovery/settings routes and new retained Entity/Schedule validation. Direct model errors preserve ordered reports while wrapped reads stay sanitized; bounded diagnostics retain commit order and never execute providers/tools. Python regenerates scoped fixtures and verifies storage interoperability. Product and performance gates remain incomplete.",
-  "exclusions": "Thirty-three experimental Assistant handlers; no shipped Rust entrypoint or production UI. Other areas and desktop-native remain untouched. No provider/harness/tool/hook execution, child dispatch, streaming or live data. This increment only adopts already durable terminal evidence. Manual reconciliation/resume, historical/PostgreSQL/checkpoint migrations, complete route/error parity, production desktop/mobile/WebKit/LAN/reconnect/device, packaging and whole-Assistant performance remain open. Complete snapshot/transaction/response/serialization limits are explicit resource-bound extensions. Detailed malformed retained-model validation envelopes remain open. Existing Goal/subagent UI visibility gaps remain; Figma inspection is design evidence. Browser tests stay unselected until an isolated Rust-backed production journey exists.",
+  "reason": "Assistant-only Rust compatibility port. Exact cumulative selections cover implemented records, bounded SQLite persistence, auth/read/recovery/settings routes, Entity/Schedule/Goal/usage diagnostics and existing-conversation Goal configuration. Source captures bind model/request behavior, lazy clocks/identities, exact budgets, raw changes, search and protected ledgers. No execution or whole-product completion claimed.",
+  "exclusions": "38 experimental Assistant route handlers; no shipped Rust entrypoint or production UI. Other areas and desktop-native stay untouched. No real provider/harness/tool/hook execution, dispatch, streaming or live data. Historical nonfinite Goal values remain an explicit source-observed parity gap. New goal-conversation creation, lifecycle actions, complete route/dependency/schema parity, migrations, packaging, browser/mobile/WebKit/LAN/reconnect/device and whole-Assistant performance remain open. Bounds are explicit extensions; Figma visits are design evidence. Browser tests remain unselected until isolated Rust-backed production journeys exist.",
   "expected_tests": {
-    "python": 57,
+    "python": 58,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 152
+    "assistant_rust": 164
   },
   "python_versions": [
     "3.12"
@@ -29,7 +29,8 @@
     "tests/test_assistant_state_contract.py",
     "tests/test_assistant_recovery_contract.py",
     "tests/test_assistant_settings_contract.py",
-    "tests/test_assistant_model_validation_contract.py::test_model_validation_oracle_matches_current_python_boundary"
+    "tests/test_assistant_model_validation_contract.py::test_model_validation_oracle_matches_current_python_boundary",
+    "tests/test_assistant_goal_drafts_contract.py::test_goal_drafts_oracle_matches_current_python_assistant_boundary"
   ],
   "frontend": [],
   "native": [],
@@ -186,6 +187,18 @@
     "nebula-assistant-storage/model_validation::schedule_writer_validates_after_revision_and_rolls_back_entity_and_search",
     "nebula-assistant-services/model_validation::retained_validation_services_preserve_catalog_and_plan_exception_origins",
     "nebula-assistant-transport/http::retained_model_errors_preserve_locations_and_bound_repeated_inputs",
-    "nebula-assistant-transport/retained_diagnostics::retained_exception_previews_match_python_and_bound_unicode_tail"
+    "nebula-assistant-transport/retained_diagnostics::retained_exception_previews_match_python_and_bound_unicode_tail",
+    "nebula-assistant-domain/goal_model_validation::retained_goal_and_usage_hydration_match_python_model_vectors",
+    "nebula-assistant-domain/goal_model_validation::goal_constructor_factories_preserve_original_inputs_and_default_precedence",
+    "nebula-assistant-domain/goal_model_validation::goal_nested_validation_preserves_paths_ownership_order_and_bounds",
+    "nebula-assistant-domain/goal_model_validation::wrapped_goal_hydration_accepts_coercions_and_sanitizes_model_errors",
+    "nebula-assistant-storage/goal_drafts::goal_config_preserves_claims_opaque_fragments_and_reopens",
+    "nebula-assistant-storage/goal_drafts::goal_config_checks_revision_and_hydration_before_writer_clock",
+    "nebula-assistant-storage/goal_drafts::goal_config_rejects_lifecycle_fields_and_concurrent_stale_updates",
+    "nebula-assistant-services/goal_drafts::python_goal_drafts_oracle_matches_configuration_and_clock_boundaries",
+    "nebula-assistant-services/goal_drafts::goal_creation_defers_identity_and_factories_without_repairing_pending_work",
+    "nebula-assistant-services/goal_drafts::goal_updates_preserve_budget_precedence_integer_precision_and_owned_state",
+    "nebula-assistant-transport/goal_drafts::python_goal_configuration_http_preserves_responses_clocks_and_durable_state",
+    "nebula-assistant-transport/retained_diagnostics::goal_exception_previews_preserve_nested_input_locations_and_order"
   ]
 }

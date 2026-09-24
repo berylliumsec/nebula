@@ -112,3 +112,42 @@ fn retained_exception_previews_match_python_and_bound_unicode_tail() {
     assert!(preview.contains("\\xa0\\x01"));
     assert!(preview.contains("\\n"));
 }
+
+#[test]
+fn goal_exception_previews_preserve_nested_input_locations_and_order() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../compatibility/python-goal-drafts.json"
+    ))
+    .unwrap();
+    let mut matched = 0;
+    for vector in fixture["vectors"].as_array().unwrap() {
+        if vector["expected"]["accepted"] == true {
+            continue;
+        }
+        let model = match vector["model"].as_str().unwrap() {
+            "ChatGoal" => Model::ChatGoal,
+            "ChatTokenUsage" => Model::ChatTokenUsage,
+            other => panic!("unreviewed model {other}"),
+        };
+        let origin = match vector["input_origin"].as_str().unwrap() {
+            "retained_json" => InputOrigin::RetainedJson,
+            "writer_model_dump" => InputOrigin::WriterModelDump,
+            other => panic!("unreviewed input origin {other}"),
+        };
+        let Err(RecordError::ModelValidation(report)) = hydrate(
+            model,
+            origin,
+            vector["raw_input"].as_str().unwrap().as_bytes(),
+        ) else {
+            panic!("expected model validation for {}", vector["name"]);
+        };
+        assert_eq!(
+            retained::exception_prefix(&report),
+            vector["expected"]["exception_preview"].as_str().unwrap(),
+            "{}",
+            vector["name"]
+        );
+        matched += 1;
+    }
+    assert!(matched > 50, "complete rejected Goal/usage corpus required");
+}

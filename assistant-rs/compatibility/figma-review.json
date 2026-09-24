@@ -1107,5 +1107,19 @@
         "sha256": "9eb47c6396ef1fb02c2182857e42eb341344e466496f98f698031c22f3bc09d2"
       }
     ]
+  },
+  "goal_configuration_followup": {
+    "reviewed_date": "2026-09-24",
+    "file_key": "tVEa0PXZaa7H4ZLflwgcb7",
+    "node_id": "4:77",
+    "width": 1440,
+    "height": 1180,
+    "sha256": "9eb47c6396ef1fb02c2182857e42eb341344e466496f98f698031c22f3bc09d2",
+    "observations": [
+      "Goal objective and checklist stay visible beside token, step, time and agent usage.",
+      "Edit limits and Interrupt are separate controls.",
+      "Children have Stop agent; skills and checkpoint restore/fork are distinct journeys."
+    ],
+    "scope": "Fresh live design screenshot visually inspected; no interactive prototype, production Rust UI, mobile, LAN or physical-device evidence."
   }
 }

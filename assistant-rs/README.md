@@ -341,7 +341,33 @@ The ordered Entity/Schedule contract captures 145 validation vectors and eight
 separate factory-default observations. Reports share original inputs, redact
 Debug/Display, and bound both retained data and repeated-input wire expansion.
 The HTTP serializer adds the error envelope within its existing response budget.
-This detailed diagnostic implementation currently covers Entity and Schedule;
+This detailed diagnostic implementation covers Entity, Schedule, Goal and token usage;
 other retained model contracts remain separate migration work. Trusted writer
-datetime provenance and top-level input ordering are preserved. Nested opaque
-dictionary ordering in diagnostic display previews remains a limitation.
+datetime provenance and top-level input ordering are preserved. Goal/usage
+diagnostics retain nested dictionary order through a bounded streaming capture
+and indexed path lookup. Other models' nested display ordering remains a limitation.
+
+Existing-conversation goal POST/PATCH save and replace goal configuration without
+starting execution. Creation preserves the provider-backend guard, ordered
+candidate validation and lazy identity/two-clock allocation. Editing preserves
+revision/terminal/budget refusal order, exact integer comparisons, active elapsed
+precision, execution claims and opaque saved data. Only the seven configuration
+fields may change through this writer; a fresh revision and writer-clock failure
+roll back atomically. Concurrent create retains Python's separate absence check
+and insertion rather than promising singleton admission.
+
+The complete finite Goal/ChatTokenUsage model contract preserves typed string
+trimming, nested diagnostics, datetime offsets and validator precedence. Wrapped
+reads accept the same coercions while retaining sanitized errors. Positive
+infinity in historical elapsed values remains an explicit JSON representation
+boundary, not a claimed parity case. New goal-conversation creation, lifecycle
+actions and actual goal execution remain separate integration work.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_goal_drafts --output assistant-rs/compatibility/python-goal-drafts.json
+```
+
+Its HTTP oracle compares all entity envelopes, raw unchanged rows, search data,
+protected ledgers, UUID/clock observations and reopened state. The settings and
+goal fixtures share that durable-state harness. Production goal-panel behavior,
+mobile/LAN/reconnect/device testing and throughput measurements remain required.

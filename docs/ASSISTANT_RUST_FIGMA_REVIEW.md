@@ -140,3 +140,17 @@ These two live screenshots were visually inspected. This was a design review,
 not interactive prototype execution or a Rust-backed browser/device test. The
 current Assistant UI still lacks a verified schedule configuration control despite
 the Advanced scheduled-tasks reference in the older details frame.
+
+
+## Goal configuration follow-up, September 24
+
+Revisited the live [Session details 4:77](https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=4-77)
+at 1440×1180 and visually inspected the fresh export. The goal card keeps its
+objective/checklist and token, step, time and child-agent usage visible. Edit limits
+and Interrupt are separate actions. Child Stop, skill context and checkpoint
+restore/fork remain separate journeys; saving limits must preserve their state.
+The new existing-conversation configuration routes address the saved-data part of
+Edit limits, with revision conflicts and used-budget guards. New goal-conversation
+creation, execution/interrupt/children, and production browser/device/LAN journeys
+remain open. This visit is design evidence, not an interactive-prototype or UI test.
+The export dimensions and hash are retained in `figma-review.json`.

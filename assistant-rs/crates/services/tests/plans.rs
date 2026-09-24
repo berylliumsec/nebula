@@ -255,6 +255,39 @@ async fn plan_clocks_preserve_stored_elapsed_revisions_and_schedules_after_reope
         .await
         .unwrap();
     assert_eq!(submicro["elapsed_seconds"], 12.5);
+    let mut raw = support::raw(&path).await;
+    let original: String =
+        sqlx::query_scalar("SELECT payload FROM entities WHERE id='parent-goal'")
+            .fetch_one(&mut raw)
+            .await
+            .unwrap();
+    sqlx::query("UPDATE entities SET payload=json_set(payload,'$.active_since','2030-01-01T11:59:59.750000001Z') WHERE id='parent-goal'")
+        .execute(&mut raw).await.unwrap();
+    let nanos = services
+        .session_goal("parent-session", now())
+        .await
+        .unwrap();
+    assert_eq!(
+        nanos["elapsed_seconds"], 12.5,
+        "both retained and observed times truncate to Python microseconds"
+    );
+    sqlx::query("UPDATE entities SET payload=json_set(payload,'$.active_since','1744-07-29T12:12:25.259007Z','$.elapsed_seconds',0.0) WHERE id='parent-goal'")
+        .execute(&mut raw).await.unwrap();
+    let distant = services
+        .session_goal("parent-session", now())
+        .await
+        .unwrap();
+    assert_eq!(
+        distant["elapsed_seconds"],
+        json!(9_007_199_254.740_993_f64),
+        "Python rounds integer true division once even beyond 2^53 microseconds"
+    );
+    sqlx::query("UPDATE entities SET payload=? WHERE id='parent-goal'")
+        .bind(&original)
+        .execute(&mut raw)
+        .await
+        .unwrap();
+    raw.close().await.unwrap();
     let later = services
         .session_goal("parent-session", now() + chrono::Duration::seconds(10))
         .await
@@ -335,8 +368,9 @@ async fn child_plan_response_limits_preserve_complete_stored_rows() {
     let mut minimal = json!({"id":"child-0000","created_at":"2020-01-01T00:00:00Z","updated_at":"2020-01-01T00:00:00Z",
         "revision":1,"engagement_id":"retained-project","session_id":"orphan-child","objective":"x",
         "completion_criteria":["Retain only"],"parent_goal_id":"parent-goal"});
-    // Raw collection stays below the storage bound. Filling deterministic
-    // legacy defaults adds enough bytes to exceed the full response bound.
+    // Raw collection stays below the byte bound. Filling deterministic legacy
+    // defaults exceeds it, so storage must refuse before retaining that complete
+    // expanded collection; the service must never return a truncated child list.
     let raw_per_child = (16 * 1024 * 1024 - 16_384) / 1000;
     let header = serde_json::to_vec(&minimal).unwrap().len() - 1;
     let objective = "x".repeat(raw_per_child - header);
@@ -354,16 +388,13 @@ async fn child_plan_response_limits_preserve_complete_stored_rows() {
     }
     tx.commit().await.unwrap();
     raw.close().await.unwrap();
-    let snapshot = store
-        .goal_children_snapshot("parent-session")
-        .await
-        .unwrap();
-    assert_eq!(
-        snapshot.children.len(),
-        1000,
-        "The storage snapshot must be complete before response expansion is checked"
+    assert!(
+        matches!(
+            store.goal_children_snapshot("parent-session").await,
+            Err(StorageError::ReadLimit)
+        ),
+        "Hydrated defaults count against the bounded storage snapshot"
     );
-    drop(snapshot);
     let before = retained_rows(&path).await;
     let services = AssistantRecords::new(store.clone());
     assert!(

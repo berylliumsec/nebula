@@ -5,7 +5,7 @@
 //! quoting, Unicode printability and float formatting reuse the local proven
 //! services/src/subagents.rs implementation, with a streaming preview sink.
 //!
-//! The report preserves root input order and trusted writer datetime provenance.
+//! The report preserves root and typed nested input order and writer datetime provenance.
 //! Nested opaque object order is not represented by serde_json::Value, so its
 //! preview ordering remains a documented compatibility boundary. This renderer
 //! uses the captured default URL setting/version; Python environment overrides
@@ -131,16 +131,11 @@ fn render(report: &ValidationReport, output: &mut Prefix) -> fmt::Result {
             output.write_char('\n')?;
         }
         write!(output, "  {} [type={}, input_value=", issue.msg, issue.kind)?;
-        let root_input = issue.kind == "missing" || issue.loc.is_empty();
-        let datetime = !root_input
-            && matches!(issue.loc, [Location::Field(field)] if report.is_datetime_input(field));
+        let datetime =
+            matches!(issue.input_path, [Location::Field(field)] if report.is_datetime_input(field));
         let mut preview = ReprPreview::new();
-        repr(
-            issue.input,
-            &mut preview,
-            root_input.then_some(report),
-            datetime,
-        )?;
+        let mut path = issue.input_path.to_vec();
+        repr(issue.input, &mut preview, report, &mut path, datetime)?;
         preview.append_to(output)?;
         write!(
             output,
@@ -182,7 +177,8 @@ fn float_number(number: &serde_json::Number) -> bool {
 fn repr(
     value: &Value,
     output: &mut ReprPreview,
-    root: Option<&ValidationReport>,
+    report: &ValidationReport,
+    path: &mut Vec<Location>,
     datetime: bool,
 ) -> fmt::Result {
     if datetime {
@@ -223,20 +219,25 @@ fn repr(
                 if index != 0 {
                     output.write_str(", ")?;
                 }
-                repr(value, output, None, false)?;
+                path.push(Location::Index(index));
+                repr(value, output, report, path, false)?;
+                path.pop();
             }
             output.write_char(']')
         }
         Value::Object(fields) => {
             output.write_char('{')?;
-            if let Some(report) = root {
-                for (index, key) in report.input_order().iter().enumerate() {
+            if let Some(order) = report.input_order_at(path) {
+                for (index, key) in order.iter().enumerate() {
                     if index != 0 {
                         output.write_str(", ")?;
                     }
                     string_repr(key, output)?;
                     output.write_str(": ")?;
-                    repr(&fields[key], output, None, report.is_datetime_input(key))?;
+                    let datetime = path.is_empty() && report.is_datetime_input(key);
+                    path.push(Location::Field(key.clone()));
+                    repr(&fields[key], output, report, path, datetime)?;
+                    path.pop();
                 }
             } else {
                 // Value retains values but not original nested dictionary order.
@@ -246,7 +247,9 @@ fn repr(
                     }
                     string_repr(key, output)?;
                     output.write_str(": ")?;
-                    repr(value, output, None, false)?;
+                    path.push(Location::Field(key.clone()));
+                    repr(value, output, report, path, false)?;
+                    path.pop();
                 }
             }
             output.write_char('}')

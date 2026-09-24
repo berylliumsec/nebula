@@ -32,6 +32,61 @@ fn session_error(error: StorageError, session: &str) -> Error {
     }
 }
 
+/// Presentation and budget guards share Python's microsecond datetime arithmetic.
+/// A naive active timestamp fails only when running arithmetic is required.
+pub(crate) fn active_elapsed_seconds(goal: &Value, now: DateTime<Utc>) -> Result<f64> {
+    let elapsed = goal["elapsed_seconds"]
+        .as_f64()
+        .ok_or(Error::LegacyUnhandled)?;
+    if goal["status"] != "running" || goal["active_since"].is_null() {
+        return Ok(elapsed);
+    }
+    let since = DateTime::parse_from_rfc3339(
+        goal["active_since"]
+            .as_str()
+            .ok_or(Error::LegacyUnhandled)?,
+    )
+    .map_err(|_| Error::LegacyUnhandled)?;
+    let since = since
+        .with_nanosecond(since.nanosecond() / 1000 * 1000)
+        .ok_or(Error::LegacyUnhandled)?;
+    let now = now
+        .with_nanosecond(now.nanosecond() / 1000 * 1000)
+        .ok_or(Error::LegacyUnhandled)?;
+    let micros = now
+        .signed_duration_since(since)
+        .num_microseconds()
+        .ok_or(Error::LegacyUnhandled)?;
+    Ok(elapsed + positive_timedelta_seconds(micros))
+}
+
+fn positive_timedelta_seconds(micros: i64) -> f64 {
+    if micros <= 0 {
+        return 0.0;
+    }
+    // Python divides the integer microsecond count before rounding to f64.
+    // Casting that count first can double-round spans longer than 2^53 µs.
+    // Here the positive ratio is always normal and the scaled numerator fits
+    // within 74 bits, even at i64::MAX. Round its 53-bit significand once.
+    let numerator = micros as u128;
+    let denominator = 1_000_000_u128;
+    let mut exponent = numerator.ilog2() as i32 - denominator.ilog2() as i32;
+    let below_power = if exponent >= 0 {
+        numerator < denominator << exponent
+    } else {
+        numerator << -exponent < denominator
+    };
+    exponent -= i32::from(below_power);
+    let scaled = numerator << (52 - exponent);
+    let mut significand = scaled / denominator;
+    let remainder = scaled % denominator;
+    if remainder * 2 > denominator || (remainder * 2 == denominator && significand & 1 == 1) {
+        significand += 1;
+    }
+    // Addition also carries a rounded significand of 2^53 into the exponent.
+    f64::from_bits((((exponent + 1023) as u64) << 52) + significand as u64 - (1 << 52))
+}
+
 struct ResponseBudget(usize);
 impl std::io::Write for ResponseBudget {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -55,6 +110,20 @@ impl ResponseBudget {
 
 impl AssistantRecords {
     pub async fn session_goal(&self, session: &str, now: DateTime<Utc>) -> Result<Value> {
+        self.session_goal_observed(session, || now).await
+    }
+
+    /// HTTP reads sample presentation time only after authoritative goal reads
+    /// and only for running goals, matching the source's lazy observation.
+    pub async fn session_goal_with_clock(&self, session: &str) -> Result<Value> {
+        self.session_goal_observed(session, self.clock).await
+    }
+
+    async fn session_goal_observed<F: FnOnce() -> DateTime<Utc>>(
+        &self,
+        session: &str,
+        observe: F,
+    ) -> Result<Value> {
         if !valid_identity(session) {
             return Err(missing_session(session));
         }
@@ -76,29 +145,14 @@ impl AssistantRecords {
                 Error::RetainedNotFound(format!("chat goal not found for session: {session}"))
             })?
             .into_payload();
-        if goal["status"] == "running" && !goal["active_since"].is_null() {
-            // Python datetime arithmetic has microsecond resolution. A naive
-            // active_since cannot be compared with the trusted aware clock.
-            let since = DateTime::parse_from_rfc3339(
-                goal["active_since"]
-                    .as_str()
-                    .ok_or(Error::LegacyUnhandled)?,
-            )
-            .map_err(|_| Error::LegacyUnhandled)?;
-            let now = now
-                .with_nanosecond(now.nanosecond() / 1000 * 1000)
-                .ok_or(Error::LegacyUnhandled)?;
-            let micros = now
-                .signed_duration_since(since)
-                .num_microseconds()
-                .ok_or(Error::LegacyUnhandled)?;
-            let elapsed = goal["elapsed_seconds"]
-                .as_f64()
-                .ok_or(Error::LegacyUnhandled)?
-                + (micros as f64 / 1_000_000.0).max(0.0);
-            goal["elapsed_seconds"] = serde_json::Number::from_f64(elapsed)
-                .ok_or(Error::LegacyUnhandled)?
-                .into();
+        if goal["status"] == "running" {
+            let now = observe();
+            if !goal["active_since"].is_null() {
+                let elapsed = active_elapsed_seconds(&goal, now)?;
+                goal["elapsed_seconds"] = serde_json::Number::from_f64(elapsed)
+                    .ok_or(Error::LegacyUnhandled)?
+                    .into();
+            }
         }
         ResponseBudget(0).charge(&goal)?;
         Ok(goal)

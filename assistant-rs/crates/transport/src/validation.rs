@@ -3,6 +3,7 @@
 use crate::ApiError;
 use nebula_assistant_services::context::{CursorWrite, DecisionWrite};
 use nebula_assistant_services::generated::GeneratedListRequest;
+use nebula_assistant_services::goal_drafts::{GoalDraft, GoalDraftUpdate};
 use nebula_assistant_services::navigation::{BookmarkWrite, SearchRequest};
 use nebula_assistant_services::results::ResultsQuery;
 use nebula_assistant_services::settings::{ScheduleCreate, ScheduleWrite, SettingsWrite};
@@ -10,6 +11,7 @@ use serde_json::{Map, Value, json};
 use speedate::{Date, DateTime, DateTimeConfig, MicrosecondsPrecisionOverflowBehavior, TimeConfig};
 use strum::EnumMessage;
 
+mod goals;
 mod settings;
 pub(crate) use settings::key_order;
 
@@ -24,6 +26,8 @@ pub(crate) enum BodyModel {
     Settings,
     ScheduleCreate,
     ScheduleWrite,
+    GoalCreate,
+    GoalUpdate,
 }
 impl RequestModel for CursorWrite {
     const MODEL: BodyModel = BodyModel::Cursor;
@@ -42,6 +46,12 @@ impl RequestModel for ScheduleCreate {
 }
 impl RequestModel for ScheduleWrite {
     const MODEL: BodyModel = BodyModel::ScheduleWrite;
+}
+impl RequestModel for GoalDraft {
+    const MODEL: BodyModel = BodyModel::GoalCreate;
+}
+impl RequestModel for GoalDraftUpdate {
+    const MODEL: BodyModel = BodyModel::GoalUpdate;
 }
 
 fn error(
@@ -95,6 +105,14 @@ pub(crate) fn validate<T: RequestModel>(input: Value, key_order: &[String]) -> R
                     "Assistant request cannot be represented by its validated contract",
                 )
             });
+    }
+    if matches!(T::MODEL, BodyModel::GoalCreate | BodyModel::GoalUpdate) {
+        return serde_json::from_value(goals::validate(&T::MODEL, &input, fields)?).map_err(|_| {
+            ApiError::http(
+                422,
+                "Assistant request cannot be represented by its validated contract",
+            )
+        });
     }
     let mut output = Map::new();
     let mut errors = Vec::new();

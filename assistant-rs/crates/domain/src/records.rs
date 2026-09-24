@@ -110,7 +110,7 @@ pub struct StoredAssistantRecord {
 impl StoredAssistantRecord {
     /// Match a direct Python model hydration where model validation errors are
     /// observable. Wrapped storage reads must continue using decode_persisted.
-    /// Only the complete Schedule/Entity contract is covered here; other kinds
+    /// Complete Goal/Schedule contracts are covered here; other kinds
     /// retain their existing decoder and error semantics.
     pub fn decode_persisted_direct(kind: AssistantKind, bytes: &[u8]) -> Result<Self, RecordError> {
         Self::decode_direct(
@@ -130,19 +130,35 @@ impl StoredAssistantRecord {
         )
     }
 
+    /// Construct a Goal with already sampled trusted Entity clock factories,
+    /// retaining the original constructor arguments in detailed errors.
+    pub fn decode_created_direct(
+        kind: AssistantKind,
+        bytes: &[u8],
+        created_at: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> Result<Self, RecordError> {
+        if kind != AssistantKind::Goal {
+            return Err(RecordError::UnknownKind);
+        }
+        let payload = crate::model_validation::hydrate_created_goal(bytes, created_at, updated_at)?;
+        Self::decode(
+            kind,
+            &serde_json::to_vec(&payload).map_err(|_| RecordError::Json)?,
+        )
+    }
+
     fn decode_direct(
         kind: AssistantKind,
         bytes: &[u8],
         origin: crate::model_validation::InputOrigin,
     ) -> Result<Self, RecordError> {
-        if kind != AssistantKind::Schedule {
-            return Self::decode_persisted(kind, bytes);
-        }
-        let payload = crate::model_validation::hydrate(
-            crate::model_validation::Model::ChatSchedule,
-            origin,
-            bytes,
-        )?;
+        let model = match kind {
+            AssistantKind::Schedule => crate::model_validation::Model::ChatSchedule,
+            AssistantKind::Goal => crate::model_validation::Model::ChatGoal,
+            _ => return Self::decode_persisted(kind, bytes),
+        };
+        let payload = crate::model_validation::hydrate(model, origin, bytes)?;
         Self::decode(
             kind,
             &serde_json::to_vec(&payload).map_err(|_| RecordError::Json)?,
@@ -150,9 +166,22 @@ impl StoredAssistantRecord {
     }
 
     /// Read an older persisted payload using deterministic model defaults only.
-    /// Identity, revision and timestamps must already exist. Opaque dictionaries
-    /// remain untouched; no current clock, UUID factory or external helper runs.
+    /// Identity, revision and timestamps must already exist. Opaque values retain
+    /// their model semantics; no clock, UUID factory or external helper runs.
     pub fn decode_persisted(kind: AssistantKind, bytes: &[u8]) -> Result<Self, RecordError> {
+        if kind == AssistantKind::Goal {
+            return Self::decode_direct(
+                kind,
+                bytes,
+                crate::model_validation::InputOrigin::RetainedJson,
+            )
+            .map_err(|error| match error {
+                // Wrapped Store.get/list_entities expose corruption rather
+                // than detailed Pydantic errors. Drop the input owner here.
+                RecordError::ModelValidation(_) => RecordError::Shape("chat_goals"),
+                error => error,
+            });
+        }
         if bytes.len() > MAX_RECORD_BYTES {
             return Err(RecordError::TooLarge);
         }

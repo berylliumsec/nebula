@@ -347,4 +347,104 @@ async fn plan_snapshot_limits_include_roots_unrelated_history_and_complete_catal
     assert_eq!(sqlx::query_scalar::<_,i64>("SELECT count(*) FROM entities WHERE kind='chat_schedules' AND chat_session_id='many-schedules'").fetch_one(&mut raw).await.unwrap(),10_000);
     raw.close().await.unwrap();
     store.shutdown().await.unwrap();
+
+    // Minimal legacy Goals fit the retained-byte limit, but their deterministic
+    // defaults still consume the same aggregate materialization budget.
+    let path = temp.path().join("hydrated-goals.db");
+    support::database(&path).await;
+    let store = SqliteAssistantStore::open(&path, Config::default())
+        .await
+        .unwrap();
+    store
+        .apply(vec![
+            Mutation::Create(record(Kind::Session, "hydrated", json!({}))),
+            Mutation::Create(record(Kind::Session, "parent-only", json!({}))),
+            Mutation::Create(record(
+                Kind::Goal,
+                "parent-only-goal",
+                json!({"session_id":"parent-only"}),
+            )),
+        ])
+        .await
+        .unwrap();
+    let minimal = json!({"id":"legacy-0000","created_at":"2026-09-23T12:00:00Z","updated_at":"2026-09-23T12:01:00Z","revision":2,"engagement_id":"plans-project","session_id":"hydrated","objective":"x","completion_criteria":["x"]});
+    let minimal_raw = serde_json::to_string(&minimal).unwrap();
+    let hydrated =
+        StoredAssistantRecord::decode_persisted(Kind::Goal, minimal_raw.as_bytes()).unwrap();
+    let added_per_goal = serde_json::to_vec(hydrated.payload()).unwrap().len() - minimal_raw.len();
+    assert!(added_per_goal > 100);
+    let mut raw = support::raw(&path).await;
+    sqlx::query("WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<1000) INSERT INTO entities(id,kind,engagement_id,revision,payload,chat_session_id,created_at,updated_at) SELECT printf('legacy-%04d',i),'chat_goals','plans-project',2,json_set(?,'$.id',printf('legacy-%04d',i)),'hydrated','2026-09-23 12:00:00.000000','2026-09-23 12:01:00.000000' FROM n")
+        .bind(&minimal_raw).execute(&mut raw).await.unwrap();
+    let retained_before:i64 = sqlx::query_scalar("SELECT sum(length(CAST(payload AS BLOB))) FROM entities WHERE chat_session_id='hydrated' OR id='hydrated'").fetch_one(&mut raw).await.unwrap();
+    let mut large = record(
+        Kind::Goal,
+        "zz-large-hydrated",
+        json!({"session_id":"hydrated","metadata":{"opaque":""}}),
+    )
+    .into_payload();
+    let base_bytes = serde_json::to_vec(&large).unwrap().len();
+    let limit = 16 * 1024 * 1024;
+    let expansion = added_per_goal * 1001;
+    let blob_bytes = limit - retained_before as usize - base_bytes - expansion / 2 - 16_384;
+    large["metadata"]["opaque"] = "x".repeat(blob_bytes).into();
+    store
+        .apply(vec![Mutation::Create(
+            StoredAssistantRecord::decode(Kind::Goal, &serde_json::to_vec(&large).unwrap())
+                .unwrap(),
+        )])
+        .await
+        .unwrap();
+    drop(large);
+    let retained:i64 = sqlx::query_scalar("SELECT sum(length(CAST(payload AS BLOB))) FROM entities WHERE chat_session_id='hydrated' OR id='hydrated'").fetch_one(&mut raw).await.unwrap();
+    assert!((retained as usize) < limit);
+    assert!((retained as usize) + expansion > limit);
+    assert!(
+        matches!(
+            store.session_plans_snapshot(Kind::Goal, "hydrated").await,
+            Err(Error::ReadLimit)
+        ),
+        "successful Goal hydration counts expanded defaults"
+    );
+    assert!(
+        matches!(
+            store.goal_children_snapshot("parent-only").await,
+            Err(Error::ReadLimit)
+        ),
+        "unrelated global Goal hydration uses the same expanded budget"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM entities WHERE kind='chat_goals' AND chat_session_id='hydrated'"
+        )
+        .fetch_one(&mut raw)
+        .await
+        .unwrap(),
+        1002
+    );
+    assert_eq!(sqlx::query_scalar::<_,i64>("SELECT length(json_extract(payload,'$.metadata.opaque')) FROM entities WHERE id='zz-large-hydrated'").fetch_one(&mut raw).await.unwrap(),blob_bytes as i64);
+    assert_eq!(
+        store.admission().available_reads,
+        Config::default().read_capacity
+    );
+    sqlx::query("UPDATE entities SET payload=json_set(payload,'$.metadata.opaque','') WHERE id='zz-large-hydrated'").execute(&mut raw).await.unwrap();
+    assert_eq!(
+        store
+            .session_plans_snapshot(Kind::Goal, "hydrated")
+            .await
+            .unwrap()
+            .records
+            .len(),
+        1002
+    );
+    assert!(
+        store
+            .goal_children_snapshot("parent-only")
+            .await
+            .unwrap()
+            .children
+            .is_empty()
+    );
+    raw.close().await.unwrap();
+    store.shutdown().await.unwrap();
 }

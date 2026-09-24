@@ -31,6 +31,40 @@ struct Budget {
     rows: usize,
 }
 impl Budget {
+    fn hydrated_goal(&mut self, record: &StoredAssistantRecord, raw_bytes: usize) -> Result<()> {
+        if record.kind() != AssistantKind::Goal {
+            return Ok(());
+        }
+        // Defaults/coercions can make a valid legacy Goal larger than its
+        // retained JSON. Count into a bounded sink, without another payload.
+        struct Counter {
+            bytes: usize,
+            limit: usize,
+        }
+        impl std::io::Write for Counter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if bytes.len() > self.limit.saturating_sub(self.bytes) {
+                    return Err(std::io::Error::other("hydrated goal byte limit"));
+                }
+                self.bytes += bytes.len();
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut counter = Counter {
+            bytes: 0,
+            limit: MAX_TRANSACTION_BYTES
+                .saturating_sub(self.bytes)
+                .saturating_add(raw_bytes),
+        };
+        serde_json::to_writer(&mut counter, record.payload()).map_err(|_| Error::ReadLimit)?;
+        self.bytes = self
+            .bytes
+            .saturating_add(counter.bytes.saturating_sub(raw_bytes));
+        Ok(())
+    }
     fn report(&mut self, error: Error) -> Error {
         if let Error::RetainedModelValidation(report) = &error {
             // The report shares its input internally; charge that retained
@@ -42,7 +76,7 @@ impl Budget {
         }
         error
     }
-    fn charge(&mut self, row: &SqliteRow) -> Result<()> {
+    fn charge(&mut self, row: &SqliteRow) -> Result<usize> {
         let bytes: i64 = row.try_get("payload_bytes")?;
         if bytes < 0 || bytes as u64 > MAX_RECORD_BYTES as u64 {
             return Err(RecordError::TooLarge.into());
@@ -52,7 +86,7 @@ impl Budget {
         if self.bytes > 16 * 1024 * 1024 || self.rows > 10_000 {
             return Err(Error::ReadLimit);
         }
-        Ok(())
+        Ok(bytes as usize)
     }
 }
 
@@ -94,8 +128,9 @@ impl SqliteAssistantStore {
             while let Some(row) = rows.try_next().await? {
                 // The Python collection validates unrelated goals before
                 // filtering. They consume the budget even when not retained.
-                budget.charge(&row)?;
-                let goal = decode_row(row).map_err(wrapped_model_error)?;
+                let raw_bytes = budget.charge(&row)?;
+                let goal = decode_row_ref(&row).map_err(wrapped_model_error)?;
+                budget.hydrated_goal(&goal, raw_bytes)?;
                 if goal.payload()["parent_goal_id"] == parent_id {
                     children.push(goal);
                 }
@@ -146,14 +181,16 @@ async fn records(
     let mut rows = statement.fetch(&mut **tx);
     let mut result = Vec::new();
     while let Some(row) = rows.try_next().await? {
-        budget.charge(&row)?;
-        result.push(decode_row_ref_on(&row, surface).map_err(|error| {
+        let raw_bytes = budget.charge(&row)?;
+        let record = decode_row_ref_on(&row, surface).map_err(|error| {
             let error = match surface {
                 ValidationSurface::WrappedRecord => wrapped_model_error(error),
                 ValidationSurface::DirectModel => error,
             };
             budget.report(error)
-        })?);
+        })?;
+        budget.hydrated_goal(&record, raw_bytes)?;
+        result.push(record);
     }
     Ok(result)
 }

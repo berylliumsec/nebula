@@ -22,6 +22,7 @@ use nebula_assistant_services::{
     artifact_preview::ArtifactPreview,
     context::{CursorWrite, DecisionWrite},
     generated::CatalogKind,
+    goal_drafts::{GoalDraft, GoalDraftUpdate},
     navigation::BookmarkWrite,
     settings::{ScheduleCreate, ScheduleWrite, SettingsWrite},
 };
@@ -43,6 +44,7 @@ pub struct HttpConfig {
     pub clock: fn() -> DateTime<Utc>,
     /// Trusted host identity source; never accepted from request fields.
     pub new_schedule_id: fn() -> String,
+    pub new_goal_id: fn() -> String,
     pub artifacts: Option<ArtifactPreview>,
     /// Trusted, synchronous observation of retained harness transport liveness.
     /// Must never start a transport or wait for network/process activity.
@@ -58,6 +60,7 @@ impl HttpConfig {
             request_timeout: std::time::Duration::from_secs(30),
             clock: Utc::now,
             new_schedule_id: || uuid::Uuid::new_v4().to_string(),
+            new_goal_id: || uuid::Uuid::new_v4().to_string(),
             artifacts: None,
             harness_connection: None,
         }
@@ -115,7 +118,10 @@ pub fn router(store: SqliteAssistantStore, config: HttpConfig) -> Result<Router,
             "/api/v1/chat-subagents/{entity_id}",
             get(other_catalog_record),
         )
-        .route("/api/v1/chat/sessions/{session_id}/goal", get(session_goal))
+        .route(
+            "/api/v1/chat/sessions/{session_id}/goal",
+            get(session_goal).post(create_goal).patch(update_goal),
+        )
         .route(
             "/api/v1/chat/sessions/{session_id}/goal/children",
             get(goal_children),
@@ -414,11 +420,44 @@ async fn session_goal(
     Path(session): Path<String>,
     request: Request,
 ) -> Response {
-    let result = state
-        .services
-        .session_goal(&session, (state.config.clock)())
+    let result = AssistantRecords::with_clock(state.store, state.config.clock)
+        .session_goal_with_clock(&session)
         .await;
     reply(request, result)
+}
+async fn create_goal(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let (parts, body) = request.into_parts();
+    let records = AssistantRecords::with_clock(state.store, state.config.clock);
+    let result = match decode::<GoalDraft>(body, state.config.body_bytes).await {
+        Ok(body) => records
+            .create_goal(&session, body, state.config.new_goal_id)
+            .await
+            .map(|r| r.into_payload())
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
+}
+async fn update_goal(
+    State(state): State<AppState>,
+    Path(session): Path<String>,
+    request: Request,
+) -> Response {
+    let (parts, body) = request.into_parts();
+    let records = AssistantRecords::with_clock(state.store, state.config.clock);
+    let result = match decode::<GoalDraftUpdate>(body, state.config.body_bytes).await {
+        Ok(body) => records
+            .update_goal(&session, body)
+            .await
+            .map(|r| r.into_payload())
+            .map_err(ApiError::service),
+        Err(error) => Err(error),
+    };
+    api_reply(&parts, result)
 }
 async fn goal_children(
     State(state): State<AppState>,

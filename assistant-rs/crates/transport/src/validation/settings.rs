@@ -217,7 +217,7 @@ fn bool_field(output: &mut Map<String, Value>, errors: &mut Vec<Value>, name: &s
     }
 }
 
-fn int_field(
+pub(super) fn int_field(
     output: &mut Map<String, Value>,
     errors: &mut Vec<Value>,
     name: &str,

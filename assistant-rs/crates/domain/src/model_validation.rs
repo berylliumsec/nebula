@@ -1,7 +1,8 @@
-//! Ordered diagnostics for direct retained Entity/ChatSchedule hydration.
+//! Ordered diagnostics for retained Entity, Schedule, Goal and usage models.
 //!
 //! This is not request validation or a general Pydantic interpreter. No factory
-//! runs while reading retained data. Reports share their input and never expose
+//! runs while reading retained data; constructors receive explicit factory
+//! outputs. Reports share their input and never expose
 //! it through Debug/Display; only their explicit Serialize interface emits it.
 use crate::records::{MAX_RECORD_BYTES, RecordError};
 use chrono::{DateTime, NaiveDateTime, SecondsFormat, Utc};
@@ -20,29 +21,38 @@ use strum::EnumMessage;
 
 const MAX_ISSUES: usize = 10_000;
 type Result<T> = std::result::Result<T, RecordError>;
+mod goal;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Model {
     Entity,
     ChatSchedule,
+    ChatGoal,
+    ChatTokenUsage,
 }
 impl Model {
     pub const fn name(self) -> &'static str {
         match self {
             Self::Entity => "Entity",
             Self::ChatSchedule => "ChatSchedule",
+            Self::ChatGoal => "ChatGoal",
+            Self::ChatTokenUsage => "ChatTokenUsage",
         }
     }
     fn kind(self) -> &'static str {
         match self {
             Self::Entity => "entities",
             Self::ChatSchedule => "chat_schedules",
+            Self::ChatGoal => "chat_goals",
+            Self::ChatTokenUsage => "chat_token_usage",
         }
     }
     fn fields(self) -> &'static [Field] {
         match self {
             Self::Entity => &FIELDS[..4],
             Self::ChatSchedule => &FIELDS,
+            Self::ChatGoal => &goal::FIELDS,
+            Self::ChatTokenUsage => &goal::USAGE_FIELDS,
         }
     }
 }
@@ -55,7 +65,7 @@ pub enum InputOrigin {
     WriterModelDump,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(untagged)]
 pub enum Location {
     Field(String),
@@ -67,8 +77,8 @@ struct Issue {
     kind: &'static str,
     loc: Vec<Location>,
     msg: String,
-    /// None references the whole shared input (missing/model-after errors).
-    input_field: Option<String>,
+    /// Empty references the whole shared input; nested inputs share that owner.
+    input_path: Vec<Location>,
     ctx: Option<Value>,
 }
 
@@ -81,6 +91,8 @@ pub struct ValidationIssueRef<'a> {
     pub loc: &'a [Location],
     pub msg: &'a str,
     pub input: &'a Value,
+    #[serde(skip)]
+    pub input_path: &'a [Location],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ctx: Option<&'a Value>,
 }
@@ -91,6 +103,7 @@ pub struct ValidationReport {
     origin: InputOrigin,
     input: Arc<Value>,
     input_order: Arc<[String]>,
+    nested_order: Arc<Vec<(Vec<Location>, Vec<String>)>>,
     datetime_fields: Vec<&'static str>,
     issues: Vec<Issue>,
     retained_bytes: usize,
@@ -132,6 +145,15 @@ impl ValidationReport {
     pub fn input_order(&self) -> &[String] {
         &self.input_order
     }
+    pub fn input_order_at(&self, path: &[Location]) -> Option<&[String]> {
+        if path.is_empty() {
+            return Some(self.input_order());
+        }
+        self.nested_order
+            .binary_search_by(|(at, _)| at.as_slice().cmp(path))
+            .ok()
+            .map(|index| self.nested_order[index].1.as_slice())
+    }
     /// Only the trusted writer entry point supplies typed datetime values.
     /// Ordinary ISO-looking strings in retained JSON or metadata are not typed.
     pub fn is_datetime_input(&self, field: &str) -> bool {
@@ -152,10 +174,8 @@ impl ValidationReport {
             kind: issue.kind,
             loc: &issue.loc,
             msg: &issue.msg,
-            input: issue
-                .input_field
-                .as_ref()
-                .map_or(self.input.as_ref(), |field| &self.input[field]),
+            input: input_at(&self.input, &issue.input_path),
+            input_path: &issue.input_path,
             ctx: issue.ctx.as_ref(),
         })
     }
@@ -175,15 +195,26 @@ impl ValidationReport {
         if self.issues.len() >= MAX_ISSUES {
             return Err(RecordError::TooLarge);
         }
+        let loc = field.map_or_else(Vec::new, |field| vec![Location::Field(field.into())]);
+        let input_path = if missing { Vec::new() } else { loc.clone() };
+        self.add_at(kind, loc, input_path, msg, ctx)
+    }
+    fn add_at(
+        &mut self,
+        kind: &'static str,
+        loc: Vec<Location>,
+        input_path: Vec<Location>,
+        msg: String,
+        ctx: Option<Value>,
+    ) -> Result<()> {
+        if self.issues.len() >= MAX_ISSUES {
+            return Err(RecordError::TooLarge);
+        }
         let issue = Issue {
             kind,
-            loc: field.map_or_else(Vec::new, |field| vec![Location::Field(field.into())]),
+            loc,
             msg,
-            input_field: if missing {
-                None
-            } else {
-                field.map(str::to_owned)
-            },
+            input_path,
             ctx,
         };
         let bytes = encoded_len(&issue, MAX_RECORD_BYTES)?;
@@ -200,6 +231,12 @@ impl ValidationReport {
         encoded_len(&self, MAX_RECORD_BYTES)?;
         Err(RecordError::ModelValidation(self))
     }
+}
+fn input_at<'a>(root: &'a Value, path: &[Location]) -> &'a Value {
+    path.iter().fold(root, |value, part| match part {
+        Location::Field(key) => &value[key],
+        Location::Index(index) => &value[*index],
+    })
 }
 
 struct Limited<W> {
@@ -276,6 +313,13 @@ enum FieldType {
     Timestamp { schedule: bool },
     Boolean,
     Archive,
+    OptionalTime,
+    Float,
+    GoalStatus,
+    Strings { min: usize, max: usize },
+    Dictionaries { max: usize },
+    Dictionary,
+    Usage,
 }
 #[derive(Clone, Copy)]
 struct Field {
@@ -370,13 +414,38 @@ type FieldResult = std::result::Result<Value, Failure>;
 /// and original diagnostic input. Missing factory-backed identity/time fields
 /// remain a strict retained-data error even though Python can invent defaults.
 pub fn hydrate(model: Model, origin: InputOrigin, bytes: &[u8]) -> Result<Value> {
+    hydrate_inner(model, origin, bytes, None)
+}
+
+/// Trusted constructor factories are supplied separately so error inputs remain
+/// the caller's original keyword arguments, without invented fields.
+pub fn hydrate_created_goal(
+    bytes: &[u8],
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+) -> Result<Value> {
+    let defaults = json!({"created_at":created_at.to_rfc3339_opts(SecondsFormat::Micros,true),"updated_at":updated_at.to_rfc3339_opts(SecondsFormat::Micros,true),"revision":1});
+    hydrate_inner(
+        Model::ChatGoal,
+        InputOrigin::RetainedJson,
+        bytes,
+        Some(&defaults),
+    )
+}
+
+fn hydrate_inner(
+    model: Model,
+    origin: InputOrigin,
+    bytes: &[u8],
+    factory_defaults: Option<&Value>,
+) -> Result<Value> {
     if bytes.len() > MAX_RECORD_BYTES {
         return Err(RecordError::TooLarge);
     }
     let mut input: Value = serde_json::from_slice(bytes).map_err(|_| RecordError::Json)?;
-    if input.is_object() {
+    if input.is_object() && model != Model::ChatTokenUsage {
         for field in ["id", "revision", "created_at", "updated_at"] {
-            if input.get(field).is_none() {
+            if input.get(field).is_none() && factory_defaults.and_then(|v| v.get(field)).is_none() {
                 return Err(RecordError::Shape(model.kind()));
             }
         }
@@ -406,9 +475,15 @@ pub fn hydrate(model: Model, origin: InputOrigin, bytes: &[u8]) -> Result<Value>
         Vec::new()
     };
     let input_bytes = encoded_len(&input, MAX_RECORD_BYTES)?;
-    let retained_bytes = input_bytes
+    let base_bytes = input_bytes
         .saturating_add(encoded_len(&keys, MAX_RECORD_BYTES)?)
         .saturating_add(encoded_len(&datetime_fields, MAX_RECORD_BYTES)?);
+    let nested_order = if matches!(model, Model::ChatGoal | Model::ChatTokenUsage) {
+        goal::nested_orders(bytes, &input, MAX_RECORD_BYTES.saturating_sub(base_bytes))?
+    } else {
+        Vec::new()
+    };
+    let retained_bytes = base_bytes.saturating_add(encoded_len(&nested_order, MAX_RECORD_BYTES)?);
     if retained_bytes > MAX_RECORD_BYTES {
         return Err(RecordError::TooLarge);
     }
@@ -419,6 +494,7 @@ pub fn hydrate(model: Model, origin: InputOrigin, bytes: &[u8]) -> Result<Value>
         origin,
         input: input.clone(),
         input_order: keys.clone(),
+        nested_order: Arc::new(nested_order),
         datetime_fields,
         issues: Vec::new(),
         retained_bytes,
@@ -438,8 +514,13 @@ pub fn hydrate(model: Model, origin: InputOrigin, bytes: &[u8]) -> Result<Value>
     };
     let mut output = Map::new();
     for field in model.fields() {
-        let Some(value) = fields.get(field.name) else {
-            if field.name == "enabled" {
+        let Some(value) = fields
+            .get(field.name)
+            .or_else(|| factory_defaults.and_then(|v| v.get(field.name)))
+        else {
+            if let Some(value) = goal::default(model, *field) {
+                output.insert(field.name.into(), value);
+            } else if field.name == "enabled" {
                 output.insert(field.name.into(), true.into());
             } else if field.nullable {
                 output.insert(field.name.into(), Value::Null);
@@ -454,11 +535,13 @@ pub fn hydrate(model: Model, origin: InputOrigin, bytes: &[u8]) -> Result<Value>
             }
             continue;
         };
-        match validate_field(*field, value) {
-            Ok(value) => {
-                output.insert(field.name.into(), value);
-            }
-            Err(error) => report.add(error.kind, Some(field.name), false, error.msg, error.ctx)?,
+        if let Some(value) = goal::validate(
+            *field,
+            value,
+            vec![Location::Field(field.name.into())],
+            &mut report,
+        )? {
+            output.insert(field.name.into(), value);
         }
     }
     for key in keys.iter() {
@@ -475,16 +558,30 @@ pub fn hydrate(model: Model, origin: InputOrigin, bytes: &[u8]) -> Result<Value>
     if !report.is_empty() {
         return report.error();
     }
-    let created =
-        DateTime::parse_from_rfc3339(output["created_at"].as_str().ok_or(RecordError::Schema)?)
-            .map_err(|_| RecordError::Schema)?;
-    let updated =
-        DateTime::parse_from_rfc3339(output["updated_at"].as_str().ok_or(RecordError::Schema)?)
-            .map_err(|_| RecordError::Schema)?;
-    if updated < created {
-        let error = Failure::value("updated_at cannot be earlier than created_at");
+    if model != Model::ChatTokenUsage {
+        let created =
+            DateTime::parse_from_rfc3339(output["created_at"].as_str().ok_or(RecordError::Schema)?)
+                .map_err(|_| RecordError::Schema)?;
+        let updated =
+            DateTime::parse_from_rfc3339(output["updated_at"].as_str().ok_or(RecordError::Schema)?)
+                .map_err(|_| RecordError::Schema)?;
+        if updated < created {
+            let error = Failure::value("updated_at cannot be earlier than created_at");
+            report.add(error.kind, None, false, error.msg, error.ctx)?;
+            return report.error();
+        }
+    }
+    if model == Model::ChatGoal
+        && let Some(message) = goal::coherence(&output)
+    {
+        let error = Failure::value(message);
         report.add(error.kind, None, false, error.msg, error.ctx)?;
         return report.error();
+    }
+    if model == Model::ChatGoal && output["elapsed_seconds"].is_null() {
+        return Err(RecordError::Invariant(
+            "nonfinite Goal elapsed value cannot be retained as canonical JSON",
+        ));
     }
     let output = Value::Object(output);
     encoded_len(&output, MAX_RECORD_BYTES)?;
@@ -496,11 +593,12 @@ fn writer_datetime_inputs(model: Model, input: &mut Value) -> Vec<&'static str> 
     if !input.is_object() {
         return typed;
     }
-    for field in model
-        .fields()
-        .iter()
-        .filter(|f| matches!(f.kind, FieldType::Timestamp { .. }))
-    {
+    for field in model.fields().iter().filter(|f| {
+        matches!(
+            f.kind,
+            FieldType::Timestamp { .. } | FieldType::OptionalTime
+        )
+    }) {
         let Some(value) = input.get_mut(field.name) else {
             continue;
         };
@@ -626,6 +724,13 @@ fn validate_field(field: Field, value: &Value) -> FieldResult {
                 )
                 .into())
         }
+        FieldType::OptionalTime | FieldType::Float | FieldType::GoalStatus => {
+            goal::scalar(field.kind, value)
+        }
+        FieldType::Strings { .. }
+        | FieldType::Dictionaries { .. }
+        | FieldType::Dictionary
+        | FieldType::Usage => unreachable!("compound field validated through goal::validate"),
     }
 }
 
