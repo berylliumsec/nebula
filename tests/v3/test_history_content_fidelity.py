@@ -31,7 +31,12 @@ from nebula.v3.domain import (
 )
 from nebula.v3.providers import ModelCapabilities, ModelProvider
 from nebula.v3.storage import NebulaStore
-from tests.v3.test_chat import ContextRejectingProvider, FakeProvider, _profile
+from tests.v3.test_chat import (
+    ContextRejectingProvider,
+    FakeProvider,
+    _admitted_stream,
+    _profile,
+)
 
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -440,7 +445,7 @@ def test_selected_context_survives_context_length_recovery(tmp_path):
     )
 
     async def collect_stream():
-        return [item async for item in service.stream(prepared)]
+        return [item async for item in _admitted_stream(service, prepared)]
 
     assert asyncio.run(collect_stream())[-1][0] == "done"
     assert provider.normal_attempts == 2

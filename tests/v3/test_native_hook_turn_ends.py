@@ -19,7 +19,12 @@ from nebula.v3.providers import (
     ToolCall,
 )
 from nebula.v3.storage import NebulaStore
-from tests.v3.test_chat import FakeProvider, _profile, _write_native_hook
+from tests.v3.test_chat import (
+    FakeProvider,
+    _admitted_stream,
+    _profile,
+    _write_native_hook,
+)
 from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
 
 
@@ -556,10 +561,10 @@ def test_stream_holds_answer_until_required_completion_hook_accepts(tmp_path, bl
         visible = []
         if blocked:
             with pytest.raises(ChatError, match="stream-answer-guard"):
-                async for event, payload in service.stream(prepared):
+                async for event, payload in _admitted_stream(service, prepared):
                     visible.append((event, payload))
         else:
-            async for event, payload in service.stream(prepared):
+            async for event, payload in _admitted_stream(service, prepared):
                 visible.append((event, payload))
         return visible
 

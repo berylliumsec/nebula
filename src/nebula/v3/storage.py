@@ -33,6 +33,7 @@ from .database import (
     Database,
     EntityRow,
     OperationEventRow,
+    ProviderTurnQueueRow,
     RunBudgetCounterRow,
     RunEventRow,
     SearchDocumentRow,
@@ -51,6 +52,19 @@ from .domain import (
 )
 
 EntityT = TypeVar("EntityT", bound=Entity)
+
+
+def _recovery_pending(payload: dict[str, Any]) -> bool:
+    """An interrupted turn still blocks its conversation until recovery ends.
+
+    Mirrors ``ChatService._turn_is_pending`` for a stored ``chat_turns`` row.
+    """
+
+    snapshot = payload.get("request_snapshot")
+    recovery = snapshot.get("recovery") if isinstance(snapshot, dict) else None
+    return isinstance(recovery, dict) and bool(
+        recovery.get("required") or recovery.get("automatic_retry_pending")
+    )
 
 
 def not_temporary_chat_session() -> ColumnElement[bool]:
@@ -1391,14 +1405,34 @@ class NebulaStore:
                 if item.payload.get("child_session_id")
             ),
         ]
+        # What the conversation reports as its pending turn, which also stops
+        # a rename or archive: a queued turn is still admitted and run, and an
+        # interrupted one awaiting recovery is resumed by Core.
         active_turn = and_(
             EntityRow.kind == "chat_turns",
             EntityRow.chat_session_id.in_(session_ids),
             EntityRow.payload["status"]
             .as_string()
-            .in_(("routing", "waiting_approval", "waiting_callback", "finalizing")),
+            .in_(
+                (
+                    "queued",
+                    "routing",
+                    "waiting_approval",
+                    "waiting_callback",
+                    "finalizing",
+                )
+            ),
         )
-        if session.scalar(select(exists().where(active_turn))):
+        interrupted = session.scalars(
+            select(EntityRow.payload).where(
+                EntityRow.kind == "chat_turns",
+                EntityRow.chat_session_id.in_(session_ids),
+                EntityRow.payload["status"].as_string() == "interrupted",
+            )
+        )
+        if session.scalar(select(exists().where(active_turn))) or any(
+            _recovery_pending(payload) for payload in interrupted
+        ):
             raise ConflictError(
                 "conversation cannot be deleted while a response is active"
             )
@@ -1523,6 +1557,13 @@ class NebulaStore:
             session.execute(
                 delete(RunBudgetCounterRow).where(
                     RunBudgetCounterRow.run_id.in_(chat_turn_ids)
+                )
+            )
+            # Admission rows are keyed by turn id; one left behind names a turn
+            # that no longer exists.
+            session.execute(
+                delete(ProviderTurnQueueRow).where(
+                    ProviderTurnQueueRow.turn_id.in_(chat_turn_ids)
                 )
             )
             # Operation events are an immutable audit ledger. As with deleted
@@ -1695,6 +1736,16 @@ class NebulaStore:
             session.execute(
                 delete(RunBudgetCounterRow).where(
                     RunBudgetCounterRow.run_id.in_(counter_owner_ids)
+                )
+            )
+            session.execute(
+                delete(ProviderTurnQueueRow).where(
+                    ProviderTurnQueueRow.turn_id.in_(
+                        select(EntityRow.id).where(
+                            EntityRow.engagement_id == engagement_id,
+                            EntityRow.kind == "chat_turns",
+                        )
+                    )
                 )
             )
             for table, column in (

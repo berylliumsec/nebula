@@ -705,6 +705,7 @@ class _ActiveProviderTurn:
     followers: int = 0
     done: bool = False
     error: BaseException | None = None
+    admission: ProviderAdmission | None = None
 
 
 # Session markers that describe the source conversation's own lifecycle, not
@@ -1754,11 +1755,39 @@ class ChatService:
                     )
             offset += len(goal_page)
         await self.subagents.reconcile_after_restart(preserve_graceful=True)
+        self._restore_queued_turns()
+        self.reconcile_waiting_callbacks()
+
+    def _restore_queued_turns(self) -> None:
+        """Start again what the previous Core accepted but never admitted.
+
+        A queued row is a new turn, or a parked one resumed after its approval
+        or callback. One unreadable or missing turn must not stop Core booting
+        or the other turns restoring.
+        """
+
         for turn_id in self.provider_scheduler.recover():
-            turn = self.store.get(ChatTurn, turn_id)
-            if turn.status != ChatTurnStatus.QUEUED:
-                continue
             try:
+                try:
+                    turn = self.store.get(ChatTurn, turn_id)
+                except NotFoundError as exc:
+                    # The turn went with its conversation. Close the admission
+                    # row so no later boot tries to restore it again.
+                    record_caught_exception(
+                        "chat",
+                        "chat.provider_queue.restore_missing",
+                        "A queued provider turn no longer exists; its admission was closed.",
+                        exc,
+                        stage="startup-recovery",
+                    )
+                    self.provider_scheduler.cancel(turn_id)
+                    continue
+                if turn.status not in {
+                    ChatTurnStatus.QUEUED,
+                    ChatTurnStatus.WAITING_APPROVAL,
+                    ChatTurnStatus.WAITING_CALLBACK,
+                } or self.has_active_provider_turn(turn_id):
+                    continue
                 self.start_provider_turn(self.prepare_resume(turn_id))
             except Exception as exc:
                 record_caught_exception(
@@ -1768,7 +1797,6 @@ class ChatService:
                     exc,
                     stage="startup-recovery",
                 )
-        self.reconcile_waiting_callbacks()
 
     def reconcile_waiting_callbacks(self) -> list[str]:
         """Resume process callback waits whose producer can no longer be live.
@@ -2129,26 +2157,17 @@ class ChatService:
                     item for item in history if item.get("tool_call_id") != call.id
                 ]
                 history.append(entry)
+                self.turn_ledger.import_legacy(turn)
+                # Its own key: ``recorded-result:`` belongs to a trustworthy
+                # receipt adopted by read repair.
                 ledger_sequence = max(
                     ledger_sequence,
                     self.turn_ledger.append(
                         turn.id,
                         entry,
-                        idempotency_key=f"recorded-result:{call.id}",
-                        event_type="recorded_result",
+                        idempotency_key=f"restart-unknown:{call.id}",
+                        event_type="restart_unknown",
                     ),
-                )
-                ledger_sequence = self.turn_ledger.append(
-                    turn.id,
-                    entry,
-                    idempotency_key=f"recorded-result:{call.id}",
-                    event_type="recorded_result",
-                )
-                ledger_sequence = self.turn_ledger.append(
-                    turn.id,
-                    entry,
-                    idempotency_key=f"restart-unknown:{call.id}",
-                    event_type="restart_unknown",
                 )
                 if existing is None:
                     if entry.get("budget_class") == "artifact_query":
@@ -2167,30 +2186,48 @@ class ChatService:
                 f"{unknown_hooks or 'none'} as outcome unknown. Do not repeat an "
                 "identical effect; inspect current state before follow-up work."
             )
+            cause = recovery.get("cause")
+            error = turn.error or ""
+            if cause is None and error.startswith(("Core stopped ", "Core restarted ")):
+                # A turn interrupted before recovery recorded its cause is
+                # recognized by this error, which the write below clears.
+                cause = (
+                    "core_shutdown"
+                    if error.startswith("Core stopped ")
+                    else "core_restart"
+                )
+            changes: dict[str, Any] = {
+                "ledger_sequence": ledger_sequence,
+                "next_step": next_step,
+                "execution_tool_calls": execution_count,
+                "artifact_queries": artifact_count,
+                "error": None,
+                "request_snapshot": {
+                    **turn.request_snapshot,
+                    "recovery": {
+                        **recovery,
+                        **({"cause": cause} if cause else {}),
+                        "required": False,
+                        "unknown_tool_call_ids": [],
+                        "unknown_hook_execution_ids": [],
+                        "auto_continued_unknown_tool_call_ids": unknown_tools,
+                        "auto_continued_unknown_hook_execution_ids": unknown_hooks,
+                        "automatic_note": automatic_note,
+                        "automatically_reconciled_at": utc_now().isoformat(),
+                    },
+                },
+            }
+            if turn.queued_at is None and recorded_unknown:
+                # Expansion-release compatibility, as in ``_save_tool_step``.
+                changes["tool_call_ids"] = list(
+                    dict.fromkeys([*turn.tool_call_ids, *recorded_unknown])
+                )
+                changes["tool_history"] = history
             try:
                 turn = self.store.update(
                     ChatTurn,
                     turn.id,
-                    {
-                        "ledger_sequence": ledger_sequence,
-                        "next_step": next_step,
-                        "execution_tool_calls": execution_count,
-                        "artifact_queries": artifact_count,
-                        "error": None,
-                        "request_snapshot": {
-                            **turn.request_snapshot,
-                            "recovery": {
-                                **recovery,
-                                "required": False,
-                                "unknown_tool_call_ids": [],
-                                "unknown_hook_execution_ids": [],
-                                "auto_continued_unknown_tool_call_ids": unknown_tools,
-                                "auto_continued_unknown_hook_execution_ids": unknown_hooks,
-                                "automatic_note": automatic_note,
-                                "automatically_reconciled_at": utc_now().isoformat(),
-                            },
-                        },
-                    },
+                    changes,
                     expected_revision=turn.revision,
                 )
                 return turn
@@ -2537,8 +2574,14 @@ class ChatService:
     ) -> None:
         admission: ProviderAdmission | None = None
         admission_task: asyncio.Task[ProviderAdmission] | None = None
+        recovery_slot = False
         try:
             assert prepared.turn is not None
+            if automatic_recovery:
+                # Before provider admission, so recovered turns waiting for this
+                # gate never hold provider slots an operator turn could use.
+                await self._automatic_recovery_slots.acquire()
+                recovery_slot = True
             admission_task = create_diagnostic_task(
                 self.provider_scheduler.admit(prepared.turn.id),
                 feature="chat",
@@ -2573,6 +2616,7 @@ class ChatService:
                     )
                     runtime.condition.notify_all()
             admission = await admission_task
+            runtime.admission = admission
             prepared.turn = self.store.get(ChatTurn, prepared.turn.id)
             self._claim_execution(prepared)
             async with runtime.condition:
@@ -2590,11 +2634,7 @@ class ChatService:
                     )
                 )
                 runtime.condition.notify_all()
-            if not automatic_recovery:
-                await self._produce_provider_turn(prepared, runtime)
-                return
-            async with self._automatic_recovery_slots:
-                await self._produce_provider_turn(prepared, runtime)
+            await self._produce_provider_turn(prepared, runtime)
         except asyncio.CancelledError:
             if admission_task is not None and not admission_task.done():
                 admission_task.cancel()
@@ -2614,6 +2654,8 @@ class ChatService:
         finally:
             if admission is not None and prepared.turn is not None:
                 await admission.release(prepared.turn.id)
+            if recovery_slot:
+                self._automatic_recovery_slots.release()
             if not runtime.done:
                 async with runtime.condition:
                     runtime.done = True
@@ -2934,10 +2976,16 @@ class ChatService:
                     runtime.events.append(frame)
                     runtime.condition.notify_all()
         finally:
+            turn = prepared.turn
+            if runtime.admission is not None and turn is not None:
+                # Provider work is over. Free the slot before settling, which
+                # can resume this same turn (a satisfied subagent wait, or a
+                # child's question closed while its parent was idle) and
+                # continue its goal; neither may queue behind this finished run.
+                await runtime.admission.release(turn.id)
             async with runtime.condition:
                 runtime.done = True
                 runtime.condition.notify_all()
-            turn = prepared.turn
             if turn is not None and (stopped or runtime.error is not None):
                 latest = self.store.get(ChatTurn, turn.id)
                 if (
@@ -4298,13 +4346,20 @@ class ChatService:
         await self._run_native_hooks(prepared, "chat.turn.started")
         if prepared.tools_enabled:
             completed: ChatCompletionResponse | None = None
+            waiting_approval = False
             async for event, payload in self.stream(prepared):
                 if event == "approval_required":
-                    raise ChatError("command response is waiting for operator approval")
+                    # Let the stream finish parking the turn: it releases the
+                    # turn and goal claims after this event, and the operator's
+                    # resume needs both free.
+                    waiting_approval = True
+                    continue
                 if event == "done":
                     body = dict(payload)
                     body.pop("type", None)
                     completed = ChatCompletionResponse.model_validate(body)
+            if waiting_approval:
+                raise ChatError("command response is waiting for operator approval")
             if completed is None:
                 raise ChatError("command response ended before final synthesis")
             return completed
@@ -8828,6 +8883,18 @@ class ChatService:
                     item for item in history if item.get("tool_call_id") != call.id
                 ]
                 history.append(entry)
+                # The ledger is the provider-visible history: the adopted
+                # receipt replaces the step's running intent there, once.
+                self.turn_ledger.import_legacy(turn)
+                ledger_sequence = max(
+                    ledger_sequence,
+                    self.turn_ledger.append(
+                        turn.id,
+                        entry,
+                        idempotency_key=f"recorded-result:{call.id}",
+                        event_type="recorded_result",
+                    ),
+                )
                 if existing is None:
                     if entry.get("budget_class") == "artifact_query":
                         artifact_count += 1
@@ -8841,32 +8908,38 @@ class ChatService:
             history.sort(key=lambda item: int(item.get("step", 0)))
             recorded = recovery.get("recorded_tool_result_ids")
             prior_recorded = recorded if isinstance(recorded, list) else []
+            changes: dict[str, Any] = {
+                "ledger_sequence": ledger_sequence,
+                "next_step": next_step,
+                "execution_tool_calls": execution_count,
+                "artifact_queries": artifact_count,
+                "error": (
+                    "Core recovered the recorded tool result and will resume this response automatically."
+                    if not remaining and not recovery.get("unknown_hook_execution_ids")
+                    else turn.error
+                ),
+                "request_snapshot": {
+                    **turn.request_snapshot,
+                    "recovery": {
+                        **recovery,
+                        "unknown_tool_call_ids": remaining,
+                        "recorded_tool_result_ids": list(
+                            dict.fromkeys([*prior_recorded, *settled])
+                        ),
+                    },
+                },
+            }
+            if turn.queued_at is None:
+                # Expansion-release compatibility, as in ``_save_tool_step``.
+                changes["tool_call_ids"] = list(
+                    dict.fromkeys([*turn.tool_call_ids, *settled])
+                )
+                changes["tool_history"] = history
             try:
                 return self.store.update(
                     ChatTurn,
                     turn.id,
-                    {
-                        "ledger_sequence": ledger_sequence,
-                        "next_step": next_step,
-                        "execution_tool_calls": execution_count,
-                        "artifact_queries": artifact_count,
-                        "error": (
-                            "Core recovered the recorded tool result and will resume this response automatically."
-                            if not remaining
-                            and not recovery.get("unknown_hook_execution_ids")
-                            else turn.error
-                        ),
-                        "request_snapshot": {
-                            **turn.request_snapshot,
-                            "recovery": {
-                                **recovery,
-                                "unknown_tool_call_ids": remaining,
-                                "recorded_tool_result_ids": list(
-                                    dict.fromkeys([*prior_recorded, *settled])
-                                ),
-                            },
-                        },
-                    },
+                    changes,
                     expected_revision=turn.revision,
                 )
             except ConflictError:  # diagnostic-expected: optimistic recovery retry
@@ -9112,6 +9185,7 @@ class ChatService:
         ]
         history.append(entry)
         history.sort(key=lambda item: int(item.get("step", 0)))
+        self.turn_ledger.import_legacy(turn)
         ledger_sequence = self.turn_ledger.append(
             turn.id,
             entry,
@@ -9119,27 +9193,34 @@ class ChatService:
             event_type="operator_reconciled",
         )
         remaining = [item for item in unknown if item != call.id]
+        turn_changes: dict[str, Any] = {
+            "ledger_sequence": ledger_sequence,
+            "next_step": max(turn.next_step, step + 1),
+            "error": (
+                "Core restarted before this response completed. Tool outcomes "
+                "were reconciled; review and resume it."
+                if not remaining
+                else turn.error
+            ),
+            "request_snapshot": {
+                **turn.request_snapshot,
+                "recovery": {
+                    **(recovery or {}),
+                    "unknown_tool_call_ids": remaining,
+                    "last_reconciled_at": utc_now().isoformat(),
+                },
+            },
+        }
+        if turn.queued_at is None:
+            # Expansion-release compatibility, as in ``_save_tool_step``.
+            turn_changes["tool_call_ids"] = list(
+                dict.fromkeys([*turn.tool_call_ids, call.id])
+            )
+            turn_changes["tool_history"] = history
         return self.store.update(
             ChatTurn,
             turn.id,
-            {
-                "ledger_sequence": ledger_sequence,
-                "next_step": max(turn.next_step, step + 1),
-                "error": (
-                    "Core restarted before this response completed. Tool outcomes "
-                    "were reconciled; review and resume it."
-                    if not remaining
-                    else turn.error
-                ),
-                "request_snapshot": {
-                    **turn.request_snapshot,
-                    "recovery": {
-                        **(recovery or {}),
-                        "unknown_tool_call_ids": remaining,
-                        "last_reconciled_at": utc_now().isoformat(),
-                    },
-                },
-            },
+            turn_changes,
             expected_revision=turn.revision,
         )
 

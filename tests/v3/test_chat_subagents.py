@@ -6,6 +6,7 @@ from typing import Awaitable, Callable
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompletionRequest, ChatService
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
+from nebula.v3.chat_turn_ledger import turn_history
 from nebula.v3.domain import (
     Approval,
     ChatGoalUsageCharge,
@@ -439,7 +440,7 @@ def test_wait_resumes_parent_with_report_and_posts_result(tmp_path: Path) -> Non
         assert "callback_required" in events
         paused = store.get(ChatTurn, parent_turn_id)
         assert paused.status == ChatTurnStatus.WAITING_CALLBACK
-        assert paused.tool_history[-1]["subagent_wait"]["mode"] == "all"
+        assert _history(store, paused)[-1]["subagent_wait"]["mode"] == "all"
 
         provider.child_gate.set()
         await _until(
@@ -449,7 +450,7 @@ def test_wait_resumes_parent_with_report_and_posts_result(tmp_path: Path) -> Non
         )
 
         parent = store.get(ChatTurn, parent_turn_id)
-        wait_entry = parent.tool_history[1]
+        wait_entry = _history(store, parent)[1]
         assert wait_entry["name"] == "wait_subagents"
         assert wait_entry["status"] == "complete"
         assert "Found 3 route files." in wait_entry["provider_result"]
@@ -614,7 +615,7 @@ def test_subagents_are_unlimited_unless_the_operator_sets_a_limit(
     # More than the three-at-once and six-per-response caps that used to apply.
     store, parent, provider = _fan_out(tmp_path, 8)
 
-    assert [entry["status"] for entry in parent.tool_history] == ["complete"] * 8
+    assert [entry["status"] for entry in _history(store, parent)] == ["complete"] * 8
     assert len(store.list_entities(ChatSubagent)) == 8
     assert parent.request_snapshot["max_active_subagents"] is None
     assert "running at once" not in (provider.parent_requests[0].instructions or "")
@@ -623,12 +624,14 @@ def test_subagents_are_unlimited_unless_the_operator_sets_a_limit(
 def test_operator_subagent_limit_is_reported_to_the_model(tmp_path: Path) -> None:
     store, parent, provider = _fan_out(tmp_path, 3, max_active_subagents=2)
 
-    statuses = [entry["status"] for entry in parent.tool_history]
+    statuses = [entry["status"] for entry in _history(store, parent)]
     assert statuses == ["complete", "complete", "failed"]
-    assert (
-        "operator allows 2 running at once"
-        in parent.tool_history[-1]["provider_result"]
-    )
+    # A tool failure carries no exception text (docs/TOOL_FAILURE_CONTRACT.md);
+    # the limit itself reaches the model in its instructions, asserted below.
+    refused = json.loads(_history(store, parent)[-1]["provider_result"])
+    assert refused["schema"] == "nebula.tool-failure/v1"
+    assert refused["tool"] == "start_subagent"
+    assert refused["category"] == "invalid_arguments"
     assert len(store.list_entities(ChatSubagent)) == 2
     assert parent.request_snapshot["max_active_subagents"] == 2
     assert "at most 2 running at once" in (
@@ -1149,7 +1152,7 @@ def test_core_shutdown_interrupts_an_inflight_parent_tool_turn(tmp_path: Path) -
         )
         assert parent.request_snapshot["recovery"]["required"] is True
         assert parent.execution_claim_id is None
-        assert parent.tool_history[0]["name"] == "start_subagent"
+        assert _history(store, parent)[0]["name"] == "start_subagent"
         interrupted = store.get(ChatSubagent, record.id)
         assert interrupted.status == ChatSubagentStatus.RUNNING
         assert interrupted.error is None
@@ -1213,9 +1216,14 @@ def test_subagent_start_failure_leaves_no_child_conversation_or_duplicate_report
 
         parent = store.get(ChatTurn, parent_turn_id)
         assert parent.status == ChatTurnStatus.COMPLETE
-        step = parent.tool_history[0]
+        step = _history(store, parent)[0]
         assert step["name"] == "start_subagent"
-        assert "could not start" in json.dumps(step)
+        assert step["status"] == "failed"
+        # The model gets the failure contract's envelope, never the exception.
+        failure = json.loads(step["provider_result"])
+        assert failure["schema"] == "nebula.tool-failure/v1"
+        assert failure["tool"] == "start_subagent"
+        assert "child provider offline" not in json.dumps(step)
         # No phantom child conversation, no failed record to re-report.
         assert store.list_entities(ChatSubagent) == []
         assert [
@@ -1296,13 +1304,13 @@ def test_subagents_take_the_conversation_reasoning_level_unless_told_otherwise(
         }
         assert chat.subagents.view(records["Routes"])["reasoning_effort"] == "high"
         parent = store.get(ChatTurn, parent_turn_id)
-        assert [entry["status"] for entry in parent.tool_history[:3]] == [
+        assert [entry["status"] for entry in _history(store, parent)[:3]] == [
             "complete",
             "complete",
             "failed",
         ]
         # The delegating model is told which level each child got.
-        started = json.loads(parent.tool_history[0]["provider_result"])
+        started = json.loads(_history(store, parent)[0]["provider_result"])
         assert started["reasoning_effort"] == "high"
         await chat.shutdown()
 
@@ -1413,8 +1421,14 @@ def _sent(store: NebulaStore, direction: str) -> list[ChatSubagentMessage]:
     ]
 
 
-def _entries(turn: ChatTurn, name: str) -> list[dict]:
-    return [item for item in turn.tool_history if item["name"] == name]
+def _history(store: NebulaStore, turn: ChatTurn) -> list[dict]:
+    """The turn's provider-visible steps, folded from its ledger."""
+
+    return turn_history(store.database, turn)
+
+
+def _entries(store: NebulaStore, turn: ChatTurn, name: str) -> list[dict]:
+    return [item for item in _history(store, turn) if item["name"] == name]
 
 
 def _result(entry: dict) -> dict:
@@ -1492,19 +1506,19 @@ def test_parent_and_subagent_message_each_other_while_both_work(
         parent = store.get(ChatTurn, parent_turn_id)
         delivered = [
             item
-            for item in _entries(parent, "list_subagents")
+            for item in _entries(store, parent, "list_subagents")
             if item.get("delivered_by_core")
         ]
         assert delivered
         assert "Found an open admin panel." in delivered[0]["provider_result"]
         # Core's step spends no tool budget.
-        assert parent.artifact_queries == len(parent.tool_history) - len(delivered)
+        assert parent.artifact_queries == len(_history(store, parent)) - len(delivered)
 
         # The child read the parent's message before its next step.
         child = store.get(ChatTurn, record.child_turn_id)
         inbox = [
             item
-            for item in _entries(child, "read_parent_messages")
+            for item in _entries(store, child, "read_parent_messages")
             if item.get("delivered_by_core")
         ]
         assert "Also check port 8443." in inbox[0]["provider_result"]
@@ -1584,14 +1598,14 @@ def test_subagent_question_pauses_it_until_the_waiting_parent_answers(
         assert "Staging or production?" in str(waited.output)
 
         parent = store.get(ChatTurn, parent_turn_id)
-        answered = _result(_entries(parent, "message_subagent")[0])
+        answered = _result(_entries(store, parent, "message_subagent")[0])
         assert answered["delivery"] == "answered"
-        final_wait = _entries(parent, "wait_subagents")[-1]
+        final_wait = _entries(store, parent, "wait_subagents")[-1]
         assert "Checked staging: healthy." in final_wait["provider_result"]
 
         # The child resumed with the answer as its tool result.
         child = store.get(ChatTurn, record.child_turn_id)
-        (asked,) = _entries(child, "message_parent")
+        (asked,) = _entries(store, child, "message_parent")
         assert asked["status"] == "complete"
         assert "Use staging." in asked["provider_result"]
         (question,) = _sent(store, "to_parent")
@@ -1642,7 +1656,7 @@ def test_idle_parent_releases_a_question_and_it_is_posted(tmp_path: Path) -> Non
         )
         # Nobody was working to answer, so the child went on and said so.
         child = store.get(ChatTurn, record.child_turn_id)
-        (asked,) = _entries(child, "message_parent")
+        (asked,) = _entries(store, child, "message_parent")
         assert "not working right now" in asked["provider_result"]
         (question,) = _sent(store, "to_parent")
         assert not question.awaiting_reply
@@ -1721,10 +1735,10 @@ def test_message_to_a_finished_subagent_starts_another_round(tmp_path: Path) -> 
             )
         )
         second = store.get(ChatTurn, second_turn_id)
-        sent = _result(_entries(second, "message_subagent")[0])
+        sent = _result(_entries(store, second, "message_subagent")[0])
         assert sent["delivery"] == "new_round"
         assert sent["round"] == 2
-        report = _result(_entries(second, "wait_subagents")[0])["subagents"][0]
+        report = _result(_entries(store, second, "wait_subagents")[0])["subagents"][0]
         assert report["report"] == "Backups are encrypted."
         assert report["round"] == 2
 
@@ -1779,13 +1793,14 @@ def test_failed_subagent_reports_its_error_and_failed_steps(tmp_path: Path) -> N
             )
         )
         parent = store.get(ChatTurn, parent_turn_id)
-        (report,) = _result(_entries(parent, "wait_subagents")[0])["subagents"]
+        (report,) = _result(_entries(store, parent, "wait_subagents")[0])["subagents"]
         assert report["status"] == "failed"
         assert "upstream returned 503" in report["error"]
         (failure,) = report["tool_failures"]
         assert failure["tool"] == "message_parent"
         assert failure["status"] == "failed"
-        assert "message must say something" in failure["error"]
+        # The failure contract's summary, not the handler's exception text.
+        assert failure["error"] == "Invalid input."
         assert report["last_step"]["tool"] == "message_parent"
 
         (record,) = store.list_entities(ChatSubagent)
@@ -1847,7 +1862,7 @@ def test_core_bookkeeping_failure_fails_the_subagent_with_its_cause(
         parent = store.get(ChatTurn, parent_turn_id)
         assert (
             "store unavailable"
-            in _entries(parent, "wait_subagents")[0]["provider_result"]
+            in _entries(store, parent, "wait_subagents")[0]["provider_result"]
         )
         await chat.shutdown()
 
@@ -1906,9 +1921,9 @@ def test_stopped_subagent_reports_messages_it_never_read(tmp_path: Path) -> None
             )
         )
         parent = store.get(ChatTurn, parent_turn_id)
-        queued = _result(_entries(parent, "message_subagent")[0])
+        queued = _result(_entries(store, parent, "message_subagent")[0])
         assert queued["delivery"] == "queued"
-        (report,) = _result(_entries(parent, "wait_subagents")[0])["subagents"]
+        (report,) = _result(_entries(store, parent, "wait_subagents")[0])["subagents"]
         assert report["status"] == "stopped"
         (unread,) = report["undelivered_messages"]
         assert unread["content"] == "Check the logs too."

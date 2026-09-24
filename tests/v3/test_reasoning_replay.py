@@ -964,10 +964,11 @@ def test_a_step_core_delivers_is_a_batch_of_its_own(tmp_path):
         "Delivered one message.",
     )
 
-    entry = turn.tool_history[-1]
+    entry = service._turn_history(turn)[-1]
     assert entry["response_group"] == "core-0"
     assert "reasoning_state" not in entry
-    (result,) = ChatService._provider_tool_history(turn)
+    # Replay reads the turn's ledger, which only the service can reach.
+    (result,) = service._provider_tool_history(turn)
     assert result.response_group == "core-0"
     assert result.reasoning_state is None
 

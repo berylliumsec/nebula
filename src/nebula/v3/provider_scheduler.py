@@ -53,8 +53,15 @@ class ProviderAdmission:
     def __init__(self, scheduler: "ProviderScheduler", lane: str) -> None:
         self.scheduler = scheduler
         self.lane = lane
+        self.released = False
 
     async def release(self, turn_id: str) -> None:
+        # The turn frees its slot as soon as provider work ends, before it
+        # settles; the task that admitted it releases again on exit. A second
+        # release must not complete a later admission of the same turn.
+        if self.released:
+            return
+        self.released = True
         self.scheduler._complete(turn_id)
         if self.lane == "background":
             self.scheduler._background.release()
@@ -115,6 +122,12 @@ class ProviderScheduler:
             if latest.status == ChatTurnStatus.CANCELLED:
                 raise asyncio.CancelledError
             admitted_at = utc_now()
+            changes: dict[str, Any] = {"admitted_at": admitted_at}
+            # Only a new turn starts routing here. A resumed turn keeps the
+            # state it parked in (waiting for an approval or a callback, or
+            # finalizing a retried answer): that state selects how it resumes.
+            if latest.status == ChatTurnStatus.QUEUED:
+                changes["status"] = ChatTurnStatus.ROUTING
             with self.store.transaction() as transaction:
                 row = transaction.session.get(ProviderTurnQueueRow, turn_id)
                 if row is None or row.state != "queued":
@@ -122,10 +135,7 @@ class ProviderScheduler:
                 updated = transaction.update(
                     ChatTurn,
                     turn_id,
-                    {
-                        "status": ChatTurnStatus.ROUTING,
-                        "admitted_at": admitted_at,
-                    },
+                    changes,
                     expected_revision=latest.revision,
                 )
                 row.state = "running"
