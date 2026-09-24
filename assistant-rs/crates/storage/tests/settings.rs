@@ -308,7 +308,7 @@ async fn schedule_configuration_patches_are_narrow_and_clear_stale_search_entrie
                 clock()
             )
             .await,
-        Err(Error::Record(_))
+        Err(Error::RetainedModelValidation(_))
     ));
     assert_eq!(row(&mut raw, "settings-schedule").await.0, 4);
     raw.close().await.unwrap();

@@ -855,3 +855,65 @@ until creation guards pass. Formatting, scoped Clippy and Python lint passed.
 Cumulative CI selects 142 Rust tests and 56 Python checks; results are recorded on
 the corresponding PR commit. The live Figma archive/details follow-up is recorded
 separately; production Rust-backed browser/device/LAN acceptance remains open.
+
+## Retained schedule validation contract
+
+Journey: an operator opens or changes a conversation with historical schedule
+data, receives the existing actionable validation response, and can retry without
+losing an already committed archive change. The current Assistant list and
+session-details paths remain the entry points. Core owns entity validity, revision
+checks and separate Session/Schedule commits; browser state owns only unsaved
+choices and presentation. A corrupt stored model must not be silently repaired.
+
+This prerequisite for subsequent goal mutations adds bounded, redacted structured
+model diagnostics. Wrapped entity reads retain sanitized storage errors, while
+direct schedule model validation retains its 422 response, field ordering and
+original input. Revision conflicts retain precedence over writer hydration.
+Archive/search commits that precede schedule validation remain durable after an
+error; merged-record failures roll back only their owning transaction. Diagnostic
+serialization must obey response limits without repeatedly cloning large inputs.
+
+Planned evidence: isolated Python Entity/Schedule validation vectors and exact
+HTTP cases; Rust domain diagnostics, direct versus wrapped storage reads, writer
+rollback, redaction and response amplification bounds; the existing settings
+differential fixture including its three currently unsupported schedule cases.
+Collect exact affected test names and refresh the diff-bound receipt before runs.
+Selection, refresh, failure and retry apply to this increment. Streaming, interrupt,
+background and deletion behavior is unchanged and remains part of the full
+Assistant acceptance inventory. Production desktop/mobile/LAN/reconnect and
+physical-device evidence is still required before product completion.
+
+The Entity/Schedule diagnostic implementation now covers 145 captured validation
+vectors and eight separately documented factory-default observations. It preserves
+coercion, default filling, field and extra ordering, original inputs, inherited
+validator precedence, UTC hydration and trusted writer datetime provenance.
+Existing canonical and wrapped decoders retain their strict contracts. Direct
+model reports share their input, redact Debug/Display, and enforce retained-data
+and wire-expansion limits before reaching transport. The final HTTP envelope is
+also serialized within its response budget without materializing repeated inputs.
+
+The settings corpus now has 173 HTTP cases and 113 service cases, including all
+three previously excluded malformed schedules. Additional controls distinguish
+wrapped catalogue/root errors from direct model errors, validate a later malformed
+candidate, and force an old-clock writer model failure with no entity/search
+changes. Archive-before-schedule-error remains a durable partial result. Error
+guidance retains Pydantic's shortened input display: all 98 captured rejected-model
+previews match, including keywords visible only at the tail of a long value.
+Multi-megabyte ASCII and Unicode fixtures verify bounded diagnostic rendering and
+release of response admission after errors.
+
+All 51 unique selected local Rust tests passed. The initial run passed three
+tests and exposed an incorrect fixture setup in the fourth new test: the strict
+canonical decoder was given a record without expanded defaults. After using the
+captured canonical payload, the remaining 48 passed without a production-code
+change. Both exact Python oracle checks passed in 11.27 seconds. Scoped Clippy,
+Ruff, formatting and diff checks passed. The cumulative selection is 152 exact
+Rust tests and 57 Python checks; uploaded CI evidence belongs to its pushed commit.
+
+Detailed retained diagnostics beyond Entity/Schedule, strict missing-factory
+boundaries, nested opaque dictionary order in diagnostic display previews and
+Python environment overrides of error-display URLs remain explicit limitations.
+This increment adds no routes or shipped execution. Goal configuration mutations,
+provider/harness execution, durable dispatch/recovery, streaming, migration,
+packaging, production browser/device/LAN journeys and performance gates remain
+required for the complete Assistant rewrite.

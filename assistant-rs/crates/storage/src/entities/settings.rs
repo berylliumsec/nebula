@@ -356,8 +356,22 @@ pub(super) async fn write(
     payload["updated_at"] = (request.clock)()
         .to_rfc3339_opts(SecondsFormat::Micros, true)
         .into();
-    let record =
-        StoredAssistantRecord::decode_persisted(request.kind, &serde_json::to_vec(&payload)?)?;
+    let encoded = serde_json::to_vec(&payload)?;
+    let record = if request.kind == AssistantKind::Schedule {
+        match StoredAssistantRecord::decode_updated_direct(request.kind, &encoded)
+            .map_err(direct_record_error)
+        {
+            Ok(record) => record,
+            Err(Error::RetainedModelValidation(report)) => {
+                budget.add(report.retained_bytes())?;
+                return Err(Error::RetainedModelValidation(report));
+            }
+            Err(error) => return Err(error),
+        }
+    } else {
+        // Session field diagnostics are a separate compatibility increment.
+        StoredAssistantRecord::decode_persisted(request.kind, &encoded)?
+    };
     let raw_payload = if request.kind == AssistantKind::Session {
         session_json(
             row.try_get("payload")?,

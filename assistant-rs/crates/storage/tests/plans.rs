@@ -129,7 +129,7 @@ async fn plan_snapshots_preserve_root_validation_global_children_and_schedule_or
     sqlx::query("UPDATE entities SET payload=json_set(payload,'$.interval_seconds',1) WHERE id='z-schedule'").execute(&mut raw).await.unwrap();
     assert!(matches!(
         store.session_plans_snapshot(Kind::Schedule, "plans").await,
-        Err(Error::Record(_))
+        Err(Error::RetainedModelValidation(_))
     ));
     assert_eq!(
         store.admission().available_reads,

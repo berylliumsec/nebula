@@ -1012,8 +1012,8 @@ def initial_settings():
         fault={"kind": "unarchive_conflict", "count": 3, "session_id": owner},
     )
 
-    # Natural retained-model failures are captured separately until their exact
-    # validation envelopes are supported by the Rust retained-record adapter.
+    # Natural retained-model failures preserve direct validation envelopes and
+    # any earlier committed session/search changes.
     for name, kind, body in [
         ("malformed-schedule-after-archive", "session_patch", {"archived": True}),
         ("malformed-schedule-create", "schedule_create", {"interval_seconds": 3600}),
@@ -1026,7 +1026,69 @@ def initial_settings():
         owner = session(name)
         sid = schedule(owner)
         raw_overrides[sid] = {"next_run_at": "2030-01-01T12:00:00"}
-        add(name, kind, body, owner, known_unsupported=True)
+        add(name, kind, body, owner)
+
+    def read_control(name, path, **extra):
+        cases.append(
+            {
+                "name": name,
+                "method": "GET",
+                "path": "/api/v1" + path,
+                "body": None,
+                "service": None,
+                **extra,
+            }
+        )
+
+    owner = session("validation-corrupt-root")
+    schedule(owner)
+    raw_overrides[owner] = {"provider_profile_id": None}
+    read_control("validation-wrapped-root", f"/chat/sessions/{owner}/schedule")
+    read_control(
+        "validation-direct-schedule",
+        "/chat/sessions/malformed-schedule-action/schedule",
+    )
+    read_control(
+        "validation-wrapped-schedule",
+        "/chat-schedules/malformed-schedule-action-schedule",
+    )
+    read_control("validation-wrapped-schedule-list", "/chat-schedules?limit=200")
+    owner = session("validation-second-candidate")
+    schedule(owner, identity=owner + "-a")
+    second = schedule(owner, identity=owner + "-b")
+    raw_overrides[second] = {"next_run_at": "2030-01-01T12:00:00"}
+    read_control(
+        "validation-direct-second-candidate", f"/chat/sessions/{owner}/schedule"
+    )
+    read_control(
+        "validation-unrelated-candidate-excluded", "/chat/sessions/sequence/schedule"
+    )
+    owner = session("validation-writer-model-after")
+    schedule(owner, last_run_at=BASE + timedelta(minutes=30))
+    writer_case = add(
+        owner,
+        "schedule_write",
+        {"expected_revision": 1, "enabled": False},
+        owner,
+        writer_clock="2019-01-01T00:00:00+00:00",
+    )
+    # Only store.update samples this old clock: disabled schedule writes never
+    # schedule a new time or unarchive. No separate runtime failpoint is needed.
+    writer_case["service"] = None
+    read_control(
+        "validation-writer-rollback-reopen",
+        f"/chat/sessions/{owner}/schedule",
+        action="reopen",
+    )
+    for name, paused_by in [
+        ("conflict", "conflict"),
+        ("rate-limit-middle", "x" * 120 + "rate limit" + "y" * 120),
+        ("rate-limit-tail", "x" * 240 + "rate limit"),
+    ]:
+        owner = session("validation-keyword-" + name)
+        sid = schedule(owner)
+        raw_overrides[sid] = {"paused_by": paused_by}
+        read_control("validation-keyword-" + name, f"/chat/sessions/{owner}/schedule")
 
     for kind, body in [
         ("session_patch", {"title": "missing"}),
@@ -1093,6 +1155,7 @@ def collect_settings():
     projects, records, dependencies, raw_overrides, cases = initial_settings()
     cases.sort(key=lambda case: bool(case.get("known_unsupported")))
     clock = [NOW]
+    writer_clock = [NOW]
     current_case = [{}]
     executions = []
     fault_attempts = [0]
@@ -1288,12 +1351,17 @@ def collect_settings():
                 # Domain's default_factory captured utc_now at class creation;
                 # freeze its datetime lookup as well as imported clock aliases.
                 guards.enter_context(patch("nebula.v3.domain.datetime", FrozenDatetime))
-                for module in ["api", "storage", "chat", "chat_schedules"]:
+                for module in ["api", "chat", "chat_schedules"]:
                     guards.enter_context(
                         patch(
                             f"nebula.v3.{module}.utc_now", side_effect=lambda: clock[0]
                         )
                     )
+                guards.enter_context(
+                    patch(
+                        "nebula.v3.storage.utc_now", side_effect=lambda: writer_clock[0]
+                    )
+                )
                 guards.enter_context(
                     patch("nebula.v3.chat_schedules.uuid4", side_effect=fixed_uuid)
                 )
@@ -1327,6 +1395,9 @@ def collect_settings():
                     uuid_calls[0] = 0
                     clock[0] = datetime.fromisoformat(
                         case.get("clock", NOW.isoformat())
+                    )
+                    writer_clock[0] = datetime.fromisoformat(
+                        case.get("writer_clock", case.get("clock", NOW.isoformat()))
                     )
                     if case.get("action") == "reopen":
                         client.close()

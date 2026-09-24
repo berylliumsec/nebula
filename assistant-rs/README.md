@@ -323,11 +323,25 @@ makes its configuration durable; schedule dispatch remains unimplemented.
 PYTHONPATH=src python -m scripts.capture_assistant_settings --output assistant-rs/compatibility/python-settings.json
 ```
 
-The settings fixture records 159 supported HTTP cases, 74 MCP hydration vectors
-and 57 request vectors, with exact entity/search changes and protected ledger,
-relation and watermark tables. Three separately labeled malformed historical
-schedule cases capture the source's detailed validation error; Rust still has a
-sanitized error gap for those cases. They are not counted as parity evidence.
+The settings fixture records 173 HTTP cases, 74 MCP hydration vectors and 57
+request vectors, with exact entity/search changes and protected ledger, relation
+and watermark tables. Direct Schedule hydration now returns structured model
+diagnostics, including the three previously excluded historical schedule cases.
+Wrapped model reads retain sanitized storage errors. Invalid merged schedules
+roll back their own writes without undoing an earlier archive/search commit.
 Historical missing identity/revision timestamps and noncanonical raw MCP datetime
 inputs also remain outside retained-profile parity. Production Assistant settings,
 archive and recurring-work journeys require the remaining integration gates.
+
+```sh
+PYTHONPATH=src python -m scripts.capture_assistant_model_validation --output assistant-rs/compatibility/python-model-validation.json
+```
+
+The ordered Entity/Schedule contract captures 145 validation vectors and eight
+separate factory-default observations. Reports share original inputs, redact
+Debug/Display, and bound both retained data and repeated-input wire expansion.
+The HTTP serializer adds the error envelope within its existing response budget.
+This detailed diagnostic implementation currently covers Entity and Schedule;
+other retained model contracts remain separate migration work. Trusted writer
+datetime provenance and top-level input ordering are preserved. Nested opaque
+dictionary ordering in diagnostic display previews remains a limitation.

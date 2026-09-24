@@ -1,10 +1,14 @@
+mod retained;
+
 use axum::{
     body::Body,
     http::{HeaderValue, StatusCode},
     response::Response,
 };
+use nebula_assistant_domain::model_validation::ValidationReport;
 use nebula_assistant_services::Error as ServiceError;
 use nebula_assistant_storage::entities::Error as StorageError;
+use serde::{Serialize, ser::SerializeMap};
 use serde_json::{Value, json};
 use std::sync::LazyLock;
 
@@ -18,10 +22,51 @@ static GUIDANCE: LazyLock<Value> = LazyLock::new(|| {
 });
 pub(crate) struct ApiError {
     status: u16,
-    detail: Value,
+    detail: ErrorDetail,
     code: String,
     feature: &'static str,
     exception: String,
+}
+/// Retained validation inputs remain shared until bounded wire serialization.
+/// Do not turn a report into Value: missing-field errors can repeat a large input.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ErrorDetail {
+    Value(Value),
+    Retained(Box<ValidationReport>),
+}
+impl ErrorDetail {
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::Value(value) => value.as_str(),
+            Self::Retained(_) => None,
+        }
+    }
+}
+impl From<String> for ErrorDetail {
+    fn from(value: String) -> Self {
+        Self::Value(value.into())
+    }
+}
+impl From<Vec<Value>> for ErrorDetail {
+    fn from(value: Vec<Value>) -> Self {
+        Self::Value(value.into())
+    }
+}
+struct ErrorEnvelope<'a> {
+    detail: &'a ErrorDetail,
+    fields: &'a Value,
+}
+impl Serialize for ErrorEnvelope<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let fields = self.fields.as_object().expect("static error envelope");
+        let mut map = serializer.serialize_map(Some(fields.len() + 1))?;
+        map.serialize_entry("detail", self.detail)?;
+        for (key, value) in fields {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
 }
 impl ApiError {
     pub(crate) fn for_feature(mut self, feature: &'static str) -> Self {
@@ -94,6 +139,16 @@ impl ApiError {
             exception,
         }
     }
+    fn retained_validation(report: ValidationReport) -> Self {
+        let exception = retained::exception_prefix(&report);
+        Self {
+            status: 422,
+            detail: ErrorDetail::Retained(Box::new(report)),
+            code: "api.model_validation".into(),
+            feature: "chat",
+            exception,
+        }
+    }
     pub(crate) fn unauthorized() -> Self {
         Self::http(401, "valid bearer token required")
     }
@@ -115,6 +170,7 @@ impl ApiError {
     pub(crate) fn storage(error: StorageError) -> Self {
         match error {
             StorageError::Capacity => Self::capacity(),
+            StorageError::RetainedModelValidation(report) => Self::retained_validation(report),
             StorageError::AlreadyExists(_) => {
                 Self::named(409, error.to_string(), "storage.conflict_error", "storage")
             }
@@ -139,6 +195,7 @@ impl ApiError {
             ServiceError::HistoryConflict(detail) => {
                 Self::named(409, detail.into(), "chat.chat_history_conflict", "chat")
             }
+            ServiceError::RetainedModelValidation(report) => Self::retained_validation(report),
             ServiceError::ModelValidation(errors) => {
                 let mut error = Self::validation(errors);
                 error.code = "api.model_validation".into();
@@ -185,7 +242,7 @@ impl ApiError {
             .unwrap_or_else(|| guidance["cause"].clone());
         let unhandled = self.code == "api.unhandled_exception";
         let retryable = self.status >= 500 && !unhandled;
-        let mut value = json!({"detail":self.detail,"code":self.code,"feature":self.feature,"request_id":request_id,"error_id":format!("err_{}",uuid::Uuid::new_v4().simple()),"retryable":retryable,"help_article":GUIDANCE["features"][self.feature]["help_article"],"reason_code":reason,"operator_detail":operator,"impact":guidance["impact"],"remediation_id":format!("{}.{reason}",self.feature),"recovery_action":if retryable {"Retry this operation"} else {"Review recovery guidance"},"recovery_destination":"/settings#diagnostics-settings"});
+        let mut value = json!({"code":self.code,"feature":self.feature,"request_id":request_id,"error_id":format!("err_{}",uuid::Uuid::new_v4().simple()),"retryable":retryable,"help_article":GUIDANCE["features"][self.feature]["help_article"],"reason_code":reason,"operator_detail":operator,"impact":guidance["impact"],"remediation_id":format!("{}.{reason}",self.feature),"recovery_action":if retryable {"Retry this operation"} else {"Review recovery guidance"},"recovery_destination":"/settings#diagnostics-settings"});
         if unhandled {
             value["help_article"] = Value::Null;
             value["operator_detail"] = guidance["cause"].clone();
@@ -193,7 +250,7 @@ impl ApiError {
         if let Some(operation) = operation_id.filter(|s| !s.is_empty() && !unhandled) {
             value["operation_id"] = operation.into();
         }
-        let bytes=match crate::json_bytes(&value) { Ok(bytes)=>bytes,Err(_)=>return Self::http(413,"Assistant validation response exceeds its configured limit; send a smaller request").for_feature(self.feature).response(request_id,None) };
+        let bytes=match crate::json_bytes(&ErrorEnvelope { detail: &self.detail, fields: &value }) { Ok(bytes)=>bytes,Err(_)=>return Self::http(413,"Assistant validation response exceeds its configured limit; send a smaller request").for_feature(self.feature).response(request_id,None) };
         let mut response = Response::builder()
             .status(StatusCode::from_u16(self.status).expect("static HTTP status"))
             .header("content-type", "application/json")
@@ -268,29 +325,7 @@ fn repr(out: &mut String, value: &Value) {
         Value::Bool(true) => append(out, "True"),
         Value::Bool(false) => append(out, "False"),
         Value::Number(n) => append(out, &n.to_string()),
-        Value::String(s) => {
-            let quote = if s.contains('\'') && !s.contains('"') {
-                '"'
-            } else {
-                '\''
-            };
-            append(out, &quote.to_string());
-            for c in s.chars() {
-                if out.chars().count() >= 300 {
-                    break;
-                }
-                match c {
-                    '\n' => append(out, "\\n"),
-                    '\r' => append(out, "\\r"),
-                    '\t' => append(out, "\\t"),
-                    '\\' => append(out, "\\\\"),
-                    c if c == quote => append(out, &format!("\\{c}")),
-                    c if c.is_control() => append(out, &format!("\\x{:02x}", c as u32)),
-                    c => append(out, &c.to_string()),
-                }
-            }
-            append(out, &quote.to_string());
-        }
+        Value::String(s) => repr_string(out, s),
         Value::Array(items) => {
             append(out, "[");
             for (i, v) in items.iter().enumerate() {
@@ -310,7 +345,7 @@ fn repr(out: &mut String, value: &Value) {
                 if i != 0 {
                     append(out, ", ");
                 }
-                repr(out, &json!(k));
+                repr_string(out, k);
                 append(out, ": ");
                 repr(out, v);
                 if out.chars().count() >= 300 {
@@ -320,4 +355,30 @@ fn repr(out: &mut String, value: &Value) {
             append(out, "}");
         }
     }
+}
+fn repr_string(out: &mut String, s: &str) {
+    if out.chars().count() >= 300 {
+        return;
+    }
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    append(out, &quote.to_string());
+    for c in s.chars() {
+        if out.chars().count() >= 300 {
+            break;
+        }
+        match c {
+            '\n' => append(out, "\\n"),
+            '\r' => append(out, "\\r"),
+            '\t' => append(out, "\\t"),
+            '\\' => append(out, "\\\\"),
+            c if c == quote => append(out, &format!("\\{c}")),
+            c if c.is_control() => append(out, &format!("\\x{:02x}", c as u32)),
+            c => append(out, &c.to_string()),
+        }
+    }
+    append(out, &quote.to_string());
 }

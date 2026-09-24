@@ -45,6 +45,8 @@ fn identity(id: &str) -> Result<()> {
 }
 fn storage_error(error: StorageError, kind: Kind, id: &str) -> Error {
     match error {
+        StorageError::RetainedModelValidation(report) => Error::RetainedModelValidation(report),
+        StorageError::WrappedRecord(_) => Error::LegacyStorageUnhandled,
         StorageError::NotFound => missing(kind, id),
         StorageError::SettingsRevisionConflict { expected, found } => {
             Error::RevisionConflict { expected, found }

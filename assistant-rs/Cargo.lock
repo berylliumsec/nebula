@@ -1237,6 +1237,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "speedate",
+ "strum 0.27.2",
  "thiserror",
 ]
 

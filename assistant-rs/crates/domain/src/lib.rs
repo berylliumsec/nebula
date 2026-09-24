@@ -8,6 +8,7 @@ pub mod auth;
 pub mod dependencies;
 mod harness_profile;
 mod mcp_profile;
+pub mod model_validation;
 pub mod records;
 pub mod retained_json;
 pub mod session_state;

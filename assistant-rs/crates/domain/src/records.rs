@@ -95,6 +95,8 @@ pub enum RecordError {
     Shape(&'static str),
     #[error("assistant record violates a persisted invariant: {0}")]
     Invariant(&'static str),
+    #[error("{0}")]
+    ModelValidation(crate::model_validation::ValidationReport),
 }
 
 /// A validated, immutable record. Opaque metadata is retained as JSON values;
@@ -106,6 +108,47 @@ pub struct StoredAssistantRecord {
 }
 
 impl StoredAssistantRecord {
+    /// Match a direct Python model hydration where model validation errors are
+    /// observable. Wrapped storage reads must continue using decode_persisted.
+    /// Only the complete Schedule/Entity contract is covered here; other kinds
+    /// retain their existing decoder and error semantics.
+    pub fn decode_persisted_direct(kind: AssistantKind, bytes: &[u8]) -> Result<Self, RecordError> {
+        Self::decode_direct(
+            kind,
+            bytes,
+            crate::model_validation::InputOrigin::RetainedJson,
+        )
+    }
+
+    /// Validate an already merged writer model. Its timestamp inputs represent
+    /// Python datetime values from model_dump(mode="python"), not an HTTP body.
+    pub fn decode_updated_direct(kind: AssistantKind, bytes: &[u8]) -> Result<Self, RecordError> {
+        Self::decode_direct(
+            kind,
+            bytes,
+            crate::model_validation::InputOrigin::WriterModelDump,
+        )
+    }
+
+    fn decode_direct(
+        kind: AssistantKind,
+        bytes: &[u8],
+        origin: crate::model_validation::InputOrigin,
+    ) -> Result<Self, RecordError> {
+        if kind != AssistantKind::Schedule {
+            return Self::decode_persisted(kind, bytes);
+        }
+        let payload = crate::model_validation::hydrate(
+            crate::model_validation::Model::ChatSchedule,
+            origin,
+            bytes,
+        )?;
+        Self::decode(
+            kind,
+            &serde_json::to_vec(&payload).map_err(|_| RecordError::Json)?,
+        )
+    }
+
     /// Read an older persisted payload using deterministic model defaults only.
     /// Identity, revision and timestamps must already exist. Opaque dictionaries
     /// remain untouched; no current clock, UUID factory or external helper runs.

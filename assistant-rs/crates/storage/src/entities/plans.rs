@@ -1,6 +1,17 @@
 //! Complete retained goal/schedule reads. No elapsed projection or scheduling.
 use super::*;
 
+fn wrapped_model_error(error: Error) -> Error {
+    match error {
+        Error::Record(
+            error @ (RecordError::Shape(_)
+            | RecordError::Invariant(_)
+            | RecordError::ModelValidation(_)),
+        ) => Error::WrappedRecord(error),
+        error => error,
+    }
+}
+
 #[derive(Debug)]
 pub struct SessionPlansSnapshot {
     pub session: StoredAssistantRecord,
@@ -20,6 +31,17 @@ struct Budget {
     rows: usize,
 }
 impl Budget {
+    fn report(&mut self, error: Error) -> Error {
+        if let Error::RetainedModelValidation(report) = &error {
+            // The report shares its input internally; charge that retained
+            // allocation and issue metadata in addition to preceding rows.
+            self.bytes = self.bytes.saturating_add(report.retained_bytes());
+            if self.bytes > MAX_TRANSACTION_BYTES {
+                return Error::ReadLimit;
+            }
+        }
+        error
+    }
     fn charge(&mut self, row: &SqliteRow) -> Result<()> {
         let bytes: i64 = row.try_get("payload_bytes")?;
         if bytes < 0 || bytes as u64 > MAX_RECORD_BYTES as u64 {
@@ -73,7 +95,7 @@ impl SqliteAssistantStore {
                 // The Python collection validates unrelated goals before
                 // filtering. They consume the budget even when not retained.
                 budget.charge(&row)?;
-                let goal = decode_row(row)?;
+                let goal = decode_row(row).map_err(wrapped_model_error)?;
                 if goal.payload()["parent_goal_id"] == parent_id {
                     children.push(goal);
                 }
@@ -98,7 +120,7 @@ async fn session_plans(
     let mut q = QueryBuilder::new(SELECT_RECORD);
     q.push(" WHERE kind = 'chat_sessions' AND id = ")
         .push_bind(session_id);
-    let session = records(tx, budget, &mut q)
+    let session = records(tx, budget, &mut q, ValidationSurface::WrappedRecord)
         .await?
         .pop()
         .ok_or(Error::NotFound)?;
@@ -110,7 +132,7 @@ async fn session_plans(
         .push(" ORDER BY created_at, id LIMIT 10001");
     // Validate every candidate before services choose the authoritative goal
     // or oldest schedule. Historical project/backend mismatches remain visible.
-    let records = records(tx, budget, &mut q).await?;
+    let records = records(tx, budget, &mut q, ValidationSurface::DirectModel).await?;
     Ok(SessionPlansSnapshot { session, records })
 }
 
@@ -118,13 +140,20 @@ async fn records(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     budget: &mut Budget,
     query: &mut QueryBuilder<'_, Sqlite>,
+    surface: ValidationSurface,
 ) -> Result<Vec<StoredAssistantRecord>> {
     let statement = query.build();
     let mut rows = statement.fetch(&mut **tx);
     let mut result = Vec::new();
     while let Some(row) = rows.try_next().await? {
         budget.charge(&row)?;
-        result.push(decode_row(row)?);
+        result.push(decode_row_ref_on(&row, surface).map_err(|error| {
+            let error = match surface {
+                ValidationSurface::WrappedRecord => wrapped_model_error(error),
+                ValidationSurface::DirectModel => error,
+            };
+            budget.report(error)
+        })?);
     }
     Ok(result)
 }

@@ -716,7 +716,7 @@ fn api_reply(parts: &axum::http::request::Parts, result: Result<Value, ApiError>
 }
 
 /// Bound serialization while writing, not after allocating an oversized body.
-fn json_bytes(value: &Value) -> Result<Vec<u8>, serde_json::Error> {
+fn json_bytes(value: &(impl serde::Serialize + ?Sized)) -> Result<Vec<u8>, serde_json::Error> {
     struct Bounded(Vec<u8>);
     impl std::io::Write for Bounded {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {

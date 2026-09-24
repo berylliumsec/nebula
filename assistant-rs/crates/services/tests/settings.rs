@@ -254,6 +254,16 @@ async fn python_settings_oracle_matches_saved_choices_and_commit_order() {
                     case["name"]
                 );
             }
+            Err(Error::RetainedModelValidation(report)) => {
+                assert_eq!(case["expected"]["status"], 422, "{}", case["name"]);
+                assert_eq!(case["expected"]["body"]["code"], "api.model_validation");
+                assert_eq!(
+                    serde_json::to_value(report).unwrap(),
+                    case["expected"]["body"]["detail"],
+                    "{}",
+                    case["name"]
+                );
+            }
             Err(Error::LegacyUnhandled | Error::LegacyStorageUnhandled) => {
                 assert_eq!(case["expected"]["status"], 500, "{}", case["name"]);
                 assert_eq!(
@@ -319,7 +329,7 @@ async fn python_settings_oracle_matches_saved_choices_and_commit_order() {
             && actual_changed.iter().any(|id| after[id].0 == "chat_turns");
         compared += 1;
     }
-    assert_eq!(compared, 110, "Complete canonical service corpus");
+    assert_eq!(compared, 113, "Complete canonical service corpus");
     assert!(
         repaired_on_refusal,
         "Capture must verify repair commits before active-response refusal"

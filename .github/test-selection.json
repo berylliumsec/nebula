@@ -1,14 +1,14 @@
 {
-  "change_digest": "a4d13dc2343959c54657d5fecace2c50ea83d996c32c846c921036b5662dc435",
+  "change_digest": "9611c5cdb816e4a6ae341381e0a09aca4eec5635da86986e58702ad2e4eaf6f0",
   "reviewed_by": "Codex with domain, storage and oracle sub-agent review",
-  "reason": "Assistant-only Rust persistence/read/recovery and saved settings/schedule mutation port. Exact cumulative checks cover all implemented changed layers, immutable MCP hydration, request/null/coercion/auth contracts, queued writer CAS/clocks/raw preservation and search updates, recorded repairs and independent commits. Python regenerates all scoped oracles plus storage interop; no provider/helper/workflow execution. Full rewrite and product gates remain incomplete.",
+  "reason": "Assistant-only Rust compatibility port. Cumulative exact checks cover implemented records, SQLite persistence, auth/read/recovery/settings routes and new retained Entity/Schedule validation. Direct model errors preserve ordered reports while wrapped reads stay sanitized; bounded diagnostics retain commit order and never execute providers/tools. Python regenerates scoped fixtures and verifies storage interoperability. Product and performance gates remain incomplete.",
   "exclusions": "Thirty-three experimental Assistant handlers; no shipped Rust entrypoint or production UI. Other areas and desktop-native remain untouched. No provider/harness/tool/hook execution, child dispatch, streaming or live data. This increment only adopts already durable terminal evidence. Manual reconciliation/resume, historical/PostgreSQL/checkpoint migrations, complete route/error parity, production desktop/mobile/WebKit/LAN/reconnect/device, packaging and whole-Assistant performance remain open. Complete snapshot/transaction/response/serialization limits are explicit resource-bound extensions. Detailed malformed retained-model validation envelopes remain open. Existing Goal/subagent UI visibility gaps remain; Figma inspection is design evidence. Browser tests stay unselected until an isolated Rust-backed production journey exists.",
   "expected_tests": {
-    "python": 56,
+    "python": 57,
     "frontend": 0,
     "native": 0,
     "playwright": 0,
-    "assistant_rust": 142
+    "assistant_rust": 152
   },
   "python_versions": [
     "3.12"
@@ -28,7 +28,8 @@
     "tests/test_assistant_subagents_contract.py",
     "tests/test_assistant_state_contract.py",
     "tests/test_assistant_recovery_contract.py",
-    "tests/test_assistant_settings_contract.py"
+    "tests/test_assistant_settings_contract.py",
+    "tests/test_assistant_model_validation_contract.py::test_model_validation_oracle_matches_current_python_boundary"
   ],
   "frontend": [],
   "native": [],
@@ -175,6 +176,16 @@
     "nebula-assistant-services/settings::python_settings_oracle_matches_saved_choices_and_commit_order",
     "nebula-assistant-services/settings::settings_preserve_ordered_opaque_choices_and_nullable_fields_after_reopen",
     "nebula-assistant-services/settings::settings_repair_before_refusal_and_keep_independent_schedule_commits",
-    "nebula-assistant-transport/settings::python_settings_http_oracle_preserves_mutations_search_and_partial_commits"
+    "nebula-assistant-transport/settings::python_settings_http_oracle_preserves_mutations_search_and_partial_commits",
+    "nebula-assistant-domain/model_validation::retained_entity_and_schedule_validation_matches_python_vectors",
+    "nebula-assistant-domain/model_validation::retained_validation_reports_share_original_inputs_and_redact_debug",
+    "nebula-assistant-domain/model_validation::retained_validation_reports_bound_retained_input_and_wire_amplification",
+    "nebula-assistant-domain/model_validation::direct_schedule_diagnostics_preserve_wrapped_and_canonical_record_contracts",
+    "nebula-assistant-storage/model_validation::schedule_validation_preserves_direct_wrapped_root_and_candidate_order",
+    "nebula-assistant-storage/model_validation::schedule_validation_keeps_integrity_limits_and_report_debug_separate",
+    "nebula-assistant-storage/model_validation::schedule_writer_validates_after_revision_and_rolls_back_entity_and_search",
+    "nebula-assistant-services/model_validation::retained_validation_services_preserve_catalog_and_plan_exception_origins",
+    "nebula-assistant-transport/http::retained_model_errors_preserve_locations_and_bound_repeated_inputs",
+    "nebula-assistant-transport/retained_diagnostics::retained_exception_previews_match_python_and_bound_unicode_tail"
   ]
 }

@@ -17,6 +17,8 @@ fn missing_session(id: &str) -> Error {
 }
 fn read_error(error: StorageError) -> Error {
     match error {
+        StorageError::RetainedModelValidation(report) => Error::RetainedModelValidation(report),
+        StorageError::WrappedRecord(_) => Error::LegacyStorageUnhandled,
         StorageError::Record(RecordError::TooLarge) => StorageError::ReadLimit.into(),
         StorageError::Record(_) | StorageError::CorruptEnvelope => Error::LegacyUnhandled,
         error => error.into(),

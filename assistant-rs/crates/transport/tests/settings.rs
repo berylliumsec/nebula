@@ -280,7 +280,8 @@ async fn python_settings_http_oracle_preserves_mutations_search_and_partial_comm
         }
         CLOCK.store(
             DateTime::parse_from_rfc3339(
-                case.get("clock")
+                case.get("writer_clock")
+                    .or_else(|| case.get("clock"))
                     .unwrap_or(&fixture["clock"])
                     .as_str()
                     .unwrap(),

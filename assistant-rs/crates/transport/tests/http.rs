@@ -625,6 +625,122 @@ async fn validation_error_amplification_cannot_exceed_response_budget() {
     store.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn retained_model_errors_preserve_locations_and_bound_repeated_inputs() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("nebula.db");
+    let store = setup(&path).await;
+    let source: Value =
+        serde_json::from_str(include_str!("../../../compatibility/python-storage.json")).unwrap();
+    let mut schedule = source["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "chat_schedules")
+        .unwrap()["payload"]
+        .clone();
+    schedule["id"] = "retained-validation".into();
+    schedule["session_id"] = "session".into();
+    schedule["engagement_id"] = fixture()["session"]["engagement_id"].clone();
+    store
+        .apply(vec![Mutation::Create(
+            StoredAssistantRecord::decode(Kind::Schedule, &serde_json::to_vec(&schedule).unwrap())
+                .unwrap(),
+        )])
+        .await
+        .unwrap();
+    let mut options = config();
+    options.response_budget_bytes = 16 * 1024 * 1024;
+    let app = router(store.clone(), options).unwrap();
+    let mut db = raw(&path).await;
+    for mode in ["small", "report-limit", "envelope-limit"] {
+        let mut invalid = schedule.clone();
+        if mode != "small" {
+            // Every missing-field issue refers to the same input object. Three
+            // such wire inputs exceed the response budget while the retained
+            // raw/parsed input remains below its own aggregate bound.
+            for field in ["provider_profile_id", "engagement_id", "next_run_at"] {
+                invalid.as_object_mut().unwrap().remove(field);
+            }
+            invalid["model"] = "".into();
+            let input_bytes =
+                if mode == "envelope-limit" {
+                    let errors: Vec<_> = ["engagement_id", "provider_profile_id", "next_run_at"]
+                    .into_iter().map(|field| json!({
+                        "type":"missing", "loc":[field], "msg":"Field required", "input":invalid
+                    })).collect();
+                    // Leave only 64 bytes after the detail array, so the report
+                    // itself fits and the final HTTP envelope exceeds the bound.
+                    (16 * 1024 * 1024 - 64 - serde_json::to_vec(&errors).unwrap().len()) / 3
+                } else {
+                    6 * 1024 * 1024
+                };
+            invalid["model"] = "x".repeat(input_bytes).into();
+        } else {
+            invalid["next_run_at"] = "2030-01-01T12:00:00".into();
+        }
+        let raw = serde_json::to_string(&invalid).unwrap();
+        if mode == "envelope-limit" {
+            assert!(
+                matches!(
+                    StoredAssistantRecord::decode_persisted_direct(Kind::Schedule, raw.as_bytes()),
+                    Err(nebula_assistant_domain::records::RecordError::ModelValidation(_))
+                ),
+                "this input passes the report preflight before the HTTP envelope exceeds its bound"
+            );
+        }
+        sqlx::query("UPDATE entities SET payload=? WHERE id='retained-validation'")
+            .bind(&raw)
+            .execute(&mut db)
+            .await
+            .unwrap();
+        let response = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                "/api/v1/chat/sessions/session/schedule",
+                Value::Null,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if mode == "small" { 422 } else { 413 },
+            "{mode}"
+        );
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        if mode == "small" {
+            assert_eq!(body["code"], "api.model_validation");
+            assert_eq!(body["feature"], "chat");
+            assert_eq!(
+                body["detail"],
+                json!([{
+                    "type":"value_error", "loc":["next_run_at"],
+                    "msg":"Value error, schedule times must include a timezone",
+                    "input":"2030-01-01T12:00:00", "ctx":{"error":{}}
+                }])
+            );
+        }
+        let after: String =
+            sqlx::query_scalar("SELECT payload FROM entities WHERE id='retained-validation'")
+                .fetch_one(&mut db)
+                .await
+                .unwrap();
+        assert_eq!(after, raw, "diagnostics never rewrite the original record");
+        // Consuming the bounded error releases the sole response slot.
+        let response = app
+            .clone()
+            .oneshot(request("GET", "/api/v1/chat-sessions/session", Value::Null))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        value(response).await;
+    }
+    db.close().await.unwrap();
+    store.shutdown().await.unwrap();
+}
+
 fn navigation_normalize(mut value: Value, stamps: &std::collections::BTreeSet<String>) -> Value {
     match &mut value {
         Value::Object(fields) => {

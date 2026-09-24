@@ -18,6 +18,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use fs2::FileExt;
 use futures_util::TryStreamExt;
 use nebula_assistant_domain::auth::PairedDevice;
+use nebula_assistant_domain::model_validation::ValidationReport;
 use nebula_assistant_domain::records::{
     AssistantKind, MAX_RECORD_BYTES, RecordError, StoredAssistantRecord,
 };
@@ -98,6 +99,10 @@ pub enum Error {
     RevisionExhausted,
     #[error(transparent)]
     Record(#[from] RecordError),
+    #[error("stored Assistant model is corrupt")]
+    WrappedRecord(RecordError),
+    #[error("retained Assistant model validation failed")]
+    RetainedModelValidation(ValidationReport),
     // Database messages can include values. Do not expose their display strings
     // through an API error; a future transport can attach a diagnostic reference.
     #[error("assistant database operation failed")]
@@ -891,13 +896,38 @@ fn decode_row(row: SqliteRow) -> Result<StoredAssistantRecord> {
     decode_row_ref(&row)
 }
 fn decode_row_ref(row: &SqliteRow) -> Result<StoredAssistantRecord> {
+    decode_row_ref_on(row, ValidationSurface::WrappedRecord)
+}
+
+// The source call site determines the exception boundary. A model kind alone
+// cannot distinguish Store.get from list_session_entities or a merged update.
+#[derive(Clone, Copy)]
+enum ValidationSurface {
+    WrappedRecord,
+    DirectModel,
+}
+fn direct_record_error(error: RecordError) -> Error {
+    match error {
+        RecordError::ModelValidation(report) => Error::RetainedModelValidation(report),
+        error => Error::Record(error),
+    }
+}
+fn decode_row_ref_on(row: &SqliteRow, surface: ValidationSurface) -> Result<StoredAssistantRecord> {
     let size: i64 = row.try_get("payload_bytes")?;
     if size < 0 || size as u64 > MAX_RECORD_BYTES as u64 {
         return Err(RecordError::TooLarge.into());
     }
     let payload: &str = row.try_get("payload")?;
     let kind = AssistantKind::try_from(row.try_get::<&str, _>("kind")?)?;
-    let record = StoredAssistantRecord::decode_persisted(kind, payload.as_bytes())?;
+    let record = match surface {
+        ValidationSurface::WrappedRecord => {
+            StoredAssistantRecord::decode_persisted(kind, payload.as_bytes())?
+        }
+        ValidationSurface::DirectModel => {
+            StoredAssistantRecord::decode_persisted_direct(kind, payload.as_bytes())
+                .map_err(direct_record_error)?
+        }
+    };
     let p = record.payload();
     if p["id"].as_str() != Some(row.try_get::<&str, _>("id")?)
         || record_revision(&record)? != row.try_get::<i64, _>("revision")?

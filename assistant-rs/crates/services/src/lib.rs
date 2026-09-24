@@ -50,6 +50,8 @@ pub enum Error {
     LegacyStorageUnhandled,
     #[error("Assistant model validation failed")]
     ModelValidation(Vec<Value>),
+    #[error("Retained Assistant model validation failed")]
+    RetainedModelValidation(nebula_assistant_domain::model_validation::ValidationReport),
     #[error("{kind} entity not found: {id}")]
     EntityNotFound { kind: &'static str, id: String },
     #[error("revision conflict: expected {expected}, found {found}")]
