@@ -27,6 +27,8 @@ Observable invariants:
    `retry_safe: false`.
 3. Recovery commits that receipt before queueing the provider continuation, so
    concurrent message delivery cannot leave the old tool call looking live.
+   If an earlier release already settled the turn with that stale row, periodic
+   reconciliation backfills the same terminal receipt without replaying work.
 4. A successful or failed authoritative callback retains the existing callback
    completion path.
 5. A still-running producer remains waiting and is never classified early.

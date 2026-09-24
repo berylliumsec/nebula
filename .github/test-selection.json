@@ -1,7 +1,7 @@
 {
-  "change_digest": "7c9b606294337eec2848aebc015b57110c7fb2ffa3616071d5080e9c1b566a81",
+  "change_digest": "426468632c55199f1adc5f580c35dbe17a8ab7c58c3495c68a25a770edfa8760",
   "reviewed_by": "Codex focused review for background callback and subagent lifecycle reconciliation",
-  "reason": "The change materializes a terminal callback result in provider history and the durable ToolCall before startup recovery queues the provider continuation. The selected file covers the callback contract, successful webhook continuation, approval-to-callback parking, terminal producer notification, durable ToolCall settlement, and the wake-order regression.",
+  "reason": "The change backfills terminal callback receipts into stale durable ToolCall rows even when a competing wake already settled the owning turn. The selected file covers the callback contract, successful webhook continuation, approval-to-callback parking, terminal producer notification, durable ToolCall settlement, wake ordering, and settled-turn backfill.",
   "exclusions": "Full suites are not approved and are excluded. Frontend rendering, Playwright selectors and layouts, native Rust/Tauri code, provider adapters, missions, hooks, terminals, and unrelated automation runtime behavior are unchanged. The deployed real-Core stale record is verified separately after merge.",
   "expected_tests": {
     "python": 4,
