@@ -1,0 +1,759 @@
+{
+  "actions": [
+    {
+      "body": {
+        "expected_revision": 0,
+        "kind": "question",
+        "source_message_id": "source",
+        "source_selection": "Keep β exact",
+        "text": "  Keep β exact  "
+      },
+      "expected": {
+        "status": 200,
+        "value": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<server-time>",
+          "effective_sequence": 1,
+          "engagement_id": "project",
+          "history": [],
+          "id": "one",
+          "kind": "question",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": "source",
+          "source_selection": "Keep β exact",
+          "source_session_id": "session",
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<server-time>"
+        }
+      },
+      "id": "one",
+      "method": "write",
+      "session": "session"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": "duplicate"
+      },
+      "expected": {
+        "status": 409
+      },
+      "id": "one",
+      "method": "write",
+      "session": "session"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_message_id": "source",
+        "source_selection": "not present",
+        "text": "bad"
+      },
+      "expected": {
+        "status": 422
+      },
+      "id": "bad-selection",
+      "method": "write",
+      "session": "session"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_message_id": "foreign-message",
+        "text": "bad"
+      },
+      "expected": {
+        "status": 404
+      },
+      "id": "bad-source",
+      "method": "write",
+      "session": "session"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": "Document defaults"
+      },
+      "expected": {
+        "status": 200,
+        "value": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<server-time>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "latest-decision",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Document defaults",
+          "updated_at": "<server-time>"
+        }
+      },
+      "id": "latest-decision",
+      "method": "write",
+      "session": "session"
+    },
+    {
+      "body": {
+        "expected_revision": 1,
+        "kind": "constraint",
+        "text": "Changed question"
+      },
+      "expected": {
+        "status": 200,
+        "value": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<server-time>",
+          "effective_sequence": 1,
+          "engagement_id": "project",
+          "history": [
+            {
+              "kind": "question",
+              "revision": 1,
+              "status": "active",
+              "text": "Keep β exact",
+              "updated_at": "<server-time>"
+            }
+          ],
+          "id": "one",
+          "kind": "constraint",
+          "revision": 2,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": "source",
+          "source_selection": "Keep β exact",
+          "source_session_id": "session",
+          "status": "active",
+          "text": "Changed question",
+          "updated_at": "<server-time>"
+        }
+      },
+      "id": "one",
+      "method": "write",
+      "session": "session"
+    },
+    {
+      "body": {
+        "expected_revision": 1,
+        "text": "stale"
+      },
+      "expected": {
+        "status": 409
+      },
+      "id": "one",
+      "method": "write",
+      "session": "session"
+    },
+    {
+      "body": {
+        "expected_revision": 2,
+        "text": "cross-project"
+      },
+      "expected": {
+        "status": 404
+      },
+      "id": "one",
+      "method": "write",
+      "session": "foreign"
+    },
+    {
+      "body": {
+        "expected_revision": 2,
+        "text": "cross-session"
+      },
+      "expected": {
+        "status": 404
+      },
+      "id": "one",
+      "method": "write",
+      "session": "peer"
+    },
+    {
+      "body": {
+        "action": "promote",
+        "expected_revision": 2
+      },
+      "expected": {
+        "status": 200,
+        "value": {
+          "copied_from_id": "one",
+          "copied_from_revision": 2,
+          "created_at": "<server-time>",
+          "effective_sequence": 1,
+          "engagement_id": "project",
+          "history": [],
+          "id": "project-one",
+          "kind": "constraint",
+          "revision": 1,
+          "scope": "project",
+          "session_id": null,
+          "source_message_id": "source",
+          "source_selection": "Keep β exact",
+          "source_session_id": "session",
+          "status": "active",
+          "text": "Changed question",
+          "updated_at": "<server-time>"
+        }
+      },
+      "id": "one",
+      "method": "write",
+      "session": "session"
+    },
+    {
+      "expected": {
+        "status": 200,
+        "value": [
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<server-time>",
+            "effective_sequence": 1,
+            "engagement_id": "project",
+            "history": [
+              {
+                "kind": "question",
+                "revision": 1,
+                "status": "active",
+                "text": "Keep β exact",
+                "updated_at": "<server-time>"
+              },
+              {
+                "kind": "constraint",
+                "revision": 2,
+                "status": "active",
+                "text": "Changed question",
+                "updated_at": "<server-time>"
+              }
+            ],
+            "id": "one",
+            "kind": "constraint",
+            "revision": 3,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": "source",
+            "source_selection": "Keep β exact",
+            "source_session_id": "session",
+            "status": "superseded",
+            "text": "Changed question",
+            "updated_at": "<server-time>"
+          },
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<server-time>",
+            "effective_sequence": 5,
+            "engagement_id": "project",
+            "history": [],
+            "id": "latest-decision",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": null,
+            "source_selection": null,
+            "source_session_id": null,
+            "status": "active",
+            "text": "Document defaults",
+            "updated_at": "<server-time>"
+          },
+          {
+            "copied_from_id": "one",
+            "copied_from_revision": 2,
+            "created_at": "<server-time>",
+            "effective_sequence": 1,
+            "engagement_id": "project",
+            "history": [],
+            "id": "project-one",
+            "kind": "constraint",
+            "revision": 1,
+            "scope": "project",
+            "session_id": null,
+            "source_message_id": "source",
+            "source_selection": "Keep β exact",
+            "source_session_id": "session",
+            "status": "active",
+            "text": "Changed question",
+            "updated_at": "<server-time>"
+          }
+        ]
+      },
+      "method": "read",
+      "session": "session"
+    },
+    {
+      "expected": {
+        "status": 200,
+        "value": [
+          {
+            "copied_from_id": "one",
+            "copied_from_revision": 2,
+            "created_at": "<server-time>",
+            "effective_sequence": 1,
+            "engagement_id": "project",
+            "history": [],
+            "id": "project-one",
+            "kind": "constraint",
+            "revision": 1,
+            "scope": "project",
+            "session_id": null,
+            "source_message_id": "source",
+            "source_selection": "Keep β exact",
+            "source_session_id": "session",
+            "status": "active",
+            "text": "Changed question",
+            "updated_at": "<server-time>"
+          }
+        ]
+      },
+      "method": "read",
+      "session": "peer"
+    },
+    {
+      "expected": {
+        "status": 200,
+        "value": []
+      },
+      "method": "read",
+      "session": "foreign"
+    },
+    {
+      "expected": {
+        "status": 200,
+        "value": [
+          {
+            "id": "latest-decision",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "source_message_id": null,
+            "source_session_id": null,
+            "text": "Document defaults"
+          },
+          {
+            "id": "project-one",
+            "kind": "constraint",
+            "revision": 1,
+            "scope": "project",
+            "source_message_id": "source",
+            "source_session_id": "session",
+            "text": "Changed question"
+          }
+        ]
+      },
+      "method": "snapshot",
+      "project": "project",
+      "session": "session"
+    },
+    {
+      "body": {
+        "expected_revision": 3,
+        "text": "cannot restore"
+      },
+      "expected": {
+        "status": 409
+      },
+      "id": "one",
+      "method": "write",
+      "session": "session"
+    },
+    {
+      "body": {
+        "action": "remove",
+        "expected_revision": 1
+      },
+      "expected": {
+        "status": 200,
+        "value": {
+          "copied_from_id": "one",
+          "copied_from_revision": 2,
+          "created_at": "<server-time>",
+          "effective_sequence": 1,
+          "engagement_id": "project",
+          "history": [
+            {
+              "kind": "constraint",
+              "revision": 1,
+              "status": "active",
+              "text": "Changed question",
+              "updated_at": "<server-time>"
+            }
+          ],
+          "id": "project-one",
+          "kind": "constraint",
+          "revision": 2,
+          "scope": "project",
+          "session_id": null,
+          "source_message_id": "source",
+          "source_selection": "Keep β exact",
+          "source_session_id": "session",
+          "status": "removed",
+          "text": "Changed question",
+          "updated_at": "<server-time>"
+        }
+      },
+      "id": "project-one",
+      "method": "write",
+      "session": "peer"
+    },
+    {
+      "expected": {
+        "status": 200,
+        "value": [
+          {
+            "id": "latest-decision",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "source_message_id": null,
+            "source_session_id": null,
+            "text": "Document defaults"
+          }
+        ]
+      },
+      "method": "snapshot",
+      "project": "project",
+      "session": "session"
+    },
+    {
+      "body": {
+        "action": "supersede",
+        "expected_revision": 1
+      },
+      "expected": {
+        "status": 200,
+        "value": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<server-time>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [
+            {
+              "kind": "decision",
+              "revision": 1,
+              "status": "active",
+              "text": "Document defaults",
+              "updated_at": "<server-time>"
+            }
+          ],
+          "id": "latest-decision",
+          "kind": "decision",
+          "revision": 2,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "superseded",
+          "text": "Document defaults",
+          "updated_at": "<server-time>"
+        }
+      },
+      "id": "latest-decision",
+      "method": "write",
+      "session": "session"
+    },
+    {
+      "expected": {
+        "status": 200,
+        "value": []
+      },
+      "method": "snapshot",
+      "project": "project",
+      "session": "session"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "status": 200,
+        "value": {
+          "created_at": "<server-time>",
+          "device_id": "phone",
+          "engagement_id": "project",
+          "id": "chat-read-b8d9791d40a9cca4ee1903c9616a80d314ebb2ec59c0c68899ba575a247e0aca",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00Z",
+          "updated_at": "<server-time>"
+        }
+      },
+      "method": "cursor",
+      "session": "session"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "status": 409
+      },
+      "method": "cursor",
+      "session": "session"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 1,
+        "through_at": "2020-01-02T03:00:00+02:00"
+      },
+      "expected": {
+        "status": 200,
+        "value": {
+          "created_at": "<server-time>",
+          "device_id": "phone",
+          "engagement_id": "project",
+          "id": "chat-read-b8d9791d40a9cca4ee1903c9616a80d314ebb2ec59c0c68899ba575a247e0aca",
+          "revision": 2,
+          "session_id": "session",
+          "through_at": "2020-01-02T03:00:00+02:00",
+          "updated_at": "<server-time>"
+        }
+      },
+      "method": "cursor",
+      "session": "session"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 2,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "status": 409
+      },
+      "method": "cursor",
+      "session": "session"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 2,
+        "through_at": "2099-01-01T00:00:00Z"
+      },
+      "expected": {
+        "status": 422
+      },
+      "method": "cursor",
+      "session": "session"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 2,
+        "through_at": "2020-01-02T04:00:00"
+      },
+      "expected": {
+        "status": 422
+      },
+      "method": "cursor",
+      "session": "session"
+    },
+    {
+      "authenticated_device": "paired-device",
+      "body": {
+        "device_id": "untrusted-device",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "status": 200,
+        "value": {
+          "created_at": "<server-time>",
+          "device_id": "paired-device",
+          "engagement_id": "project",
+          "id": "chat-read-93149da9779415c58629c26b9f94da6d2a03f421042009b42932aa1872568268",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00Z",
+          "updated_at": "<server-time>"
+        }
+      },
+      "method": "cursor",
+      "session": "session"
+    },
+    {
+      "authenticated_device": "paired-device",
+      "body": {
+        "device_id": "different-untrusted-device",
+        "expected_revision": 1,
+        "through_at": "2020-01-03T00:00:00Z"
+      },
+      "expected": {
+        "status": 200,
+        "value": {
+          "created_at": "<server-time>",
+          "device_id": "paired-device",
+          "engagement_id": "project",
+          "id": "chat-read-93149da9779415c58629c26b9f94da6d2a03f421042009b42932aa1872568268",
+          "revision": 2,
+          "session_id": "session",
+          "through_at": "2020-01-03T00:00:00Z",
+          "updated_at": "<server-time>"
+        }
+      },
+      "method": "cursor",
+      "session": "session"
+    }
+  ],
+  "format": "nebula.assistant-context-oracle/v1",
+  "initial": [
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "session",
+        "metadata": {},
+        "model": "fixture",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "session",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "peer",
+        "metadata": {},
+        "model": "fixture",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "peer",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "other",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "foreign",
+        "metadata": {},
+        "model": "fixture",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "foreign",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "First line\nKeep β exact\nLast line",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:00Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "source",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "user",
+        "sequence": 1,
+        "session_id": "session",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:00Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Review the docs",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:00Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "latest",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "user",
+        "sequence": 5,
+        "session_id": "session",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:00Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "private",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:00Z",
+        "elapsed_ms": null,
+        "engagement_id": "other",
+        "finish_reason": null,
+        "id": "foreign-message",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "user",
+        "sequence": 1,
+        "session_id": "foreign",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:00Z",
+        "usage": null
+      }
+    }
+  ],
+  "source_sha256": {
+    "src/nebula/v3/chat_catchup.py": "0e35488542f1c096f4d587c41f311614bfd6d08b7aaab7651dfb5d6b3d6b4524",
+    "src/nebula/v3/chat_decisions.py": "45a3fd98dca2162cc9fd5c36b2bc7f953c37947e80d8bba3fc26b8d13f5f50f5",
+    "src/nebula/v3/storage.py": "1eb90d54a711e2ced692efdab6b47f764d017963bea029c76bebe1cc5256cfb2"
+  }
+}

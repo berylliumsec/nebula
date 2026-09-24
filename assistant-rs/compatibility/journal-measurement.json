@@ -1,0 +1,29 @@
+{
+  "append_p50_us": 23962,
+  "append_p95_us": 30979,
+  "append_p99_us": 41811,
+  "assistant_performance_gates_verified": false,
+  "build_profile": "release",
+  "capacity_rejections_retried": 0,
+  "committed_events": 2000,
+  "elapsed_seconds": 0.401972916,
+  "events_per_second": 4975.459590416783,
+  "events_per_stream": 20,
+  "format": "nebula.assistant-journal-measurement/v1",
+  "package_version": "0.1.0",
+  "peak_rss_kib": 9184,
+  "python_baseline_measured": false,
+  "replay_batch_p99_us": 3452,
+  "replayed_events": 2000,
+  "scope": "synthetic journal only; no API, provider, harness, tools, or real agents",
+  "sqlite": {
+    "journal_mode": "wal",
+    "readers": 4,
+    "synchronous": "normal",
+    "writer_capacity": 128
+  },
+  "streams": 100,
+  "binary_sha256": "40fd65c507d0ad157331f9f757cf15ba254f6c191cb0390009a92a153b51667c",
+  "environment": "Shared development host; no CPU or memory isolation; not the agreed 8-core/16-GiB benchmark environment.",
+  "baseline_commit": "b5bab4372871a0fa3fe91968c95d73903796ab56"
+}

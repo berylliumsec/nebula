@@ -1,27 +1,25 @@
 {
-  "change_digest": "f878ef94fc058c6b80d9c5959758e25e57ba2a3062f0f929b6b203f2d54e5631",
-  "reviewed_by": "Codex focused review for actor-scoped workspace provenance",
-  "reason": "The change adds bounded Git dirty-path provenance to Core, persists actor and subagent ownership, and exposes the receipt through chat lifecycle and automatic command hook envelopes. The selection covers exact/pre-existing/other/concurrent/unsupported classification, store-reopen durability, durable native-hook envelope shape, all turn-ending lifecycle variants, automatic before/after command hooks, blocking before-hook cleanup, and the regression that command execution itself never walks the workspace.",
-  "exclusions": "Full suites are not approved and are excluded. Frontend, Rust/native code, browser/device behavior, API routes, provider wire formats, mission orchestration, and unrelated harness adapters are unchanged. The production Core journey is exercised manually after immutable deployment because it validates the installed binary and authenticated native-hook path rather than a browser presentation surface.",
+  "change_digest": "02117af00a5645ae2479bb8b5eff6791d1e83b7fa7310a1817979466245f2489",
+  "reviewed_by": "Codex using current Assistant source captures, independent writer/provider review and shared validator impact review",
+  "reason": "Review of cumulative Assistant diff: run35984273210 passed all256 selected Rust tests and72 Python tests. The only Python failure compared capture Python3.12.11 metadata to runner3.12.14. This correction changes only the comparison to require the same major/minor family; all behavioral/static fields and fixture provenance remain intact. Repeat only that failed exact recapture. Existing application code and fixture vectors are unchanged from the reviewed run.",
+  "exclusions": "Python collection60s and local execution120s; CI Python job has no explicit timeout. All256 Rust and the other72 Python checks passed at unchanged application code in f7fc383, so they are not repeated for this test-metadata-only correction. No full suites, frontend/native/Playwright, provider network, app lifespan, live state, production UI/LAN/physical-device or performance execution.",
   "expected_tests": {
-    "python": 17,
+    "assistant_rust": 0,
+    "python": 1,
     "frontend": 0,
     "native": 0,
     "playwright": 0
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
-  "python_node": false,
+  "python_node": true,
   "python": [
-    "tests/v3/test_workspace_provenance.py",
-    "tests/v3/test_native_hooks.py",
-    "tests/v3/test_native_hook_turn_ends.py::test_every_turn_end_sends_one_payload_shape",
-    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_runs_the_completed_hook_once",
-    "tests/v3/test_automation_runtime.py::test_command_tools_run_automatic_project_hooks_before_and_after",
-    "tests/v3/test_automation_runtime.py::test_blocking_before_hook_denies_command_before_runtime_execution",
-    "tests/v3/test_automation_runtime.py::test_command_execution_does_not_walk_workspace"
+    "tests/test_assistant_provider_profile_contract.py::test_provider_profile_oracle_matches_python_source"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [],
+  "assistant_rust": []
 }

@@ -19,6 +19,7 @@ jobs:
       python: ${{ steps.plan.outputs.python }}
       frontend: ${{ steps.plan.outputs.frontend }}
       native: ${{ steps.plan.outputs.native }}
+      assistant_rust: ${{ steps.plan.outputs.assistant_rust }}
       python_browser: ${{ steps.plan.outputs.python_browser }}
       python_node: ${{ steps.plan.outputs.python_node }}
       python_versions: ${{ steps.plan.outputs.python_versions }}
@@ -37,6 +38,7 @@ jobs:
           printf 'python=%s\n' "$(jq -c '.python' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'frontend=%s\n' "$(jq -c '.frontend' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'native=%s\n' "$(jq -c '.native' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
+          printf 'assistant_rust=%s\n' "$(jq -c '.assistant_rust // []' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'python_browser=%s\n' "$(jq -r '.python_browser // false' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'python_node=%s\n' "$(jq -r '.python_node // false' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
           printf 'python_versions=%s\n' "$(jq -c '.python_versions // ["3.12"]' test-selection-receipt.json)" >> "$GITHUB_OUTPUT"
@@ -88,6 +90,11 @@ jobs:
       - name: Install Chromium for browser runtime regression tests
         if: env.RUN_SELECTED == 'true' && needs.selection.outputs.python_browser == 'true'
         run: poetry run playwright install --with-deps chromium
+      - name: Install pinned Rust for selected assistant storage interoperability test
+        if: env.RUN_SELECTED == 'true' && contains(needs.selection.outputs.python, 'tests/test_assistant_storage_interop.py')
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.94.0
       - name: Test
         if: env.RUN_SELECTED == 'true'
         env:
@@ -178,6 +185,35 @@ jobs:
           mapfile -t targets < <(jq -r '.[] | ltrimstr("ui/")' <<<"$SELECTED_TESTS")
           npm test -- "${targets[@]}" --testTimeout=15000
       - run: npm run build
+
+  assistant-rust:
+    needs: selection
+    if: needs.selection.outputs.assistant_rust != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.94.0
+          components: rustfmt, clippy
+      - name: Check isolated assistant workspace
+        run: |
+          cargo +1.94.0 fmt --manifest-path assistant-rs/Cargo.toml --all --check
+          cargo +1.94.0 clippy --locked --manifest-path assistant-rs/Cargo.toml --workspace --all-targets -- -D warnings
+      - name: Run exact selected assistant tests
+        env:
+          BASELINE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CANDIDATE: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: python -m scripts.run_assistant_rust_tests --baseline "$BASELINE" --candidate "$CANDIDATE" --output assistant-rust-test-receipt.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: assistant-rust-test-receipt
+          path: assistant-rust-test-receipt.json
 
   desktop-macos:
     needs: selection

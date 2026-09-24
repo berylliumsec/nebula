@@ -1,0 +1,5268 @@
+{
+  "cases": [
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": null,
+              "loc": [
+                "body"
+              ],
+              "msg": "Field required",
+              "type": "missing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "body-0",
+      "path": "/api/v1/chat/sessions/session/decisions/input-0"
+    },
+    {
+      "body": [],
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": [],
+              "loc": [
+                "body"
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "type": "model_attributes_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "body-1",
+      "path": "/api/v1/chat/sessions/session/decisions/input-1"
+    },
+    {
+      "body": "string",
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "string",
+              "loc": [
+                "body"
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "type": "model_attributes_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "body-2",
+      "path": "/api/v1/chat/sessions/session/decisions/input-2"
+    },
+    {
+      "body": 1,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1,
+              "loc": [
+                "body"
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "type": "model_attributes_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "body-3",
+      "path": "/api/v1/chat/sessions/session/decisions/input-3"
+    },
+    {
+      "body": true,
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": true,
+              "loc": [
+                "body"
+              ],
+              "msg": "Input should be a valid dictionary or object to extract fields from",
+              "type": "model_attributes_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "body-4",
+      "path": "/api/v1/chat/sessions/session/decisions/input-4"
+    },
+    {
+      "body": {},
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {},
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Field required",
+              "type": "missing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "body-5",
+      "path": "/api/v1/chat/sessions/session/decisions/input-5"
+    },
+    {
+      "body": {
+        "expected_revision": null,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": null,
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Input should be a valid integer",
+              "type": "int_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "expected_revision-type-6",
+      "path": "/api/v1/chat/sessions/session/decisions/input-6"
+    },
+    {
+      "body": {
+        "expected_revision": false,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "input-7",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "expected_revision-type-7",
+      "path": "/api/v1/chat/sessions/session/decisions/input-7"
+    },
+    {
+      "body": {
+        "expected_revision": 1,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_decisions entity not found: input-8",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_decisions entity not found: input-8",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "PUT",
+      "name": "expected_revision-type-8",
+      "path": "/api/v1/chat/sessions/session/decisions/input-8"
+    },
+    {
+      "body": {
+        "expected_revision": 1.25,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1.25,
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Input should be a valid integer, got a number with a fractional part",
+              "type": "int_from_float"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "expected_revision-type-9",
+      "path": "/api/v1/chat/sessions/session/decisions/input-9"
+    },
+    {
+      "body": {
+        "expected_revision": [],
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": [],
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Input should be a valid integer",
+              "type": "int_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "expected_revision-type-10",
+      "path": "/api/v1/chat/sessions/session/decisions/input-10"
+    },
+    {
+      "body": {
+        "expected_revision": {},
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {},
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Input should be a valid integer",
+              "type": "int_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "expected_revision-type-11",
+      "path": "/api/v1/chat/sessions/session/decisions/input-11"
+    },
+    {
+      "body": {
+        "action": null,
+        "expected_revision": 0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": null,
+              "loc": [
+                "body",
+                "action"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "action-type-12",
+      "path": "/api/v1/chat/sessions/session/decisions/input-12"
+    },
+    {
+      "body": {
+        "action": false,
+        "expected_revision": 0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": false,
+              "loc": [
+                "body",
+                "action"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "action-type-13",
+      "path": "/api/v1/chat/sessions/session/decisions/input-13"
+    },
+    {
+      "body": {
+        "action": 1,
+        "expected_revision": 0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1,
+              "loc": [
+                "body",
+                "action"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "action-type-14",
+      "path": "/api/v1/chat/sessions/session/decisions/input-14"
+    },
+    {
+      "body": {
+        "action": 1.25,
+        "expected_revision": 0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1.25,
+              "loc": [
+                "body",
+                "action"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "action-type-15",
+      "path": "/api/v1/chat/sessions/session/decisions/input-15"
+    },
+    {
+      "body": {
+        "action": [],
+        "expected_revision": 0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": [],
+              "loc": [
+                "body",
+                "action"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "action-type-16",
+      "path": "/api/v1/chat/sessions/session/decisions/input-16"
+    },
+    {
+      "body": {
+        "action": {},
+        "expected_revision": 0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {},
+              "loc": [
+                "body",
+                "action"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "action-type-17",
+      "path": "/api/v1/chat/sessions/session/decisions/input-17"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "kind": null,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": null,
+              "loc": [
+                "body",
+                "kind"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "kind-type-18",
+      "path": "/api/v1/chat/sessions/session/decisions/input-18"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "kind": false,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": false,
+              "loc": [
+                "body",
+                "kind"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "kind-type-19",
+      "path": "/api/v1/chat/sessions/session/decisions/input-19"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "kind": 1,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1,
+              "loc": [
+                "body",
+                "kind"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "kind-type-20",
+      "path": "/api/v1/chat/sessions/session/decisions/input-20"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "kind": 1.25,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1.25,
+              "loc": [
+                "body",
+                "kind"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "kind-type-21",
+      "path": "/api/v1/chat/sessions/session/decisions/input-21"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "kind": [],
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": [],
+              "loc": [
+                "body",
+                "kind"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "kind-type-22",
+      "path": "/api/v1/chat/sessions/session/decisions/input-22"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "kind": {},
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {},
+              "loc": [
+                "body",
+                "kind"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "kind-type-23",
+      "path": "/api/v1/chat/sessions/session/decisions/input-23"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": null
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": null,
+              "loc": [
+                "body",
+                "text"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "text-type-24",
+      "path": "/api/v1/chat/sessions/session/decisions/input-24"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": false
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": false,
+              "loc": [
+                "body",
+                "text"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "text-type-25",
+      "path": "/api/v1/chat/sessions/session/decisions/input-25"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": 1
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1,
+              "loc": [
+                "body",
+                "text"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "text-type-26",
+      "path": "/api/v1/chat/sessions/session/decisions/input-26"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": 1.25
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1.25,
+              "loc": [
+                "body",
+                "text"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "text-type-27",
+      "path": "/api/v1/chat/sessions/session/decisions/input-27"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": []
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": [],
+              "loc": [
+                "body",
+                "text"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "text-type-28",
+      "path": "/api/v1/chat/sessions/session/decisions/input-28"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": {}
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {},
+              "loc": [
+                "body",
+                "text"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "text-type-29",
+      "path": "/api/v1/chat/sessions/session/decisions/input-29"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_message_id": null,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "input-30",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "source_message_id-type-30",
+      "path": "/api/v1/chat/sessions/session/decisions/input-30"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_message_id": false,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": false,
+              "loc": [
+                "body",
+                "source_message_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "source_message_id-type-31",
+      "path": "/api/v1/chat/sessions/session/decisions/input-31"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_message_id": 1,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1,
+              "loc": [
+                "body",
+                "source_message_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "source_message_id-type-32",
+      "path": "/api/v1/chat/sessions/session/decisions/input-32"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_message_id": 1.25,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1.25,
+              "loc": [
+                "body",
+                "source_message_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "source_message_id-type-33",
+      "path": "/api/v1/chat/sessions/session/decisions/input-33"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_message_id": [],
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": [],
+              "loc": [
+                "body",
+                "source_message_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "source_message_id-type-34",
+      "path": "/api/v1/chat/sessions/session/decisions/input-34"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_message_id": {},
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {},
+              "loc": [
+                "body",
+                "source_message_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "source_message_id-type-35",
+      "path": "/api/v1/chat/sessions/session/decisions/input-35"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_selection": null,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "input-36",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "source_selection-type-36",
+      "path": "/api/v1/chat/sessions/session/decisions/input-36"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_selection": false,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": false,
+              "loc": [
+                "body",
+                "source_selection"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "source_selection-type-37",
+      "path": "/api/v1/chat/sessions/session/decisions/input-37"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_selection": 1,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1,
+              "loc": [
+                "body",
+                "source_selection"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "source_selection-type-38",
+      "path": "/api/v1/chat/sessions/session/decisions/input-38"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_selection": 1.25,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1.25,
+              "loc": [
+                "body",
+                "source_selection"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "source_selection-type-39",
+      "path": "/api/v1/chat/sessions/session/decisions/input-39"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_selection": [],
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": [],
+              "loc": [
+                "body",
+                "source_selection"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "source_selection-type-40",
+      "path": "/api/v1/chat/sessions/session/decisions/input-40"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_selection": {},
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {},
+              "loc": [
+                "body",
+                "source_selection"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "source_selection-type-41",
+      "path": "/api/v1/chat/sessions/session/decisions/input-41"
+    },
+    {
+      "body": {
+        "expected_revision": -1,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 0
+              },
+              "input": -1,
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Input should be greater than or equal to 0",
+              "type": "greater_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "revision-42",
+      "path": "/api/v1/chat/sessions/session/decisions/input-42"
+    },
+    {
+      "body": {
+        "expected_revision": "-1",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 0
+              },
+              "input": "-1",
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Input should be greater than or equal to 0",
+              "type": "greater_than_equal"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "revision-43",
+      "path": "/api/v1/chat/sessions/session/decisions/input-43"
+    },
+    {
+      "body": {
+        "expected_revision": "  +00  ",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "input-44",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "revision-44",
+      "path": "/api/v1/chat/sessions/session/decisions/input-44"
+    },
+    {
+      "body": {
+        "expected_revision": "0.000",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "input-45",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "revision-45",
+      "path": "/api/v1/chat/sessions/session/decisions/input-45"
+    },
+    {
+      "body": {
+        "expected_revision": "000",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "input-46",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "revision-46",
+      "path": "/api/v1/chat/sessions/session/decisions/input-46"
+    },
+    {
+      "body": {
+        "expected_revision": "0__0",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "input-47",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "revision-47",
+      "path": "/api/v1/chat/sessions/session/decisions/input-47"
+    },
+    {
+      "body": {
+        "expected_revision": "0_0",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "input-48",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "revision-48",
+      "path": "/api/v1/chat/sessions/session/decisions/input-48"
+    },
+    {
+      "body": {
+        "expected_revision": "1e0",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "1e0",
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "type": "int_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "revision-49",
+      "path": "/api/v1/chat/sessions/session/decisions/input-49"
+    },
+    {
+      "body": {
+        "expected_revision": "abc",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "abc",
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "type": "int_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "revision-50",
+      "path": "/api/v1/chat/sessions/session/decisions/input-50"
+    },
+    {
+      "body": {
+        "expected_revision": "1.25",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": "1.25",
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Input should be a valid integer, unable to parse string as an integer",
+              "type": "int_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "revision-51",
+      "path": "/api/v1/chat/sessions/session/decisions/input-51"
+    },
+    {
+      "body": {
+        "expected_revision": 0.5,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 0.5,
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Input should be a valid integer, got a number with a fractional part",
+              "type": "int_from_float"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "revision-52",
+      "path": "/api/v1/chat/sessions/session/decisions/input-52"
+    },
+    {
+      "body": {
+        "expected_revision": 1000000000000000000000000000000,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_decisions entity not found: input-53",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_decisions entity not found: input-53",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "PUT",
+      "name": "revision-53",
+      "path": "/api/v1/chat/sessions/session/decisions/input-53"
+    },
+    {
+      "body": {
+        "expected_revision": "1000000000000000000000000000000",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_decisions entity not found: input-54",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_decisions entity not found: input-54",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "PUT",
+      "name": "revision-54",
+      "path": "/api/v1/chat/sessions/session/decisions/input-54"
+    },
+    {
+      "body": {
+        "action": "unknown",
+        "expected_revision": 0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "pattern": "^(save|supersede|remove|promote)$"
+              },
+              "input": "unknown",
+              "loc": [
+                "body",
+                "action"
+              ],
+              "msg": "String should match pattern '^(save|supersede|remove|promote)$'",
+              "type": "string_pattern_mismatch"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "action-bounds-55",
+      "path": "/api/v1/chat/sessions/session/decisions/input-55"
+    },
+    {
+      "body": {
+        "action": " save",
+        "expected_revision": 0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "pattern": "^(save|supersede|remove|promote)$"
+              },
+              "input": " save",
+              "loc": [
+                "body",
+                "action"
+              ],
+              "msg": "String should match pattern '^(save|supersede|remove|promote)$'",
+              "type": "string_pattern_mismatch"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "action-bounds-56",
+      "path": "/api/v1/chat/sessions/session/decisions/input-56"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "kind": "unknown",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "pattern": "^(decision|constraint|assumption|question)$"
+              },
+              "input": "unknown",
+              "loc": [
+                "body",
+                "kind"
+              ],
+              "msg": "String should match pattern '^(decision|constraint|assumption|question)$'",
+              "type": "string_pattern_mismatch"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "kind-bounds-57",
+      "path": "/api/v1/chat/sessions/session/decisions/input-57"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": " "
+      },
+      "expected": {
+        "body": {
+          "code": "api.http_422",
+          "detail": "Write the decision before saving",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "Write the decision before saving",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "text-bounds-58",
+      "path": "/api/v1/chat/sessions/session/decisions/input-58"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": {
+          "$repeat_string": [
+            "🦀",
+            4001
+          ]
+        }
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "max_length": 4000
+              },
+              "input": {
+                "$repeat_string": [
+                  "🦀",
+                  4001
+                ]
+              },
+              "loc": [
+                "body",
+                "text"
+              ],
+              "msg": "String should have at most 4000 characters",
+              "type": "string_too_long"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "text-bounds-59",
+      "path": "/api/v1/chat/sessions/session/decisions/input-59"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_selection": {
+          "$repeat_string": [
+            "β",
+            200001
+          ]
+        },
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "max_length": 200000
+              },
+              "input": {
+                "$repeat_string": [
+                  "β",
+                  200001
+                ]
+              },
+              "loc": [
+                "body",
+                "source_selection"
+              ],
+              "msg": "String should have at most 200000 characters",
+              "type": "string_too_long"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "source_selection-bounds-60",
+      "path": "/api/v1/chat/sessions/session/decisions/input-60"
+    },
+    {
+      "body": {
+        "action": "unknown",
+        "expected_revision": -1,
+        "kind": 3,
+        "source_message_id": [],
+        "source_selection": false,
+        "text": null
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "ge": 0
+              },
+              "input": -1,
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Input should be greater than or equal to 0",
+              "type": "greater_than_equal"
+            },
+            {
+              "ctx": {
+                "pattern": "^(save|supersede|remove|promote)$"
+              },
+              "input": "unknown",
+              "loc": [
+                "body",
+                "action"
+              ],
+              "msg": "String should match pattern '^(save|supersede|remove|promote)$'",
+              "type": "string_pattern_mismatch"
+            },
+            {
+              "input": 3,
+              "loc": [
+                "body",
+                "kind"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            },
+            {
+              "input": null,
+              "loc": [
+                "body",
+                "text"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            },
+            {
+              "input": [],
+              "loc": [
+                "body",
+                "source_message_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            },
+            {
+              "input": false,
+              "loc": [
+                "body",
+                "source_selection"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "multiple-fields",
+      "path": "/api/v1/chat/sessions/session/decisions/input-61"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "metadata": {
+          "retained": false
+        },
+        "text": "Keep β exact",
+        "unknown": true
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "input-62",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "unknown-fields-ignored",
+      "path": "/api/v1/chat/sessions/session/decisions/input-62"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {
+                "device_id": "phone",
+                "through_at": "2020-01-01T00:00:00Z"
+              },
+              "loc": [
+                "body",
+                "expected_revision"
+              ],
+              "msg": "Field required",
+              "type": "missing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-missing-expected_revision",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {
+                "expected_revision": 0,
+                "through_at": "2020-01-01T00:00:00Z"
+              },
+              "loc": [
+                "body",
+                "device_id"
+              ],
+              "msg": "Field required",
+              "type": "missing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-missing-device_id",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 0
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {
+                "device_id": "phone",
+                "expected_revision": 0
+              },
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Field required",
+              "type": "missing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The operation was based on a revision or runtime state that changed before it could finish.",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-missing-through_at",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": null,
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": null,
+              "loc": [
+                "body",
+                "device_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-device_id-66",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": false,
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": false,
+              "loc": [
+                "body",
+                "device_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-device_id-67",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": [],
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": [],
+              "loc": [
+                "body",
+                "device_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-device_id-68",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": {},
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {},
+              "loc": [
+                "body",
+                "device_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-device_id-69",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "min_length": 1
+              },
+              "input": "",
+              "loc": [
+                "body",
+                "device_id"
+              ],
+              "msg": "String should have at least 1 character",
+              "type": "string_too_short"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-device_id-70",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": 1,
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1,
+              "loc": [
+                "body",
+                "device_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-device_id-71",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": 1.25,
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": 1.25,
+              "loc": [
+                "body",
+                "device_id"
+              ],
+              "msg": "Input should be a valid string",
+              "type": "string_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-device_id-72",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 0,
+        "through_at": null
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": null,
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime",
+              "type": "datetime_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-through_at-73",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 0,
+        "through_at": false
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": false,
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime",
+              "type": "datetime_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-through_at-74",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 0,
+        "through_at": []
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": [],
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime",
+              "type": "datetime_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-through_at-75",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 0,
+        "through_at": {}
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "input": {},
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime",
+              "type": "datetime_type"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-through_at-76",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 0,
+        "through_at": ""
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "error": "input is too short"
+              },
+              "input": "",
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime or date, input is too short",
+              "type": "datetime_from_date_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-through_at-77",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 0,
+        "through_at": 1
+      },
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "phone",
+          "engagement_id": "project",
+          "id": "chat-read-b8d9791d40a9cca4ee1903c9616a80d314ebb2ec59c0c68899ba575a247e0aca",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "1970-01-01T00:00:01Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "cursor-through_at-78",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "phone",
+        "expected_revision": 0,
+        "through_at": 1.25
+      },
+      "expected": {
+        "body": {
+          "code": "storage.conflict_error",
+          "detail": "entity already exists: chat-read-b8d9791d40a9cca4ee1903c9616a80d314ebb2ec59c0c68899ba575a247e0aca",
+          "error_id": "<generated>",
+          "feature": "storage",
+          "help_article": "diagnostics",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "entity already exists: chat-read-b8d9791d40a9cca4ee1903c9616a80d314ebb2ec59c0c68899ba575a247e0aca",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "storage.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 409
+      },
+      "method": "PUT",
+      "name": "cursor-through_at-79",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-80",
+        "expected_revision": 0,
+        "through_at": "2020-01-01"
+      },
+      "expected": {
+        "body": {
+          "code": "api.http_422",
+          "detail": "Read cursor must use a recorded server timestamp",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "Read cursor must use a recorded server timestamp",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-time-80",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-81",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00"
+      },
+      "expected": {
+        "body": {
+          "code": "api.http_422",
+          "detail": "Read cursor must use a recorded server timestamp",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "Read cursor must use a recorded server timestamp",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-time-81",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-82",
+        "expected_revision": 0,
+        "through_at": "2020-01-01_00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "device-82",
+          "engagement_id": "project",
+          "id": "chat-read-6720afb79facf0a9f8cf77ea7cd78a85ee513a8285f5dc5f7d8ac59aa0063caa",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "cursor-time-82",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-83",
+        "expected_revision": 0,
+        "through_at": "2020-01-01t00:00:00z"
+      },
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "device-83",
+          "engagement_id": "project",
+          "id": "chat-read-44477f1d775cb1c5db2befe8963182b24d6a2e3cac5473f2f2be8e201d1feed3",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "cursor-time-83",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-84",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T03:04:05.123456789+02:30"
+      },
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "device-84",
+          "engagement_id": "project",
+          "id": "chat-read-e8b6a6410c48cabb21991bdcb34d979e16cc7b88d498144e18b448b7c7e212f3",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T03:04:05.123456+02:30",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "cursor-time-84",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-85",
+        "expected_revision": 0,
+        "through_at": "1577836800"
+      },
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "device-85",
+          "engagement_id": "project",
+          "id": "chat-read-ea3a7c53672f8ad462dc4889822bd0bf99a133dba203d8d39a23a79f290c4de7",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "cursor-time-85",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-86",
+        "expected_revision": 0,
+        "through_at": "1577836800000"
+      },
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "device-86",
+          "engagement_id": "project",
+          "id": "chat-read-3762810a651406862567268fb31f65b5971c3be0f9fecec0735ea6c2eeb08d8f",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "cursor-time-86",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-87",
+        "expected_revision": 0,
+        "through_at": 1577836800
+      },
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "device-87",
+          "engagement_id": "project",
+          "id": "chat-read-0acc48e359988d6357927411c3ae268f214e94342319aadd81f91cd76e6ca215",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "cursor-time-87",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-88",
+        "expected_revision": 0,
+        "through_at": 1577836800000
+      },
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "device-88",
+          "engagement_id": "project",
+          "id": "chat-read-a05e047a032ecc2f8f09aca5355615972722fb88cb8cf7553704e9299be49094",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "cursor-time-88",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-89",
+        "expected_revision": 0,
+        "through_at": 1577836800.1234567
+      },
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "device-89",
+          "engagement_id": "project",
+          "id": "chat-read-9301439a6aa8429573e7b9e9c2bf6332a70881961b3f470e6e7843fa502ffc75",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00.123457Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "cursor-time-89",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-90",
+        "expected_revision": 0,
+        "through_at": "x"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "error": "input is too short"
+              },
+              "input": "x",
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime or date, input is too short",
+              "type": "datetime_from_date_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-time-90",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-91",
+        "expected_revision": 0,
+        "through_at": "2020-13-01"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "error": "month value is outside expected range of 1-12"
+              },
+              "input": "2020-13-01",
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime or date, month value is outside expected range of 1-12",
+              "type": "datetime_from_date_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-time-91",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-92",
+        "expected_revision": 0,
+        "through_at": "2020-01-32"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "error": "day value is outside expected range"
+              },
+              "input": "2020-01-32",
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime or date, day value is outside expected range",
+              "type": "datetime_from_date_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-time-92",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-93",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T25:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "error": "unexpected extra characters at the end of the input"
+              },
+              "input": "2020-01-01T25:00:00Z",
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime or date, unexpected extra characters at the end of the input",
+              "type": "datetime_from_date_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-time-93",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-94",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00+25:00"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "error": "unexpected extra characters at the end of the input"
+              },
+              "input": "2020-01-01T00:00:00+25:00",
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime or date, unexpected extra characters at the end of the input",
+              "type": "datetime_from_date_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-time-94",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-95",
+        "expected_revision": 0,
+        "through_at": 1000000000000000000000000000000
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "error": "dates after 9999 are not supported as unix timestamps"
+              },
+              "input": 1000000000000000000000000000000,
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime, dates after 9999 are not supported as unix timestamps",
+              "type": "datetime_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-time-95",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "device-96",
+        "expected_revision": 0,
+        "through_at": -1000000000000000000000000000000
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "error": "dates before 0000 are not supported as unix timestamps"
+              },
+              "input": -1000000000000000000000000000000,
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime, dates before 0000 are not supported as unix timestamps",
+              "type": "datetime_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-time-96",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "max_length": 200
+              },
+              "input": "🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀🦀",
+              "loc": [
+                "body",
+                "device_id"
+              ],
+              "msg": "String should have at most 200 characters",
+              "type": "string_too_long"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-device-bound",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_sessions entity not found: missing",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_sessions entity not found: missing",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "GET",
+      "name": "lifecycle-98",
+      "path": "/api/v1/chat/sessions/missing/decisions"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_sessions entity not found: missing",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_sessions entity not found: missing",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "PUT",
+      "name": "lifecycle-99",
+      "path": "/api/v1/chat/sessions/missing/decisions/x"
+    },
+    {
+      "body": {
+        "expected_revision": 1,
+        "text": "update"
+      },
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_decisions entity not found: missing",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_decisions entity not found: missing",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "PUT",
+      "name": "lifecycle-100",
+      "path": "/api/v1/chat/sessions/session/decisions/missing"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_message_id": "missing",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "chat.not_found_error",
+          "detail": "chat_messages entity not found: missing",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "chat_messages entity not found: missing",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "PUT",
+      "name": "lifecycle-101",
+      "path": "/api/v1/chat/sessions/session/decisions/source-missing"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_message_id": "foreign-message",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.http_404",
+          "detail": "Source message does not belong to this conversation",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "Source message does not belong to this conversation",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "PUT",
+      "name": "lifecycle-102",
+      "path": "/api/v1/chat/sessions/session/decisions/source-foreign"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "source_message_id": "source",
+        "source_selection": "not present",
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "api.http_422",
+          "detail": "Source selection must be exact text from the saved message",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "Source selection must be exact text from the saved message",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "lifecycle-103",
+      "path": "/api/v1/chat/sessions/session/decisions/source-selection"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "retry",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "lifecycle-104",
+      "path": "/api/v1/chat/sessions/session/decisions/retry"
+    },
+    {
+      "body": {
+        "expected_revision": 0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "code": "storage.conflict_error",
+          "detail": "entity already exists: retry",
+          "error_id": "<generated>",
+          "feature": "storage",
+          "help_article": "diagnostics",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "entity already exists: retry",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "storage.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 409
+      },
+      "method": "PUT",
+      "name": "lifecycle-105",
+      "path": "/api/v1/chat/sessions/session/decisions/retry"
+    },
+    {
+      "body": {
+        "expected_revision": 3,
+        "text": "stale"
+      },
+      "expected": {
+        "body": {
+          "code": "chat.conflict_error",
+          "detail": "Decision changed on another device. Reload and reapply your edit",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "Decision changed on another device. Reload and reapply your edit",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 409
+      },
+      "method": "PUT",
+      "name": "lifecycle-106",
+      "path": "/api/v1/chat/sessions/session/decisions/retry"
+    },
+    {
+      "body": {
+        "expected_revision": 1,
+        "text": "corrected"
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [
+            {
+              "kind": "decision",
+              "revision": 1,
+              "status": "active",
+              "text": "Keep β exact",
+              "updated_at": "<generated>"
+            }
+          ],
+          "id": "retry",
+          "kind": "decision",
+          "revision": 2,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "corrected",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "lifecycle-107",
+      "path": "/api/v1/chat/sessions/session/decisions/retry"
+    },
+    {
+      "body": {
+        "expected_revision": 2,
+        "text": "foreign"
+      },
+      "expected": {
+        "body": {
+          "code": "api.http_404",
+          "detail": "Decision does not belong to this project chat",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "Decision does not belong to this project chat",
+          "reason_code": "unknown_internal_fault",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.unknown_internal_fault",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 404
+      },
+      "method": "PUT",
+      "name": "lifecycle-108",
+      "path": "/api/v1/chat/sessions/peer/decisions/retry"
+    },
+    {
+      "body": {
+        "device_id": "stale-cursor",
+        "expected_revision": 0,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "stale-cursor",
+          "engagement_id": "project",
+          "id": "chat-read-9784d94c07dc73ac86abe6fbc12d797da39c57ca492ef9380e4c7cb4636113af",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "2020-01-01T00:00:00Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "lifecycle-109",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "stale-cursor",
+        "expected_revision": 7,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "chat.conflict_error",
+          "detail": "revision conflict: expected 7, found 1",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "revision conflict: expected 7, found 1",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 409
+      },
+      "method": "PUT",
+      "name": "lifecycle-110",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": [
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<generated>",
+            "effective_sequence": 5,
+            "engagement_id": "project",
+            "history": [],
+            "id": "input-7",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": null,
+            "source_selection": null,
+            "source_session_id": null,
+            "status": "active",
+            "text": "Keep β exact",
+            "updated_at": "<generated>"
+          },
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<generated>",
+            "effective_sequence": 5,
+            "engagement_id": "project",
+            "history": [],
+            "id": "input-30",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": null,
+            "source_selection": null,
+            "source_session_id": null,
+            "status": "active",
+            "text": "Keep β exact",
+            "updated_at": "<generated>"
+          },
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<generated>",
+            "effective_sequence": 5,
+            "engagement_id": "project",
+            "history": [],
+            "id": "input-36",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": null,
+            "source_selection": null,
+            "source_session_id": null,
+            "status": "active",
+            "text": "Keep β exact",
+            "updated_at": "<generated>"
+          },
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<generated>",
+            "effective_sequence": 5,
+            "engagement_id": "project",
+            "history": [],
+            "id": "input-44",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": null,
+            "source_selection": null,
+            "source_session_id": null,
+            "status": "active",
+            "text": "Keep β exact",
+            "updated_at": "<generated>"
+          },
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<generated>",
+            "effective_sequence": 5,
+            "engagement_id": "project",
+            "history": [],
+            "id": "input-45",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": null,
+            "source_selection": null,
+            "source_session_id": null,
+            "status": "active",
+            "text": "Keep β exact",
+            "updated_at": "<generated>"
+          },
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<generated>",
+            "effective_sequence": 5,
+            "engagement_id": "project",
+            "history": [],
+            "id": "input-46",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": null,
+            "source_selection": null,
+            "source_session_id": null,
+            "status": "active",
+            "text": "Keep β exact",
+            "updated_at": "<generated>"
+          },
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<generated>",
+            "effective_sequence": 5,
+            "engagement_id": "project",
+            "history": [],
+            "id": "input-47",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": null,
+            "source_selection": null,
+            "source_session_id": null,
+            "status": "active",
+            "text": "Keep β exact",
+            "updated_at": "<generated>"
+          },
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<generated>",
+            "effective_sequence": 5,
+            "engagement_id": "project",
+            "history": [],
+            "id": "input-48",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": null,
+            "source_selection": null,
+            "source_session_id": null,
+            "status": "active",
+            "text": "Keep β exact",
+            "updated_at": "<generated>"
+          },
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<generated>",
+            "effective_sequence": 5,
+            "engagement_id": "project",
+            "history": [],
+            "id": "input-62",
+            "kind": "decision",
+            "revision": 1,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": null,
+            "source_selection": null,
+            "source_session_id": null,
+            "status": "active",
+            "text": "Keep β exact",
+            "updated_at": "<generated>"
+          },
+          {
+            "copied_from_id": null,
+            "copied_from_revision": null,
+            "created_at": "<generated>",
+            "effective_sequence": 5,
+            "engagement_id": "project",
+            "history": [
+              {
+                "kind": "decision",
+                "revision": 1,
+                "status": "active",
+                "text": "Keep β exact",
+                "updated_at": "<generated>"
+              }
+            ],
+            "id": "retry",
+            "kind": "decision",
+            "revision": 2,
+            "scope": "conversation",
+            "session_id": "session",
+            "source_message_id": null,
+            "source_selection": null,
+            "source_session_id": null,
+            "status": "active",
+            "text": "corrected",
+            "updated_at": "<generated>"
+          }
+        ],
+        "status": 200
+      },
+      "method": "GET",
+      "name": "lifecycle-111",
+      "path": "/api/v1/chat/sessions/session/decisions"
+    },
+    {
+      "body": {
+        "expected_revision": -0.0,
+        "text": "Keep β exact"
+      },
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "input-112",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep β exact",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "negative-zero-float",
+      "path": "/api/v1/chat/sessions/session/decisions/input-112"
+    },
+    {
+      "body": null,
+      "expected": {
+        "body": {
+          "copied_from_id": null,
+          "copied_from_revision": null,
+          "created_at": "<generated>",
+          "effective_sequence": 5,
+          "engagement_id": "project",
+          "history": [],
+          "id": "input-113",
+          "kind": "decision",
+          "revision": 1,
+          "scope": "conversation",
+          "session_id": "session",
+          "source_message_id": null,
+          "source_selection": null,
+          "source_session_id": null,
+          "status": "active",
+          "text": "Keep negative zero",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "negative-zero-integer",
+      "path": "/api/v1/chat/sessions/session/decisions/input-113",
+      "raw_body": "{\"expected_revision\":-0,\"text\":\"Keep negative zero\"}"
+    },
+    {
+      "body": {
+        "device_id": "year-114",
+        "expected_revision": 0,
+        "through_at": "0000-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "error": "year 0 is out of range"
+              },
+              "input": "0000-01-01T00:00:00Z",
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime, year 0 is out of range",
+              "type": "datetime_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-year-boundary-114",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "year-115",
+        "expected_revision": 0,
+        "through_at": "0000-01-01"
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "error": "year 0 is out of range"
+              },
+              "input": "0000-01-01",
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime, year 0 is out of range",
+              "type": "datetime_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-year-boundary-115",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "year-116",
+        "expected_revision": 0,
+        "through_at": -62167219200000
+      },
+      "expected": {
+        "body": {
+          "code": "api.request_validation",
+          "detail": [
+            {
+              "ctx": {
+                "error": "year 0 is out of range"
+              },
+              "input": -62167219200000,
+              "loc": [
+                "body",
+                "through_at"
+              ],
+              "msg": "Input should be a valid datetime, year 0 is out of range",
+              "type": "datetime_parsing"
+            }
+          ],
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "The operation was not applied.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "The supplied configuration or state did not satisfy the operation's validated contract.",
+          "reason_code": "invalid_input",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.invalid_input",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 422
+      },
+      "method": "PUT",
+      "name": "cursor-year-boundary-116",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "device_id": "year-117",
+        "expected_revision": 0,
+        "through_at": -62167219200
+      },
+      "expected": {
+        "body": {
+          "created_at": "<generated>",
+          "device_id": "year-117",
+          "engagement_id": "project",
+          "id": "chat-read-f172e04dd8e13ab7cd20d09c70954a92d4f8603fda1ae98a0653330f2c2f81f6",
+          "revision": 1,
+          "session_id": "session",
+          "through_at": "1968-01-12T11:19:40.800000Z",
+          "updated_at": "<generated>"
+        },
+        "status": 200
+      },
+      "method": "PUT",
+      "name": "cursor-year-boundary-117",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    },
+    {
+      "body": {
+        "expected_revision": 1000000000000000000000000000000,
+        "text": "must not replace"
+      },
+      "expected": {
+        "body": {
+          "code": "chat.conflict_error",
+          "detail": "Decision changed on another device. Reload and reapply your edit",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "Decision changed on another device. Reload and reapply your edit",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 409
+      },
+      "method": "PUT",
+      "name": "large-stale-decision",
+      "path": "/api/v1/chat/sessions/session/decisions/retry"
+    },
+    {
+      "body": {
+        "device_id": "stale-cursor",
+        "expected_revision": 1000000000000000000000000000000,
+        "through_at": "2020-01-01T00:00:00Z"
+      },
+      "expected": {
+        "body": {
+          "code": "chat.conflict_error",
+          "detail": "revision conflict: expected 1000000000000000000000000000000, found 1",
+          "error_id": "<generated>",
+          "feature": "chat",
+          "help_article": "provider-model",
+          "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+          "operation_id": "fixture-operation",
+          "operator_detail": "revision conflict: expected 1000000000000000000000000000000, found 1",
+          "reason_code": "stale_state",
+          "recovery_action": "Review recovery guidance",
+          "recovery_destination": "/settings#diagnostics-settings",
+          "remediation_id": "chat.stale_state",
+          "request_id": "<generated>",
+          "retryable": false
+        },
+        "status": 409
+      },
+      "method": "PUT",
+      "name": "large-stale-cursor",
+      "path": "/api/v1/chat/sessions/session/read-cursor"
+    }
+  ],
+  "encoding": "Repeated strings use {$repeat_string: [character, count]}",
+  "final": [
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [],
+        "id": "input-7",
+        "kind": "decision",
+        "revision": 1,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "Keep β exact",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [],
+        "id": "input-30",
+        "kind": "decision",
+        "revision": 1,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "Keep β exact",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [],
+        "id": "input-36",
+        "kind": "decision",
+        "revision": 1,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "Keep β exact",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [],
+        "id": "input-44",
+        "kind": "decision",
+        "revision": 1,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "Keep β exact",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [],
+        "id": "input-45",
+        "kind": "decision",
+        "revision": 1,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "Keep β exact",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [],
+        "id": "input-46",
+        "kind": "decision",
+        "revision": 1,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "Keep β exact",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [],
+        "id": "input-47",
+        "kind": "decision",
+        "revision": 1,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "Keep β exact",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [],
+        "id": "input-48",
+        "kind": "decision",
+        "revision": 1,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "Keep β exact",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [],
+        "id": "input-62",
+        "kind": "decision",
+        "revision": 1,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "Keep β exact",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [
+          {
+            "kind": "decision",
+            "revision": 1,
+            "status": "active",
+            "text": "Keep β exact",
+            "updated_at": "<generated>"
+          }
+        ],
+        "id": "retry",
+        "kind": "decision",
+        "revision": 2,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "corrected",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [],
+        "id": "input-112",
+        "kind": "decision",
+        "revision": 1,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "Keep β exact",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_decisions",
+      "payload": {
+        "copied_from_id": null,
+        "copied_from_revision": null,
+        "created_at": "<generated>",
+        "effective_sequence": 5,
+        "engagement_id": "project",
+        "history": [],
+        "id": "input-113",
+        "kind": "decision",
+        "revision": 1,
+        "scope": "conversation",
+        "session_id": "session",
+        "source_message_id": null,
+        "source_selection": null,
+        "source_session_id": null,
+        "status": "active",
+        "text": "Keep negative zero",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "<generated>",
+        "device_id": "phone",
+        "engagement_id": "project",
+        "id": "chat-read-b8d9791d40a9cca4ee1903c9616a80d314ebb2ec59c0c68899ba575a247e0aca",
+        "revision": 1,
+        "session_id": "session",
+        "through_at": "1970-01-01T00:00:01Z",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "<generated>",
+        "device_id": "device-82",
+        "engagement_id": "project",
+        "id": "chat-read-6720afb79facf0a9f8cf77ea7cd78a85ee513a8285f5dc5f7d8ac59aa0063caa",
+        "revision": 1,
+        "session_id": "session",
+        "through_at": "2020-01-01T00:00:00Z",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "<generated>",
+        "device_id": "device-83",
+        "engagement_id": "project",
+        "id": "chat-read-44477f1d775cb1c5db2befe8963182b24d6a2e3cac5473f2f2be8e201d1feed3",
+        "revision": 1,
+        "session_id": "session",
+        "through_at": "2020-01-01T00:00:00Z",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "<generated>",
+        "device_id": "device-84",
+        "engagement_id": "project",
+        "id": "chat-read-e8b6a6410c48cabb21991bdcb34d979e16cc7b88d498144e18b448b7c7e212f3",
+        "revision": 1,
+        "session_id": "session",
+        "through_at": "2020-01-01T03:04:05.123456+02:30",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "<generated>",
+        "device_id": "device-85",
+        "engagement_id": "project",
+        "id": "chat-read-ea3a7c53672f8ad462dc4889822bd0bf99a133dba203d8d39a23a79f290c4de7",
+        "revision": 1,
+        "session_id": "session",
+        "through_at": "2020-01-01T00:00:00Z",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "<generated>",
+        "device_id": "device-86",
+        "engagement_id": "project",
+        "id": "chat-read-3762810a651406862567268fb31f65b5971c3be0f9fecec0735ea6c2eeb08d8f",
+        "revision": 1,
+        "session_id": "session",
+        "through_at": "2020-01-01T00:00:00Z",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "<generated>",
+        "device_id": "device-87",
+        "engagement_id": "project",
+        "id": "chat-read-0acc48e359988d6357927411c3ae268f214e94342319aadd81f91cd76e6ca215",
+        "revision": 1,
+        "session_id": "session",
+        "through_at": "2020-01-01T00:00:00Z",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "<generated>",
+        "device_id": "device-88",
+        "engagement_id": "project",
+        "id": "chat-read-a05e047a032ecc2f8f09aca5355615972722fb88cb8cf7553704e9299be49094",
+        "revision": 1,
+        "session_id": "session",
+        "through_at": "2020-01-01T00:00:00Z",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "<generated>",
+        "device_id": "device-89",
+        "engagement_id": "project",
+        "id": "chat-read-9301439a6aa8429573e7b9e9c2bf6332a70881961b3f470e6e7843fa502ffc75",
+        "revision": 1,
+        "session_id": "session",
+        "through_at": "2020-01-01T00:00:00.123457Z",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "<generated>",
+        "device_id": "stale-cursor",
+        "engagement_id": "project",
+        "id": "chat-read-9784d94c07dc73ac86abe6fbc12d797da39c57ca492ef9380e4c7cb4636113af",
+        "revision": 1,
+        "session_id": "session",
+        "through_at": "2020-01-01T00:00:00Z",
+        "updated_at": "<generated>"
+      }
+    },
+    {
+      "kind": "chat_read_cursors",
+      "payload": {
+        "created_at": "<generated>",
+        "device_id": "year-117",
+        "engagement_id": "project",
+        "id": "chat-read-f172e04dd8e13ab7cd20d09c70954a92d4f8603fda1ae98a0653330f2c2f81f6",
+        "revision": 1,
+        "session_id": "session",
+        "through_at": "1968-01-12T11:19:40.800000Z",
+        "updated_at": "<generated>"
+      }
+    }
+  ],
+  "format": "nebula.assistant-http-oracle/v1",
+  "guidance": {
+    "feature": {
+      "destination": "/?view=chat",
+      "help_article": "provider-model",
+      "label": "Assistant chat",
+      "operation": "Chat turn"
+    },
+    "reasons": {
+      "authentication_failed": {
+        "cause": "The configured credential was missing, expired, or rejected by the required service.",
+        "confirmed_safe_state": "Nebula retained only the credential reference and did not log the credential value.",
+        "impact": "Requests that require this credential cannot complete. The credential value was not added to diagnostics.",
+        "retryable": false,
+        "steps": [
+          "Open the affected provider or service settings.",
+          "Replace or re-authorize the rejected credential.",
+          "Run its connection verification before retrying the operation."
+        ],
+        "title": "Authentication failed",
+        "verification": "Confirm connection verification succeeds with the updated credential."
+      },
+      "cancelled": {
+        "cause": "The operation ended because its viewer disconnected or a stop request was received.",
+        "confirmed_safe_state": "Nebula did not represent the stopped operation as complete.",
+        "impact": "The stopped operation did not reach a successful terminal result.",
+        "retryable": true,
+        "steps": [
+          "Open the affected operation and inspect its terminal state.",
+          "Retry only if the prior operation is durably marked stopped or interrupted."
+        ],
+        "title": "Operation stopped",
+        "verification": "Confirm the prior operation is terminal before starting a replacement."
+      },
+      "dependency_unavailable": {
+        "cause": "Nebula could not reach or start a component required by this operation.",
+        "confirmed_safe_state": "Nebula did not partially complete the operation after the dependency failure.",
+        "impact": "The affected operation is unavailable until the dependency becomes healthy.",
+        "retryable": true,
+        "steps": [
+          "Run the affected component's health check.",
+          "Open its settings and correct the reported availability or configuration problem.",
+          "Retry the durable failed operation after the health check passes."
+        ],
+        "title": "Required dependency is unavailable",
+        "verification": "Confirm the component health check reports ready and a new operation can connect successfully."
+      },
+      "integrity_failed": {
+        "cause": "A required signature, digest, revision, or state invariant did not match the expected value.",
+        "confirmed_safe_state": "The unverified data was not trusted or committed.",
+        "impact": "Nebula rejected the affected data or transition to prevent unverified state from being used.",
+        "retryable": false,
+        "steps": [
+          "Do not retry or replace the affected data until its source is verified.",
+          "Open the affected component and review its integrity status.",
+          "Create a diagnostics support bundle if the expected source cannot be verified."
+        ],
+        "title": "Integrity verification failed",
+        "verification": "Confirm the source digest, signature, or revision matches a trusted expected value before continuing."
+      },
+      "invalid_input": {
+        "cause": "The supplied configuration or state did not satisfy the operation's validated contract.",
+        "confirmed_safe_state": "Invalid input was rejected before the requested change was committed.",
+        "impact": "The operation was not applied.",
+        "retryable": false,
+        "steps": [
+          "Review the specific invalid field or state shown in this incident.",
+          "Correct it in the affected view.",
+          "Submit the operation again after validation passes."
+        ],
+        "title": "Operation input was rejected",
+        "verification": "Confirm the affected view reports valid configuration and accepts the operation."
+      },
+      "note_referenced_by_report": {
+        "cause": "A report references this note, so deleting it would break retained report lineage.",
+        "confirmed_safe_state": "Nebula preserved both the note and every report that depends on it.",
+        "impact": "The note was not deleted and the referencing report remains unchanged.",
+        "retryable": false,
+        "steps": [
+          "Open the named report in Reports.",
+          "For a draft or review report, remove the note from that report before trying again.",
+          "For a final report, retain the note because the signed report is immutable."
+        ],
+        "title": "Note is retained by a report",
+        "verification": "Confirm the note dependency view lists no editable report before deleting; notes retained by final reports remain intentionally unavailable for deletion."
+      },
+      "permission_denied": {
+        "cause": "A Nebula policy, operating-system permission, or service permission denied the requested operation.",
+        "confirmed_safe_state": "Nebula failed closed and did not bypass the denied permission.",
+        "impact": "The denied operation was not performed.",
+        "retryable": false,
+        "steps": [
+          "Review the affected policy or permission in its settings.",
+          "Grant only the minimum required permission outside Diagnostics if the operation is authorized.",
+          "Run the relevant health or permission check before retrying."
+        ],
+        "title": "Permission denied",
+        "verification": "Confirm the permission check passes and the authorized retry no longer reports a denial."
+      },
+      "protocol_invalid": {
+        "cause": "A required component returned a response that does not match the supported Nebula protocol.",
+        "confirmed_safe_state": "The invalid response was not applied to durable application state.",
+        "impact": "Nebula rejected the response and the affected operation did not complete.",
+        "retryable": true,
+        "steps": [
+          "Check the component version and compatibility status.",
+          "Upgrade or restart the component when the compatibility check identifies a mismatch.",
+          "Retry the durable operation after compatibility is restored."
+        ],
+        "title": "Runtime response was invalid",
+        "verification": "Confirm the component health check reports a supported protocol version and the retry completes without a protocol notice."
+      },
+      "quota_exhausted": {
+        "cause": "The selected harness account cannot fund another model turn.",
+        "confirmed_safe_state": "Nebula retained the conversation and did not retry the provider request.",
+        "impact": "The turn did not complete; saved conversation content remains available.",
+        "retryable": false,
+        "steps": [
+          "Restore provider balance or wait for its reset.",
+          "Run Test turn only after the account is available again."
+        ],
+        "title": "Provider usage balance exhausted",
+        "verification": "An opt-in Test turn completes using the same harness account."
+      },
+      "rate_limited": {
+        "cause": "The service temporarily rejected the operation because its request or usage limit was reached.",
+        "confirmed_safe_state": "Nebula did not repeatedly replay the rejected request automatically.",
+        "impact": "The operation did not complete and similar requests may be delayed until the limit resets.",
+        "retryable": true,
+        "steps": [
+          "Review the service's current limit and reset status.",
+          "Wait until the reported retry window has elapsed.",
+          "Retry the durable operation once."
+        ],
+        "title": "Service rate limit reached",
+        "verification": "Confirm the service health or usage view no longer reports an active rate limit and the retry is accepted."
+      },
+      "session_not_found": {
+        "cause": "The provider could not load the saved session identity.",
+        "confirmed_safe_state": "Nebula did not replace the saved conversation with a new provider session.",
+        "impact": "The current turn did not complete; Nebula's saved transcript remains available.",
+        "retryable": false,
+        "steps": [
+          "Reload the saved conversation.",
+          "Start a new conversation if the provider session has been removed."
+        ],
+        "title": "Provider session no longer available",
+        "verification": "A new conversation completes while the prior transcript remains readable."
+      },
+      "stale_state": {
+        "cause": "The operation was based on a revision or runtime state that changed before it could finish.",
+        "confirmed_safe_state": "No newer state was overwritten.",
+        "impact": "Nebula rejected the stale update; the newer saved state remains authoritative.",
+        "retryable": true,
+        "steps": [
+          "Refresh the affected view to load the current state.",
+          "Review any changes that occurred since the operation started.",
+          "Repeat the action against the current revision if it is still needed."
+        ],
+        "title": "Saved state changed",
+        "verification": "Confirm the view shows the current revision and the repeated action completes without a conflict."
+      },
+      "storage_write_failed": {
+        "cause": "Nebula could not durably write a required local record or file.",
+        "confirmed_safe_state": "Nebula reports the operation as failed instead of claiming an unconfirmed durable write.",
+        "impact": "The affected change may not have been saved and must not be assumed complete.",
+        "retryable": true,
+        "steps": [
+          "Check available disk space and the reported storage path permissions.",
+          "Run the local storage health check.",
+          "Retry only after the health check confirms writable storage."
+        ],
+        "title": "Local storage write failed",
+        "verification": "Confirm storage health reports writable and a new bounded write succeeds."
+      },
+      "timeout": {
+        "cause": "The operation exceeded its configured bounded time limit before a complete result was available.",
+        "confirmed_safe_state": "The timed-out result was not committed as a completed operation.",
+        "impact": "Nebula stopped waiting; the affected operation is not recorded as successful.",
+        "retryable": true,
+        "steps": [
+          "Check the affected component's current health and load.",
+          "Wait for any still-running external work to settle or stop it explicitly.",
+          "Retry the durable operation once health is restored."
+        ],
+        "title": "Operation timed out",
+        "verification": "Confirm the health check passes and the retried operation completes within its time limit."
+      },
+      "transport_closed": {
+        "cause": "The connection to a required local or remote runtime closed before Nebula received a complete response.",
+        "confirmed_safe_state": "Nebula stopped consuming the incomplete response and did not treat it as a successful result.",
+        "impact": "The affected operation did not complete. Previously committed Nebula data remains unchanged.",
+        "retryable": true,
+        "steps": [
+          "Check the affected runtime's health from this incident.",
+          "Restart or reconnect the runtime if its health check is unavailable or failing.",
+          "Retry only the durable failed operation shown by this incident."
+        ],
+        "title": "Connection closed before the operation finished",
+        "verification": "Run the health check and confirm the affected runtime reports ready, then confirm a retry reaches a terminal success state."
+      },
+      "unknown_internal_fault": {
+        "cause": "Nebula recorded an internal failure but the available sanitized evidence does not identify a verified root cause.",
+        "confirmed_safe_state": "Nebula did not invent a diagnosis or automatically replay the failed request.",
+        "impact": "The affected operation did not complete; no additional impact can be claimed from the available evidence.",
+        "retryable": false,
+        "steps": [
+          "Review the technical evidence and correlation identifiers in this incident.",
+          "Run the affected component's health check when available.",
+          "Generate a diagnostics support bundle if the fault recurs."
+        ],
+        "title": "Unclassified internal fault",
+        "verification": "Confirm the affected component is healthy and a separately initiated operation completes successfully."
+      },
+      "workspace_busy": {
+        "cause": "An active Project terminal or reviewed execution is still using the scratch workspace.",
+        "confirmed_safe_state": "Nebula rejected the reset before removing any workspace entry.",
+        "impact": "The reset was not performed and all workspace files remain unchanged.",
+        "retryable": true,
+        "steps": [
+          "Open Terminal and stop every active Project terminal.",
+          "Open Activity and wait for or cancel every queued, running, or cancelling reviewed execution.",
+          "Return to Files and run the reset readiness check again."
+        ],
+        "title": "Workspace is in use",
+        "verification": "Confirm Files reports no active terminal or reviewed execution, then complete the reset and verify the removed-entry count."
+      }
+    }
+  },
+  "initial": [
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "session",
+        "metadata": {},
+        "model": "fixture",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "session",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "project",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "peer",
+        "metadata": {},
+        "model": "fixture",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "peer",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_sessions",
+      "payload": {
+        "backend": "provider",
+        "created_at": "2020-01-01T00:00:00Z",
+        "engagement_id": "other",
+        "forked_from_message_id": null,
+        "harness_profile_id": null,
+        "harness_session_id": null,
+        "id": "foreign",
+        "metadata": {},
+        "model": "fixture",
+        "parent_session_id": null,
+        "provider_profile_id": "fixture-provider",
+        "revision": 1,
+        "title": "foreign",
+        "updated_at": "2020-01-01T00:00:00Z"
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "First line\nKeep β exact\nLast line",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:00Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "source",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "user",
+        "sequence": 1,
+        "session_id": "session",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:00Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "Review the docs",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:00Z",
+        "elapsed_ms": null,
+        "engagement_id": "project",
+        "finish_reason": null,
+        "id": "latest",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "user",
+        "sequence": 5,
+        "session_id": "session",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:00Z",
+        "usage": null
+      }
+    },
+    {
+      "kind": "chat_messages",
+      "payload": {
+        "approval_wait_ms": null,
+        "citations": [],
+        "content": "private",
+        "content_blocks": [],
+        "created_at": "2020-01-01T00:00:00Z",
+        "elapsed_ms": null,
+        "engagement_id": "other",
+        "finish_reason": null,
+        "id": "foreign-message",
+        "metadata": {},
+        "model": null,
+        "provider_profile_id": null,
+        "provider_request_id": null,
+        "reasoning": "",
+        "revision": 1,
+        "role": "user",
+        "sequence": 1,
+        "session_id": "foreign",
+        "source_message_id": null,
+        "updated_at": "2020-01-01T00:00:00Z",
+        "usage": null
+      }
+    }
+  ],
+  "source_sha256": {
+    "src/nebula/v3/api.py": "064e0fd6840d45d9e5b9b8ad4d3be2a422638277091baefdf2164fee896b9fcb",
+    "src/nebula/v3/chat_catchup.py": "0e35488542f1c096f4d587c41f311614bfd6d08b7aaab7651dfb5d6b3d6b4524",
+    "src/nebula/v3/chat_decisions.py": "45a3fd98dca2162cc9fd5c36b2bc7f953c37947e80d8bba3fc26b8d13f5f50f5",
+    "src/nebula/v3/diagnostic_guidance.py": "78819bc545a9f26b5eabc30ee29908d5e1503556330ad5642b4a828a8a4d95be",
+    "src/nebula/v3/storage.py": "1eb90d54a711e2ced692efdab6b47f764d017963bea029c76bebe1cc5256cfb2"
+  }
+}

@@ -1,0 +1,408 @@
+mod request;
+mod retained;
+
+use axum::{
+    body::Body,
+    http::{HeaderValue, StatusCode},
+    response::Response,
+};
+use nebula_assistant_domain::model_validation::ValidationReport;
+use nebula_assistant_services::Error as ServiceError;
+use nebula_assistant_storage::entities::Error as StorageError;
+use serde::{Serialize, ser::SerializeMap};
+use serde_json::{Value, json};
+use std::sync::LazyLock;
+
+// Shared product text is compiled into Rust. No Python process or runtime file
+// lookup is required, and other feature implementations remain unchanged.
+static GUIDANCE: LazyLock<Value> = LazyLock::new(|| {
+    serde_json::from_str(include_str!(
+        "../../../../src/nebula/v3/diagnostic_guidance.json"
+    ))
+    .expect("checked-in diagnostic guidance is JSON")
+});
+pub(crate) struct ApiError {
+    status: u16,
+    detail: ErrorDetail,
+    code: String,
+    feature: &'static str,
+    exception: String,
+}
+/// Retained validation inputs remain shared until bounded wire serialization.
+/// Do not turn a report into Value: missing-field errors can repeat a large input.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ErrorDetail {
+    Value(Value),
+    Retained(Box<ValidationReport>),
+    Request(request::RequestReport),
+}
+impl ErrorDetail {
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::Value(value) => value.as_str(),
+            Self::Retained(_) | Self::Request(_) => None,
+        }
+    }
+}
+impl From<String> for ErrorDetail {
+    fn from(value: String) -> Self {
+        Self::Value(value.into())
+    }
+}
+impl From<Vec<Value>> for ErrorDetail {
+    fn from(value: Vec<Value>) -> Self {
+        Self::Value(value.into())
+    }
+}
+struct ErrorEnvelope<'a> {
+    detail: &'a ErrorDetail,
+    fields: &'a Value,
+}
+impl Serialize for ErrorEnvelope<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let fields = self.fields.as_object().expect("static error envelope");
+        let mut map = serializer.serialize_map(Some(fields.len() + 1))?;
+        map.serialize_entry("detail", self.detail)?;
+        for (key, value) in fields {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+impl ApiError {
+    pub(crate) fn for_feature(mut self, feature: &'static str) -> Self {
+        // Keep errors already classified by another authority (for example a
+        // storage uniqueness conflict). Only the default route context changes.
+        if self.feature == "chat" {
+            self.feature = feature;
+            if let Some(suffix) = self.code.strip_prefix("chat.") {
+                self.code = format!("{feature}.{suffix}");
+            }
+        }
+        self
+    }
+    pub(crate) fn http(status: u16, detail: impl Into<String>) -> Self {
+        let detail = detail.into();
+        Self {
+            status,
+            exception: format!("{status}: {detail}"),
+            detail: detail.into(),
+            code: format!("api.http_{status}"),
+            feature: "chat",
+        }
+    }
+    pub(crate) fn validation(errors: Vec<Value>) -> Self {
+        let mut exception = format!(
+            "{} validation error{}:\n",
+            errors.len(),
+            if errors.len() == 1 { "" } else { "s" }
+        );
+        for error in &errors {
+            append(&mut exception, "  {");
+            for (i, key) in ["type", "loc", "msg", "input", "ctx"]
+                .iter()
+                .filter(|key| error.get(**key).is_some())
+                .enumerate()
+            {
+                if i != 0 {
+                    append(&mut exception, ", ");
+                }
+                repr(&mut exception, &json!(key));
+                append(&mut exception, ": ");
+                if *key == "loc" {
+                    append(&mut exception, "(");
+                    if let Some(items) = error[*key].as_array() {
+                        for (i, item) in items.iter().enumerate() {
+                            if i != 0 {
+                                append(&mut exception, ", ");
+                            }
+                            repr(&mut exception, item);
+                        }
+                        if items.len() == 1 {
+                            append(&mut exception, ",");
+                        }
+                    }
+                    append(&mut exception, ")");
+                } else {
+                    repr(&mut exception, &error[*key]);
+                }
+            }
+            append(&mut exception, "}\n");
+            if exception.chars().count() >= 300 {
+                break;
+            }
+        }
+        Self {
+            status: 422,
+            detail: errors.into(),
+            code: "api.request_validation".into(),
+            feature: "chat",
+            exception,
+        }
+    }
+    pub(crate) fn request_validation(report: ValidationReport) -> Self {
+        let exception = retained::request_exception_prefix(&report);
+        Self {
+            status: 422,
+            detail: ErrorDetail::Request(request::RequestReport(Box::new(report))),
+            code: "api.request_validation".into(),
+            feature: "chat",
+            exception,
+        }
+    }
+    fn retained_validation(report: ValidationReport) -> Self {
+        let exception = retained::exception_prefix(&report);
+        Self {
+            status: 422,
+            detail: ErrorDetail::Retained(Box::new(report)),
+            code: "api.model_validation".into(),
+            feature: "chat",
+            exception,
+        }
+    }
+    pub(crate) fn unauthorized() -> Self {
+        Self::http(401, "valid bearer token required")
+    }
+    pub(crate) fn capacity() -> Self {
+        Self::http(
+            503,
+            "Assistant request capacity is full; retry after capacity becomes available",
+        )
+    }
+    fn named(status: u16, detail: String, code: &str, feature: &'static str) -> Self {
+        Self {
+            status,
+            exception: detail.clone(),
+            detail: detail.into(),
+            code: code.into(),
+            feature,
+        }
+    }
+    pub(crate) fn storage(error: StorageError) -> Self {
+        match error {
+            StorageError::Capacity | StorageError::ExecutionResultCapacity => Self::capacity(),
+            StorageError::RetainedModelValidation(report) => Self::retained_validation(report),
+            StorageError::AlreadyExists(_) => {
+                Self::named(409, error.to_string(), "storage.conflict_error", "storage")
+            }
+            StorageError::Conflict | StorageError::RevisionConflict { .. } => {
+                Self::named(409, error.to_string(), "chat.conflict_error", "chat")
+            }
+            StorageError::NotFound => {
+                Self::named(404, error.to_string(), "chat.not_found_error", "chat")
+            }
+            StorageError::ReadLimit => Self::http(413, error.to_string()),
+            _ => Self::http(
+                503,
+                "Assistant storage is unavailable; inspect durable state before retrying a mutation",
+            ),
+        }
+    }
+    pub(crate) fn service(error: ServiceError) -> Self {
+        match error {
+            ServiceError::LegacyValueError(detail) => {
+                Self::named(422, detail, "chat.value_error", "chat")
+            }
+            ServiceError::HistoryConflict(detail) => {
+                Self::named(409, detail.into(), "chat.chat_history_conflict", "chat")
+            }
+            ServiceError::HarnessState(detail) => Self::named(
+                409,
+                detail.into(),
+                "harnesses.harness_state_error",
+                "harnesses",
+            ),
+            ServiceError::ChatConfiguration(detail) => {
+                Self::named(422, detail.into(), "chat.chat_configuration_error", "chat")
+            }
+            ServiceError::RetainedModelValidation(report) => Self::retained_validation(report),
+            ServiceError::ModelValidation(errors) => {
+                let mut error = Self::validation(errors);
+                error.code = "api.model_validation".into();
+                error
+            }
+            ServiceError::LegacyUnhandled | ServiceError::LegacyStorageUnhandled => Self::named(
+                500,
+                "The operation failed unexpectedly. No verified recovery procedure is available."
+                    .into(),
+                "api.unhandled_exception",
+                if matches!(error, ServiceError::LegacyStorageUnhandled) {
+                    "storage"
+                } else {
+                    "chat"
+                },
+            ),
+            ServiceError::Unavailable(detail) => Self::http(503, detail),
+            ServiceError::Timeout(detail) => Self::http(504, detail),
+            ServiceError::Invalid(detail) => Self::http(422, detail),
+            ServiceError::NotFound(detail) => Self::http(404, detail),
+            ServiceError::EntityNotFound { .. } => {
+                Self::named(404, error.to_string(), "chat.not_found_error", "chat")
+            }
+            ServiceError::StorageNotFound(_) | ServiceError::RetainedNotFound(_) => {
+                Self::named(404, error.to_string(), "chat.not_found_error", "chat")
+            }
+            ServiceError::Conflict(_)
+            | ServiceError::DynamicConflict(_)
+            | ServiceError::RevisionConflict { .. } => {
+                Self::named(409, error.to_string(), "chat.conflict_error", "chat")
+            }
+            ServiceError::Storage(error) => Self::storage(error),
+            _ => Self::http(422, "Assistant record does not match its storage contract"),
+        }
+    }
+    pub(crate) fn response(self, request_id: &str, operation_id: Option<&str>) -> Response {
+        let reason = reason(self.status, &self.code, &self.exception);
+        let guidance = &GUIDANCE["reason_families"][reason];
+        let operator = self
+            .detail
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(Value::from)
+            .unwrap_or_else(|| guidance["cause"].clone());
+        let unhandled = self.code == "api.unhandled_exception";
+        let retryable = self.status >= 500 && !unhandled;
+        let mut value = json!({"code":self.code,"feature":self.feature,"request_id":request_id,"error_id":format!("err_{}",uuid::Uuid::new_v4().simple()),"retryable":retryable,"help_article":GUIDANCE["features"][self.feature]["help_article"],"reason_code":reason,"operator_detail":operator,"impact":guidance["impact"],"remediation_id":format!("{}.{reason}",self.feature),"recovery_action":if retryable {"Retry this operation"} else {"Review recovery guidance"},"recovery_destination":"/settings#diagnostics-settings"});
+        if self.feature == "harnesses" {
+            value["recovery_destination"] = "/settings#harnesses-settings".into();
+        }
+        if unhandled {
+            value["help_article"] = Value::Null;
+            value["operator_detail"] = guidance["cause"].clone();
+        }
+        if let Some(operation) = operation_id.filter(|s| !s.is_empty() && !unhandled) {
+            value["operation_id"] = operation.into();
+        }
+        let bytes=match crate::json_bytes(&ErrorEnvelope { detail: &self.detail, fields: &value }) { Ok(bytes)=>bytes,Err(_)=>return Self::http(413,"Assistant validation response exceeds its configured limit; send a smaller request").for_feature(self.feature).response(request_id,None) };
+        let mut response = Response::builder()
+            .status(StatusCode::from_u16(self.status).expect("static HTTP status"))
+            .header("content-type", "application/json")
+            .body(Body::from(bytes))
+            .expect("static response headers");
+        if self.status == 401 {
+            response
+                .headers_mut()
+                .insert("www-authenticate", HeaderValue::from_static("Bearer"));
+        }
+        if self.status == 503 {
+            response
+                .headers_mut()
+                .insert("retry-after", HeaderValue::from_static("1"));
+        }
+        if let Ok(id) = HeaderValue::from_str(request_id) {
+            response.headers_mut().insert("x-request-id", id);
+        }
+        response
+    }
+}
+fn reason(status: u16, code: &str, exception: &str) -> &'static str {
+    let text = format!("{code} {}", exception.chars().take(300).collect::<String>()).to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| text.contains(w));
+    if status == 429 || text.contains("rate") && text.contains("limit") {
+        "rate_limited"
+    } else if status == 401
+        || has(&[
+            "authentication",
+            "credential",
+            "unauthorized",
+            "login",
+            "not signed in",
+        ])
+    {
+        "authentication_failed"
+    } else if status == 403 || has(&["permission", "denied", "privacy", "policy"]) {
+        "permission_denied"
+    } else if matches!(status, 408 | 504) || has(&["timeout", "timedout"]) {
+        "timeout"
+    } else if has(&["integrity", "digest", "signature", "checksum"]) {
+        "integrity_failed"
+    } else if has(&["conflict", "stale", "stateerror", "state_error", "revision"]) {
+        "stale_state"
+    } else if has(&["transport", "disconnect", "closed", "endofstream"]) {
+        "transport_closed"
+    } else if text.contains("connecterror") {
+        "dependency_unavailable"
+    } else if has(&["protocol", "malformed", "decode", "parse"]) {
+        "protocol_invalid"
+    } else if matches!(status, 502 | 503) || has(&["unavailable", "notavailable", "not_available"])
+    {
+        "dependency_unavailable"
+    } else if has(&["invalid", "validation", "unsupported", "configuration"]) {
+        "invalid_input"
+    } else if has(&["cancelled", "canceled", "interrupted"]) {
+        "cancelled"
+    } else {
+        "unknown_internal_fault"
+    }
+}
+fn append(out: &mut String, text: &str) {
+    let left = 300usize.saturating_sub(out.chars().count());
+    out.extend(text.chars().take(left));
+}
+fn repr(out: &mut String, value: &Value) {
+    if out.chars().count() >= 300 {
+        return;
+    }
+    match value {
+        Value::Null => append(out, "None"),
+        Value::Bool(true) => append(out, "True"),
+        Value::Bool(false) => append(out, "False"),
+        Value::Number(n) => append(out, &n.to_string()),
+        Value::String(s) => repr_string(out, s),
+        Value::Array(items) => {
+            append(out, "[");
+            for (i, v) in items.iter().enumerate() {
+                if i != 0 {
+                    append(out, ", ");
+                }
+                repr(out, v);
+                if out.chars().count() >= 300 {
+                    break;
+                }
+            }
+            append(out, "]");
+        }
+        Value::Object(items) => {
+            append(out, "{");
+            for (i, (k, v)) in items.iter().enumerate() {
+                if i != 0 {
+                    append(out, ", ");
+                }
+                repr_string(out, k);
+                append(out, ": ");
+                repr(out, v);
+                if out.chars().count() >= 300 {
+                    break;
+                }
+            }
+            append(out, "}");
+        }
+    }
+}
+fn repr_string(out: &mut String, s: &str) {
+    if out.chars().count() >= 300 {
+        return;
+    }
+    let quote = if s.contains('\'') && !s.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    append(out, &quote.to_string());
+    for c in s.chars() {
+        if out.chars().count() >= 300 {
+            break;
+        }
+        match c {
+            '\n' => append(out, "\\n"),
+            '\r' => append(out, "\\r"),
+            '\t' => append(out, "\\t"),
+            '\\' => append(out, "\\\\"),
+            c if c == quote => append(out, &format!("\\{c}")),
+            c if c.is_control() => append(out, &format!("\\x{:02x}", c as u32)),
+            c => append(out, &c.to_string()),
+        }
+    }
+    append(out, &quote.to_string());
+}
