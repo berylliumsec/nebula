@@ -448,6 +448,8 @@ class NebulaStore:
         session_id: str,
         *,
         statuses: Sequence[str] | None = None,
+        newest_first: bool = False,
+        limit: int | None = None,
     ) -> list[EntityT]:
         """Return one conversation's records of ``model``, oldest first, filtered in SQL.
 
@@ -455,8 +457,11 @@ class NebulaStore:
         its first 1,000-row page and filters by ``session_id`` in Python stops
         seeing newer conversations once Core holds that many records of the
         kind. Per-conversation lookups must filter in the database instead.
+        ``newest_first`` with ``limit`` reads only the latest records.
         """
 
+        if limit is not None and limit < 1:
+            raise ValueError("limit must be at least 1")
         statement = select(EntityRow).where(
             EntityRow.kind == model.entity_kind,
             EntityRow.chat_session_id == session_id,
@@ -465,7 +470,9 @@ class NebulaStore:
             statement = statement.where(
                 EntityRow.payload["status"].as_string().in_(list(statuses))
             )
-        statement = statement.order_by(EntityRow.created_at, EntityRow.id)
+        statement = statement.order_by(*_entity_order(newest_first))
+        if limit is not None:
+            statement = statement.limit(limit)
         with self.database.session() as session:
             return [
                 model.model_validate(row.payload) for row in session.scalars(statement)

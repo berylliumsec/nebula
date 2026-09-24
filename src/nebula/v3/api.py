@@ -2182,26 +2182,9 @@ def create_app(
                             exc,
                             stage="schedule",
                         )
-                    try:
-                        provider_chat.resume_turns_stopped_by_core()
-                    except Exception as exc:
-                        record_caught_exception(
-                            "chat",
-                            "chat.restart_recovery_tick_failed",
-                            "A chat restart recovery pass failed; the next pass retries.",
-                            exc,
-                            stage="restart-recovery",
-                        )
-                    try:
-                        provider_chat.reconcile_waiting_callbacks()
-                    except Exception as exc:
-                        record_caught_exception(
-                            "chat",
-                            "chat.callback_recovery_tick_failed",
-                            "A callback reconciliation pass failed; the next pass retries.",
-                            exc,
-                            stage="callback-recovery",
-                        )
+                    # Its scans run off the event loop and read only rows
+                    # that can still need recovery; each step fails alone.
+                    await provider_chat.recovery_tick()
 
             schedule_loop = create_diagnostic_task(
                 _chat_schedule_loop(),
@@ -2212,6 +2195,10 @@ def create_app(
             )
 
             def _stop_chat_schedules() -> None:
+                # Marked before the loop is cancelled, so work the cancellation
+                # reaches is parked for the next boot as Core stopping, not
+                # recorded as an operator stop.
+                provider_chat.shutting_down = True
                 schedule_loop.cancel()
 
             started.append(("chat", "schedules", _stop_chat_schedules))

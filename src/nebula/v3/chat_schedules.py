@@ -259,6 +259,32 @@ class ChatScheduleService:
             expected_revision=schedule.revision,
         )
 
+    def record_outcome(
+        self, schedule_id: str, *, turn_id: str, status: str
+    ) -> ChatSchedule | None:
+        """Record how the occurrence ``record_run`` started has settled.
+
+        A later occurrence or a removed schedule owns the row by then, so the
+        outcome of an older turn is not written over it.
+        """
+
+        try:
+            schedule = self.store.get(ChatSchedule, schedule_id)
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: the schedule was removed while its occurrence ran
+            return None
+        if schedule.last_turn_id != turn_id:
+            return None
+        changes: dict[str, Any] = {"last_status": status}
+        if status == "failed":
+            changes["skip_reason"] = (
+                "Scheduled occurrence failed; it was not retried overlapping."
+            )
+        return self.store.update(
+            ChatSchedule, schedule.id, changes, expected_revision=schedule.revision
+        )
+
     def reconcile(self, schedule: ChatSchedule) -> ChatSchedule | None:
         """Retire a schedule whose conversation is gone; pause one whose provider is.
 

@@ -3454,6 +3454,17 @@ class SubagentService:
             # Children it still had running would otherwise work on with
             # nobody to report to.
             await self._stop_unsupervised_children(latest)
+            # The goal this turn served has nothing running for it now. Like
+            # any other failed response it pauses with the reason, instead of
+            # claiming to run until a later report happens to continue it.
+            self.chat._pause_running_session_goal(
+                latest.session_id,
+                _bounded(
+                    f"{reason} ({type(exc).__name__}): {exc}. Resume the goal to "
+                    "continue with the delivered reports.",
+                    1_000,
+                ),
+            )
             await self.deliver_pending(latest.session_id)
 
     def pending_wait(self, turn: ChatTurn) -> dict[str, Any] | None:

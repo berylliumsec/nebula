@@ -862,6 +862,11 @@ class AutomationRuntimeManager:
         self._inventory: list[dict[str, str]] = []
         self._prepared_runner_profile_id: str | None = None
         self._prepared_runner_profile_revision: int | None = None
+        # Set once Core begins stopping. Processes it tears down then end as
+        # INTERRUPTED, the state a crash leaves after the next startup, and
+        # their owners are not woken mid-teardown: the next boot reconciles
+        # both cases through the same path.
+        self._stopping = False
         self._refresh_cached_runtime()
 
     def bind_process_terminal_observer(
@@ -1056,6 +1061,7 @@ class AutomationRuntimeManager:
         return "Core restarted; detached runtime teardown requested"
 
     async def shutdown(self) -> None:
+        self._stopping = True
         await asyncio.gather(
             *(self.close_session(session_id) for session_id in list(self._sessions)),
             return_exceptions=True,
@@ -1679,7 +1685,13 @@ class AutomationRuntimeManager:
             )
         for process in list(managed.processes.values()):
             if process.final_task is not None and not process.final_task.done():
-                process.forced_status = CommandExecutionStatus.CANCELLED
+                # Core stopping is not a decision about the command; closing a
+                # session while Core keeps running is.
+                process.forced_status = (
+                    CommandExecutionStatus.INTERRUPTED
+                    if self._stopping
+                    else CommandExecutionStatus.CANCELLED
+                )
                 await process.backend.terminate()
         await asyncio.gather(
             *(
@@ -2197,12 +2209,18 @@ class AutomationRuntimeManager:
                         if status == CommandExecutionStatus.TIMED_OUT
                         else "command was cancelled"
                         if status == CommandExecutionStatus.CANCELLED
+                        else "Core stopped before the process completed"
+                        if status == CommandExecutionStatus.INTERRUPTED
                         else None
                     ),
                 },
                 expected_revision=current.revision,
             )
-            if process.execution.background and self.process_terminal_observer:
+            if (
+                process.execution.background
+                and self.process_terminal_observer
+                and status != CommandExecutionStatus.INTERRUPTED
+            ):
                 try:
                     self.process_terminal_observer(process.execution.process_id)
                 except Exception as exc:
