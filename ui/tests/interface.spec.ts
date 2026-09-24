@@ -4498,6 +4498,77 @@ test("assistant settings expose provider metadata when switching a saved provide
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
 });
 
+reloadTest("assistant upgrade provider queue position survives refresh and queued work can be cancelled", async ({page}) => {
+  let cancelled = false;
+  let cancelRequests = 0;
+  await installTruthfulCore(page);
+  await page.addInitScript(() => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.includes("/chat/turns/queued-turn/events")) return nativeFetch(input, init);
+      const stream = new ReadableStream<Uint8Array>({start() { /* Core owns the queued turn. */ }});
+      return new Response(stream, {status: 200, headers: {"content-type": "text/event-stream"}});
+    };
+  });
+  await page.context().route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({json: [{
+        ...entity, id: "queued-provider", name: "Queued provider", provider_type: "vllm",
+        endpoint: "http://127.0.0.1:8000/v1", enabled: true, is_local: true,
+        model_allowlist: ["model-a"], capabilities: {streaming: true, tool_calling: true},
+        privacy: {local_only: true, permits_sensitive_data: true}, metadata: {default_model: "model-a"},
+      }]});
+      return;
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({json: [{
+        ...entity, id: "queued-session", engagement_id: "scratch-project", title: "Queued work",
+        backend: "provider", provider_profile_id: "queued-provider", model: "model-a", metadata: {},
+      }]});
+      return;
+    }
+    if (path.endsWith("/chat/sessions/queued-session/messages")) {
+      await route.fulfill({json: [{
+        ...entity, id: "queued-prompt", engagement_id: "scratch-project", session_id: "queued-session",
+        sequence: 1, role: "user", content: "Analyze the queued workload.", citations: [], metadata: {},
+      }]});
+      return;
+    }
+    if (path.endsWith("/chat/sessions/queued-session/pending-turn")) {
+      await route.fulfill({json: cancelled ? null : {
+        ...entity, id: "queued-turn", session_id: "queued-session", status: "queued",
+        started_at: entity.created_at, queued_at: entity.created_at, admitted_at: null,
+        queue_position: 3, capacity_lane: "direct", tool_call_ids: [], content: "", reasoning: "",
+      }});
+      return;
+    }
+    if (path.endsWith("/chat/turns/queued-turn/cancel") && request.method() === "POST") {
+      cancelRequests += 1;
+      cancelled = true;
+      await route.fulfill({json: {
+        ...entity, id: "queued-turn", session_id: "queued-session", status: "cancelled",
+        queued_at: entity.created_at, queue_position: null, capacity_lane: "direct", tool_call_ids: [],
+      }});
+      return;
+    }
+    await route.fallback();
+  });
+
+  await openWorkspace(page, "/?view=chat&session=queued-session", "Workbench");
+  await expect(page.getByText("Analyze the queued workload.", {exact: true})).toBeVisible();
+  await expect(page.getByText("Waiting for Core capacity · position 3", {exact: true})).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Waiting for Core capacity · position 3", {exact: true})).toBeVisible();
+  await page.getByRole("button", {name: "Stop response", exact: true}).click();
+  await expect.poll(() => cancelRequests).toBe(1);
+  await expect(page.getByText("Stopped", {exact: false})).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  expect((await new AxeBuilder({page}).include(".chat-thread").analyze()).violations).toEqual([]);
+});
+
 reloadTest("assistant upgrade restores paused provider supervisor thinking and partial text after refresh", async ({ page }) => {
   await installTruthfulCore(page);
   await page.context().route("**/api/v1/**", async (route) => {

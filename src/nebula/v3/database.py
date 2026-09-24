@@ -299,6 +299,82 @@ class RunBudgetCounterRow(Base):
     )
 
 
+class ChatTurnStepEventRow(Base):
+    """Append-only provider/tool history for one durable chat turn."""
+
+    __tablename__ = "chat_turn_step_events"
+    __table_args__ = (
+        UniqueConstraint("turn_id", "sequence", name="uq_chat_turn_steps_sequence"),
+        UniqueConstraint(
+            "turn_id", "idempotency_key", name="uq_chat_turn_steps_idempotency"
+        ),
+        Index("ix_chat_turn_steps_replay", "turn_id", "sequence"),
+        Index("ix_chat_turn_steps_step", "turn_id", "step", "sequence"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    turn_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    step: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider_group: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    tool_call_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(300), nullable=False)
+
+
+class ChatTurnCheckpointRow(Base):
+    """Append-only deterministic replay checkpoint for a chat turn."""
+
+    __tablename__ = "chat_turn_checkpoints"
+    __table_args__ = (
+        UniqueConstraint(
+            "turn_id", "through_step", name="uq_chat_turn_checkpoint_boundary"
+        ),
+        Index("ix_chat_turn_checkpoints_latest", "turn_id", "through_step"),
+    )
+
+    id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    turn_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    through_step: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_estimate: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+
+
+class ProviderTurnQueueRow(Base):
+    """Durable admission record; provider capacity is process-local."""
+
+    __tablename__ = "provider_turn_queue"
+    __table_args__ = (
+        Index("ix_provider_turn_queue_dispatch", "state", "lane", "accepted_at"),
+        Index("ix_provider_turn_queue_lease", "state", "lease_expires_at"),
+    )
+
+    turn_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    lane: Mapped[str] = mapped_column(String(20), nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    accepted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now
+    )
+    admitted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
 @event.listens_for(RunEventRow, "before_update")
 def _prevent_event_update(*_: object) -> None:
     raise RuntimeError("run events are append-only")
@@ -317,6 +393,15 @@ def _prevent_operation_event_update(*_: object) -> None:
 @event.listens_for(OperationEventRow, "before_delete")
 def _prevent_operation_event_delete(*_: object) -> None:
     raise RuntimeError("operation events are append-only")
+
+
+def _prevent_chat_turn_ledger_change(*_: object) -> None:
+    raise RuntimeError("chat turn ledgers are append-only")
+
+
+for _append_only_model in (ChatTurnStepEventRow, ChatTurnCheckpointRow):
+    event.listen(_append_only_model, "before_update", _prevent_chat_turn_ledger_change)
+    event.listen(_append_only_model, "before_delete", _prevent_chat_turn_ledger_change)
 
 
 class SchemaVersionError(RuntimeError):

@@ -45,6 +45,7 @@ from nebula.v3.runtime_platform import RuntimeToolComponents
 from nebula.v3.storage import NebulaStore
 from nebula.v3.tools import (
     ApprovalRequired,
+    ParallelismPolicy,
     PolicyDenied,
     ToolExecutionResult,
     ToolSpec,
@@ -102,6 +103,22 @@ class RecordingBroker:
         return ToolExecutionResult(output={"value": invocation.arguments["value"]})
 
 
+class OverlappingBroker(RecordingBroker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.active = 0
+        self.peak = 0
+
+    async def execute(self, invocation, scope, *, approval=None):
+        del scope, approval
+        self.calls.append(invocation)
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+        await asyncio.sleep(0.02)
+        self.active -= 1
+        return ToolExecutionResult(output={"value": invocation.arguments["value"]})
+
+
 def _response(
     *,
     calls: list[ToolCall] | None = None,
@@ -127,6 +144,7 @@ def _prepared(
     *,
     max_tool_calls: int = 5,
     extra_specs: list[ToolSpec] | None = None,
+    parallel_safe: bool = False,
 ):
     store = NebulaStore(tmp_path / "tool-loop.db")
     project = store.create(Engagement(id="project", name="Tool loop"))
@@ -186,6 +204,9 @@ def _prepared(
         },
         output_schema={"type": "object", "additionalProperties": True},
         risk_class=RiskClass.LOCAL_READ,
+        parallelism=(
+            ParallelismPolicy.SAFE_READ if parallel_safe else ParallelismPolicy.SERIAL
+        ),
     )
     specs = {item.name: item for item in [spec, *(extra_specs or [])]}
     provider = ScriptedProvider(responses)
@@ -529,8 +550,8 @@ def test_cancelling_an_inflight_tool_turn_stops_the_owned_worker_once(tmp_path):
     asyncio.run(scenario())
 
 
-def test_batched_calls_all_run_one_step_at_a_time(tmp_path):
-    broker = RecordingBroker()
+def test_batched_safe_reads_overlap_and_commit_in_provider_order(tmp_path):
+    broker = OverlappingBroker()
     responses = [
         _response(
             calls=[
@@ -543,12 +564,15 @@ def test_batched_calls_all_run_one_step_at_a_time(tmp_path):
         ),
         _response(text="Read a and b."),
     ]
-    store, service, prepared, provider = _prepared(tmp_path, responses, broker)
+    store, service, prepared, provider = _prepared(
+        tmp_path, responses, broker, parallel_safe=True
+    )
 
     asyncio.run(service.complete(prepared))
 
     # One routing response, both calls executed, in the requested order.
     assert [call.arguments["value"] for call in broker.calls] == ["a", "b"]
+    assert broker.peak == 2
     turn = store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert [entry["step"] for entry in turn.tool_history] == [0, 1]

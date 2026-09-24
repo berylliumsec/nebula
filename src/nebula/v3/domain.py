@@ -3739,6 +3739,7 @@ class ChatContentBlock(NebulaModel):
 
 
 class ChatTurnStatus(StringEnum):
+    QUEUED = "queued"
     ROUTING = "routing"
     WAITING_APPROVAL = "waiting_approval"
     WAITING_CALLBACK = "waiting_callback"
@@ -3761,6 +3762,11 @@ class ChatTurn(Entity):
     harness_turn_id: str | None = None
     model: str
     status: ChatTurnStatus = ChatTurnStatus.ROUTING
+    queued_at: datetime | None = None
+    admitted_at: datetime | None = None
+    capacity_lane: Literal["direct", "background"] = "direct"
+    ledger_sequence: int = Field(default=0, ge=0)
+    checkpoint_through_step: int = Field(default=0, ge=0)
     tools_enabled: bool = False
     max_tool_calls: int | None = Field(default=None, ge=0)
     max_artifact_queries: int | None = Field(default=None, ge=0)

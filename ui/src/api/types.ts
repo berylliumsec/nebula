@@ -1970,6 +1970,20 @@ export interface ContextStatus {
 export type ChatStreamEvent =
   | { type: "connection"; state: "connected" | "reconnecting" }
   | {
+      type: "queued";
+      turnId: Identifier;
+      queuedAt: string;
+      queuePosition?: number;
+      capacityLane: "direct" | "background";
+      detail: string;
+    }
+  | {
+      type: "admitted";
+      turnId: Identifier;
+      admittedAt: string;
+      capacityLane: "direct" | "background";
+    }
+  | {
       type: "started";
       providerId?: Identifier;
       harnessProfileId?: Identifier;
@@ -2072,6 +2086,7 @@ export interface ChatTurn {
   startedAt?: string;
   revision: number;
   status:
+    | "queued"
     | "routing"
     | "waiting_approval"
     | "waiting_callback"
@@ -2080,6 +2095,10 @@ export interface ChatTurn {
     | "failed"
     | "cancelled"
     | "interrupted";
+  queuedAt?: string;
+  admittedAt?: string;
+  queuePosition?: number;
+  capacityLane?: "direct" | "background";
   /** Saved partial output while a provider turn is paused. */
   content: string;
   reasoning: string;

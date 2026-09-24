@@ -1,23 +1,41 @@
 {
-  "change_digest": "affbfc8069890ef62d6e6a4e1600bee378a2cab3d7592d8ac2f3833e3eea6cf1",
-  "reviewed_by": "Codex focused review for diagnostics sink self-recovery",
-  "reason": "The change tracks transient write failures per diagnostics sink and clears degradation only after the exact failed destination accepts a later write. A bounded background probe makes recovery autonomous when no new diagnostic targets that sink. The selection covers retained aggregate failures, exact-sink recovery for both feature and aggregate destinations, and recovery by the autonomous probe.",
-  "exclusions": "Full suites are not approved and are excluded. Frontend, Rust/native code, browser/device behavior, API response shape, provider and harness runtimes, chat lifecycle, and database persistence are unchanged. The live Core restart and authenticated localhost/LAN health checks cover the operator-visible recovery baseline; this branch changes only diagnostics manager state reconciliation.",
+  "change_digest": "5426a7609b902ba70b2e7a75a5006a31460d441f3d57d7fa154d0cd346c54092",
+  "reviewed_by": "Codex focused review for Core throughput scheduler, ledger, compaction, and parallel tools",
+  "reason": "The change adds durable provider admission, append-only turn history and checkpoints, bounded replay context, completion recovery, explicit safe parallel tool waves, and queued-turn Sessions lifecycle. The selection covers concurrency limits and lane reservation, a 120-step compact projection and replay reduction, provider tool ordering/barriers, context pruning, callback and restart behavior, migrations, client mapping, saved-session state, queued refresh/cancel across Chromium and WebKit, and real-Core reconnect behavior.",
+  "exclusions": "Full suites are not approved and are excluded. Harness adapters, terminal, browser automation, artifacts outside chat receipts, native Rust/Tauri packaging, reports, findings, and unrelated workspace journeys are unchanged. Production deployment is excluded; validation uses an isolated Core and database on a non-production port.",
   "expected_tests": {
-    "python": 4,
-    "frontend": 0,
+    "python": 42,
+    "frontend": 85,
     "native": 0,
-    "playwright": 0
+    "playwright": 19
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_diagnostics.py::test_aggregate_sink_failure_retains_the_error_once",
-    "tests/v3/test_diagnostics.py::test_transient_sink_failure_recovers_only_after_the_failed_path_succeeds",
-    "tests/v3/test_diagnostics.py::test_transient_sink_failure_is_probed_without_another_matching_record"
+    "tests/v3/test_chat_throughput.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_in_turn_context_pruning.py",
+    "tests/v3/test_process_results_webhook.py",
+    "tests/v3/test_chat_reconnection.py",
+    "tests/v3/test_migrations.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/client.test.ts",
+    "ui/src/pages/chatSessionList.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:chat-provider-queue/desktop",
+    "entry:chat-provider-queue/mobile-chromium-ledger-390",
+    "entry:chat-provider-queue/mobile-webkit",
+    "entry:chat-reconnection/model-desktop",
+    "entry:chat-reconnection/model-compact",
+    "entry:chat-reconnection/model-chromium-320",
+    "entry:chat-reconnection/model-webkit-320",
+    "entry:chat-reconnection/model-chromium-390",
+    "entry:chat-reconnection/model-webkit-390",
+    "entry:chat-reconnection/model-chromium-430",
+    "entry:chat-reconnection/model-webkit-430"
+  ]
 }

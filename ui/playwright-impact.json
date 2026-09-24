@@ -389,6 +389,32 @@
       "shard": "1/1"
     }
   ],
+  "chat-provider-queue": [
+    {
+      "area": "chat-provider-queue",
+      "project": "desktop",
+      "test_match": "tests/interface.spec.ts",
+      "grep": "provider queue position survives refresh",
+      "runtime": "mock",
+      "shard": "1/1"
+    },
+    {
+      "area": "chat-provider-queue",
+      "project": "mobile-chromium-ledger-390",
+      "test_match": "tests/interface.spec.ts",
+      "grep": "provider queue position survives refresh",
+      "runtime": "mock",
+      "shard": "1/1"
+    },
+    {
+      "area": "chat-provider-queue",
+      "project": "mobile-webkit",
+      "test_match": "tests/interface.spec.ts",
+      "grep": "provider queue position survives refresh",
+      "runtime": "mock",
+      "shard": "1/1"
+    }
+  ],
   "thinking-retention": [
     {
       "area": "thinking-retention",

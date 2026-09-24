@@ -52,6 +52,7 @@ conversations in another project. Do not send progress chatter. Sending a
 message does not start an idle agent; it receives the message on its next turn."""
 
 _UNFINISHED = {
+    ChatTurnStatus.QUEUED,
     ChatTurnStatus.ROUTING,
     ChatTurnStatus.WAITING_APPROVAL,
     ChatTurnStatus.WAITING_CALLBACK,

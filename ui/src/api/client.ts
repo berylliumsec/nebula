@@ -1597,6 +1597,10 @@ interface WireChatTurn extends WireEntity {
   session_id: string;
   started_at?: string;
   status: ChatTurn["status"];
+  queued_at?: string | null;
+  admitted_at?: string | null;
+  queue_position?: number | null;
+  capacity_lane?: "direct" | "background" | null;
   content?: string;
   reasoning?: string;
   approval_id?: string | null;
@@ -3842,6 +3846,10 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
     startedAt: value.started_at ?? undefined,
     revision: value.revision,
     status: value.status,
+    queuedAt: value.queued_at ?? undefined,
+    admittedAt: value.admitted_at ?? undefined,
+    queuePosition: value.queue_position ?? undefined,
+    capacityLane: value.capacity_lane ?? undefined,
     content: value.content ?? "",
     reasoning: value.reasoning ?? "",
     approvalId: value.approval_id ?? undefined,

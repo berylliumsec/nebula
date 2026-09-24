@@ -17,6 +17,7 @@ from .domain import (
     utc_now,
 )
 from .chat_naming import substantive_prompt
+from .chat_turn_ledger import turn_history
 from .storage import ConflictError, NotFoundError
 from .tool_results import sanitize_model_history_result
 
@@ -277,7 +278,7 @@ def catchup_router(store, harness: HarnessRuntimeService | None):
                 raise HTTPException(
                     404, "Recorded turn does not match this conversation"
                 )
-            for entry in turn.tool_history if turn else []:
+            for entry in turn_history(store.database, turn) if turn else []:
                 value = entry.get("provider_result")
                 if not isinstance(value, (str, dict)):
                     continue

@@ -545,7 +545,7 @@ class SubagentService:
         """Return the operator-facing state, overlaying the live child turn."""
 
         turn = self._child_turn(record)
-        history = list(turn.tool_history) if turn is not None else []
+        history = list(self.chat._turn_history(turn)) if turn is not None else []
         recent = [
             {
                 "tool": str(entry.get("name") or ""),
@@ -630,7 +630,7 @@ class SubagentService:
         """What the parent model sees of one subagent."""
 
         turn = self._child_turn(record)
-        history = list(turn.tool_history) if turn is not None else []
+        history = list(self.chat._turn_history(turn)) if turn is not None else []
         payload: dict[str, Any] = {
             "subagent_id": record.id,
             "name": record.name,
@@ -1271,7 +1271,11 @@ class SubagentService:
             if turn is not None:
                 await self._resume_waiting_turn(turn)
         elif turn is not None and turn.status == ChatTurnStatus.WAITING_APPROVAL:
-            pending_step = turn.tool_history[-1] if turn.tool_history else {}
+            pending_step = (
+                self.chat._turn_history(turn)[-1]
+                if self.chat._turn_history(turn)
+                else {}
+            )
             output["delivery"] = "queued"
             output["note"] = (
                 "It is waiting for the operator to approve "
@@ -2069,7 +2073,9 @@ class SubagentService:
     ) -> None:
         """Give a blocked child back to its supervisor, never the operator."""
 
-        pending_step = turn.tool_history[-1] if turn.tool_history else {}
+        pending_step = (
+            self.chat._turn_history(turn)[-1] if self.chat._turn_history(turn) else {}
+        )
         tool = str(pending_step.get("name") or "a tool call")
         detail = _step_detail(pending_step.get("arguments"))
         request = tool + (f" ({detail})" if detail else "")
@@ -2300,11 +2306,11 @@ class SubagentService:
         else:
             await self.deliver_pending(latest.session_id)
 
-    @staticmethod
-    def pending_wait(turn: ChatTurn) -> dict[str, Any] | None:
-        if turn.status != ChatTurnStatus.WAITING_CALLBACK or not turn.tool_history:
+    def pending_wait(self, turn: ChatTurn) -> dict[str, Any] | None:
+        history = self.chat._turn_history(turn)
+        if turn.status != ChatTurnStatus.WAITING_CALLBACK or not history:
             return None
-        wait = turn.tool_history[-1].get("subagent_wait")
+        wait = history[-1].get("subagent_wait")
         return wait if isinstance(wait, dict) else None
 
     async def deliver_pending(self, parent_session_id: str) -> None:
