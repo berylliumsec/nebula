@@ -889,11 +889,11 @@ def test_shared_session_handoff_streaming_and_frozen_mcp_snapshot(tmp_path):
         assert reserved.detail == "A harness turn is reserved and waiting to start."
 
         events = [event async for event in runtime.stream_turn(harness_turn.id)]
+        # Back-to-back answer fragments share one durable activity row.
         assert [event.type for event in events] == [
             "status",
             "status",
             "started",
-            "message_delta",
             "message_delta",
             "usage",
             "completed",
@@ -2608,7 +2608,7 @@ def test_gateway_unix_ipc_accepts_messages_above_streamreader_default() -> None:
     asyncio.run(scenario())
 
 
-def test_gateway_launch_uses_python_module_outside_frozen_build(monkeypatch) -> None:
+def test_gateway_launch_uses_python_script_outside_frozen_build(monkeypatch) -> None:
     async def scenario() -> None:
         monkeypatch.delattr(sys, "frozen", raising=False)
         gateway = McpGatewaySession(
@@ -2618,12 +2618,16 @@ def test_gateway_launch_uses_python_module_outside_frozen_build(monkeypatch) -> 
         launch = await gateway.start()
         try:
             assert launch.command == sys.executable
+            # A plain isolated script: starting the shim never imports Core.
             assert launch.arguments == (
-                "-m",
-                "nebula.v3.mcp_gateway",
+                "-I",
+                str(
+                    Path(harness_module.__file__).with_name("mcp_gateway.py").resolve()
+                ),
                 "--socket",
                 str(launch.socket_path),
             )
+            assert launch.environment == {}
         finally:
             await gateway.close()
 

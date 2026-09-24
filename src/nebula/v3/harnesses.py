@@ -37,7 +37,7 @@ import os
 import re
 import sys
 from abc import ABC, abstractmethod
-from collections import deque
+from collections import OrderedDict, deque
 from collections.abc import (
     AsyncGenerator,
     AsyncIterator,
@@ -54,6 +54,7 @@ from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 import hashlib
 import tempfile
+import weakref
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
@@ -207,6 +208,14 @@ CLAUDE_ACTIVITY_MINIMUM_VERSION = Version("0.2.118")
 CODEX_ACTIVITY_MINIMUM_VERSION = Version("0.144.0")
 ACTIVITY_DELTA_FLUSH_SECONDS = 0.1
 ACTIVITY_DELTA_FLUSH_CHARS = 16 * 1024
+# Streamed fragments that share one durable activity row per flush window.
+# Assistant text arrives a few characters per token; one row per token made
+# each fragment cost a synchronous ledger insert and a full event envelope.
+COALESCED_DELTA_TYPES = frozenset({"message_delta", "output_delta"})
+# A follower wakes on each durable activity event and each owner exit. This
+# fallback only bounds status changes written without either, such as a turn
+# settled by another code path while nothing streams.
+ACTIVITY_FOLLOW_IDLE_SECONDS = 1.0
 HARNESS_STARTUP_TIMEOUT_SECONDS = 60.0
 HARNESS_INTERRUPT_TIMEOUT_SECONDS = 5.0
 CODEX_SESSION_LIST_TIMEOUT_SECONDS = 15.0
@@ -1042,13 +1051,29 @@ class HarnessActivityEventList(NebulaModel):
     next_sequence: int = Field(ge=0)
 
 
+@dataclass
+class _UndeliveredDelta:
+    """The coalesced fragment a consumer has not received yet, if any."""
+
+    event: HarnessEvent | None = None
+
+
 async def _coalesce_activity_deltas(
     source: AsyncIterator[HarnessEvent],
+    undelivered: _UndeliveredDelta | None = None,
 ) -> AsyncGenerator[HarnessEvent, None]:
-    """Bound write amplification while keeping live output perceptibly immediate."""
+    """Bound write amplification while keeping live output perceptibly immediate.
 
+    Consecutive text and output fragments of one stream are joined for at most
+    ``ACTIVITY_DELTA_FLUSH_SECONDS`` or ``ACTIVITY_DELTA_FLUSH_CHARS``; any other
+    event flushes first, so ordering and the joined text are unchanged. The
+    fragment being joined stays in ``undelivered`` until it is yielded, so a
+    consumer that is cancelled mid-window can still keep it.
+    """
+
+    held = undelivered if undelivered is not None else _UndeliveredDelta()
+    held.event = None
     iterator = source.__aiter__()
-    pending: HarnessEvent | None = None
     pending_since = 0.0
     # diagnostic-expected: this iterator-owned task is cancelled and awaited in finally.
     next_event: asyncio.Future[HarnessEvent] | None = asyncio.ensure_future(
@@ -1057,7 +1082,7 @@ async def _coalesce_activity_deltas(
     try:
         while next_event is not None:
             timeout: float | None = None
-            if pending is not None:
+            if held.event is not None:
                 timeout = max(
                     0.0,
                     ACTIVITY_DELTA_FLUSH_SECONDS
@@ -1065,9 +1090,9 @@ async def _coalesce_activity_deltas(
                 )
             done, _ = await asyncio.wait({next_event}, timeout=timeout)
             if not done:
-                if pending is not None:
-                    yield pending
-                    pending = None
+                if held.event is not None:
+                    flushed, held.event = held.event, None
+                    yield flushed
                 continue
             try:
                 event = next_event.result()
@@ -1078,34 +1103,46 @@ async def _coalesce_activity_deltas(
                 break
             # diagnostic-expected: this iterator-owned task is cancelled and awaited in finally.
             next_event = asyncio.ensure_future(anext(iterator))
-            if event.type != "output_delta" or not event.delta:
-                if pending is not None:
-                    yield pending
-                    pending = None
+            if event.type not in COALESCED_DELTA_TYPES or not event.delta:
+                if held.event is not None:
+                    flushed, held.event = held.event, None
+                    yield flushed
                 yield event
                 continue
+            pending: HarnessEvent | None = held.event
             same_stream = pending is not None and (
                 pending.type,
                 pending.vendor,
                 pending.item_id,
+                pending.parent_item_id,
                 pending.stream,
-            ) == (event.type, event.vendor, event.item_id, event.stream)
-            if not same_stream:
-                if pending is not None:
-                    yield pending
-                pending = event
-                pending_since = asyncio.get_running_loop().time()
-            else:
-                assert pending is not None
-                pending = pending.model_copy(
+                pending.external_turn_id,
+            ) == (
+                event.type,
+                event.vendor,
+                event.item_id,
+                event.parent_item_id,
+                event.stream,
+                event.external_turn_id,
+            )
+            if pending is not None and same_stream:
+                held.event = pending.model_copy(
                     update={"delta": (pending.delta or "") + event.delta}
                 )
-            assert pending is not None
-            if len(pending.delta or "") >= ACTIVITY_DELTA_FLUSH_CHARS:
-                yield pending
-                pending = None
-        if pending is not None:
-            yield pending
+            else:
+                held.event = event
+                pending_since = asyncio.get_running_loop().time()
+                if pending is not None:
+                    yield pending
+            if (
+                held.event is not None
+                and len(held.event.delta or "") >= ACTIVITY_DELTA_FLUSH_CHARS
+            ):
+                flushed, held.event = held.event, None
+                yield flushed
+        if held.event is not None:
+            flushed, held.event = held.event, None
+            yield flushed
     finally:
         if next_event is not None and not next_event.done():
             next_event.cancel()
@@ -1116,6 +1153,35 @@ async def _coalesce_activity_deltas(
             # finished (usually StopAsyncIteration). Retrieve it so the loop
             # never reports it as an unhandled task exception.
             next_event.exception()
+
+
+def _activity_event_from_ledger(
+    durable: OperationEvent | RunEvent,
+) -> HarnessEvent | None:
+    """Rebuild one normalized activity event from its durable ledger row."""
+
+    if not durable.event_type.startswith("harness."):
+        return None
+    payload = durable.payload if isinstance(durable.payload, dict) else {}
+    fields = HarnessEvent.model_fields
+    values = {key: value for key, value in payload.items() if key in fields}
+    values.update(
+        {
+            "id": durable.id,
+            "sequence": durable.sequence,
+            "occurred_at": durable.occurred_at,
+            "type": payload.get("type") or durable.event_type.removeprefix("harness."),
+        }
+    )
+    # Activity v1 records predate strict display bounds. Keep those
+    # durable records readable without mutating their historical bytes.
+    if isinstance(values.get("summary"), str):
+        values["summary"] = values["summary"][:4_000]
+    if isinstance(values.get("tool_name"), str):
+        values["tool_name"] = values["tool_name"][:1_000]
+    if values.get("vendor") == "grok_acp" and values.get("item_kind") == "tool":
+        values.update(_grok_tool_details(values.get("payload") or {}, values))
+    return HarnessEvent.model_validate(values)
 
 
 class HarnessHealth(NebulaModel):
@@ -7709,6 +7775,34 @@ class _ActiveTurn:
     task: asyncio.Task[Any] | None = None
 
 
+# Activity items whose latest value the session status rail shows.
+_TURN_STATE_ITEM_KINDS = ("plan", "mode", "goal")
+# Fragment rows never carry turn state; skipping them avoids decoding the bulk
+# of a long turn's ledger.
+_ACTIVITY_DELTA_EVENT_TYPES = tuple(
+    f"harness.{event_type}" for event_type in sorted(COALESCED_DELTA_TYPES)
+)
+MAX_TRACKED_TURN_ACTIVITY_STATES = 256
+
+
+@dataclass
+class _TurnActivityState:
+    """A turn's latest mode, plan and goal, folded from its ledger to ``cursor``."""
+
+    cursor: int = 0
+    mode: str | None = None
+    plan: list[HarnessPlanEntry] = field(default_factory=list)
+    goal: HarnessGoalSnapshot | None = None
+
+    def apply(self, event: HarnessEvent) -> None:
+        if event.mode:
+            self.mode = event.mode
+        if event.item_kind == "plan":
+            self.plan = event.plan
+        if event.item_kind == "goal" and event.goal is not None:
+            self.goal = event.goal
+
+
 class HarnessRuntimeService:
     """Own live harness connections and independent parallel sessions."""
 
@@ -7771,6 +7865,13 @@ class HarnessRuntimeService:
         self._mission_tasks: dict[str, asyncio.Task[None]] = {}
         self._scheduled_mission_tasks: dict[str, asyncio.Task[None]] = {}
         self._chat_turn_tasks: dict[str, asyncio.Task[None]] = {}
+        # Followers of a turn wait on its signal instead of polling the ledger;
+        # an entry lives only while some follower holds it.
+        self._activity_signals: weakref.WeakValueDictionary[str, asyncio.Event] = (
+            weakref.WeakValueDictionary()
+        )
+        # Per-turn mode, plan and goal folded from the ledger up to ``cursor``.
+        self._turn_activity_states: OrderedDict[str, _TurnActivityState] = OrderedDict()
         self._closed = False
 
     def bind_knowledge_retriever(self, retriever: KnowledgeRetriever) -> None:
@@ -8926,22 +9027,18 @@ class HarnessRuntimeService:
     def _chat_messages(
         self, engagement_id: str, session_id: str, *, include_replaced: bool = False
     ) -> list[ChatMessage]:
-        """Read the complete conversation, not just the first project page."""
-        messages: list[ChatMessage] = []
-        offset = 0
-        while True:
-            page = self.store.list_entities(
-                ChatMessage, engagement_id=engagement_id, offset=offset, limit=1_000
-            )
-            messages.extend(
-                item
-                for item in page
-                if item.session_id == session_id
-                and (include_replaced or not message_is_replaced(item))
-            )
-            if len(page) < 1_000:
-                return sorted(messages, key=lambda item: item.sequence)
-            offset += len(page)
+        """Read the complete conversation through its indexed session rows.
+
+        Runs several times per turn, so it must cost the conversation's size,
+        not the whole project's.
+        """
+        messages = [
+            item
+            for item in self.store.list_session_entities(ChatMessage, session_id)
+            if item.engagement_id == engagement_id
+            and (include_replaced or not message_is_replaced(item))
+        ]
+        return sorted(messages, key=lambda item: item.sequence)
 
     def _chat_handoff_context(
         self,
@@ -9879,6 +9976,20 @@ class HarnessRuntimeService:
                 metadata={"entity_type": "harness_turn", "entity_id": turn_id},
             )
 
+    def _activity_signal(self, turn_id: str) -> asyncio.Event:
+        signal = self._activity_signals.get(turn_id)
+        if signal is None:
+            signal = asyncio.Event()
+            self._activity_signals[turn_id] = signal
+        return signal
+
+    def _wake_activity_followers(self, turn_id: str) -> None:
+        """Wake every follower of a turn after its ledger or status changed."""
+
+        signal = self._activity_signals.pop(turn_id, None)
+        if signal is not None:
+            signal.set()
+
     async def follow_turn(
         self, turn_id: str, *, after_sequence: int = 0
     ) -> AsyncIterator[HarnessEvent]:
@@ -9886,6 +9997,9 @@ class HarnessRuntimeService:
 
         cursor = after_sequence
         while True:
+            # Hold the signal before reading, so an event appended between
+            # this read and the wait below still wakes this follower.
+            signal = self._activity_signal(turn_id)
             page = self.activity_events(turn_id, after_sequence=cursor, limit=1_000)
             cursor = max(cursor, page.next_sequence)
             for event in page.events:
@@ -9900,7 +10014,13 @@ class HarnessRuntimeService:
                 HarnessTurnStatus.INTERRUPTED,
             }:
                 return
-            await asyncio.sleep(0.1)
+            try:
+                await asyncio.wait_for(
+                    signal.wait(), timeout=ACTIVITY_FOLLOW_IDLE_SECONDS
+                )
+            except TimeoutError:
+                # diagnostic-expected: an idle wait re-reads the durable status.
+                continue
 
     async def stream_turn(self, turn_id: str) -> AsyncIterator[HarnessEvent]:
         turn = self.store.get(HarnessTurn, turn_id)
@@ -10156,6 +10276,7 @@ class HarnessRuntimeService:
             terminal_error: str | None = None
             terminal_diagnostic: dict[str, Any] | None = None
             coalesced: AsyncGenerator[HarnessEvent, None] | None = None
+            undelivered = _UndeliveredDelta()
             try:
                 turn_options: dict[str, Any] = {}
                 if isinstance(turn.metadata.get("harness_mode"), str):
@@ -10221,7 +10342,7 @@ class HarnessRuntimeService:
                         **turn_options,
                     )
                 )
-                coalesced = _coalesce_activity_deltas(turn_events)
+                coalesced = _coalesce_activity_deltas(turn_events, undelivered)
                 async for event in coalesced:
                     event = event.model_copy(
                         update={
@@ -10437,6 +10558,13 @@ class HarnessRuntimeService:
                     caught_error,
                     stage="harnesses",
                 )
+                tail = undelivered.event
+                if tail is not None and tail.type == "message_delta" and tail.delta:
+                    # Text still inside the coalescing window when Stop landed
+                    # was already produced; keep it in the stopped answer.
+                    remaining = MAX_NORMALIZED_TEXT - len(final_message)
+                    if remaining > 0:
+                        final_message += tail.delta[:remaining]
                 self._keep_stopped_answer(turn.id, final_message, usage)
                 await self._interrupt_connection(
                     session.id, connection, stage="turn-cancel"
@@ -10539,6 +10667,9 @@ class HarnessRuntimeService:
                     for key, gate in self._gateway_target_gates.items()
                     if key[0] != turn.id
                 }
+                # The terminal status is written without a ledger event;
+                # followers must not wait out their idle interval to see it.
+                self._wake_activity_followers(turn.id)
                 if coalesced is not None:
                     # Close last: after any vendor interrupt and the cleanup
                     # above, so a stop racing this await cannot skip either,
@@ -11926,24 +12057,26 @@ class HarnessRuntimeService:
 
         session = self.store.get(HarnessSession, session_id)
         live_turn = self._active.get(session.id)
-        reserved_turns = [
-            turn
-            for turn in self.store.list_entities(
-                HarnessTurn, engagement_id=session.engagement_id, limit=1_000
-            )
-            if turn.harness_session_id == session.id
-            and turn.status
-            in {
-                HarnessTurnStatus.QUEUED,
-                HarnessTurnStatus.RUNNING,
-                HarnessTurnStatus.WAITING_APPROVAL,
-            }
-        ]
         turn: HarnessTurn | None = None
         if live_turn is not None:
             turn = self.store.get(HarnessTurn, live_turn.turn_id)
-        elif reserved_turns:
-            turn = min(reserved_turns, key=lambda item: item.created_at)
+        else:
+            # The UI polls this every few seconds: filter in SQL and read only
+            # the oldest reservation, not every turn of the project.
+            reserved = self.store.find_entities(
+                HarnessTurn,
+                {
+                    "harness_session_id": session.id,
+                    "status": [
+                        HarnessTurnStatus.QUEUED.value,
+                        HarnessTurnStatus.RUNNING.value,
+                        HarnessTurnStatus.WAITING_APPROVAL.value,
+                    ],
+                },
+                engagement_id=session.engagement_id,
+                limit=1,
+            )
+            turn = reserved[0] if reserved else None
 
         busy_session_status = session.status in {
             HarnessSessionStatus.RUNNING,
@@ -11979,15 +12112,8 @@ class HarnessRuntimeService:
         plan: list[HarnessPlanEntry] = []
         goal: HarnessGoalSnapshot | None = None
         if turn is not None:
-            for event in self.activity_events(
-                turn.id, after_sequence=0, limit=1_000
-            ).events:
-                if event.mode:
-                    mode = event.mode
-                if event.item_kind == "plan":
-                    plan = event.plan
-                if event.item_kind == "goal" and event.goal is not None:
-                    goal = event.goal
+            state = self._turn_activity_state(turn)
+            mode, plan, goal = state.mode, list(state.plan), state.goal
 
         connection = self._connections.get(session.id)
         last_turn = (
@@ -14872,6 +14998,7 @@ class HarnessRuntimeService:
                 f"harness.{event.type}",
                 payload,
             )
+        self._wake_activity_followers(turn.id)
         return event.model_copy(
             update={
                 "id": durable.id,
@@ -14952,35 +15079,56 @@ class HarnessRuntimeService:
         next_sequence = after_sequence
         for durable in durable_events:
             next_sequence = durable.sequence
-            if not durable.event_type.startswith("harness."):
+            event = _activity_event_from_ledger(durable)
+            if event is None:
                 continue
-            payload = durable.payload if isinstance(durable.payload, dict) else {}
-            fields = HarnessEvent.model_fields
-            values = {key: value for key, value in payload.items() if key in fields}
-            values.update(
-                {
-                    "id": durable.id,
-                    "sequence": durable.sequence,
-                    "occurred_at": durable.occurred_at,
-                    "type": payload.get("type")
-                    or durable.event_type.removeprefix("harness."),
-                }
-            )
-            # Activity v1 records predate strict display bounds. Keep those
-            # durable records readable without mutating their historical bytes.
-            if isinstance(values.get("summary"), str):
-                values["summary"] = values["summary"][:4_000]
-            if isinstance(values.get("tool_name"), str):
-                values["tool_name"] = values["tool_name"][:1_000]
-            if values.get("vendor") == "grok_acp" and values.get("item_kind") == "tool":
-                values.update(_grok_tool_details(values.get("payload") or {}, values))
-            events.append(HarnessEvent.model_validate(values))
+            events.append(event)
             if len(events) >= limit:
                 break
         return HarnessActivityEventList(
             events=events,
             next_sequence=next_sequence,
         )
+
+    def _turn_activity_state(self, turn: HarnessTurn) -> _TurnActivityState:
+        """Return the turn's latest mode, plan and goal, reading only new rows.
+
+        The ledger is append-only, so each read folds the rows after the last
+        cursor into the kept state. Chat ledgers are filtered in SQL to the
+        few rows that carry state, so the cost does not grow with streamed
+        output, however long the turn runs.
+        """
+
+        state = self._turn_activity_states.pop(turn.id, None) or _TurnActivityState()
+        self._turn_activity_states[turn.id] = state
+        while len(self._turn_activity_states) > MAX_TRACKED_TURN_ACTIVITY_STATES:
+            self._turn_activity_states.popitem(last=False)
+        if turn.origin in {HarnessTurnOrigin.CHAT, HarnessTurnOrigin.ANALYSIS}:
+            through = self.store.last_operation_event_sequence(turn.id)
+            while state.cursor < through:
+                rows = self.store.replay_operation_events(
+                    turn.id,
+                    after_sequence=state.cursor,
+                    through_sequence=through,
+                    limit=1_000,
+                    exclude_event_types=_ACTIVITY_DELTA_EVENT_TYPES,
+                    payload_values={"item_kind": _TURN_STATE_ITEM_KINDS},
+                )
+                for durable in rows:
+                    event = _activity_event_from_ledger(durable)
+                    if event is not None:
+                        state.apply(event)
+                state.cursor = rows[-1].sequence if len(rows) == 1_000 else through
+            return state
+        while True:
+            page = self.activity_events(
+                turn.id, after_sequence=state.cursor, limit=1_000
+            )
+            for event in page.events:
+                state.apply(event)
+            if page.next_sequence <= state.cursor:
+                return state
+            state.cursor = page.next_sequence
 
     @staticmethod
     def _activity_payload(

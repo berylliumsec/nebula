@@ -544,6 +544,7 @@ def test_artifact_member_audit_accepts_only_complete_v3_payload():
             "nebula/v3/egress_helper.py",
             "nebula/v3/public_ip_update.py",
             "nebula/v3/terminal_entrypoint.sh",
+            "nebula/v3/mcp_gateway.py",
             "nebula/v3/operator_help.md",
             "nebula/v3/diagnostic_guidance.json",
             "nebula/v3/report_assets/fonts/NotoSans-Regular.ttf",
