@@ -17,6 +17,7 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from nebula.v3.chat_snapshot_parts import resolve_request_snapshot
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompletionRequest, ChatHistoryConflict, ChatService
@@ -245,7 +246,12 @@ def test_goal_turns_keep_subagents_checked_after_the_last_send(tmp_path):
             assert turn.goal_id is not None
             assert turn.request_snapshot.get("allow_subagents") is True
             assert turn.request_snapshot.get("max_active_subagents") == 2
-            assert turn.request_snapshot["model_request"]["reasoning_effort"] == "high"
+            assert (
+                resolve_request_snapshot(store, turn.request_snapshot)["model_request"][
+                    "reasoning_effort"
+                ]
+                == "high"
+            )
         metadata = store.get(ChatSession, SESSION).metadata
         assert metadata["allow_subagents"] is True
         assert metadata["max_active_subagents"] == 2
@@ -303,7 +309,12 @@ def test_scheduled_run_keeps_subagents_checked_after_the_last_send(tmp_path):
         assert await _schedule_outcome(store) == "complete"
         assert scheduled.request_snapshot.get("allow_subagents") is True
         assert scheduled.request_snapshot.get("max_active_subagents") == 2
-        assert scheduled.request_snapshot["model_request"]["reasoning_effort"] == "low"
+        assert (
+            resolve_request_snapshot(store, scheduled.request_snapshot)[
+                "model_request"
+            ]["reasoning_effort"]
+            == "low"
+        )
         metadata = store.get(ChatSession, SESSION).metadata
         assert metadata["allow_subagents"] is True
         assert metadata["max_active_subagents"] == 2

@@ -426,25 +426,32 @@ async def run_project_tool_hooks(
                 "actor_id": actor_id,
             }
         elif event_name == "tool.before":
-            observation = provenance.begin(
-                workspace,
-                engagement_id=engagement_id,
-                scope_kind="tool",
-                scope_id=scope_id,
-                actor_id=actor_id,
-                owner_kind=owner_kind,
-                owner_id=owner_id,
-                chat_session_id=chat_session_id,
-                chat_turn_id=chat_turn_id,
-            )
-            workspace_receipt = provenance.receipt(observation)
-        else:
-            try:
-                observation = provenance.finish(
+            # Git status and dirty-file hashing run off the event loop.
+            observation = await asyncio.to_thread(
+                functools.partial(
+                    provenance.begin,
                     workspace,
                     engagement_id=engagement_id,
                     scope_kind="tool",
                     scope_id=scope_id,
+                    actor_id=actor_id,
+                    owner_kind=owner_kind,
+                    owner_id=owner_id,
+                    chat_session_id=chat_session_id,
+                    chat_turn_id=chat_turn_id,
+                )
+            )
+            workspace_receipt = provenance.receipt(observation)
+        else:
+            try:
+                observation = await asyncio.to_thread(
+                    functools.partial(
+                        provenance.finish,
+                        workspace,
+                        engagement_id=engagement_id,
+                        scope_kind="tool",
+                        scope_id=scope_id,
+                    )
                 )
             except NotFoundError:  # diagnostic-expected: an after-only tool hook reports the missing baseline explicitly
                 workspace_receipt = {
@@ -491,11 +498,14 @@ async def run_project_tool_hooks(
         ):
             if event_name == "tool.before" and scope_id:
                 try:
-                    provenance.finish(
-                        workspace,
-                        engagement_id=engagement_id,
-                        scope_kind="tool",
-                        scope_id=scope_id,
+                    await asyncio.to_thread(
+                        functools.partial(
+                            provenance.finish,
+                            workspace,
+                            engagement_id=engagement_id,
+                            scope_kind="tool",
+                            scope_id=scope_id,
+                        )
                     )
                 except Exception as exc:
                     record_caught_exception(

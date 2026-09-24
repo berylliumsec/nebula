@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Iterable, Literal
 from uuid import NAMESPACE_URL, uuid5
 
 from .domain import (
@@ -26,6 +28,15 @@ from .storage import ConflictError, NebulaStore, NotFoundError
 
 PROVENANCE_SCHEMA = "nebula.workspace-provenance/v1"
 MAX_DIRTY_PATHS = 2_000
+# Bytes of dirty regular files one snapshot may fingerprint, and the time the
+# whole snapshot (Git plus hashing) may take. Past either the receipt is
+# unsupported rather than partial, as for too many dirty paths.
+MAX_DIRTY_BYTES = 256 * 1024 * 1024
+SNAPSHOT_TIME_LIMIT_SECONDS = 10.0
+
+
+class _SnapshotTimeLimit(Exception):
+    """The snapshot ran past its time limit."""
 
 
 @dataclass(frozen=True)
@@ -67,16 +78,28 @@ def _observation_id(engagement_id: str, scope_kind: str, scope_id: str) -> str:
     )
 
 
-def _run_git(workspace: Path, *arguments: str) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        ("git", "-C", str(workspace), *arguments),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_LFS_SKIP_SMUDGE": "1"},
-        timeout=30,
-        check=False,
-    )
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _SnapshotTimeLimit()
+    return remaining
+
+
+def _run_git(
+    workspace: Path, *arguments: str, deadline: float
+) -> subprocess.CompletedProcess[bytes]:
+    try:
+        return subprocess.run(
+            ("git", "-C", str(workspace), *arguments),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_LFS_SKIP_SMUDGE": "1"},
+            timeout=_remaining(deadline),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise _SnapshotTimeLimit() from exc
 
 
 def _decode_path(raw: bytes) -> str:
@@ -105,7 +128,23 @@ def _dirty_entries(output: bytes) -> dict[str, str]:
     return entries
 
 
-def _path_state(root: Path, relative: str, status: str) -> dict[str, Any]:
+def _dirty_file_bytes(root: Path, paths: Iterable[str]) -> int:
+    """Total size of the dirty regular files a snapshot would hash."""
+
+    total = 0
+    for relative in paths:
+        try:
+            state = os.lstat(root / relative)
+        except OSError:  # diagnostic-expected: an absent or unreadable path is recorded as such when fingerprinted
+            continue
+        if stat.S_ISREG(state.st_mode):
+            total += state.st_size
+    return total
+
+
+def _path_state(
+    root: Path, relative: str, status: str, *, deadline: float
+) -> dict[str, Any]:
     path = root / relative
     try:
         path.relative_to(root)
@@ -120,6 +159,7 @@ def _path_state(root: Path, relative: str, status: str) -> dict[str, Any]:
             size = 0
             with path.open("rb") as handle:
                 while chunk := handle.read(1024 * 1024):
+                    _remaining(deadline)
                     digest.update(chunk)
                     size += len(chunk)
             return {
@@ -149,10 +189,31 @@ def _path_state(root: Path, relative: str, status: str) -> dict[str, Any]:
     }
 
 
-def snapshot(workspace: Path) -> _Snapshot:
-    """Fingerprint only the checkout paths Git already reports as dirty."""
+def snapshot(
+    workspace: Path, *, time_limit: float = SNAPSHOT_TIME_LIMIT_SECONDS
+) -> _Snapshot:
+    """Fingerprint only the checkout paths Git already reports as dirty.
 
-    root_result = _run_git(workspace, "rev-parse", "--show-toplevel")
+    Bounded by ``MAX_DIRTY_PATHS``, ``MAX_DIRTY_BYTES`` and ``time_limit``;
+    a snapshot past any bound is an unsupported receipt, never a partial one.
+    """
+
+    deadline = time.monotonic() + time_limit
+    try:
+        return _bounded_snapshot(workspace, deadline)
+    except (
+        _SnapshotTimeLimit
+    ):  # diagnostic-expected: a slow repository becomes an explicit unsupported receipt
+        return _Snapshot(
+            False,
+            str(workspace.resolve()),
+            {},
+            f"snapshot_time_limit_exceeded:{time_limit:g}s",
+        )
+
+
+def _bounded_snapshot(workspace: Path, deadline: float) -> _Snapshot:
+    root_result = _run_git(workspace, "rev-parse", "--show-toplevel", deadline=deadline)
     if root_result.returncode:
         return _Snapshot(
             False,
@@ -174,6 +235,7 @@ def snapshot(workspace: Path) -> _Snapshot:
         "-z",
         "--untracked-files=all",
         "--ignore-submodules=none",
+        deadline=deadline,
     )
     if status.returncode:
         detail = status.stderr.decode("utf-8", "replace").strip()[:500]
@@ -191,11 +253,19 @@ def snapshot(workspace: Path) -> _Snapshot:
             {},
             f"dirty_path_limit_exceeded:{len(entries)}>{MAX_DIRTY_PATHS}",
         )
+    dirty_bytes = _dirty_file_bytes(root, entries)
+    if dirty_bytes > MAX_DIRTY_BYTES:
+        return _Snapshot(
+            False,
+            str(root),
+            {},
+            f"dirty_bytes_limit_exceeded:{dirty_bytes}>{MAX_DIRTY_BYTES}",
+        )
     return _Snapshot(
         True,
         str(root),
         {
-            relative: _path_state(root, relative, entries[relative])
+            relative: _path_state(root, relative, entries[relative], deadline=deadline)
             for relative in sorted(entries)
         },
     )
@@ -422,7 +492,9 @@ class WorkspaceProvenanceService:
 
 
 __all__ = [
+    "MAX_DIRTY_BYTES",
     "PROVENANCE_SCHEMA",
+    "SNAPSHOT_TIME_LIMIT_SECONDS",
     "WorkspaceProvenanceService",
     "actor_id_for",
     "snapshot",

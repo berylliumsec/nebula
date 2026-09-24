@@ -642,7 +642,18 @@ def test_goal_skills_are_explicitly_replaced_only_at_safe_revision(tmp_path):
     attached = goals.replace_skills(
         "session", expected_revision=draft.revision, snapshots=[snapshot]
     )
-    assert attached.skill_snapshots == [snapshot.model_dump(mode="json")]
+    assert goals.skill_snapshots(attached) == [snapshot]
+    # The goal row keeps the summary; the instructions live beside it.
+    assert [
+        {key: value for key, value in item.items() if key != "part_id"}
+        for item in attached.skill_snapshots
+    ] == [
+        {
+            key: value
+            for key, value in snapshot.model_dump(mode="json").items()
+            if key != "instructions"
+        }
+    ]
     with pytest.raises(ConflictError, match="reload before retrying"):
         goals.replace_skills("session", expected_revision=draft.revision, snapshots=[])
 

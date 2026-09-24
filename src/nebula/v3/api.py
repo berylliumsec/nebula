@@ -12343,7 +12343,7 @@ def _chat_turn_summary(service: ChatService, turn: ChatTurn) -> ChatTurnSummary:
         queue_position=service.provider_scheduler.position(turn.id),
         capacity_lane=turn.capacity_lane,
         content=turn.content,
-        reasoning=turn.reasoning,
+        reasoning=service.turn_reasoning(turn),
         approval_id=turn.approval_id,
         harness_turn_id=turn.harness_turn_id,
         tool_call_ids=service.turn_ledger.tool_call_ids(turn),

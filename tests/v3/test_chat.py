@@ -8,6 +8,8 @@ import pytest
 from pydantic import ValidationError
 
 import nebula.v3.chat as chat_module
+from nebula.v3.chat_goals import ChatGoalService
+from nebula.v3.chat_snapshot_parts import resolve_request_snapshot
 from nebula.v3.chat_subagents import is_subagent_session
 from nebula.v3.chat import (
     ChatCompletionRequest,
@@ -59,6 +61,7 @@ from nebula.v3.providers import (
     StreamEventType,
 )
 from nebula.v3.model_catalog import ModelDescriptor, ModelRouteDescriptor
+from nebula.v3.skill_catalog import SkillSnapshot
 from nebula.v3.storage import NebulaStore, StoreTransaction
 from nebula.v3.tools import StoreToolLedger, ToolInvocation, ToolSpec, ToolBrokerError
 from nebula.v3.tool_results import ToolResultReceipt, ToolResultStatus
@@ -1085,12 +1088,16 @@ def test_provider_skill_is_snapshotted_on_turn_and_running_goal(tmp_path, monkey
     )
 
     assert prepared.turn is not None
-    snapshot = prepared.turn.request_snapshot["skill_snapshots"][0]
+    snapshot = resolve_request_snapshot(store, prepared.turn.request_snapshot)[
+        "skill_snapshots"
+    ][0]
     assert snapshot["path"] == str(skill_path.resolve())
     assert snapshot["instructions"] == "Review only changed files."
     assert snapshot["sha256"] in (prepared.model_request.instructions or "")
     saved_goal = store.get(ChatGoal, goal.id)
-    assert saved_goal.skill_snapshots == [snapshot]
+    assert ChatGoalService(store).skill_snapshots(saved_goal) == [
+        SkillSnapshot.model_validate(snapshot)
+    ]
 
     asyncio.run(service.complete(prepared))
     completed_turn = store.get(ChatTurn, prepared.turn.id)
@@ -1109,7 +1116,9 @@ def test_provider_skill_is_snapshotted_on_turn_and_running_goal(tmp_path, monkey
         )
     )
     assert continued.turn is not None
-    assert continued.turn.request_snapshot["skill_snapshots"] == [snapshot]
+    assert resolve_request_snapshot(store, continued.turn.request_snapshot)[
+        "skill_snapshots"
+    ] == [snapshot]
     assert "Review only changed files." in (continued.model_request.instructions or "")
     assert "Changed after start." not in (continued.model_request.instructions or "")
 

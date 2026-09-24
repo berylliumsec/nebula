@@ -20,6 +20,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from nebula.v3.chat_snapshot_parts import resolve_request_snapshot
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import ChatCompletionRequest, ChatHistoryConflict, ChatService
@@ -133,7 +134,12 @@ def test_goal_conversation_starts_with_the_composer_subagent_choice(tmp_path):
         assert turn.goal_id is not None
         assert turn.request_snapshot.get("allow_subagents") is True
         assert turn.request_snapshot.get("max_active_subagents") == 2
-        assert turn.request_snapshot["model_request"]["reasoning_effort"] == "high"
+        assert (
+            resolve_request_snapshot(store, turn.request_snapshot)["model_request"][
+                "reasoning_effort"
+            ]
+            == "high"
+        )
         # The turn recorded its settings back without unchecking the box.
         saved = store.get(ChatSession, session["id"]).metadata
         assert saved["allow_subagents"] is True

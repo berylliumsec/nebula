@@ -27,6 +27,11 @@ from .domain import (
     utc_now,
 )
 from .providers import ReasoningEffort
+from .chat_snapshot_parts import (
+    resolve_skill_snapshots,
+    split_skill_snapshots,
+    stage_snapshot_parts,
+)
 from .storage import ConflictError, NebulaStore, NotFoundError, StoreTransaction
 from .skill_catalog import SkillSelection, SkillSnapshot
 
@@ -478,22 +483,30 @@ class ChatGoalService:
                 },
             )
         )
-        child = self.store.create(
-            ChatGoal(
-                engagement_id=parent.engagement_id,
-                session_id=child_session.id,
-                objective=body.objective,
-                completion_criteria=body.completion_criteria,
-                plan=body.plan,
-                token_budget=body.token_budget,
-                time_budget_seconds=body.time_budget_seconds,
-                step_budget=body.step_budget,
-                child_budget=0,
-                parent_goal_id=parent.id,
-                skill_snapshots=parent.skill_snapshots,
-                status=ChatGoalStatus.DRAFT,
-            )
+        # The child's skills are stored in its own conversation, which may
+        # outlive the parent's.
+        skill_entries, skill_parts = split_skill_snapshots(
+            resolve_skill_snapshots(self.store, parent.skill_snapshots),
+            engagement_id=parent.engagement_id,
+            session_id=child_session.id,
         )
+        child = ChatGoal(
+            engagement_id=parent.engagement_id,
+            session_id=child_session.id,
+            objective=body.objective,
+            completion_criteria=body.completion_criteria,
+            plan=body.plan,
+            token_budget=body.token_budget,
+            time_budget_seconds=body.time_budget_seconds,
+            step_budget=body.step_budget,
+            child_budget=0,
+            parent_goal_id=parent.id,
+            skill_snapshots=skill_entries,
+            status=ChatGoalStatus.DRAFT,
+        )
+        with self.store.transaction() as transaction:
+            stage_snapshot_parts(transaction, skill_parts)
+            transaction.add(child)
         self.store.update(
             ChatGoal,
             reserved.id,
@@ -576,12 +589,29 @@ class ChatGoalService:
         paths = [item.path for item in snapshots]
         if len(paths) != len(set(paths)):
             raise ConflictError("the same skill cannot be attached more than once")
-        return self.store.update(
-            ChatGoal,
-            goal.id,
-            {"skill_snapshots": [item.model_dump(mode="json") for item in snapshots]},
-            expected_revision=goal.revision,
+        # Every usage charge rewrites the goal, so the instructions are stored
+        # beside it and the goal keeps each skill's summary.
+        entries, parts = split_skill_snapshots(
+            (item.model_dump(mode="json") for item in snapshots),
+            engagement_id=goal.engagement_id,
+            session_id=goal.session_id,
         )
+        with self.store.transaction() as transaction:
+            stage_snapshot_parts(transaction, parts)
+            return transaction.update(
+                ChatGoal,
+                goal.id,
+                {"skill_snapshots": entries},
+                expected_revision=goal.revision,
+            )
+
+    def skill_snapshots(self, goal: ChatGoal) -> list[SkillSnapshot]:
+        """The goal's attached skills in full, however they were stored."""
+
+        return [
+            SkillSnapshot.model_validate(item)
+            for item in resolve_skill_snapshots(self.store, goal.skill_snapshots)
+        ]
 
 
 def goals_router(
@@ -651,9 +681,7 @@ def goals_router(
             raise HTTPException(503, "skill discovery is unavailable")
         try:
             goal = service.get(session_id)
-            existing = [
-                SkillSnapshot.model_validate(item) for item in goal.skill_snapshots
-            ]
+            existing = service.skill_snapshots(goal)
             snapshots = skill_snapshot_resolver(session_id, body.skills, existing)
         except (OSError, ValueError) as error:
             raise HTTPException(422, str(error)) from error
