@@ -1,12 +1,22 @@
 import { Check, ChevronRight, Copy } from "lucide-react";
 import { useEffect, useState } from "react";
+import type { ChatWaitKind } from "../api/types";
 
 type CallbackWaitingStatusProps = {
   summary: string;
   resultsUrl?: string;
+  /** Subagent waits reuse this status line; only a command wait has a callback. */
+  kind?: ChatWaitKind;
 };
 
-export function CallbackWaitingStatus({ summary, resultsUrl }: CallbackWaitingStatusProps) {
+const WAIT_LABELS: Record<ChatWaitKind, string> = {
+  process: "Waiting for command results",
+  subagents: "Waiting for subagents",
+  reply: "Waiting for the delegating assistant",
+};
+
+export function CallbackWaitingStatus({ summary, resultsUrl, kind }: CallbackWaitingStatusProps) {
+  const callback = kind === undefined || kind === "process";
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
   useEffect(() => setCopyState("idle"), [resultsUrl]);
@@ -21,11 +31,11 @@ export function CallbackWaitingStatus({ summary, resultsUrl }: CallbackWaitingSt
     }
   };
 
-  return <section className="callback-waiting-status" role="status" aria-label="Waiting for command results">
+  return <section className="callback-waiting-status" role="status" aria-label={WAIT_LABELS[kind ?? "process"]}>
     <header>
       <span className="callback-waiting-dot" aria-hidden="true" />
       <strong>{summary}</strong>
-      <small>{copyState === "copied" ? "Copied" : "Callback ready"}</small>
+      {callback && <small>{copyState === "copied" ? "Copied" : "Callback ready"}</small>}
     </header>
     {resultsUrl && <>
       <div className="callback-results-endpoint">

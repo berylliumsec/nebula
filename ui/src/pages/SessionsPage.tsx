@@ -29,6 +29,7 @@ import { AgentViewPanel, useStructuredResults, useUnseenCount } from "../compone
 import { ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
 import { useChatNavigation } from "./useChatNavigation";
 import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionList";
+import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
 import { groupSidebarConversations } from "./conversationSidebar";
 import { subagentRequestFields } from "./chatSubagentChoice";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
@@ -110,6 +111,7 @@ import type {
   ChatSessionSummary,
   ChatStreamEvent,
   ChatTurn,
+  ChatWaitKind,
   ContextStatus,
   ExecutionCapabilities,
   ExecutionLanguage,
@@ -797,7 +799,7 @@ export function SessionsPage() {
   const [artifactBusy, setArtifactBusy] = useState(false);
   const [artifactError, setArtifactError] = useState<string>();
   const [pendingResponse, setPendingResponse] = useState<PendingChatResponse>();
-  const [waitingCallback, setWaitingCallback] = useState<{ turnId: string; assistantId: string; resultsUrl?: string; processId?: string; toolCallId: string; summary: string }>();
+  const [waitingCallback, setWaitingCallback] = useState<{ turnId: string; assistantId: string; resultsUrl?: string; processId?: string; toolCallId: string; summary: string; kind?: ChatWaitKind }>();
   const [interruptedRecovery, setInterruptedRecovery] = useState<InterruptedChatRecovery>();
   const [failedProviderRecovery, setFailedProviderRecovery] = useState<FailedProviderRecovery>();
   useEffect(() => {
@@ -943,6 +945,10 @@ export function SessionsPage() {
   const abortRef = useRef<AbortController | undefined>(undefined);
   const streamBackendRef = useRef<ChatCompletionRequest["backend"] | undefined>(undefined);
   const activeProviderTurnIdRef = useRef<string | undefined>(undefined);
+  // Provider turns whose end this page saw on a stream it followed or a stop
+  // it made, and the last snapshot the follow authority acted on.
+  const finishedProviderTurnsRef = useRef(new Set<string>());
+  const providerFollowKeyRef = useRef("");
   useEffect(() => {
     if (runtimeKind !== "provider" || authoritativeState?.execution !== "cancelled") return;
     const activeTurnId = activeProviderTurnIdRef.current;
@@ -954,6 +960,7 @@ export function SessionsPage() {
     setMessages((current) => cancelActiveAssistantMessage(current));
     setPendingResponse(undefined);
     setWaitingCallback(undefined);
+    setInterruptedRecovery(undefined);
     setChatReconnecting(false);
     setSending(false);
     activeProviderTurnIdRef.current = undefined;
@@ -2877,26 +2884,44 @@ export function SessionsPage() {
             resultsUrl: pendingTurn.resultsUrl,
             processId: pendingTurn.processId,
             toolCallId: pendingTurn.toolCallIds[0] ?? "",
-            summary: "Waiting for the command to POST results.",
+            // A subagent wait saved its own status line; only a command
+            // callback falls back to the command's.
+            summary: pendingTurn.waitSummary
+              ?? (pendingTurn.waitKind === "subagents" ? "Waiting for subagents to report."
+                : pendingTurn.waitKind === "reply" ? "Waiting for the delegating assistant to reply."
+                  : "Waiting for the command to POST results."),
+            kind: pendingTurn.waitKind,
           });
         } else {
           setPendingResponse(undefined);
           activeProviderTurnIdRef.current = pendingTurn.id;
           setSending(true);
-          const restoreController = new AbortController();
-          abortRef.current = restoreController;
-          streamBackendRef.current = "provider";
+          // The follow owns the viewer transport until it ends, so the page
+          // knows when no viewer is attached to Core's active turn.
+          const restore = beginGuardedStream({ generation: sessionSelectionGenerationRef, abort: abortRef, backend: streamBackendRef }, "provider");
           void api.followChatTurn(
             pendingTurn.id,
             resumeRequest,
-            (streamEvent) => { if (selectionIsCurrent() && !restoreController.signal.aborted) applyChatEvent(streamEvent, assistantId, "", resumeRequest); },
-            restoreController.signal,
+            restore.guard((streamEvent) => applyChatEvent(streamEvent, assistantId, "", resumeRequest)),
+            restore.controller.signal,
           ).then(async (response) => {
-            if (selectionIsCurrent() && response?.sessionId) await refreshSessions(response.sessionId);
+            if (restore.isCurrent() && response?.sessionId) await refreshSessions(response.sessionId);
           }).catch((error) => {
             void logCaughtDiagnostic("interface.sessions_page.caught_failure_09", "A handled interface operation failed.", error, "sessions_page");
-            if (selectionIsCurrent() && !restoreController.signal.aborted) setChatError(error instanceof Error ? error.message : "Could not restore the pending response.");
-          }).finally(() => { if (selectionIsCurrent()) { setSending(false); setChatReconnecting(false); } });
+            if (!restore.isCurrent() || restore.controller.signal.aborted) return;
+            if (error instanceof ApiError && error.status === 409) {
+              // Core has no stream to replay for this turn in this process:
+              // it runs without one (a scheduled occurrence) or it has just
+              // settled. The bubble keeps showing work, and the session
+              // snapshot reloads the transcript once the turn settles.
+              refreshSessionState();
+              return;
+            }
+            setChatError(error instanceof Error ? error.message : "Could not restore the pending response.");
+          }).finally(() => {
+            restore.release();
+            if (restore.isCurrent()) { setSending(false); setChatReconnecting(false); }
+          });
         }
       } else if (pendingTurn?.harnessTurnId && summary?.backend === "harness") {
         const assistantId = makeId("assistant-harness-pending");
@@ -3124,15 +3149,41 @@ export function SessionsPage() {
   const pendingApprovalToRestore = pendingApprovalId(authoritativeState, authoritativeState?.turn_id ?? undefined);
   useEffect(() => {
     if (!pendingApprovalToRestore) { approvalRestorationRef.current = undefined; return; }
-    if (runtimeKind !== "harness" || !sessionId || loadingHistory || approvalDecisionBusy
+    if (!sessionId || loadingHistory || approvalDecisionBusy
       || pendingResponse?.approval.id === pendingApprovalToRestore) return;
+    // A provider stream this page follows delivers its own approval frame;
+    // restore from the snapshot once no stream here owns the turn.
+    if (runtimeKind === "provider" && abortRef.current) return;
     const key = `${sessionId}:${authoritativeState?.revision}:${pendingApprovalToRestore}`;
     if (approvalRestorationRef.current === key) return;
     approvalRestorationRef.current = key;
     // A snapshot can reveal another request after a decision, lost event or
     // reconnect. Restore its exact saved card; this only reads/follows work.
     void selectSession(sessionId, false, true);
-  }, [sessionId, runtimeKind, pendingApprovalToRestore, authoritativeState?.revision, pendingResponse?.approval.id, loadingHistory, approvalDecisionBusy]);
+  }, [sessionId, runtimeKind, pendingApprovalToRestore, authoritativeState?.revision, pendingResponse?.approval.id, loadingHistory, approvalDecisionBusy, sending]);
+
+  // The session snapshot names the active provider turn even when this page
+  // did not start it (a goal's next turn, a schedule, a decision made on
+  // another device, recovery after a restart). Attach through the restore
+  // path a reload uses whenever nothing here presents that turn, and reload
+  // the transcript once a turn it never showed has settled.
+  useEffect(() => {
+    if (runtimeKind !== "provider" || !sessionId || !authoritativeState || loadingHistory || !sessionReadReady) return;
+    const owned = Boolean(abortRef.current) || approvalDecisionBusy || Boolean(waitingCallback)
+      || Boolean(interruptedRecovery) || pendingResponseActive || Boolean(failedProviderRecovery);
+    const action = providerTurnFollowAction({
+      snapshot: authoritativeState,
+      owned,
+      finished: finishedProviderTurnsRef.current,
+      shown: (turnId) => transcriptShowsTurn(messages, turnId) || transcriptShowsTurn(replacedMessages, turnId),
+    });
+    if (!action) return;
+    // Once per snapshot revision: an unchanged snapshot never repeats a load.
+    const key = `${sessionId}:${authoritativeState.turn_id}:${authoritativeState.revision}:${action}`;
+    if (providerFollowKeyRef.current === key) return;
+    providerFollowKeyRef.current = key;
+    void selectSession(sessionId, false, true);
+  }, [runtimeKind, sessionId, authoritativeState, loadingHistory, sessionReadReady, sending, approvalDecisionBusy, waitingCallback, interruptedRecovery, pendingResponseActive, failedProviderRecovery, messages, replacedMessages]);
 
   const copyMessage = async (message: ConversationMessage) => {
     try {
@@ -3221,6 +3272,17 @@ export function SessionsPage() {
   ) => {
     if (streamEvent.type === "connection") {
       setChatReconnecting(streamEvent.state === "reconnecting");
+      return;
+    }
+    if (streamEvent.type === "restarted") {
+      // Core resumed the turn in a new runtime (after a restart, say), which
+      // replays it from the start, saved text included. Drop what the earlier
+      // runtime streamed so the replay neither doubles nor loses text.
+      streamDeltaRef.current.delete(assistantId);
+      streamReasoningRef.current.delete(assistantId);
+      setMessages((current) => current.map((message) => message.id === assistantId
+        ? { ...message, content: "", reasoning: "" }
+        : message));
       return;
     }
     // Events invalidate the durable snapshot; they never independently resolve
@@ -3392,6 +3454,7 @@ export function SessionsPage() {
         processId: streamEvent.processId,
         toolCallId: streamEvent.toolCallId,
         summary: streamEvent.summary,
+        kind: streamEvent.waitKind,
       });
       setSending(false);
       setToolCards((current) => current.map((item) => item.toolCallId === streamEvent.toolCallId
@@ -3425,7 +3488,12 @@ export function SessionsPage() {
     }
     if (streamEvent.type === "done") {
       setChatReconnecting(false);
-      if (request.backend === "provider") activeProviderTurnIdRef.current = undefined;
+      if (request.backend === "provider") {
+        activeProviderTurnIdRef.current = undefined;
+        if (streamEvent.turnId) finishedProviderTurnsRef.current.add(streamEvent.turnId);
+        // The turn finished: an error an earlier stream of it reported is stale.
+        setChatError(undefined);
+      }
       if (request.backend === "provider" && request.goalId) {
         setLiveGoalTokenEstimate(streamEvent.usage.totalTokens + (streamEvent.contextUsage?.totalTokens ?? 0));
       }
@@ -3479,7 +3547,10 @@ export function SessionsPage() {
       // Core ended this viewer's stream because the turn was stopped (here or
       // from another tab): settle the bubble instead of waiting on a reconnect.
       setChatReconnecting(false);
-      if (request.backend === "provider") activeProviderTurnIdRef.current = undefined;
+      if (request.backend === "provider") {
+        activeProviderTurnIdRef.current = undefined;
+        if (streamEvent.turnId) finishedProviderTurnsRef.current.add(streamEvent.turnId);
+      }
       setPendingResponse(undefined);
       setMessages((current) => cancelStreamingAssistantMessage(current, assistantId));
     }
@@ -4271,6 +4342,8 @@ export function SessionsPage() {
   const stopCurrentResponse = async (): Promise<boolean> => {
     followUpAutoDrainRef.current = false;
     const reloadSessionId = sessionId;
+    // An interrupted turn has no live bubble to settle in place.
+    const stoppedRecovery = runtimeKind === "provider" && Boolean(interruptedRecovery);
     if (runtimeKind === "harness" && api) {
       const turnId = harnessProgress?.turnId ?? harnessActivity?.turnId
         ?? [...messages].reverse().find((message) => message.state === "streaming")?.harnessTurnId;
@@ -4284,7 +4357,7 @@ export function SessionsPage() {
         }
       }
     } else if (api) {
-      const turnId = activeProviderTurnIdRef.current ?? pendingResponse?.turnId
+      const turnId = activeProviderTurnIdRef.current ?? pendingResponse?.turnId ?? interruptedRecovery?.turn.id
         ?? (authoritativeState?.busy ? authoritativeState.turn_id : undefined);
       if (turnId) {
         try {
@@ -4294,7 +4367,11 @@ export function SessionsPage() {
           setChatError(error instanceof Error ? error.message : "Could not stop the provider turn.");
           return false;
         }
+        // The page settles a live turn itself; its outcome needs no reload.
+        if (!stoppedRecovery) finishedProviderTurnsRef.current.add(turnId);
       }
+      setInterruptedRecovery(undefined);
+      setWaitingCallback(undefined);
     }
     harnessFollowDetachRef.current?.();
     harnessFollowDetachRef.current = undefined;
@@ -4307,6 +4384,7 @@ export function SessionsPage() {
     if (runtimeKind === "harness" && reloadSessionId) {
       await selectSession(reloadSessionId, false);
     } else if (api && reloadSessionId) {
+      if (stoppedRecovery) await selectSession(reloadSessionId, false, true);
       try {
         setProviderGoal(await api.getChatGoal(reloadSessionId));
       } catch (error) {
@@ -4887,7 +4965,7 @@ export function SessionsPage() {
                         {interaction.containsSecret && <small>Secret answer is forwarded in memory and will not be persisted.</small>}
                         <div><button className="button secondary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "decline")}>Decline</button><button className="button primary" type="button" disabled={harnessControlBusy} onClick={() => void decideHarnessInteraction(interaction, "answer")}>Submit</button></div>
                       </div>)}
-                      {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {waitingCallback?.assistantId === message.id ? "Waiting for command results" : runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : message.detail ?? "Waiting for provider"}</div>}
+                      {message.state === "streaming" && !message.content && <div className="chat-thinking"><span /><span /><span /> {waitingCallback?.assistantId === message.id ? waitingCallback.kind === "subagents" || waitingCallback.kind === "reply" ? waitingCallback.summary : "Waiting for command results" : runtimeKind === "harness" ? visibleHarnessProgress?.detail ?? "Waiting for harness" : message.detail ?? "Waiting for provider"}</div>}
                       {message.state === "waiting_approval" && pendingResponse?.assistantId === message.id && pendingResponseActive && <div className="chat-approval-card" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Approval required"><strong>Approval required</strong><AssistantApprovalDetails request={pendingResponse.approval} /><div>{pendingSshApproval && <button className="button quiet" type="button" disabled={approvalDecisionBusy} title={`Stop asking before commands on ${pendingSshApproval.label}, then run this one`} onClick={() => void alwaysAllowSshHost(pendingSshApproval.alias)}>Always allow on this host</button>}<button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("reject")}>Reject</button><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("stop")}>Stop response</button><button className="button primary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("approve")}>Approve</button></div></div>}
                       {message.state === "cancelled" && <small className="muted" role="status">Stopped{message.elapsedMs !== undefined ? ` · ${formatTurnElapsed(message.elapsedMs)}` : ""}</small>}
                       {message.detail && message.state === "error" && <DiagnosticErrorNotice error={message.detail} fallback="The response could not be completed." compact />}
@@ -4924,11 +5002,13 @@ export function SessionsPage() {
                 onStop={() => { if (harnessControlBusy) return; setHarnessControlBusy(true); void stopCurrentResponse().then(stopped => { if (stopped) setResolvedApproval(undefined); }).finally(() => setHarnessControlBusy(false)); }} />}
               <div className="chat-operator-updates">
               {stateSyncError && <div className="chat-recovery-notice" role="status"><p>{stateSyncError}</p><button className="icon-button subtle" type="button" aria-label="Retry response status" title="Retry response status" onClick={refreshSessionState}><RefreshCw size={16} aria-hidden="true" /></button></div>}
-              {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} pendingActions={authoritativeState?.pending} ready={!loadingHistory} atLatest={!hasNewerMessages} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => updateSearchParams(next => {next.set("turn", id); next.set("drawer", "context");})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
+              {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} pendingActions={authoritativeState?.pending} ready={!loadingHistory} atLatest={!hasNewerMessages} isShown={(messageId) => messages.some((message) => message.id === messageId)} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => updateSearchParams(next => {next.set("turn", id); next.set("drawer", "context");})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
               {runtimeKind === "provider" && hookExecutions.length > 0 && <details className="chat-action-status" data-guide="hook-outcomes" open={Boolean(interruptedRecovery)}><summary>Lifecycle hooks · {hookExecutions.filter(item => item.status === "complete" || item.status === "reconciled").length}/{hookExecutions.length} completed</summary><div role="list" aria-label="Lifecycle hook outcomes">{hookExecutions.map(execution => { const hookName = nativeHooks.find(hook => hook.id === execution.hookId)?.manifest.name ?? execution.hookId; return <div role="listitem" key={execution.id}><strong>{hookName}</strong><small>{execution.eventName.replaceAll(".", " ")} · {execution.status.replaceAll("_", " ")}{execution.sideEffects !== "none" ? ` · ${execution.sideEffects} effects` : ""}</small>{execution.error && <span role="alert">{execution.error}</span>}{execution.status === "interrupted" && execution.lateOutcomeStatus && <small>Later process exit: {execution.lateOutcomeStatus}{execution.lateOutcomeExitCode !== undefined ? ` (code ${execution.lateOutcomeExitCode})` : ""}. {execution.lateOutcomeStatus === "complete" ? "Checking the saved result." : "Effects may be partial; verify before continuing."}</small>}{execution.reconciliation && typeof execution.reconciliation.detail === "string" && <small>{execution.reconciliation.detail}</small>}</div>; })}</div></details>}
-              {waitingCallback && <CallbackWaitingStatus summary={waitingCallback.summary} resultsUrl={waitingCallback.resultsUrl} />}
+              {waitingCallback && <CallbackWaitingStatus summary={waitingCallback.summary} resultsUrl={waitingCallback.resultsUrl} kind={waitingCallback.kind} />}
               {interruptedRecovery && <div className="chat-action-status" role="status">
-                <span>Core is recovering this response automatically. Recorded receipts will be adopted; uncertain effects will not be replayed.</span>
+                <span>{interruptedRecovery.turn.recoverable
+                  ? "Core is recovering this response automatically. Recorded receipts will be adopted; uncertain effects will not be replayed."
+                  : "This interrupted response will not resume automatically. Stop it to continue the conversation."}</span>
               </div>}
               {pendingResponse && pendingResponse.request.backend !== "harness" && <div className="chat-inline-approval-actions"><button className="button secondary" type="button" disabled={approvalDecisionBusy} onClick={() => void decideInlineApproval("edit")}>Edit pending request</button></div>}
               {chatReconnecting && <p role="status" className="chat-recovery-notice">Connection lost. Reconnecting to the existing turn…</p>}
@@ -4977,7 +5057,7 @@ export function SessionsPage() {
                   {runtimeKind === "harness" && ["grok_acp", "codex_app_server"].includes(selectedHarness?.kind ?? "") && <HarnessCommandHints draft={draft} commands={harnessActivity?.sessionId === harnessSessionId && !harnessActivityError ? harnessActivity.commands : undefined} discoveryPending={selectedHarness?.kind === "grok_acp" && (harnessActivity?.sessionId !== harnessSessionId || !harnessActivity?.commandsDiscovered || Boolean(harnessActivityError))} onSelect={(text) => { updateComposerDraft(text); composerRef.current?.focus(); }} />}
                   {skillToken && <HarnessSkillAutocomplete skills={harnessSkills} token={skillToken} activeIndex={skillMenuIndex} onActiveIndexChange={setSkillMenuIndex} onSelect={selectHarnessSkill} onClose={() => setSkillToken(undefined)} />}
                 </div>
-                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button><button ref={agentViewButtonRef} className={`button quiet chat-composer-icon${publishedUnseen > 0 ? " needs-attention" : ""}`} type="button" aria-label={publishedUnseen > 0 ? `Agent view, ${publishedUnseen} new` : "Agent view"} title="Visuals the assistant published for this conversation" aria-expanded={agentView === "floating"} disabled={!sessionId} onClick={() => setAgentView(current => current === "floating" ? "closed" : "floating")}><Sparkles size={18} aria-hidden="true" />{publishedUnseen > 0 && <span className="chat-composer-badge">{publishedUnseen > 9 ? "9+" : publishedUnseen}</span>}</button><input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{(sending || authoritativeProviderBusy) && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer><button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls="assistant-settings-popover" title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>{api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button><button ref={agentViewButtonRef} className={`button quiet chat-composer-icon${publishedUnseen > 0 ? " needs-attention" : ""}`} type="button" aria-label={publishedUnseen > 0 ? `Agent view, ${publishedUnseen} new` : "Agent view"} title="Visuals the assistant published for this conversation" aria-expanded={agentView === "floating"} disabled={!sessionId} onClick={() => setAgentView(current => current === "floating" ? "closed" : "floating")}><Sparkles size={18} aria-hidden="true" />{publishedUnseen > 0 && <span className="chat-composer-badge">{publishedUnseen > 9 ? "9+" : publishedUnseen}</span>}</button><input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{(sending || authoritativeProviderBusy || (runtimeKind === "provider" && Boolean(interruptedRecovery))) && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
               {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? visibleHarnessProgress.phase === "command_runtime_session_created" ? " · current command runtime" : " · independent parallel session" : ""}</code>}</div>{canSteerCurrentHarness && <button className="button quiet harness-steer-button" type="button" disabled={harnessControlBusy} onClick={() => composerRef.current?.focus()}><Plus size={13} aria-hidden="true" /> Add guidance</button>}</div>}
             </div>

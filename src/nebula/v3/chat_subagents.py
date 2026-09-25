@@ -620,6 +620,20 @@ def restart_recovery_pending(turn: ChatTurn) -> bool:
     )
 
 
+def core_resumes_interrupted_turn(turn: ChatTurn) -> bool:
+    """Whether Core's recovery pass resumes this interrupted turn by itself.
+
+    Unresolved effect receipts do not stop it: the pass records them as
+    uncertain observations first. A turn Core did not interrupt, or whose
+    automatic resume was already attempted, waits for the operator instead.
+    """
+
+    if not restart_recovery_pending(turn):
+        return False
+    recovery = turn.request_snapshot.get("recovery")
+    return isinstance(recovery, dict) and not recovery.get("auto_resume_attempted_at")
+
+
 # Compatibility for callers outside the lifecycle service.  Automatic recovery
 # now covers both a graceful stop and a process restart.
 safely_stopped_by_core = recoverable_after_core_restart
