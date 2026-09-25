@@ -26,7 +26,9 @@ from nebula.v3.domain import (
     Engagement,
     McpServerProfile,
     McpTransport,
+    ProviderCapabilityVerification,
     ProviderProfile,
+    ProviderVerificationStatus,
     RunBackend,
     Task,
 )
@@ -720,6 +722,61 @@ def test_chat_api_rejects_system_injection_and_disallowed_model(tmp_path, monkey
     )
     assert disallowed.status_code == 422
     assert "not allowed" in disallowed.json()["detail"]
+
+
+def test_cloud_tool_turn_without_consent_is_a_typed_refusal_before_acceptance(
+    tmp_path, monkeypatch
+):
+    store = NebulaStore(tmp_path / "chat-consent.db")
+    engagement = store.create(Engagement(id="project-a", name="Project A"))
+    profile = store.create(
+        ProviderProfile(
+            id="provider-cloud",
+            name="Cloud provider",
+            provider_type="custom",
+            endpoint="https://provider.invalid/v1",
+            is_local=False,
+            model_allowlist=["model-a"],
+            capabilities={"streaming": True, "tool_calling": True},
+            capability_verifications={
+                "model-a": ProviderCapabilityVerification(
+                    model="model-a", status=ProviderVerificationStatus.VERIFIED
+                )
+            },
+            privacy={"permits_sensitive_data": True},
+        )
+    )
+    provider = ApiChatProvider(profile.id)
+    provider.config = provider.config.model_copy(update={"local": False})
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    client = TestClient(create_app(store, auth_token="test-token"))
+
+    refused = client.post(
+        "/api/v1/chat/completions",
+        headers=_auth(),
+        json={
+            "engagement_id": engagement.id,
+            "provider_id": profile.id,
+            "model": "model-a",
+            "messages": [{"role": "user", "content": "Split the work."}],
+            "allow_subagents": True,
+            "allow_agent_messaging": True,
+            "stream": True,
+        },
+    )
+
+    # The client recognises this refusal by its code, asks the operator, and
+    # sends the same request again; nothing was accepted in between.
+    assert refused.status_code == 409
+    body = refused.json()
+    assert body["code"] == "tool_result_consent_required"
+    assert "explicit confirmation" in body["detail"]
+    assert body["operator_detail"] == (
+        "This turn uses subagents and agent messaging, whose tool inputs and "
+        "results would go to Cloud provider."
+    )
+    assert store.list_entities(ChatSession, include_temporary=True) == []
+    assert store.list_entities(ChatTurn) == []
 
 
 def test_chat_delete_rejects_an_active_response(tmp_path):

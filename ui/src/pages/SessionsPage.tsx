@@ -33,6 +33,7 @@ import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionLis
 import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
 import { groupSidebarConversations } from "./conversationSidebar";
 import { subagentRequestFields } from "./chatSubagentChoice";
+import { declinedToolSharingMessage, notSentMessage, providerTurnToolFamilies, runWithToolResultConsent, textOnlyToolSharingMessage, ToolResultSharingDeclinedError, type ToolResultFamily } from "./chatToolResultConsent";
 import { ChatSearchPanel } from "../components/ChatSearchPanel";
 import { CallbackWaitingStatus } from "../components/CallbackWaitingStatus";
 import { AssistantApprovalDetails } from "../components/AssistantApprovalDetails";
@@ -4054,15 +4055,31 @@ export function SessionsPage() {
         : item));
     };
 
+    // Nothing reached Core. Say so in place and keep the operator's words
+    // where they can send them again: the composer, or the queued entry. An
+    // edited message's conversation is already rewound, so its text returns
+    // to an empty composer.
+    const refuseBeforeSend = (detail: string) => {
+      if (queuedFollowUp) {
+        setChatError(detail);
+        failQueuedFollowUp(detail);
+        return;
+      }
+      const keptEdit = Boolean(resent && !draft.trim());
+      if (resent && keptEdit) {
+        setDraft(resent.text);
+        if (activeDraftStorageKey) draftStore.write(activeDraftStorageKey, resent.text);
+      }
+      setChatError(notSentMessage(detail, !resent || keptEdit));
+    };
+
     try {
       await prepareProviderCredential(api, providerRuntime?.credentialRef);
     } catch (credentialError) {
       // diagnostic-expected: preflight failures are rendered inline and stop submission.
-      const detail = credentialError instanceof Error
+      refuseBeforeSend(credentialError instanceof Error && credentialError.message
         ? credentialError.message
-        : "The provider credential is unavailable on the Nebula Core host.";
-      setChatError(detail);
-      failQueuedFollowUp(detail);
+        : "The provider credential could not be checked on the Nebula Core host. Send again once Core responds.");
       return;
     }
 
@@ -4070,11 +4087,28 @@ export function SessionsPage() {
     const knowledgeRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
     const allowCloudKnowledge = wantsKnowledge && !knowledgeRuntimeIsLocal;
 
-    const wantsTools = browserControlEnabled || allowAgentMessaging || (runtimeKind === "harness"
-      ? Boolean(harnessSessionId
-        ? harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length
-        : selectedMcpIds.length)
-      : canUseTools || selectedMcpIds.length > 0);
+    // Tool results leave the device for every family the turn carries. A
+    // provider turn mirrors Core's list (chat.py), Subagents included, so the
+    // operator is asked exactly when Core would refuse without consent.
+    const toolFamilies: ToolResultFamily[] = runtimeKind === "harness"
+      ? [
+        ...((harnessSessionId
+          ? harnessSessions.find((item) => item.id === harnessSessionId)?.mcpServerIds.length
+          : selectedMcpIds.length) ? ["MCP servers" as const] : []),
+        ...(browserControlEnabled ? ["Browser control" as const] : []),
+        ...(allowAgentMessaging ? ["Agent messaging" as const] : []),
+      ]
+      : providerTurnToolFamilies({
+        commandRuntime: canUseTools,
+        mcpServerIds: selectedMcpIds,
+        sshEnvironmentIds: environmentIdsForTarget(environmentTarget),
+        allowSubagents,
+        allowAgentMessaging,
+        subagentConversation: activeChatSession?.isSubagent === true,
+        browserControl: browserControlEnabled,
+        contextSourceKinds: !queuedFollowUp && !resent ? assistantDrafts.map((item) => item.source.kind) : [],
+      });
+    const wantsTools = toolFamilies.length > 0;
     let allowCloudToolResults = false;
     const toolRuntimeIsLocal = runtimeKind === "harness" ? harnessIsLocal : providerIsLocal;
     const toolRuntimeName = runtimeKind === "harness" ? harnessRuntime?.name : providerRuntime?.name;
@@ -4082,23 +4116,23 @@ export function SessionsPage() {
     const toolSharingRuntime: ToolSharingRuntime | undefined = runtimeKind === "harness"
       ? harnessRuntime && { kind: "harness", profile: harnessRuntime }
       : providerRuntime && { kind: "provider", profile: providerRuntime };
+    const askToolResultSharing = () => confirm({
+      title: "Share redacted tool results?",
+      message: `Allow this turn to send bounded tool inputs and results to ${toolRuntimeName}? Canonical output remains local and risky calls still require approval.`,
+      confirmLabel: "Allow this turn",
+      ...(api && toolSharingRuntime
+        ? { remember: rememberToolSharing(api, toolSharingRuntime, rememberToolSharingRuntime) }
+        : {}),
+    });
     if (wantsTools && !toolRuntimeIsLocal && toolRuntimeName) {
       if (!toolRuntimePermitsSensitive) {
-        const detail = "This runtime profile does not permit tool results to leave the device.";
-        setChatError(detail);
-        failQueuedFollowUp(detail);
+        refuseBeforeSend(textOnlyToolSharingMessage(toolFamilies, toolRuntimeName));
         return;
       }
-      allowCloudToolResults = sharesToolResultsAlways(toolSharingRuntime) || await confirm({
-        title: "Share redacted tool results?",
-        message: `Allow this turn to send bounded tool inputs and results to ${toolRuntimeName}? Canonical output remains local and risky calls still require approval.`,
-        confirmLabel: "Allow this turn",
-        ...(api && toolSharingRuntime
-          ? { remember: rememberToolSharing(api, toolSharingRuntime, rememberToolSharingRuntime) }
-          : {}),
-      });
+      allowCloudToolResults = sharesToolResultsAlways(toolSharingRuntime) || await askToolResultSharing();
       if (!allowCloudToolResults) {
-        failQueuedFollowUp("Tool-result sharing was cancelled. Review the queued message before retrying.");
+        if (queuedFollowUp) failQueuedFollowUp("Tool-result sharing was cancelled. Review the queued message before retrying.");
+        else refuseBeforeSend(declinedToolSharingMessage(toolFamilies, toolRuntimeName));
         return;
       }
     }
@@ -4220,10 +4254,16 @@ export function SessionsPage() {
       return true;
     }
     setMessages((current) => [...current, userMessage, assistantMessage]);
-    if (!queuedFollowUp && !resent) {
+    // Previews outlive the cleared composer until the send settles: a turn
+    // Core refuses for tool-result consent the operator then declines comes
+    // back to the composer whole.
+    const composerSend = !queuedFollowUp && !resent;
+    const submittedDraft = composerSend ? draft : resent?.text ?? "";
+    const submittedImages = composerSend ? pendingImages : [];
+    let returnedToComposer = false;
+    if (composerSend) {
       if (activeDraftStorageKey) draftStore.clear(activeDraftStorageKey);
       setDraft("");
-      pendingImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
       setPendingImages([]);
       clearSubmittedContext();
     }
@@ -4262,12 +4302,19 @@ export function SessionsPage() {
         if (streamEvent.type === "done") returnedSessionId = streamEvent.sessionId ?? returnedSessionId;
         applyChatEvent(streamEvent, assistantId, userId, chatRequest);
       }, controller.signal);
-      // Core returns the typed locked-vault error before accepting the turn,
-      // so the helper's single unlock-and-resubmit cannot duplicate work.
+      // Core returns the typed locked-vault and tool-result consent errors
+      // before accepting the turn, so each single resubmit cannot duplicate
+      // work. Core alone sees some tools (project web search, skill files),
+      // and its consent refusal is what asks for those.
       const response = await runWithProviderCredentialRecovery(
         api,
         providerRuntime?.credentialRef,
-        streamRequest,
+        () => runWithToolResultConsent(streamRequest, {
+          canAsk: () => runtimeKind === "provider" && chatRequest.allowCloudToolResults !== true,
+          ask: askToolResultSharing,
+          grant: () => { chatRequest.allowCloudToolResults = true; },
+          runtimeName: toolRuntimeName ?? "the provider",
+        }),
       );
       requestCompleted = true;
       if (controller.signal.aborted || detachedStreamsRef.current.has(controller)) return;
@@ -4296,6 +4343,28 @@ export function SessionsPage() {
       }
       if (requestCompleted) {
         setChatError(error instanceof Error ? error.message : "The response completed, but the conversation could not be refreshed.");
+        return;
+      }
+      if (error instanceof ToolResultSharingDeclinedError) {
+        // Core refused before accepting the turn and the operator declined:
+        // nothing was saved, so the message leaves the transcript and goes
+        // back where it can be sent again rather than reading as a failure.
+        setMessages((current) => current.filter((message) => message.id !== userId && message.id !== assistantId));
+        failQueuedFollowUp(error.message);
+        returnedToComposer = !queuedFollowUp;
+        if (returnedToComposer) {
+          setDraft((current) => {
+            if (current.trim()) return current;
+            if (activeDraftStorageKey) draftStore.write(activeDraftStorageKey, submittedDraft);
+            return submittedDraft;
+          });
+          if (submittedImages.length) setPendingImages((current) => current.length ? current : submittedImages);
+          // A skill whose files needed the consent stays selected with its words.
+          if (chatRequest.skill || chatRequest.harnessSkill) setHarnessSkillPath(harnessSkillPath);
+        }
+        // A selected context pack is not restored with the words.
+        setChatError(notSentMessage(error.message, returnedToComposer && !contextAttachments?.length));
+        if (!initialSessionId) setSessionId("");
         return;
       }
       void logCaughtDiagnostic("interface.sessions_page.caught_failure_13", "A handled interface operation failed.", error, "sessions_page");
@@ -4347,6 +4416,7 @@ export function SessionsPage() {
         setSessionId("");
       }
     } finally {
+      if (!returnedToComposer) submittedImages.forEach((image) => URL.revokeObjectURL(image.previewUrl));
       if (queuedFollowUp && followUpDrainIdRef.current === queuedFollowUp.id) {
         followUpDrainIdRef.current = undefined;
       }
