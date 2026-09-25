@@ -58,6 +58,7 @@ export function ActivityLedger({
   renderEntryDetails,
   renderEntryActions,
   onExpandedChange,
+  expanded: controlledExpanded,
   emptyState,
   compact = false,
   historyPending = false,
@@ -66,11 +67,13 @@ export function ActivityLedger({
   renderEntryDetails?: (entry: ActivityLedgerEntry) => ReactNode;
   renderEntryActions?: (entry: ActivityLedgerEntry) => ReactNode;
   onExpandedChange?: (expanded: boolean) => void;
+  expanded?: boolean;
   emptyState?: ReactNode;
   compact?: boolean;
   historyPending?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const expanded = controlledExpanded ?? localExpanded;
   const auditId = useId();
   const active = model.status === "active" || model.status === "queued" || model.status === "attention";
   const attentionEntries = model.entries.filter((entry) => entry.status === "attention" || (!compact && entry.status === "failed"));
@@ -132,11 +135,11 @@ export function ActivityLedger({
           type="button"
           aria-expanded={expanded}
           aria-controls={auditId}
-          onClick={() => setExpanded((value) => {
-            const next = !value;
+          onClick={() => {
+            const next = !expanded;
+            if (controlledExpanded === undefined) setLocalExpanded(next);
             onExpandedChange?.(next);
-            return next;
-          })}
+          }}
         >
           {expanded ? "Hide activity" : historyPending ? "Inspect saved work" : "Show activity"}
           <ChevronDown size={14} aria-hidden="true" />

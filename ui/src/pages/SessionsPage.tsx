@@ -660,6 +660,8 @@ interface TranscriptRowProps {
   replacements: ReplacedMessageGroup[];
   activityItems: HarnessActivityItem[];
   toolCards: ToolLifecycleCard[];
+  activityExpanded: boolean;
+  onActivityExpandedChange: (messageId: string, expanded: boolean) => void;
   historicalState?: "loading" | "loaded" | "failed";
   historicalError?: string;
   subagentResult?: ChatSubagentView;
@@ -687,6 +689,7 @@ const NO_ANSWERS: Record<string, string> = {};
  */
 const ChatTranscriptRow = memo(function ChatTranscriptRow({
   message, shared, actions, editing, replacedByEdit, pendingReplacement, replacements, activityItems, toolCards,
+  activityExpanded, onActivityExpandedChange,
   historicalState, historicalError, subagentResult, bookmarked, interactions, answers, waitingLabel,
   harnessProgressDetail, approval, focusPendingAction,
 }: TranscriptRowProps) {
@@ -758,11 +761,13 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       {historicalState === "failed" && historicalError && <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Saved work details could not be loaded; the answer remains available." compact /><button className="button quiet" type="button" onClick={() => void actions.loadHistoricalHarnessActivity(message)}>Retry work details</button></div>}
       {message.role === "assistant" && activityLedger && <ActivityLedger
         compact
+        expanded={activityExpanded}
         historyPending={Boolean(historicalTurnId && historicalState !== "loaded" && !messageActivityItems.length && !messageToolCards.length)}
         model={activityLedger}
-        onExpandedChange={historicalTurnId ? (expanded) => {
-          if (expanded) void actions.loadHistoricalHarnessActivity(message);
-        } : undefined}
+        onExpandedChange={(expanded) => {
+          onActivityExpandedChange(message.id, expanded);
+          if (expanded && historicalTurnId) void actions.loadHistoricalHarnessActivity(message);
+        }}
         emptyState={historicalState === "loading"
           ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading saved work…</div>
           : undefined}
@@ -959,6 +964,15 @@ export function SessionsPage() {
   const [archivingSessionId, setArchivingSessionId] = useState<string>();
   const [archivedGroupOpen, setArchivedGroupOpen] = useState(false);
   const [sessionId, setSessionId] = useState("");
+  const [expandedActivityMessageIds, setExpandedActivityMessageIds] = useState<Set<string>>(() => new Set());
+  const setActivityExpanded = useCallback((messageId: string, expanded: boolean) => {
+    setExpandedActivityMessageIds(current => {
+      const next = new Set(current);
+      if (expanded) next.add(messageId);
+      else next.delete(messageId);
+      return next;
+    });
+  }, []);
   useEffect(() => {
     const selected = sessions.find(session => session.id === sessionId);
     const parent = selected?.isSubagent ? sessions.find(session => session.id === selected.parentSessionId) : undefined;
@@ -5343,6 +5357,8 @@ export function SessionsPage() {
                     replacements={anchoredReplacements.get(message.id) ?? NO_REPLACEMENTS}
                     activityItems={activityItemsByAssistantId.get(message.id) ?? NO_ACTIVITY}
                     toolCards={toolCardsByAssistantId.get(message.id) ?? NO_TOOL_CARDS}
+                    activityExpanded={expandedActivityMessageIds.has(message.id)}
+                    onActivityExpandedChange={setActivityExpanded}
                     historicalState={historicalTurnId ? historicalActivityState[historicalTurnId] : undefined}
                     historicalError={historicalTurnId ? historicalActivityErrors[historicalTurnId] : undefined}
                     subagentResult={subagentResultsByMessage.get(message.id)}
