@@ -504,7 +504,8 @@ def _gateway_subagent_tools(
             "Delegate one independent, multi-step task to a parallel subagent on the "
             "Nebula provider model chosen for this conversation. It uses this "
             "project's command runtime and MCP servers, cannot see this "
-            "conversation, and returns immediately with its id.",
+            "conversation, and returns immediately with its id. Effort defaults "
+            "to low; pass reasoning_effort to choose another level for this task.",
             {
                 "type": "object",
                 "properties": {

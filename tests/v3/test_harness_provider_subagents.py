@@ -829,9 +829,13 @@ def test_waits_stay_below_each_harness_tool_timeout(tmp_path):
         gateway_tools=({"name": _portable_gateway_tool_name("subagent.start")},),
     )
     assert "waits up to 300 seconds" in instructions
+    assert "set reasoning_effort on subagent.start" in instructions
+    start = _gateway_subagent_tools(HarnessKind.GROK_ACP)["subagent.start"]
+    assert "Effort defaults to low" in start[0]
+    assert "Omit to use low effort" in start[1]["properties"]["reasoning_effort"]["description"]
 
 
-def test_harness_subagents_take_its_reasoning_level_unless_told_otherwise(tmp_path):
+def test_harness_subagents_default_to_low_unless_the_supervisor_selects_an_effort(tmp_path):
     async def scenario() -> None:
         store, project, harness, chat, adapter, runtime = _setup(tmp_path)
         harness = store.update(
@@ -871,7 +875,7 @@ def test_harness_subagents_take_its_reasoning_level_unless_told_otherwise(tmp_pa
                     await connection.call(
                         "subagent.start",
                         task="List the config files.",
-                        reasoning_effort="low",
+                        reasoning_effort="high",
                     )
                 )
             )
@@ -898,17 +902,16 @@ def test_harness_subagents_take_its_reasoning_level_unless_told_otherwise(tmp_pa
         adapter.script = delegate
         _, _, turn = prepare("high")
         await runtime.start_chat_turn(turn.id)
-        assert [item["reasoning_effort"] for item in started] == ["high", "low"]
+        assert [item["reasoning_effort"] for item in started] == ["low", "high"]
         assert {
             request.messages[-1].content: request.reasoning_effort
             for request in child.requests
-        } == {"Map the API routes.": "high", "List the config files.": "low"}
+        } == {"Map the API routes.": "low", "List the config files.": "high"}
         assert sorted(
             str(item.reasoning_effort) for item in store.list_entities(ChatSubagent)
         ) == ["high", "low"]
 
-        # A vendor-only level has no provider equivalent; the child keeps the
-        # provider model's own default.
+        # The harness's own level does not change the child's low default.
         async def delegate_once(connection: ScriptedConnection, prompt: str) -> str:
             del prompt
             started.append(
@@ -920,9 +923,9 @@ def test_harness_subagents_take_its_reasoning_level_unless_told_otherwise(tmp_pa
         adapter.script = delegate_once
         _, _, other = prepare("max")
         await runtime.start_chat_turn(other.id)
-        assert started[-1]["reasoning_effort"] == "model default"
+        assert started[-1]["reasoning_effort"] == "low"
         assert child.requests[-1].messages[-1].content == "Count tests."
-        assert child.requests[-1].reasoning_effort is None
+        assert child.requests[-1].reasoning_effort == "low"
         await chat.shutdown()
 
     asyncio.run(scenario())

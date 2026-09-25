@@ -1,33 +1,20 @@
 {
-  "change_digest": "02220265e57f8ffd03f800ad0e0ba4cbbbec6384759687f0faabb1750c23093e",
-  "reviewed_by": "Codex focused review for provider progress in parent and subagent conversations",
-  "reason": "The changed journey shows one latest provider routing update while tool work runs and keeps exact earlier prose and thinking behind View work. A duplicate subagent wait strip is removed when this card already carries the wait, while the command callback strip and its URL remain. Operator wording now says Waiting for delegated work and Collect delegated reports; internal capability names and older durable receipts are preserved. Core saves an explicit UTF-16 boundary so completed parent and subagent answers remain clean after reload, without affecting direct answer streaming. Four Python cases cover the saved stream, metadata, and delegated wait contract. The selected component files cover splitting, reconciliation, disclosure, activity labels, callback controls, and existing states. The selected mocked browser cases cover waiting, callback resume, parent and child completion, reload, quotation, desktop and 320/390/430 px mobile layouts. The real-Core local delegation case covers the saved boundary, callback wait, resumed answer, reload, and production LAN origin on desktop and mobile Chromium/WebKit.",
-  "exclusions": "No full-suite approval was given. Native code and unrelated operator journeys are unchanged. The mobile profiles are browser emulations, not physical devices. The real-Core browser cases use a local model stub rather than an external provider account. No origin-sensitive browser API changes were made; the real-Core journey still runs at a non-loopback LAN origin.",
-  "expected_tests": {"python": 4, "frontend": 46, "native": 0, "playwright": 27},
+  "change_digest": "65ee695d3963685ea53f97c5cd0aebcedf3e642f2b52b3e98c6fc929ec9e384a",
+  "reviewed_by": "Codex focused review for supervisor-selected subagent effort",
+  "reason": "The provider and harness supervisors can spawn a child with an explicit reasoning effort. An omitted effort now starts the child at low, independent of the parent level. Three collected Python cases cover both runtime paths, the explicit override, invalid levels, and the advertised tool instructions. One collected production real-Core browser journey in each of desktop Chromium and mobile Chromium/WebKit verifies the durable child effort, visible wait, resumed answer, and reload at a LAN origin.",
+  "exclusions": "No full-suite approval was given. Native and frontend component code are unchanged. Other browser projects and unrelated operator journeys are excluded because the UI layout and browser capabilities did not change; 390 px mobile profiles cover the selected journey. Browser profiles are emulated rather than physical devices. The real-Core journey uses a local scripted model rather than an external provider account.",
+  "expected_tests": {"python": 3, "frontend": 0, "native": 0, "playwright": 3},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_leftovers.py::test_routing_commentary_stops_at_an_unreadable_frame_beside_a_real_call",
-    "tests/v3/test_chat_subagents.py::test_wait_resumes_parent_with_report_and_posts_result"
+    "tests/v3/test_chat_subagents.py::test_subagents_default_to_low_unless_the_supervisor_selects_an_effort",
+    "tests/v3/test_harness_provider_subagents.py::test_harness_subagents_default_to_low_unless_the_supervisor_selects_an_effort",
+    "tests/v3/test_harness_provider_subagents.py::test_waits_stay_below_each_harness_tool_timeout"
   ],
-  "frontend": [
-    "ui/src/components/ActivityLedger.test.tsx",
-    "ui/src/components/activityLedgerModel.test.ts",
-    "ui/src/components/CallbackWaitingStatus.test.tsx",
-    "ui/src/pages/chatMessageReconciliation.test.ts",
-    "ui/src/pages/chatProgressContent.test.ts"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:conversation-progress/desktop",
-    "entry:conversation-progress/compact",
-    "entry:conversation-progress/mobile-chromium-small",
-    "entry:conversation-progress/mobile-chromium-ledger-390",
-    "entry:conversation-progress/mobile-chromium-wide",
-    "entry:conversation-progress/mobile-webkit-small",
-    "entry:conversation-progress/mobile-webkit",
-    "entry:conversation-progress/mobile-webkit-wide",
     "entry:conversation-progress/assistant-real-desktop",
     "entry:conversation-progress/assistant-real-chromium-390",
     "entry:conversation-progress/assistant-real-webkit-390"

@@ -109,6 +109,7 @@ if TYPE_CHECKING:
 # Subagents are unlimited unless the operator sets how many may run at once
 # for a conversation. The ceiling only bounds that setting.
 SUBAGENT_LIMIT_CEILING = 100
+SUBAGENT_DEFAULT_EFFORT: ReasoningEffort = "low"
 # A report's own bound (ChatSubagent.result). Delivery no longer needs a
 # smaller one: a long report reaches the parent in parts.
 RESULT_CHARACTERS = 20_000
@@ -166,7 +167,9 @@ SUBAGENT_ROUTING_INSTRUCTIONS = """
 Subagents: start_subagent delegates one independent, multi-step task to a child
 assistant with the same model and tools; it returns immediately and runs in
 parallel. Give it a complete, self-contained task. Do not delegate single
-lookups. Call wait_subagents when you need their reports before answering;
+lookups. New subagents use low reasoning effort by default. Set
+reasoning_effort on start_subagent when a task needs a different level.
+Call wait_subagents when you need their reports before answering;
 subagents that finish after your answer report back in the conversation.
 message_subagent sends a subagent new instructions or answers its question; a
 finished subagent starts another round with it. Messages, questions and
@@ -176,9 +179,8 @@ ends. Reports name what failed: the error, failed tool steps and unread
 messages."""
 
 SUBAGENT_EFFORT_DESCRIPTION = (
-    "How hard the subagent reasons: lower for routine, mechanical work, higher "
-    "for hard analysis. Leave it unset to use this conversation's level, or the "
-    "model's default when it has none."
+    "How hard the subagent reasons. Omit to use low effort; set a different "
+    "level when this task needs it."
 )
 
 SUBAGENT_CHILD_INSTRUCTIONS = """
@@ -257,6 +259,8 @@ def harness_subagent_instructions(
         + ". Children "
         "cannot see this conversation, so give complete, self-contained "
         "instructions and the expected report. Do not delegate single lookups. "
+        "Children use low reasoning effort by default; set reasoning_effort "
+        "on subagent.start when a task needs a different level. "
         "Call subagent.wait when you need their reports; it waits up to "
         f"{wait_seconds} seconds and returns anything still "
         "running, so call it again if needed. subagent.message sends a subagent "
@@ -1583,25 +1587,12 @@ class SubagentService:
                 and self.chat.automation_tool_platform is not None
             )
             allow_subagents = False
-            # The harness's own level carries over when a provider model takes
-            # it too; a vendor-only level leaves the child at its default.
-            runtime_options = snapshot.get("harness_runtime_options")
-            inherited_effort = _known_effort(
-                runtime_options.get("reasoning_effort")
-                if isinstance(runtime_options, dict)
-                else None
-            )
         else:
             provider_id = parent_turn.provider_profile_id or ""
             model = parent_turn.model
             tools_enabled = bool(snapshot.get("include_oci_tools", False))
             allow_subagents = bool(snapshot.get("allow_subagents", False))
-            # A child is a new turn, so it reads the conversation's current
-            # level like any other; the operator may have changed it mid-turn.
-            inherited_effort = _known_effort(
-                parent_session.metadata.get("reasoning_effort")
-            )
-        effort = requested_effort or inherited_effort
+        effort = requested_effort or SUBAGENT_DEFAULT_EFFORT
         if not provider_id or not model:
             raise ToolNotPermitted(
                 "subagents need a provider model", rule="subagents.provider_model"
@@ -4246,7 +4237,8 @@ def subagent_specs() -> dict[str, ToolSpec]:
         _spec(
             "start_subagent",
             "Delegate one independent multi-step task to a parallel subagent that "
-            "uses the same model and tools. Returns immediately with its id.",
+            "uses the same model and tools. Returns immediately with its id. "
+            "Effort defaults to low; pass reasoning_effort for another level.",
             {
                 "task": {
                     "type": "string",
