@@ -2708,11 +2708,14 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
       expect(response.ok(), await response.text()).toBe(true);
       return (await response.json() as {session_id: string}).session_id;
     };
-    const sessionId = await send("Summarize the open findings.");
+    const originalTask = "Summarize `activate`.\n\nRequired work:\n1. Resolve the binding.\n2. Check the `memcpy` calls.";
+    const sessionId = await send(originalTask);
     expect(await send("Any update on the certificate?", sessionId)).toBe(sessionId);
     const url = `${core.origin}/?view=chat&session=${sessionId}#token=${encodeURIComponent(core.token)}`;
     await page.goto(url);
     const operator = page.locator(".chat-message.operator");
+    await expect(operator.first().locator(".assistant-markdown ol > li")).toHaveCount(2);
+    await expect(operator.first().locator(".assistant-markdown code")).toContainText(["activate", "memcpy"]);
     const edited = operator.filter({hasText: "Any update on the certificate?"});
     await expect(edited).toBeVisible({timeout: 20_000});
     await edited.hover();
@@ -2736,6 +2739,7 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
     // The replaced turns survive a reload: Core owns them, not the browser.
     await page.goto(url);
     await expect(operator).toHaveCount(2, {timeout: 20_000});
+    await expect(operator.first().locator(".assistant-markdown ol > li")).toHaveCount(2);
     const replacedGroup = page.locator(".chat-replaced-group").first();
     await expect(replacedGroup.locator("summary")).toContainText("2 replaced messages");
     await replacedGroup.locator("summary").click();
@@ -2744,6 +2748,7 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
     const sessions = await (await api.get(`chat-sessions?engagement_id=${projects[0].id}`)).json() as Array<{id: string}>;
     expect(sessions.map(item => item.id)).toEqual([sessionId]);
     const live = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{sequence: number; content: string}>;
+    expect(live[0].content).toBe(originalTask);
     expect(live[2].content).toBe("Any update on the certificate and IKEv1?");
     const everything = await (await api.get(`chat/sessions/${sessionId}/messages?include_replaced=true`)).json() as Array<{metadata: Record<string, unknown>}>;
     expect(everything.filter(item => item.metadata.retracted_at)).toHaveLength(2);
