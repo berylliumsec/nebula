@@ -1,5 +1,5 @@
 {
-  "change_digest": "db3dd93d6827a7642910aa842151bb5eaf10756d9ece7e3e64b8120356d07204",
+  "change_digest": "97c13c62eb43ff3d4e3690d3f9f8e4cdacdb08b056aa42e0b00779569e8a25c6",
   "reviewed_by": "Codex focused review for conversation cleanup in parent and subagent chats",
   "reason": "The changed journey is a cleaner transcript for parent and child conversations: current work is compact, saved commentary is behind activity, and a child approval remains actionable in its parent. Component cases cover active and completed work, commentary-only history, approvals, failures, and result cards. The selected mocked browser cases cover the transcript and parent approval path on desktop and mobile. Saved thinking is checked after reload across the 320, 390, and 430 px Chromium and WebKit profiles. Two real-Core cases cover durable child selection after refresh and restart recovery.",
   "exclusions": "No full-suite approval was given. Python and native code are unchanged. Unrelated browser areas are excluded. The mobile profiles are emulated; a physical device and a live external provider are unavailable for this branch test. The real-Core browser cases use a local fixture or model stub, not an external account.",
