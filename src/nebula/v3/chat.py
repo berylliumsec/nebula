@@ -3271,6 +3271,9 @@ class ChatService:
     def _idle_running_goal_candidates(self) -> list[tuple[ChatGoal, ChatTurn | None]]:
         """Running provider goals with no claim, pending turn or working subagent."""
 
+        from .chat_goals import ChatGoalService
+
+        goals = ChatGoalService(self.store)
         found: list[tuple[ChatGoal, ChatTurn | None]] = []
         for goal in self.store.find_entities(
             ChatGoal, {"status": ChatGoalStatus.RUNNING.value}
@@ -3296,7 +3299,7 @@ class ChatService:
                     stage="goal-recovery",
                 )
                 continue
-            if self.subagents.active(self.subagents.for_session(goal.session_id)):
+            if goals.has_working_subagents(goal.session_id):
                 # Working subagents report back and continue the goal.
                 continue
             latest = self.store.list_session_entities(

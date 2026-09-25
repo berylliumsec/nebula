@@ -893,3 +893,91 @@ def test_due_schedule_is_dispatched_without_holding_the_recovery_tick(tmp_path):
         await service.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_foreground_command_cancelled_while_core_stops_is_interrupted(tmp_path):
+    """Owners cancel foreground commands before the runtime itself shuts down.
+
+    A command cancelled once Core began stopping ends interrupted, the state
+    a crash leaves; the same cancellation while Core runs stays an operator or
+    caller decision.
+    """
+
+    async def scenario():
+        manager, store, _, engagement, _ = runtime(tmp_path)
+        manager.update_project_policy(
+            engagement.id,
+            execution_mode="host",
+            host_access_acknowledged=True,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=False,
+            runner_profile_id=None,
+            max_timeout_ms=60_000,
+        )
+
+        async def cancelled_status(owner_id: str) -> CommandExecutionStatus:
+            command = asyncio.create_task(
+                manager.run_command(
+                    engagement_id=engagement.id,
+                    owner_kind="api",
+                    owner_id=owner_id,
+                    request=RunCommandRequest(command="sleep 5"),
+                )
+            )
+            for _ in range(200):
+                running = store.find_entities(
+                    CommandExecution, {"metadata.owner_id": owner_id}
+                )
+                if running:
+                    break
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.1)
+            command.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await command
+            (execution,) = store.find_entities(
+                CommandExecution, {"metadata.owner_id": owner_id}
+            )
+            for _ in range(200):
+                execution = store.get(CommandExecution, execution.id)
+                if execution.status != CommandExecutionStatus.RUNNING:
+                    break
+                await asyncio.sleep(0.01)
+            return execution.status
+
+        assert await cancelled_status("before-stop") == CommandExecutionStatus.CANCELLED
+        manager.begin_stopping()
+        assert await cancelled_status("during-stop") == CommandExecutionStatus.INTERRUPTED
+        await manager.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_idle_goal_reconciler_does_not_count_idle_time_as_active(tmp_path):
+    store, engagement, profile, session = _conversation(tmp_path, "idle-time")
+    idle_since = utc_now() - timedelta(hours=2)
+    goal = _running_goal(
+        store, engagement, session, elapsed_seconds=30, active_since=None
+    )
+    store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=session.id,
+            goal_id=goal.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.FAILED,
+            created_at=idle_since,
+            updated_at=idle_since,
+            request_snapshot={"model_request": _model_request()},
+        )
+    )
+    service = ChatService(store)
+
+    for _ in range(2):
+        asyncio.run(service.reconcile_idle_running_goals())
+
+    paused = store.get(ChatGoal, goal.id)
+    assert paused.status == ChatGoalStatus.PAUSED
+    # Two idle hours with nothing running were not charged as active time.
+    assert paused.elapsed_seconds == pytest.approx(30, abs=1)

@@ -2066,7 +2066,16 @@ def create_app(
                 metadata={"component": component},
             )
 
+        def mark_core_stopping() -> None:
+            # Components stop in reverse start order, so owners cancel their
+            # turns and commands before the runtime and chat shut down. Both
+            # learn first that the cancellation is Core stopping.
+            provider_chat.shutting_down = True
+            if automation_runtime is not None:
+                automation_runtime.begin_stopping()
+
         async def stop_components() -> list[BaseException]:
+            mark_core_stopping()
             failures: list[BaseException] = []
             while started:
                 feature, component, shutdown = started.pop()
@@ -2198,7 +2207,7 @@ def create_app(
                 # Marked before the loop is cancelled, so work the cancellation
                 # reaches is parked for the next boot as Core stopping, not
                 # recorded as an operator stop.
-                provider_chat.shutting_down = True
+                mark_core_stopping()
                 schedule_loop.cancel()
 
             started.append(("chat", "schedules", _stop_chat_schedules))

@@ -1060,8 +1060,31 @@ class AutomationRuntimeManager:
             return f"Core restarted; runtime teardown failed: {str(exc)[:2_000]}"
         return "Core restarted; detached runtime teardown requested"
 
-    async def shutdown(self) -> None:
+    def begin_stopping(self) -> None:
+        """Mark Core as stopping before any component starts tearing down.
+
+        Owners cancel their work before this runtime's own shutdown runs; a
+        command stopped from then on is interrupted by Core, not cancelled.
+        """
+
         self._stopping = True
+
+    def _stop_status(self) -> CommandExecutionStatus:
+        """How a command Core terminates ends: interrupted while Core stops.
+
+        Core stopping is not a decision about the command; it takes the state
+        a crash leaves after the next startup. Otherwise the caller or the
+        operator chose to stop it.
+        """
+
+        return (
+            CommandExecutionStatus.INTERRUPTED
+            if self._stopping
+            else CommandExecutionStatus.CANCELLED
+        )
+
+    async def shutdown(self) -> None:
+        self.begin_stopping()
         await asyncio.gather(
             *(self.close_session(session_id) for session_id in list(self._sessions)),
             return_exceptions=True,
@@ -1545,11 +1568,11 @@ class AutomationRuntimeManager:
             # which would leave the process running with no timeout either.
             await asyncio.shield(process.final_task)
         except asyncio.CancelledError:
-            # The caller stopped waiting (an operator Stop, or a turn that
-            # ended). A foreground command has no one left to read its
-            # result, so it stops too and finalizes as cancelled.
+            # The caller stopped waiting (an operator Stop, a turn that
+            # ended, or Core stopping). A foreground command has no one left
+            # to read its result, so it stops too.
             if not process.final_task.done():
-                process.forced_status = CommandExecutionStatus.CANCELLED
+                process.forced_status = self._stop_status()
                 await asyncio.shield(process.backend.terminate())
             raise
         return await self._poll(managed, process, MAX_POLL_BYTES)
@@ -1685,13 +1708,7 @@ class AutomationRuntimeManager:
             )
         for process in list(managed.processes.values()):
             if process.final_task is not None and not process.final_task.done():
-                # Core stopping is not a decision about the command; closing a
-                # session while Core keeps running is.
-                process.forced_status = (
-                    CommandExecutionStatus.INTERRUPTED
-                    if self._stopping
-                    else CommandExecutionStatus.CANCELLED
-                )
+                process.forced_status = self._stop_status()
                 await process.backend.terminate()
         await asyncio.gather(
             *(
