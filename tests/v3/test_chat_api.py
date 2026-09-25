@@ -1300,6 +1300,31 @@ def test_pending_callback_turn_returns_saved_thinking_and_partial_answer(tmp_pat
             content="I have dispatched the command.",
         )
     )
+    ledger = ChatService(store).turn_ledger
+    ledger.append(
+        turn.id,
+        {
+            "step": 0,
+            "tool_call_id": "finished-read",
+            "name": "tool_output.read",
+            "arguments": {"artifact_id": "previous-output"},
+            "status": "complete",
+            "result_summary": "Read previous output.",
+        },
+        event_type="complete",
+    )
+    ledger.append(
+        turn.id,
+        {
+            "step": 1,
+            "tool_call_id": "running-command",
+            "name": "ssh.simulation-host.run_command",
+            "display_name": "Command runtime",
+            "arguments": {"command": "inspect corpus_index.json"},
+            "status": "running",
+        },
+        event_type="started",
+    )
     client = TestClient(create_app(store, auth_token="test-token"))
 
     response = client.get(
@@ -1310,6 +1335,24 @@ def test_pending_callback_turn_returns_saved_thinking_and_partial_answer(tmp_pat
     assert response.json()["id"] == turn.id
     assert response.json()["reasoning"] == turn.reasoning
     assert response.json()["content"] == turn.content
+    assert response.json()["tool_calls"] == [
+        {
+            "tool_call_id": "finished-read",
+            "capability": "tool_output.read",
+            "display_name": None,
+            "status": "complete",
+            "arguments": {"artifact_id": "previous-output"},
+            "summary": "Read previous output.",
+        },
+        {
+            "tool_call_id": "running-command",
+            "capability": "ssh.simulation-host.run_command",
+            "display_name": "Command runtime",
+            "status": "running",
+            "arguments": {"command": "inspect corpus_index.json"},
+            "summary": None,
+        },
+    ]
 
 
 def test_chat_subagent_routes_list_and_stop_within_their_conversation(tmp_path):

@@ -1039,6 +1039,15 @@ class LocalProviderDetection(NebulaModel):
     models: list[str] = Field(default_factory=list, max_length=256)
 
 
+class ChatTurnToolCallSummary(NebulaModel):
+    tool_call_id: str
+    capability: str
+    display_name: str | None = None
+    status: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    summary: str | None = None
+
+
 class ChatTurnSummary(NebulaModel):
     id: str
     session_id: str
@@ -1054,6 +1063,7 @@ class ChatTurnSummary(NebulaModel):
     approval_id: str | None = None
     harness_turn_id: str | None = None
     tool_call_ids: list[str] = Field(default_factory=list)
+    tool_calls: list[ChatTurnToolCallSummary] = Field(default_factory=list)
     revision: int = Field(ge=1)
     error: str | None = None
     recovery_blocked: bool = False
@@ -12540,6 +12550,24 @@ def _chat_turn_summary(service: ChatService, turn: ChatTurn) -> ChatTurnSummary:
         approval_id=turn.approval_id,
         harness_turn_id=turn.harness_turn_id,
         tool_call_ids=service.turn_ledger.tool_call_ids(turn),
+        tool_calls=[
+            ChatTurnToolCallSummary(
+                tool_call_id=str(item["tool_call_id"]),
+                capability=str(item["name"]),
+                display_name=(
+                    str(item["display_name"]) if item.get("display_name") else None
+                ),
+                status=str(item.get("status") or "running"),
+                arguments=(
+                    item["arguments"] if isinstance(item.get("arguments"), dict) else {}
+                ),
+                summary=(
+                    str(item["result_summary"]) if item.get("result_summary") else None
+                ),
+            )
+            for item in history
+            if item.get("tool_call_id") and item.get("name")
+        ],
         revision=turn.revision,
         error=turn.error,
         recovery_blocked=bool(unresolved or unresolved_hooks),

@@ -1,35 +1,34 @@
 {
-  "change_digest": "95949c5d08d4a9008d939e05ca458fdf93ef1e420a8ea81286768f077ac77fd0",
-  "reviewed_by": "Codex focused review for provider request breakdown",
-  "reason": "Direct provider chats now retain a content-free breakdown of the last outbound request, expose it in context status and the session inspector, and omit duplicate built-in tool descriptions from final synthesis. The selected Python tests cover request accounting, durable chat status, and loaded versus unloaded deferred tools. The component test covers readable breakdown details. One production real-Core LAN journey covers provider dispatch, persistence, inspector display, reload, and desktop/mobile browser geometry.",
-  "exclusions": "No full suite approval was given. Other provider adapters and harness-owned context are unchanged. Native tests are unrelated. The real-Core journey uses a local model stub, not a paid cloud provider. Mobile profiles are emulated; no physical device is available. The selected journey does not exercise tool execution in the browser because the Python tool-loop tests cover request construction and synthesis.",
+  "change_digest": "219f163000248b15b9f9265b2a66e42c0a0be3667613c99522b2886df601e44f",
+  "reviewed_by": "Codex focused review for live provider tool activity",
+  "reason": "A provider chat must show which tool is running and let the operator expand each call independently, including after reload. The selected API test covers durable ledger names, statuses, and inputs. Ledger component tests cover current-action priority and independent disclosure. Mocked browser journeys cover live streaming and pending-turn UI reload; the production real-Core LAN journey covers the persisted workflow in the desktop and mobile browser matrix.",
+  "exclusions": "No full suite approval was given. Native tests and unrelated provider or harness journeys are unchanged. Browser tests use a seeded pending tool ledger instead of executing an external SSH command. Mobile profiles are emulated; no physical device is available. Tool inputs remain behind explicit per-call disclosure.",
   "expected_tests": {
-    "python": 4,
-    "frontend": 1,
+    "python": 1,
+    "frontend": 25,
     "native": 0,
-    "playwright": 8
+    "playwright": 10
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_context.py::test_request_breakdown_counts_tool_images_once_without_retaining_content",
-    "tests/v3/test_chat.py::test_local_chat_retrieves_only_its_engagement_and_persists",
-    "tests/v3/test_tool_catalog.py::test_tools_array_is_identical_across_search_load_and_call",
-    "tests/v3/test_tool_catalog.py::test_final_synthesis_omits_on_demand_tools_that_were_never_loaded"
+    "tests/v3/test_chat_api.py::test_pending_callback_turn_returns_saved_thinking_and_partial_answer"
   ],
   "frontend": [
-    "ui/src/components/ProviderRequestInputDetails.test.tsx"
+    "ui/src/components/ActivityLedger.test.tsx",
+    "ui/src/components/activityLedgerModel.test.ts"
   ],
   "native": [],
   "playwright": [
-    "entry:provider-request-breakdown-core/assistant-real-desktop",
-    "entry:provider-request-breakdown-core/assistant-real-compact",
-    "entry:provider-request-breakdown-core/assistant-real-chromium-320",
-    "entry:provider-request-breakdown-core/assistant-real-chromium-390",
-    "entry:provider-request-breakdown-core/assistant-real-chromium-430",
-    "entry:provider-request-breakdown-core/assistant-real-webkit-320",
-    "entry:provider-request-breakdown-core/assistant-real-webkit-390",
-    "entry:provider-request-breakdown-core/assistant-real-webkit-430"
+    "entry:live-tool-activity/desktop",
+    "entry:live-tool-activity/assistant-real-desktop",
+    "entry:live-tool-activity/assistant-real-compact",
+    "entry:live-tool-activity/assistant-real-chromium-320",
+    "entry:live-tool-activity/assistant-real-chromium-390",
+    "entry:live-tool-activity/assistant-real-chromium-430",
+    "entry:live-tool-activity/assistant-real-webkit-320",
+    "entry:live-tool-activity/assistant-real-webkit-390",
+    "entry:live-tool-activity/assistant-real-webkit-430"
   ]
 }

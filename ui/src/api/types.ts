@@ -2129,6 +2129,7 @@ export interface ChatTurn {
   approvalId?: Identifier;
   harnessTurnId?: Identifier;
   toolCallIds: Identifier[];
+  toolCalls?: ChatTurnToolCall[];
   error?: string;
   recoveryBlocked: boolean;
   unresolvedToolCallIds: Identifier[];
@@ -2141,6 +2142,15 @@ export interface ChatTurn {
   subagentIds: Identifier[];
   /** Whether Core resumes this interrupted turn by itself; otherwise the operator stops it. */
   recoverable: boolean;
+}
+
+export interface ChatTurnToolCall {
+  toolCallId: Identifier;
+  capability: string;
+  displayName?: string;
+  status: string;
+  arguments: Record<string, unknown>;
+  summary?: string;
 }
 
 /** A paused turn waits for a background command, its subagents, or (as a subagent) its supervisor's reply. */

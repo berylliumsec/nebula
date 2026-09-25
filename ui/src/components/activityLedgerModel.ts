@@ -77,6 +77,7 @@ export interface NativeActivitySource {
   capability: string;
   /** Readable identity Core sends for a brokered MCP call. */
   displayName?: string;
+  arguments?: Record<string, unknown>;
   status: string;
   summary?: string;
   evidenceIds: string[];
@@ -255,6 +256,15 @@ export function harnessLedgerEntries(items: HarnessActivityItem[]): ActivityLedg
   });
 }
 
+function nativeToolLabel(item: NativeActivitySource): string {
+  if (item.capability === "web.search") return "Web search";
+  const displayName = item.displayName?.trim();
+  if (sshToolHost(item.capability) || !displayName || displayName.toLowerCase() === "command runtime") {
+    return meaningfulLabel(item.capability, item.summary, "execution");
+  }
+  return displayName;
+}
+
 export function nativeLedgerEntries(items: NativeActivitySource[]): ActivityLedgerEntry[] {
   return items.map((item, index) => ({
     id: `native:${item.toolCallId}`,
@@ -263,9 +273,7 @@ export function nativeLedgerEntries(items: NativeActivitySource[]): ActivityLedg
     phase: item.capability === "web.search" ? "research" : "execution",
     status: normalizeActivityStatus(item.status),
     statusLabel: sourceStatusLabel(item.status),
-    label: item.capability === "web.search"
-      ? "Web search"
-      : item.displayName?.trim() || meaningfulLabel(item.capability, item.summary, "execution"),
+    label: nativeToolLabel(item),
     summary: item.summary,
     brief: firstSentence(item.summary),
     sequence: index,
@@ -371,7 +379,9 @@ export function missionLedgerEntries(events: RunEvent[]): ActivityLedgerEntry[] 
 function overallStatus(value: string, entries: ActivityLedgerEntry[]): ActivityLedgerStatus {
   const normalized = normalizeActivityStatus(value);
   if (["complete", "failed", "cancelled"].includes(normalized)) return normalized;
-  if (entries.some((entry) => entry.status === "failed" || entry.status === "attention")) return "attention";
+  if (entries.some((entry) => entry.status === "attention")) return "attention";
+  if (entries.some((entry) => entry.status === "active")) return "active";
+  if (entries.some((entry) => entry.status === "failed")) return "attention";
   return normalized;
 }
 
@@ -435,8 +445,8 @@ export function buildActivityLedger(options: {
     }];
   });
   const newestFirst = [...uniqueEntries].reverse();
-  const current = newestFirst.find((entry) => entry.status === "attention" || entry.status === "failed")
-    ?? newestFirst.find((entry) => entry.status === "active" || entry.countsAsAction || entry.summary);
+  const current = newestFirst.find((entry) => entry.status === "attention")
+    ?? newestFirst.find((entry) => entry.status === "active" || entry.status === "failed" || entry.countsAsAction || entry.summary);
   const goal = options.harnessItems
     ? [...options.harnessItems].reverse().find((item) => item.goal?.currentStep || item.goal?.objective)?.goal
     : undefined;

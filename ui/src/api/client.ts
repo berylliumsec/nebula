@@ -1627,6 +1627,14 @@ interface WireChatTurn extends WireEntity {
   approval_id?: string | null;
   harness_turn_id?: string | null;
   tool_call_ids?: string[];
+  tool_calls?: Array<{
+    tool_call_id: string;
+    capability: string;
+    display_name?: string | null;
+    status: string;
+    arguments?: Record<string, unknown>;
+    summary?: string | null;
+  }>;
   error?: string | null;
   recovery_blocked?: boolean;
   unresolved_tool_call_ids?: string[];
@@ -3896,6 +3904,14 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
     approvalId: value.approval_id ?? undefined,
     harnessTurnId: value.harness_turn_id ?? undefined,
     toolCallIds: value.tool_call_ids ?? [],
+    toolCalls: (value.tool_calls ?? []).map((call) => ({
+      toolCallId: call.tool_call_id,
+      capability: call.capability,
+      displayName: call.display_name ?? undefined,
+      status: call.status,
+      arguments: call.arguments ?? {},
+      summary: call.summary ?? undefined,
+    })),
     error: value.error ?? undefined,
     recoveryBlocked: value.recovery_blocked === true,
     unresolvedToolCallIds: value.unresolved_tool_call_ids ?? [],

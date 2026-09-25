@@ -439,6 +439,7 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .activity-ledger-current { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr); gap: 8px; margin: 0 !important; padding: 8px 9px; border-radius: var(--radius-control); background: color-mix(in srgb, var(--blue-muted) 52%, transparent); }
 .activity-ledger-current small { color: var(--blue); font-size: 11px; font-weight: var(--weight-bold); letter-spacing: .05em; text-transform: uppercase; }
 .activity-ledger-current span { min-width: 0; color: var(--text); overflow-wrap: anywhere; }
+.activity-ledger-compact-current { margin: 0; padding: 4px 12px 9px; }
 .activity-ledger-receipt { display: flex; min-width: 0; align-items: baseline; gap: 8px; margin: 0 !important; padding: 4px 12px 12px; }
 .activity-ledger-receipt > strong { color: var(--text-strong); }
 .activity-ledger-receipt > span { min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
@@ -462,10 +463,14 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .activity-ledger-audit > ol > li { display: grid; min-width: 0; grid-template-columns: 70px minmax(0, 1fr); gap: 9px; padding: 8px 0; border-top: 1px solid var(--border-soft); }
 .activity-ledger-entry-time { padding-top: 2px; color: var(--muted); font-family: var(--font-mono); font-size: 11px; }
 .activity-ledger-entry-content { min-width: 0; }
-.activity-ledger-entry-content > details > summary, .activity-ledger-entry-static { display: flex; min-width: 0; align-items: baseline; gap: 8px; cursor: pointer; list-style: none; }
+.activity-ledger-entry-content > details > summary, .activity-ledger-entry-static { display: flex; min-width: 0; min-height: 44px; align-items: center; gap: 8px; list-style: none; }
+.activity-ledger-entry-content > details > summary { cursor: pointer; }
 .activity-ledger-entry-content > details > summary::-webkit-details-marker { display: none; }
 .activity-ledger-entry-content > details > summary strong, .activity-ledger-entry-static strong { min-width: 0; flex: 1; overflow-wrap: anywhere; font-size: 12px; }
 .activity-ledger-entry-content > details > summary span, .activity-ledger-entry-static span { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.activity-ledger-entry-content > details > summary svg { flex-shrink: 0; color: var(--muted); }
+.activity-ledger-entry-content > details[open] > summary svg { transform: rotate(180deg); }
+.activity-ledger-entry-content > details > summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: var(--radius-control); }
 .activity-ledger-entry-body { display: grid; min-width: 0; gap: 7px; padding: 8px 0 2px; }
 .activity-ledger-entry-body p { margin: 0; overflow-wrap: anywhere; }
 .activity-ledger-entry-body > small { color: var(--muted); }
