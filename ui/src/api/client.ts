@@ -1306,6 +1306,16 @@ interface WireContextStatus extends JsonObject {
   route_context_window?: number | null;
   route_input_limit?: number | null;
   estimated_input_tokens?: number;
+  last_provider_request?: {
+    instructions: number;
+    conversation: number;
+    tool_schemas: number;
+    tool_results: number;
+    other: number;
+    estimated_total: number;
+    reported_input_tokens?: number | null;
+    attempt: number;
+  } | null;
   compacted_through?: number;
   source_references?: WireContextSourceReference[];
   compaction_usage?: WireChatCompletion["usage"];
@@ -3030,6 +3040,16 @@ function mapContextStatus(value: WireContextStatus): ContextStatus {
     routeContextWindow: value.route_context_window ?? undefined,
     routeInputLimit: value.route_input_limit ?? undefined,
     estimatedInputTokens: numberField(value.estimated_input_tokens),
+    lastProviderRequest: value.last_provider_request ? {
+      instructions: numberField(value.last_provider_request.instructions),
+      conversation: numberField(value.last_provider_request.conversation),
+      toolSchemas: numberField(value.last_provider_request.tool_schemas),
+      toolResults: numberField(value.last_provider_request.tool_results),
+      other: numberField(value.last_provider_request.other),
+      estimatedTotal: numberField(value.last_provider_request.estimated_total),
+      reportedInputTokens: value.last_provider_request.reported_input_tokens ?? undefined,
+      attempt: numberField(value.last_provider_request.attempt),
+    } : undefined,
     compactedThrough: numberField(value.compacted_through),
     sourceReferences: (value.source_references ?? []).map(mapContextSource),
     compactionUsage: {

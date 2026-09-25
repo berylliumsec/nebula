@@ -9,6 +9,7 @@ import { useResizableSidePanel } from "../components/useResizableSidePanel";
 import "../browser-assistant.css";
 import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
+import { ProviderRequestInputDetails } from "../components/ProviderRequestInputDetails";
 import { ChatCatchUp } from "../components/ChatCatchUp";
 import { ResolvedApprovalNotice } from "../components/ResolvedApprovalNotice";
 import { isPendingRequest, pendingApprovalId, useSessionState } from "./useSessionState";
@@ -5658,6 +5659,7 @@ export function SessionsPage() {
               ["Corrections", activeContextStatus.snapshot.memory.corrections],
               ["Open questions", activeContextStatus.snapshot.memory.openQuestions],
             ] as const).map(([label, items]) => items.length ? <section key={label}><strong>{label}</strong><ul>{items.map((item, index) => <li key={`${label}-${index}`}>{item.text}</li>)}</ul></section> : null)}<small>{activeContextStatus.snapshot.sourceReferences.length} source reference{activeContextStatus.snapshot.sourceReferences.length === 1 ? "" : "s"} · private reasoning is not stored</small></div></details>}</> : <p>Context status has not been recorded yet.</p>}</section>
+          {activeContextStatus && activeContextStatus.status !== "runtime_managed" && <section className="session-context-health"><p>The context meter estimates saved conversation and project instructions. It excludes tools and references added during a request.</p>{activeContextStatus.lastProviderRequest && <ProviderRequestInputDetails request={activeContextStatus.lastProviderRequest} />}</section>}
           {runtimeKind === "provider" && api && sessionId && <ProviderGoalChildren api={api} sessionId={sessionId} goal={providerGoal} onOpenChild={id => void selectSession(id)} />}</>}
         </ChatWorkspaceDrawer>}
       </div>

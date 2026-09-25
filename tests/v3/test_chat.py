@@ -2468,6 +2468,15 @@ def test_local_chat_retrieves_only_its_engagement_and_persists(tmp_path, monkeyp
         (2, ChatRole.ASSISTANT),
     ]
     assert persisted[-1].citations[0].source_id == "source-a"
+    last_request = service.context_status(session.id).last_provider_request
+    assert last_request is not None
+    assert last_request.instructions > 0
+    assert last_request.conversation > 0
+    assert last_request.tool_schemas == 0
+    assert last_request.reported_input_tokens == 4
+    assert persisted[-1].metadata["last_provider_request"] == last_request.model_dump(
+        mode="json"
+    )
 
 
 def test_in_place_edit_replaces_turns_inside_the_same_conversation(

@@ -133,11 +133,25 @@ class ContextStatus(BaseModel):
     route_input_limit: int | None = Field(default=None, ge=1)
     route_limits_required: bool = False
     estimated_input_tokens: int = Field(default=0, ge=0)
+    last_provider_request: ProviderRequestInput | None = None
     compacted_through: int = Field(default=0, ge=0)
     source_references: list[ContextSourceReference] = Field(default_factory=list)
     compaction_usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
     compaction_cost_usd: float = Field(default=0.0, ge=0)
     snapshot: ContextSnapshot | None = None
+
+
+class ProviderRequestInput(BaseModel):
+    """Content-free estimate of the last chat request sent to a provider."""
+
+    instructions: int = Field(ge=0)
+    conversation: int = Field(ge=0)
+    tool_schemas: int = Field(ge=0)
+    tool_results: int = Field(ge=0)
+    other: int = Field(ge=0)
+    estimated_total: int = Field(ge=0)
+    reported_input_tokens: int | None = Field(default=None, ge=0)
+    attempt: int = Field(default=1, ge=1)
 
 
 @dataclass(frozen=True)
@@ -472,36 +486,66 @@ def estimate_messages(messages: Iterable[ModelMessage], instructions: str = "") 
     return total
 
 
-def estimate_model_request(request: ModelRequest) -> int:
-    """Estimate every text/schema component sent on one provider request."""
+def estimate_model_request_parts(request: ModelRequest) -> ProviderRequestInput:
+    """Attribute a provider-neutral estimate without retaining prompt content."""
 
-    total = estimate_messages(request.messages, request.instructions or "")
-    for value in (
-        request.tools,
-        request.tool_results,
-        request.response_schema,
-        request.metadata.get("continuation") if request.metadata else None,
-    ):
-        if not value:
-            continue
-        payload = (
-            [item.model_dump(mode="json") for item in value]
-            if isinstance(value, list) and value and hasattr(value[0], "model_dump")
-            else value
+    def encoded(value: Any) -> int:
+        return estimate_tokens(
+            json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
         )
-        total += estimate_tokens(
-            json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+
+    instructions = estimate_tokens(request.instructions or "")
+    conversation = estimate_messages(request.messages) - estimate_tokens("")
+    tool_schemas = (
+        encoded([tool.model_dump(mode="json") for tool in request.tools])
+        if request.tools
+        else 0
+    )
+    # Image bytes are transported as image parts, not as textual JSON. Count
+    # their model-facing budget once, after the textual result envelope.
+    tool_results = (
+        encoded(
+            [
+                result.model_dump(mode="json", exclude={"attachments"})
+                for result in request.tool_results
+            ]
         )
-    # What a tool showed the model (a screenshot) is left out of the dump
-    # above; it is counted as the message content it is sent as.
+        if request.tool_results
+        else 0
+    )
     attachments = [
         ModelMessage(role="user", content=result.attachments)
         for result in request.tool_results
         if result.attachments
     ]
     if attachments:
-        total += estimate_messages(attachments)
-    return total
+        tool_results += estimate_messages(attachments) - estimate_tokens("")
+    other = sum(
+        encoded(value)
+        for value in (
+            request.response_schema,
+            request.metadata.get("continuation") if request.metadata else None,
+        )
+        if value
+    )
+    return ProviderRequestInput(
+        instructions=instructions,
+        conversation=conversation,
+        tool_schemas=tool_schemas,
+        tool_results=tool_results,
+        other=other,
+        estimated_total=instructions
+        + conversation
+        + tool_schemas
+        + tool_results
+        + other,
+    )
+
+
+def estimate_model_request(request: ModelRequest) -> int:
+    """Estimate every text/schema component sent on one provider request."""
+
+    return estimate_model_request_parts(request).estimated_total
 
 
 def lexical_score(query: str, content: str) -> int:
@@ -1347,11 +1391,13 @@ __all__ = [
     "ContextLimits",
     "ContextSource",
     "ContextStatus",
+    "ProviderRequestInput",
     "CompactionResult",
     "DEFAULT_MAX_OUTPUT_TOKENS",
     "default_output_tokens",
     "estimate_messages",
     "estimate_model_request",
+    "estimate_model_request_parts",
     "estimate_tokens",
     "known_model_limits",
     "lexical_score",
