@@ -1,13 +1,13 @@
 {
-  "change_digest": "e3158ca3a519a483b9d0d4b6f9efde490832c7837d67f67190ea9669d85e2aa1",
-  "reviewed_by": "Claude focused review for send-consent-credential",
-  "reason": "Two composer send defects. (1) SessionsPage submit left Subagents (and SSH targets, project model context, a subagent's parent messages) out of its tool-result consent decision, so a Subagents provider conversation on a cloud provider with no command runtime never asked and Core refused every send. The composer now mirrors Core's tool families (chatToolResultConsent.ts), and Core's refusal carries code tool_result_consent_required plus an operator_detail naming the families, so the composer also asks, and resends once with consent, for tools only Core sees (project web search, skill resources). A declined share or a text-only runtime now explains in place and keeps the message; a Core-requested decline returns the message to the composer. (2) prepareProviderCredential threw Error(undefined) for an unknown or unreadable credential state and the send was dropped behind the generic fallback; every state, an unreadable answer and an unreachable Core now name what failed and the next action, and the message is kept. Python covers the typed refusal in ChatService and the 409 API envelope, plus the chat, subagent, harness provider-subagent and preflight files whose tool-enablement path changed. Frontend covers the consent helpers, the credential states, full-App send journeys (consent asked/declined/Core-requested/credential) and the existing App and Subagents-choice journeys through SessionsPage. Playwright runs entry:assistant on desktop, mobile Chromium and mobile WebKit (SessionsPage changed; two new mocked journeys) and area:chat-subagents.",
-  "exclusions": "Full suites are not approved and are excluded. Harness consent (MCP servers, browser control, agent messaging) is unchanged in behaviour and harness adapters are not selected beyond test_harness_provider_subagents.py. Credential storage (credentials.py) is unchanged, so tests/v3/test_credentials.py is not selected. Mission, native Rust/Tauri and real-Core Playwright areas are not selected: the consent journey was exercised against a scratch real Core (OpenRouter deepseek/deepseek-v4.1-flash, LAN origin, production bundle) and recorded in the PR body; committed real-Core coverage would need a cloud-classified provider stub.",
+  "change_digest": "4099a739e4f67ca1352502a98e5fdb0b5a454a95238f0c5e16c5b857f2e9267c",
+  "reviewed_by": "Claude focused review for prune-event-history",
+  "reason": "Run and operation events of deleted records are pruned. Migration 0018 replaces the unconditional no-delete triggers on run_events and operation_events (SQLite and PostgreSQL) with owner-aware ones: updates stay refused, a delete is refused while the owning record (run_id's Mission/chat turn/harness turn; the project, and the operation_id's record for listed kinds) exists. Deleting a conversation, Mission, archived project or single owning record hands the ids to a background purger that deletes their history in paused 1,000-row batches; Core prunes older leftovers at startup; the CLI gains maintenance prune-events and maintenance vacuum. tests/v3/test_event_history_retention.py covers the triggers, mapping, batched and idempotent prune, settle age and stop, the four delete paths, the deferred purge, terminal audit and export after a prune, the startup prune and vacuum. tests/v3/test_migrations.py (also on PostgreSQL in the database-migrations job) covers upgrade/downgrade of 0018 and the prune on each dialect. The other files cover the delete paths (storage, guarded delete, archived project deletion, temporary chat, chat API, browser research/assessment deletes), the readers of kept history (terminal history and container terminal replay, doctor, exporter, session state, approval continuation, harness activity, report sign-off, operators) and the Core lifespan beside unreadable rows.",
+  "exclusions": "Full suites are not approved and are excluded. No UI, native or Playwright code changes: the operator surfaces are unchanged (a deleted conversation already disappeared from the UI; its stored history now goes too), so frontend, native and Playwright selections are empty. Provider, harness adapter, Mission orchestration and chat routing code is unchanged and not selected; their event writers were only read to map event ownership. test_executions/test_execution_ai are not selected: execution events are only removed after their execution is deleted, which the retention tests cover at the storage layer.",
   "expected_tests": {
-    "python": 162,
-    "frontend": 68,
+    "python": 291,
+    "frontend": 0,
     "native": 0,
-    "playwright": 213
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -15,24 +15,28 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_event_history_retention.py",
+    "tests/v3/test_migrations.py",
+    "tests/v3/test_storage.py",
+    "tests/v3/test_storage_waste.py",
+    "tests/v3/test_guarded_delete.py",
+    "tests/v3/test_archived_project_deletion.py",
+    "tests/v3/test_cli.py",
+    "tests/v3/test_exporter.py",
+    "tests/v3/test_terminal_history.py",
+    "tests/v3/test_temporary_chat.py",
+    "tests/v3/test_browser_research.py",
+    "tests/v3/test_browser_assessments.py",
+    "tests/v3/test_session_state.py",
+    "tests/v3/test_approval_continuation.py",
+    "tests/v3/test_startup_unreadable_rows.py",
+    "tests/v3/test_container_terminal.py",
     "tests/v3/test_chat_api.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_harness_provider_subagents.py",
-    "tests/v3/test_turn_preflight_latency.py"
+    "tests/v3/test_harness_activity_cost.py",
+    "tests/v3/test_operators.py",
+    "tests/v3/test_report_signoff.py"
   ],
-  "frontend": [
-    "ui/src/pages/chatToolResultConsent.test.ts",
-    "ui/src/pages/providerCredentialRecovery.test.ts",
-    "ui/src/App.sendConsent.test.tsx",
-    "ui/src/App.subagentChoice.test.tsx",
-    "ui/src/App.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit",
-    "area:chat-subagents"
-  ]
+  "playwright": []
 }

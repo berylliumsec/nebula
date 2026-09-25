@@ -383,7 +383,7 @@ def test_orm_and_database_reject_operation_event_mutation(store):
             )
 
 
-def test_delete_harness_chat_retains_immutable_operation_events(store):
+def test_delete_harness_chat_removes_its_operation_events(store):
     engagement = store.create(Engagement(name="Harness chat deletion"))
     harness_session = store.create(
         HarnessSession(
@@ -422,7 +422,7 @@ def test_delete_harness_chat_retains_immutable_operation_events(store):
             prompt="test",
         )
     )
-    audit_event = store.append_operation_event(
+    store.append_operation_event(
         harness_turn.id,
         "harness_turn",
         engagement.id,
@@ -437,7 +437,9 @@ def test_delete_harness_chat_retains_immutable_operation_events(store):
         store.get(ChatTurn, chat_turn.id)
     with pytest.raises(NotFoundError):
         store.get(HarnessTurn, harness_turn.id)
-    assert store.replay_operation_events(harness_turn.id) == [audit_event]
+    # The turn's history follows it rather than outliving the conversation.
+    assert store.event_history.wait_idle(10)
+    assert store.replay_operation_events(harness_turn.id) == []
 
 
 def test_overview_counts_entities_by_engagement(store):

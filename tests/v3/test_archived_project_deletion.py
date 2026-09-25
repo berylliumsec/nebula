@@ -67,7 +67,8 @@ def test_archive_deletion_cleans_owned_records_and_preserves_folder_and_other_pr
             store.get(model, id)
     assert store.get(Asset, other_asset.id).name == "Keep"
     assert (folder / "keep.txt").read_text() == "host data"
-    assert store.replay_events(run.id)
+    assert store.event_history.wait_idle(10)
+    assert store.replay_events(run.id) == []
     with store.database.session() as session:
         assert (
             session.scalar(

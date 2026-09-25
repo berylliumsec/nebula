@@ -6,7 +6,9 @@ from .diagnostics import record_caught_exception
 
 import fcntl
 import os
+import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -375,6 +377,9 @@ class ProviderTurnQueueRow(Base):
     )
 
 
+# The ORM never updates or deletes an event row. The history of a deleted
+# record is removed by the bulk statements in ``event_history``, which the
+# database triggers refuse while the owning record exists.
 @event.listens_for(RunEventRow, "before_update")
 def _prevent_event_update(*_: object) -> None:
     raise RuntimeError("run events are append-only")
@@ -708,3 +713,56 @@ def create_database(location: str | Path, *, echo: bool = False) -> Database:
     """Convenience factory used by the CLI, API, and tests."""
 
     return Database(location, echo=echo)
+
+
+class DatabaseInUseError(RuntimeError):
+    """Raised when maintenance needs a database no other connection has open."""
+
+
+def vacuum_sqlite(path: Path) -> dict[str, Any]:
+    """Rewrite a SQLite database file so the pages deletes freed leave it.
+
+    SQLite keeps freed pages inside the file; only VACUUM returns them to the
+    disk. It refuses while any other connection, such as a running Core, has
+    the database open. It needs free disk for a temporary copy of the database
+    and a write-ahead log of the same size.
+    """
+
+    database = Path(path)
+    if not database.is_file():
+        raise FileNotFoundError(f"database not found: {database}")
+    wal = Path(f"{database}-wal")
+
+    def stored_bytes() -> int:
+        return sum(item.stat().st_size for item in (database, wal) if item.exists())
+
+    before = stored_bytes()
+    started = time.monotonic()
+    connection = sqlite3.connect(database, isolation_level=None, timeout=1)
+    try:
+        # Exclusive locking keeps the lock this transaction takes until the
+        # connection closes: nothing can open the database mid-rewrite, and a
+        # connection that already has it open makes this refuse.
+        connection.execute("PRAGMA locking_mode=EXCLUSIVE")
+        try:
+            connection.execute("BEGIN EXCLUSIVE")
+        except sqlite3.OperationalError as exc:  # diagnostic-expected: an open database is refused as DatabaseInUseError for the caller to report.
+            if "locked" not in str(exc):
+                raise
+            raise DatabaseInUseError(
+                "the database is open elsewhere; stop Nebula Core and retry"
+            ) from exc
+        free_pages = int(connection.execute("PRAGMA freelist_count").fetchone()[0])
+        connection.execute("COMMIT")
+        connection.execute("VACUUM")
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        connection.close()
+    database.chmod(0o600)
+    return {
+        "database": str(database),
+        "bytes_before": before,
+        "bytes_after": stored_bytes(),
+        "free_pages_before": free_pages,
+        "seconds": round(time.monotonic() - started, 1),
+    }
