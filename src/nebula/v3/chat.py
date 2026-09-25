@@ -242,9 +242,14 @@ from .chat_agent_messages import (
     contract_digest_segment as agent_message_digest_segment,
 )
 from .tool_results import (
+    MAX_MODEL_ARTIFACT_REFS,
     TOOL_RESULT_SCHEMA,
+    ArtifactKind,
+    ToolArtifactRef,
     ToolResultReceipt,
     ToolResultStatus,
+    ToolTimingReceipt,
+    artifact_ref,
     sanitize_model_history_result,
     serialize_model_result,
 )
@@ -8467,7 +8472,7 @@ class ChatService:
         """Classify one broker result into its durable tool-history fields.
 
         Shared by the fresh execution path and the approval resume so that a
-        background command (a receipt carrying results_url and results_api_key)
+        background command (a receipt carrying its results_url and process_id)
         parks the turn in WAITING_CALLBACK from either path.
         """
 
@@ -8494,9 +8499,7 @@ class ChatService:
                 "status": receipt.status.value if receipt else "failed",
             }
             model_result = failure
-        waiting_callback = bool(
-            receipt and receipt.results_url and receipt.results_api_key
-        )
+        waiting_callback = bool(receipt and receipt.results_url and receipt.process_id)
         fields = {
             "status": (
                 "waiting_callback"
@@ -8731,7 +8734,7 @@ class ChatService:
                 "summary": entry["result_summary"],
                 "evidence_ids": [],
                 "result_artifact_id": None,
-                "artifacts": [],
+                "artifacts": entry["artifacts"],
                 "receipt": output,
                 "step": entry["step"],
             },
@@ -8758,6 +8761,7 @@ class ChatService:
                 "status": "failed" if failed else "complete",
                 "provider_result": serialize_model_result(output),
                 "result_summary": output.get("summary") or output["problem"],
+                "artifacts": output.get("artifacts") or [],
             }
         )
         turn = self._update_tool_step(
@@ -8777,21 +8781,7 @@ class ChatService:
         """Project a terminal callback producer into its durable tool row."""
 
         if callback_received:
-            output = {
-                "schema": "nebula.tool-result/v2",
-                "tool_call_id": entry["tool_call_id"],
-                "tool_name": entry["name"],
-                "status": "completed"
-                if execution.status.value == "completed"
-                else "failed",
-                "summary": execution.metadata.get("results_summary")
-                or execution.error
-                or f"Callback recorded {execution.status.value}",
-                "exit_code": execution.exit_code,
-                "output": execution.metadata.get("results_output") or {},
-                "stdout": execution.metadata.get("results_stdout") or "",
-                "incomplete": False,
-            }
+            output = self._callback_receipt(entry, execution).as_model_result()
             failed = execution.status != CommandExecutionStatus.COMPLETED
         else:
             summary = (
@@ -8824,6 +8814,13 @@ class ChatService:
                 "process_id": execution.process_id,
                 "process_status": execution.status.value,
                 "exit_code": execution.exit_code,
+                # What the process did record, so the advice to inspect it can
+                # be followed with tool_output.search and tool_output.read.
+                "tool_call_id": entry["tool_call_id"],
+                "artifacts": [
+                    item.model_dump(mode="json")
+                    for item in self._callback_artifact_refs(execution)
+                ],
             }
             failed = True
         from .domain import ToolCall
@@ -8860,6 +8857,119 @@ class ChatService:
                     stage="callback",
                 )
         return output, failed
+
+    def _callback_receipt(
+        self, entry: dict[str, Any], execution: CommandExecution
+    ) -> ToolResultReceipt:
+        """The ``nebula.tool-result/v2`` receipt a posted callback completes.
+
+        The posted summary, redacted and bounded, is the part placed in model
+        context. The posted stdout and structured output stay artifacts the
+        receipt names, as any command's captured output does. The waiting
+        receipt's results URL is not repeated.
+        """
+
+        completed = execution.status == CommandExecutionStatus.COMPLETED
+        posted = execution.metadata.get("results_summary")
+        summary = (
+            sanitize_display_text(redact_text(posted)).strip()[:1_000]
+            if isinstance(posted, str) and posted.strip()
+            else "The command reported success without a summary."
+            if completed
+            else "The command reported failure without a summary."
+        )
+        refs = self._callback_artifact_refs(execution)
+        warnings: list[str] = []
+        if (
+            execution.metadata.get("results_stdout")
+            or execution.metadata.get("results_output")
+        ) and not any(
+            key in execution.metadata
+            for key in ("results_stdout_artifact_id", "results_output_artifact_id")
+        ):
+            # Accepted before callback output became artifacts.
+            warnings.append(
+                "The posted output is kept on the process record only; it is not "
+                "available to tool_output."
+            )
+        waiting = _decoded_result(entry.get("provider_result")) or {}
+        version = waiting.get("tool_version")
+        started = execution.started_at
+        ended = execution.completed_at
+        return ToolResultReceipt(
+            tool_call_id=str(entry["tool_call_id"]),
+            tool_name=str(entry["name"]),
+            tool_version=version if isinstance(version, str) and version else "1",
+            process_id=execution.process_id,
+            status=ToolResultStatus.COMPLETED if completed else ToolResultStatus.FAILED,
+            exit_code=execution.exit_code,
+            summary=summary,
+            timing=ToolTimingReceipt(
+                started_at=started.isoformat(),
+                completed_at=ended.isoformat() if ended is not None else None,
+                duration_seconds=(
+                    max(0.0, (ended - started).total_seconds())
+                    if ended is not None
+                    else None
+                ),
+            ),
+            artifacts=refs,
+            warnings=warnings,
+            next_actions=["tool_output.search", "tool_output.read"] if refs else [],
+        )
+
+    def _callback_artifact_refs(
+        self, execution: CommandExecution
+    ) -> list[ToolArtifactRef]:
+        """What a background command posted to its callback and what it captured."""
+
+        recorded: tuple[tuple[object, ArtifactKind, int | None, bool], ...] = (
+            (
+                execution.metadata.get("results_stdout_artifact_id"),
+                "stdout",
+                None,
+                False,
+            ),
+            (
+                execution.metadata.get("results_output_artifact_id"),
+                "parsed",
+                None,
+                False,
+            ),
+            (
+                execution.stdout_artifact_id,
+                "stdout",
+                execution.observed_stdout_bytes,
+                execution.stdout_truncated,
+            ),
+            (
+                execution.stderr_artifact_id,
+                "stderr",
+                execution.observed_stderr_bytes,
+                execution.stderr_truncated,
+            ),
+        )
+        refs: list[ToolArtifactRef] = []
+        for identifier, kind, observed, truncated in recorded:
+            if not isinstance(identifier, str) or not identifier:
+                continue
+            try:
+                artifact = self.store.get(Artifact, identifier)
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: a receipt names only artifacts that still exist
+                continue
+            searchable = artifact.metadata.get("searchable")
+            refs.append(
+                artifact_ref(
+                    artifact,
+                    kind=kind,
+                    observed_byte_count=observed,
+                    searchable=searchable if isinstance(searchable, bool) else None,
+                    truncated=truncated,
+                )
+            )
+        return refs[:MAX_MODEL_ARTIFACT_REFS]
 
     async def _resume_subagent_wait(
         self,

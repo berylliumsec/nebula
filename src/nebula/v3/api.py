@@ -69,7 +69,9 @@ from .automation_runtime import (
     AutomationRuntimeUnavailable,
     CommandApprovalRequired,
     CommandResult,
+    MAX_PROCESS_RESULTS_BODY_BYTES,
     ProcessIORequest,
+    ProcessResultsAccepted,
     ProcessResultsRequest,
     RunCommandRequest,
 )
@@ -512,6 +514,7 @@ from .tool_results import (
     ToolOutputAccessError,
     ToolOutputQueryError,
     ToolOutputService,
+    without_results_api_key,
 )
 from .version import __version__, build_metadata
 from .workspace import (
@@ -7853,15 +7856,27 @@ def create_app(
 
     @app.post(
         f"{API_PREFIX}/automation-processes/{{process_id}}/results",
-        response_model=CommandExecution,
+        response_model=ProcessResultsAccepted,
         tags=["automation"],
+        # The body is read with a size bound before it is parsed, so the
+        # schema is declared here rather than inferred from a parameter.
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {
+                    "application/json": {
+                        "schema": ProcessResultsRequest.model_json_schema()
+                    }
+                },
+            }
+        },
     )
     async def submit_process_results(
         process_id: str,
-        request: ProcessResultsRequest,
+        raw_request: Request,
         credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
         api_key_header: str | None = Header(default=None, alias="X-Nebula-Api-Key"),
-    ) -> CommandExecution:
+    ) -> ProcessResultsAccepted:
         if automation_runtime is None:
             raise HTTPException(
                 status_code=501, detail="automation runtime is not configured"
@@ -7877,6 +7892,16 @@ def create_app(
                 detail="results API key required",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        body = await _bounded_request_body(
+            raw_request,
+            MAX_PROCESS_RESULTS_BODY_BYTES,
+            detail=(
+                "results body exceeds 1 MiB; keep summary within 1,000 "
+                "characters, stdout within 65,536 characters and output within "
+                "64 KiB of JSON"
+            ),
+        )
+        request = ProcessResultsRequest.model_validate_json(body)
         try:
             execution = automation_runtime.accept_results(process_id, api_key, request)
         except AutomationPolicyDenied as exc:
@@ -7895,7 +7920,11 @@ def create_app(
                 exc,
                 stage="callback",
             )
-        return execution
+        return ProcessResultsAccepted(
+            process_id=execution.process_id,
+            status=execution.status,
+            exit_code=execution.exit_code,
+        )
 
     @app.get(
         f"{API_PREFIX}/automation-sessions/{{session_id}}/processes",
@@ -12163,6 +12192,34 @@ def create_app(
     return app
 
 
+async def _bounded_request_body(request: Request, limit: int, *, detail: str) -> bytes:
+    """The request body, refused with 413 once it passes ``limit`` bytes."""
+
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise HTTPException(status_code=413, detail=detail)
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > limit:
+            raise HTTPException(status_code=413, detail=detail)
+    return bytes(body)
+
+
+def _public_entity(entity: Entity) -> Entity:
+    """``entity`` as the generic read routes return it.
+
+    A background command's tool call recorded before the callback key left
+    its receipt still holds the key at rest; it is never returned.
+    """
+
+    if isinstance(entity, ToolCall):
+        result = without_results_api_key(entity.result)
+        if result is not entity.result:
+            return entity.model_copy(update={"result": result})
+    return entity
+
+
 def _utf8_boundary(data: bytes, offset: int) -> bool:
     """Report whether ``offset`` starts a character or is the end of ``data``."""
 
@@ -12963,7 +13020,10 @@ def _register_crud_routes(
                     for entity in entities
                     if isinstance(entity, KnowledgeSource)
                 ]
-            return [relation_service.project_legacy(entity) for entity in entities]
+            return [
+                _public_entity(relation_service.project_legacy(entity))
+                for entity in entities
+            ]
 
         list_entities.__name__ = f"list_{resource.replace('-', '_')}"
         list_entities.__annotations__["return"] = list[model]  # type: ignore[valid-type]
@@ -12977,7 +13037,7 @@ def _register_crud_routes(
                 if isinstance(entity, KnowledgeSource)
                 else entity
             )
-            return relation_service.project_legacy(entity)
+            return _public_entity(relation_service.project_legacy(entity))
 
         get_entity.__name__ = f"get_{resource.replace('-', '_')}"
         get_entity.__annotations__["return"] = model
