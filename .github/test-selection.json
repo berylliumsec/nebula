@@ -1,10 +1,10 @@
 {
-  "change_digest": "1a74d33cc718e409db73c2d903f8c5b3c6366759114984bf997e5a5a60939c3d",
-  "reviewed_by": "Claude focused review for capacity-refusals",
-  "reason": "Adds capacity_reached (wait for running work, then retry; retry_safe true) and budget_exhausted (do not retry) to the nebula.tool-failure/v1 contract, with Core's limit numbers in a new limit field, and makes every subagent, agent-messaging and catalog-limit refusal raise a typed exception that tool_failure classifies the same way on the provider-chat path (chat.py tool loop via SubagentBroker/AgentMessageBroker) and the harness gateway (_gateway_subagent / _gateway_agent_message now raise to _gateway_call instead of returning a denial). Selected: test_tool_failures.py (envelope unit tests for the new categories and the limit field), the new test_subagent_refusal_categories.py (both paths: provider wait-then-retry at the running limit, goal budget, invalid input, rules; harness wait-then-retry, invalid input, rules, agent messaging), test_chat_subagents.py and test_harness_provider_subagents.py (the operator-limit tests now pin category and limit; start failure is execution_failed), test_chat_agent_messages.py (ToolNotPermitted), test_tool_catalog.py (catalog limit is budget_exhausted), test_chat_subagent_lifecycle.py and test_subagent_delivery.py (subagent start/round/message paths whose refusal types changed), and the one test_turn_write_amplification.py node that expected the start failure type.",
-  "exclusions": "Full suites are not approved and are excluded. No UI, native Rust/Tauri or Playwright code changed and the UI does not read failure categories, so frontend, native and playwright are empty. tests/v3/test_harnesses.py is not selected: _gateway_call and every other gateway tool are unchanged; only the subagent and agent-message handlers now raise their refusals to it, covered by test_harness_provider_subagents.py, test_chat_agent_messages.py and test_subagent_refusal_categories.py. Mission tooling (agent_tooling.py), test_turn_prompt_cache.py and the browser/process envelope tests are unaffected: tool_failure output for errors other than the new limit types is byte-identical. tests/v3/test_chat_api.py is not selected: the subagent routes are unchanged.",
+  "change_digest": "343966056a530d0a3b25b9eb85dfca9d1a3d9b0dccacbe2fd93a4e15fa8cb9b2",
+  "reviewed_by": "Claude focused review for queue-context-refusals",
+  "reason": "Backend-only fixes for three audit leftovers. (1) provider_turn_queue rows now follow their turn when it ends outside admission release (stop while parked, approval stop, supervisor stop, failed unresumable wait, cancel before admission), startup and the recovery tick close open rows of ended or missing turns in SQL off the event loop, recover() releases running rows as the turn stands, and _complete reads status in SQL. A turn whose admission or execution claim fails in _run_provider_turn now fails with an actionable error and a closed row (a restart-recovery resume returns to interrupted with its automatic retry pending, row parked); _resume_stopped_turn shares that retry helper (test_chat restart-recovery tests). Covered by the scheduler/admission tests (test_chat_throughput), restart recovery and startup-robustness tests (test_restart_recovery_lifecycle, test_startup_unreadable_rows), stop/cancel and turn-outcome paths (test_turn_outcome_history, test_chat, test_chat_tool_loop, test_native_hook_turn_ends), approval park/resume (test_approval_continuation) and subagent waits and failures (test_chat_subagents, test_subagent_delivery). (2) ExecutionAI._context reads one execution's output events through replay_operation_events (new event_types filter): test_execution_ai, test_storage. (3) CompanionBroker marks schema/request-model/region refusals before execution: test_browser_companion, test_tool_failures, and test_harnesses for the harness gateway that calls the same broker.",
+  "exclusions": "Full suites are not approved and are excluded. No UI, native or Playwright changes: frontend, native and playwright are empty because no ui/ or Rust file changed and no operator-visible control or copy changed (the queue row state is not shown in the UI; queue position and metrics only count queued rows). Mission tests are not selected: missions never attach the conversation browser companion and agent_tooling's before-execution handling is unchanged. test_executions.py is not selected: execution event writing is unchanged; the new read is covered by test_execution_ai. python_browser is true because tests/v3/test_browser_companion.py::test_real_chromium_capture_retains_fields_and_rejects_changed_document launches Chromium.",
   "expected_tests": {
-    "python": 151,
+    "python": 467,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -12,18 +12,24 @@
   "python_versions": [
     "3.12"
   ],
-  "python_browser": false,
+  "python_browser": true,
   "python_node": false,
   "python": [
-    "tests/v3/test_tool_failures.py",
-    "tests/v3/test_subagent_refusal_categories.py",
+    "tests/v3/test_chat_throughput.py",
+    "tests/v3/test_restart_recovery_lifecycle.py",
+    "tests/v3/test_startup_unreadable_rows.py",
+    "tests/v3/test_turn_outcome_history.py",
     "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_harness_provider_subagents.py",
-    "tests/v3/test_chat_agent_messages.py",
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_chat_subagent_lifecycle.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_native_hook_turn_ends.py",
+    "tests/v3/test_approval_continuation.py",
+    "tests/v3/test_chat.py",
     "tests/v3/test_subagent_delivery.py",
-    "tests/v3/test_turn_write_amplification.py::test_subagent_gets_the_ssh_hosts_of_a_parent_whose_snapshot_is_split"
+    "tests/v3/test_execution_ai.py",
+    "tests/v3/test_storage.py",
+    "tests/v3/test_browser_companion.py",
+    "tests/v3/test_tool_failures.py",
+    "tests/v3/test_harnesses.py"
   ],
   "frontend": [],
   "native": [],

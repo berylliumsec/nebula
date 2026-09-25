@@ -67,11 +67,11 @@ restart uncertainty itself is not one.
 | --- | --- | --- |
 | Graceful Core stop | The lifespan calls `begin_stopping()` before any component stops, so a process Core tears down ends `interrupted`, its owner is not woken, and `continue_after_tool_callback` refuses. `ChatService.shutdown` sets `shutting_down` and cancels provider tasks; `_interrupt_turn_for_shutdown` parks an owned routing/finalizing turn, streamed or `complete()`-driven, as interrupted instead of recording an operator stop. Harness shutdown interrupts running turns and settles chat turns still connecting. A cancelled native hook's process continues in a worker thread and may report later. | Cancellation of the producer does not undo an already-started external effect. |
 | Process crash or forced kill | On startup, Core reads routing/finalizing provider turns (filtered in SQL) with their own calls and hooks. A call with a projected terminal step is not uncertain; an open `tool_output.*`/`workspace.*` read is rerunnable; every other open call is unknown. The turn is interrupted and a running goal with a claim or such a turn is paused. Running command executions become interrupted. | The scan is a snapshot; a prior worker or external process may commit a result around that boundary. |
-| Provider admission queue | `ProviderScheduler.recover` closes `running` rows (startup owns their turns) and returns `queued` rows. `_restore_queued_turns` restarts each new turn and each resume the previous Core accepted but never admitted, closes a row whose turn is gone, and skips an unreadable turn without stopping the rest. | A turn is restored only from `queued`, `waiting_approval` or `waiting_callback`. |
+| Provider admission queue | `ProviderScheduler.settle` closes queued and parked rows whose turn ended or is gone. `ProviderScheduler.recover` releases `running` rows as their turn now stands (startup owns their turns) and returns `queued` rows. `_restore_queued_turns` restarts each new turn and each resume the previous Core accepted but never admitted, closes a row whose turn is gone, and skips an unreadable turn without stopping the rest. | A turn is restored only from `queued`, `waiting_approval` or `waiting_callback`. |
 | Subagent startup reconciliation | Running children parked on an approval or a question are retained; a child whose turn Core is recovering stays running; a settled child turn is reported; any other running child is marked interrupted and reported. Terminal records re-run delivery and goal charging. | This is a child-record policy, separate from whether the child turn itself has a recoverable effect. |
 | Harness startup | Queued, running and waiting harness turns become interrupted with their chat turn; pending approval deliveries fail; pending questions are cancelled; scheduled harness Missions are restored. | The vendor may have acted on the last request; a retry is a new linked turn. |
 | Mission startup reconciliation | Stale API-owned runs are queued for checkpoint continuation under a new recovery generation; a `cancelling` run is finalized `cancelled`; scheduled queued runs are restored. | Run state and effect outcome remain separate; ambiguous ledger rows refuse the deterministic repeated invocation. |
-| Periodic recovery tick (15 s) | `recovery_tick` runs its scans off the event loop: resume interrupted turns Core owns, close settled callback rows, wake callback waits whose producer is terminal, settle approved calls whose owners ended, and continue or pause idle running goals. Due schedules are dispatched first through `start_provider_turn` and never hold the tick. | Each scan reads only rows that can still need recovery, filtered in SQL. |
+| Periodic recovery tick (15 s) | `recovery_tick` runs its scans off the event loop: resume interrupted turns Core owns, close settled callback rows, wake callback waits whose producer is terminal, settle approved calls whose owners ended, close admissions of turns that ended while queued or parked, and continue or pause idle running goals. Due schedules are dispatched first through `start_provider_turn` and never hold the tick. | Each scan reads only rows that can still need recovery, filtered in SQL. |
 
 ## State machines
 
@@ -89,6 +89,7 @@ stateDiagram-v2
     [*] --> Queued: turn persisted
     Queued --> Routing: admitted
     Queued --> Cancelled: operator stop
+    Queued --> Failed: admission or execution claim failed
     Routing --> WaitingApproval: approval required
     Routing --> WaitingCallback: background command, subagent wait or child question
     Routing --> Finalizing: tools settled
@@ -119,7 +120,11 @@ keeps the state it parked in; `_stream_tool_turn` reads that state to choose the
 resume action. A turn is never admitted once cancelled. It frees its slot when
 provider work ends, before it settles, so a settle that resumes the same turn
 (a satisfied wait, or a child question closed while the parent is idle) is
-queued and admitted again.
+queued and admitted again. Nothing admits a turn again once its admission or
+execution claim failed, so it fails with the reason and a resend hint, and its
+row closes; a restart-recovery resume instead returns to `interrupted` with its
+automatic retry pending, and the next recovery pass retries it. A turn another
+runtime or worker owns, or one that already ended, is left as it is.
 
 | Resume path | Queued in | After admission |
 | --- | --- | --- |
@@ -132,9 +137,15 @@ queued and admitted again.
 
 | Queue row state | Meaning | Next |
 | --- | --- | --- |
-| queued | Accepted and waiting for a slot: a new turn or a resume | `running` on admission; `cancelled` by Stop or when its turn is gone |
-| running | Admitted; a 24 h lease names this worker | `parked` when the turn parks or is interrupted, `complete` otherwise; startup closes it as `complete` |
-| parked, complete, cancelled | Slot released | A later resume queues the row again |
+| queued | Accepted and waiting for a slot: a new turn or a resume | `running` on admission; `cancelled` by Stop or when its turn is gone; closed when its turn ends before admission |
+| running | Admitted; a 24 h lease names this worker | Released as the turn stands: `parked` while it can resume (waiting for an approval or a callback, or interrupted), `cancelled` when stopped or gone, `complete` otherwise. Startup releases a stopped Core's lease the same way. |
+| parked | Slot released; the turn can still resume | `queued` by a resume; closed (`cancelled` or `complete`) when the turn ends without resuming: stopped, denied, or failed while it waited |
+| complete, cancelled | The turn's admission is over | A later resume (final-answer retry) queues the row again |
+
+A turn that ends while queued or parked ends outside admission release, so
+the path that ends it closes the row (`ProviderScheduler.settle`), and startup
+and the periodic recovery tick close any row still open for a turn that ended
+or no longer exists. An unreadable turn keeps its row for a repaired record.
 
 Deleting a conversation is refused while a turn is queued, routing, waiting,
 finalizing, or interrupted with recovery pending, and removes its turns' queue
@@ -145,7 +156,7 @@ rows.
 | Condition | Exit |
 | --- | --- |
 | Recovery required, caused by a Core stop or restart, not yet attempted | Core adopts late receipts, materializes unknowns, records `auto_resume_attempted_at`, resumes a paused goal with budget left, and starts the turn. `/state` reports `recovering`. |
-| The automatic start fails | The turn stays interrupted with `automatic_retry_pending`; the next pass retries; the goal pauses with the reason. |
+| The automatic start, or its admission, fails | The turn stays interrupted with `automatic_retry_pending`; the next pass retries; the goal pauses with the reason. |
 | Its goal is cancelled, completed or blocked, or its time budget is spent | Core cancels the turn with that reason, stops its subagents and posts the reports they held. |
 | Automatic resume already attempted, or the interruption was not Core's | `/state` reports `needs_stop`; Stop is the exit. |
 | Operator Stop, at any point | `cancel_turn` cancels the turn, its pending approval and open calls; background commands holding its callback lease are terminated; its subagents stop; held reports post; its goal pauses. |

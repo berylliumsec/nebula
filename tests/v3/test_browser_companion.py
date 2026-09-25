@@ -1414,6 +1414,78 @@ def _refused_before_execution(store, turn_id, provider, status="denied"):
     assert replayed.output["side_effects"] == "none"
 
 
+@pytest.mark.parametrize(
+    ("arguments", "field", "offered_region"),
+    [
+        # Outside the offered schema.
+        ({"operation": "teleport", "url": "https://example.test/"}, "operation", False),
+        # Inside the schema, but not a value the browser request accepts.
+        (
+            {"operation": "scroll", "url": "https://example.test/", "x": float("nan")},
+            None,
+            False,
+        ),
+        # Region screenshots were offered, but this runtime cannot receive one.
+        (
+            {
+                "operation": "capture",
+                "capture_kind": "region",
+                "tab_id": "tab",
+                "width": 10,
+                "height": 10,
+                "url": "https://example.test/",
+            },
+            "capture_kind",
+            True,
+        ),
+    ],
+)
+def test_invalid_browser_arguments_are_refused_before_execution(
+    tmp_path, arguments, field, offered_region
+):
+    """An argument to correct, and nothing ran: the call is safe to reissue.
+
+    Both refusals came before the call was recorded, but read as invalid
+    input with unknown side effects that must not be retried.
+    """
+
+    import dataclasses
+    import json
+
+    from nebula.v3.domain import ChatTurn, ChatTurnStatus, ToolCall as PersistedToolCall
+
+    store, service, prepared, provider, broker, browser = _provider_chat_with_companion(
+        tmp_path, arguments, answer="The browser request needs other arguments."
+    )
+    if offered_region:
+        broker.spec = companion_spec(image_supported=True)
+        prepared.tool_components = dataclasses.replace(
+            prepared.tool_components, specs={broker.spec.name: broker.spec}
+        )
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == "The browser request needs other arguments."
+    turn = store.get(ChatTurn, "turn")
+    assert turn.status == ChatTurnStatus.COMPLETE
+    [entry] = turn.tool_history
+    assert entry["name"] == "browser.companion" and entry["status"] == "failed"
+    failure = json.loads(entry["provider_result"])
+    assert failure["schema"] == "nebula.tool-failure/v1"
+    assert failure["category"] == "invalid_arguments"
+    assert failure["side_effects"] == "none"
+    assert failure["retry_safe"] is True
+    assert failure["invalid_input"] == field
+    assert failure["next_action"].startswith("Correct the indicated argument")
+    [replayed] = provider.requests[-1].tool_results
+    assert replayed.is_error is True
+    assert replayed.output["category"] == "invalid_arguments"
+    assert replayed.output["side_effects"] == "none"
+    # Nothing reached the browser or its ledger.
+    assert broker.service.actions(browser.id) == []
+    assert store.list_entities(PersistedToolCall) == []
+
+
 def test_a_nebula_approval_handed_to_the_browser_is_refused_before_execution(
     tmp_path,
 ):

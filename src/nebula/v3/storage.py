@@ -2131,15 +2131,17 @@ class NebulaStore:
         after_sequence: int = 0,
         limit: int = 1000,
         through_sequence: int | None = None,
+        event_types: Sequence[str] = (),
         exclude_event_types: Sequence[str] = (),
         payload_values: Mapping[str, Sequence[str]] | None = None,
     ) -> list[OperationEvent]:
         """Return one operation's events after ``after_sequence``, in order.
 
-        ``through_sequence`` caps the range, ``exclude_event_types`` skips
-        whole event types, and ``payload_values`` keeps only events whose
-        top-level payload field is one of the listed values. All filtering
-        happens in SQL on the ``(operation_id, sequence)`` index.
+        ``through_sequence`` caps the range, ``event_types`` keeps only the
+        listed event types, ``exclude_event_types`` skips whole event types,
+        and ``payload_values`` keeps only events whose top-level payload field
+        is one of the listed values. All filtering happens in SQL on the
+        ``(operation_id, sequence)`` index.
         """
 
         if after_sequence < 0:
@@ -2152,6 +2154,10 @@ class NebulaStore:
         )
         if through_sequence is not None:
             statement = statement.where(OperationEventRow.sequence <= through_sequence)
+        if event_types:
+            statement = statement.where(
+                OperationEventRow.event_type.in_(list(event_types))
+            )
         if exclude_event_types:
             statement = statement.where(
                 OperationEventRow.event_type.not_in(list(exclude_event_types))

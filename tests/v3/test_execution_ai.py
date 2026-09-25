@@ -501,6 +501,87 @@ async def test_draft_context_is_bounded_redacted_deduplicated_and_accepts_once(
     assert store.count(Finding, engagement_id=execution.engagement_id) == 0
 
 
+def test_draft_context_reads_only_its_executions_output_events(tmp_path, monkeypatch):
+    """The context paged every event of the Project to find one execution's
+    output: 225k rows and ~15 s on the live database for two events."""
+
+    from sqlalchemy import event as orm_event
+
+    from nebula.v3 import execution_ai
+    from nebula.v3.database import OperationEventRow
+
+    (
+        store,
+        _artifacts,
+        engagement,
+        execution,
+        _profile,
+        _evidence,
+        _provider,
+        service,
+    ) = _fixture(tmp_path)
+    # The rest of the Project's history, and this execution's own lifecycle.
+    for index in range(25):
+        store.append_operation_event(
+            "harness-turn",
+            "harness_turn",
+            engagement.id,
+            "harness.delta",
+            {"text": f"delta {index}"},
+        )
+    store.append_operation_event(
+        "other-execution",
+        "execution",
+        engagement.id,
+        "execution.stdout",
+        {"stream": "stdout", "text": "other output\n"},
+    )
+    store.append_operation_event(
+        execution.id,
+        "execution",
+        engagement.id,
+        "execution.terminal",
+        {"status": "completed"},
+    )
+    store.append_operation_event(
+        execution.id,
+        "execution",
+        engagement.id,
+        "execution.stdout",
+        {"stream": "stdout", "text": "last line\n"},
+    )
+    loaded: list[tuple[str, str]] = []
+
+    def count(target, _context):
+        loaded.append((target.operation_id, target.event_type))
+
+    orm_event.listen(OperationEventRow, "load", count)
+    try:
+        context, fingerprint, _metadata = service._context(execution)
+    finally:
+        orm_event.remove(OperationEventRow, "load", count)
+
+    assert sorted(loaded) == [
+        (execution.id, "execution.stderr"),
+        (execution.id, "execution.stdout"),
+        (execution.id, "execution.stdout"),
+    ]
+    decoded = json.loads(context)
+    output = decoded["output_excerpt"]
+    # Interleaved in the order the execution wrote them, still redacted.
+    assert output.index("[stdout]") < output.index("hello") < output.index("[stderr]")
+    assert output.index("warning") < output.index("[stdout] last line")
+    assert "anothersecret123" not in context
+    assert "other output" not in context and "delta" not in context
+    assert "hello" in decoded["stdout_excerpt"]
+    assert "last line" in decoded["stdout_excerpt"]
+    assert "warning" in decoded["stderr_excerpt"]
+
+    # Output past one page keeps every event, in order.
+    monkeypatch.setattr(execution_ai, "_OUTPUT_EVENT_PAGE", 2)
+    assert service._context(execution)[1] == fingerprint
+
+
 @async_test
 async def test_provider_failure_is_retryable_and_strict_prose_never_falls_back(
     tmp_path,

@@ -15,6 +15,7 @@ from nebula.v3.chat import (
     ChatCompletionRequest,
     ChatCompactionError,
     ChatConfigurationError,
+    ChatError,
     ChatHistoryConflict,
     ChatPrivacyError,
     ChatRuntimeSwitchPreflightRequest,
@@ -4403,6 +4404,85 @@ def test_core_restart_recovery_retries_without_operator_action(tmp_path, monkeyp
 
         assert service.resume_turns_stopped_by_core() == [turn.id]
         assert service.has_active_provider_turn(turn.id)
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_core_restart_recovery_retries_a_resume_that_could_not_be_admitted(
+    tmp_path, monkeypatch
+):
+    """An automatic resume whose admission fails waits for the next recovery
+    pass, as one whose start fails does; it no longer sits routing with its
+    admission queued until another restart."""
+
+    from nebula.v3.database import ProviderTurnQueueRow
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "auto-recovery-admission.db")
+        engagement = store.create(Engagement(name="Recovery admission"))
+        profile = store.create(_profile(local=True))
+        session = store.create(
+            ChatSession(
+                engagement_id=engagement.id,
+                title="Supervisor",
+                provider_profile_id=profile.id,
+                model="model-a",
+            )
+        )
+        turn = store.create(
+            ChatTurn(
+                engagement_id=engagement.id,
+                session_id=session.id,
+                provider_profile_id=profile.id,
+                model="model-a",
+                status=ChatTurnStatus.INTERRUPTED,
+                request_snapshot={
+                    "model_request": ModelRequest(
+                        model="model-a",
+                        messages=[{"role": "user", "content": "Continue."}],
+                    ).model_dump(mode="json"),
+                    "context_usage": {},
+                    "recovery": {
+                        "required": True,
+                        "cause": "core_restart",
+                        "unknown_tool_call_ids": [],
+                        "unknown_hook_execution_ids": [],
+                    },
+                },
+            )
+        )
+        provider = WaitingRecoveryProvider(profile.id, local=True)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        await service.startup()
+        admit = service.provider_scheduler.admit
+
+        async def fail_admission(turn_id: str):
+            del turn_id
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(service.provider_scheduler, "admit", fail_admission)
+        assert service.resume_turns_stopped_by_core() == [turn.id]
+        with pytest.raises(ChatError, match="retry on the next recovery pass"):
+            async for _ in service.follow_provider_turn(turn.id):
+                pass
+
+        waiting = store.get(ChatTurn, turn.id)
+        assert waiting.status == ChatTurnStatus.INTERRUPTED
+        assert waiting.request_snapshot["recovery"]["automatic_retry_pending"] is True
+        assert waiting.request_snapshot["recovery"]["auto_resume_attempted_at"] is None
+        with store.database.session() as database_session:
+            row = database_session.get(ProviderTurnQueueRow, turn.id)
+            assert row is not None and row.state == "parked"
+        assert service.provider_scheduler.metrics()["queued"] == 0
+
+        monkeypatch.setattr(service.provider_scheduler, "admit", admit)
+        assert service.resume_turns_stopped_by_core() == [turn.id]
+        assert service.has_active_provider_turn(turn.id)
+        async with asyncio.timeout(3):
+            while store.get(ChatTurn, turn.id).execution_claim_id is None:
+                await asyncio.sleep(0.01)
+        assert store.get(ChatTurn, turn.id).status == ChatTurnStatus.ROUTING
         await service.shutdown()
 
     asyncio.run(scenario())
