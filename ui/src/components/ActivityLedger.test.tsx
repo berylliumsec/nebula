@@ -154,3 +154,26 @@ it("keeps completed reasoning without text discoverable", async () => {
   await userEvent.click(screen.getByRole("button", {name: "Show activity"}));
   expect(screen.getByText("Reasoning")).toBeVisible();
 });
+
+it("shows the current tool and expands each running call independently", async () => {
+  const user = userEvent.setup();
+  const first = { ...model().entries[0], id: "ssh-a", label: "Command on host A", sequence: 1 };
+  const second = { ...model().entries[0], id: "ssh-b", label: "Command on host B", sequence: 2 };
+  render(<ActivityLedger compact model={model({ currentAction: "Command on host B", entries: [second, first] })}
+    renderEntryDetails={(entry) => <p>{entry.id} input</p>} />);
+  const ledger = screen.getByRole("region", { name: "Work summary" });
+  expect(within(ledger).getByText("Command on host B", { selector: ".activity-ledger-compact-current span" })).toBeVisible();
+  await user.click(within(ledger).getByRole("button", { name: "Show activity" }));
+  const rows = ledger.querySelectorAll(".activity-ledger-audit li details");
+  expect(rows).toHaveLength(2);
+  await user.click(within(rows[0] as HTMLElement).getByText("Command on host B"));
+  expect(rows[0]).toHaveAttribute("open");
+  expect(rows[1]).not.toHaveAttribute("open");
+  expect(within(rows[0] as HTMLElement).getByText("ssh-b input")).toBeVisible();
+  await user.click(within(rows[1] as HTMLElement).getByText("Command on host A"));
+  expect(rows[0]).toHaveAttribute("open");
+  expect(rows[1]).toHaveAttribute("open");
+  await user.click(within(rows[0] as HTMLElement).getByText("Command on host B"));
+  expect(rows[0]).not.toHaveAttribute("open");
+  expect(rows[1]).toHaveAttribute("open");
+});

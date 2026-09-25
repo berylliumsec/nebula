@@ -416,12 +416,20 @@ function AuthenticatedChatImage({ api, block }: { api: ApiClient; block: ChatCon
 function AssistantLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) {
   const item = entry.sourceItem;
   const tool = entry.sourceTool;
-  if (tool) return <div className="activity-ledger-entry-body">
+  if (tool) {
+    const input = tool.arguments && Object.keys(tool.arguments).length > 0
+      ? JSON.stringify(tool.arguments, null, 2)
+      : undefined;
+    const inputPreview = input && input.length > 4_000 ? `${input.slice(0, 4_000)}\n… Input preview truncated.` : input;
+    return <div className="activity-ledger-entry-body">
     {tool.summary && <p>{tool.summary}</p>}
+    {inputPreview && <div className="harness-output"><small>Tool input</small><pre tabIndex={0}>{inputPreview}</pre></div>}
+    {tool.status === "running" && !tool.summary && !inputPreview && <p>Waiting for this tool to return a result.</p>}
     {tool.capability === "web.search" && <WebSearchResults receipt={tool.receipt} />}
     {tool.evidenceIds.length > 0 && <div className="scope-chip-list">{tool.evidenceIds.map((id) => <Link to={`/evidence?id=${encodeURIComponent(id)}`} key={id}>Evidence {id.slice(0, 8)}</Link>)}</div>}
     {Object.keys(tool.receipt ?? {}).length > 0 && <details className="activity-ledger-technical"><summary>Technical details</summary><pre tabIndex={0}>{JSON.stringify(tool.receipt, null, 2)}</pre></details>}
   </div>;
+  }
   if (!item) return null;
   return <div className="activity-ledger-entry-body">
     <HarnessReasoningDetails item={item} />
@@ -3168,14 +3176,29 @@ export function SessionsPage() {
             : ["interrupted", "failed"].includes(pendingTurn.status) ? pendingTurn.error : undefined,
           durable: false,
         }]);
-        setToolCards([...restoredToolCards, ...pendingTurn.toolCallIds.map((toolCallId) => ({
-          assistantId,
-          toolCallId,
-          capability: "Command runtime",
-          status: pendingTurn.status === "waiting_approval" ? "waiting_approval" : ["interrupted", "failed"].includes(pendingTurn.status) ? "failed" : "running",
-          evidenceIds: [],
-          artifacts: [],
-        }))]);
+        const savedToolCalls = pendingTurn.toolCalls ?? [];
+        const savedToolIds = new Set(savedToolCalls.map((call) => call.toolCallId));
+        setToolCards([...restoredToolCards,
+          ...savedToolCalls.map((call) => ({
+            assistantId,
+            toolCallId: call.toolCallId,
+            capability: call.capability,
+            displayName: call.displayName,
+            arguments: call.arguments,
+            status: call.status,
+            summary: call.summary,
+            evidenceIds: [],
+            artifacts: [],
+          })),
+          ...pendingTurn.toolCallIds.filter((toolCallId) => !savedToolIds.has(toolCallId)).map((toolCallId) => ({
+            assistantId,
+            toolCallId,
+            capability: "Command runtime",
+            status: pendingTurn.status === "waiting_approval" ? "waiting_approval" : ["interrupted", "failed"].includes(pendingTurn.status) ? "failed" : "running",
+            evidenceIds: [],
+            artifacts: [],
+          })),
+        ]);
         if (pendingTurn.status === "failed") {
           setPendingResponse(undefined);
           setChatError(pendingTurn.error ?? "The provider did not return a final answer.");
@@ -3721,6 +3744,7 @@ export function SessionsPage() {
         toolCallId: streamEvent.toolCallId,
         capability: streamEvent.capability,
         displayName: streamEvent.displayName,
+        arguments: streamEvent.arguments,
         status: "running",
         evidenceIds: [],
         artifacts: [],

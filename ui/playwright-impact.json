@@ -159,6 +159,18 @@
       {"area":"provider-request-breakdown-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"},
       {"area":"provider-request-breakdown-core","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"}
     ],
+    "live-tool-activity": [
+      {"area":"live-tool-activity","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade shows each saved running tool and its input on demand","runtime":"mock","shard":"1/1"},
+      {"area":"live-tool-activity","project":"desktop","test_match":"tests/interface.spec.ts","grep":"native assistant tools use the shared activity ledger","runtime":"mock","shard":"1/1"},
+      {"area":"live-tool-activity","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade running tool details survive a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"live-tool-activity","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade running tool details survive a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"live-tool-activity","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade running tool details survive a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"live-tool-activity","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade running tool details survive a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"live-tool-activity","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade running tool details survive a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"live-tool-activity","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade running tool details survive a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"live-tool-activity","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade running tool details survive a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"live-tool-activity","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade running tool details survive a production LAN chat reload","runtime":"real-core","shard":"1/1"}
+    ],
     "durable-conversation-core": [
       {"area":"durable-conversation-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade foundation production LAN reads durable conversation","runtime":"real-core","shard":"1/1"},
       {"area":"durable-conversation-core","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade foundation production LAN reads durable conversation","runtime":"real-core","shard":"1/1"},

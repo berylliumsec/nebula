@@ -5433,6 +5433,75 @@ reloadTest("assistant upgrade restores paused provider supervisor thinking and p
   await expect(page.getByRole("combobox", { name: "Chat harness", exact: true })).toBeEnabled();
 });
 
+reloadTest("assistant upgrade shows each saved running tool and its input on demand", async ({ page }) => {
+  await installTruthfulCore(page);
+  await page.context().route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) return route.fulfill({ json: [{
+      ...entity,
+      id: "running-tools-session",
+      engagement_id: "scratch-project",
+      title: "Inspect the simulation corpus",
+      backend: "provider",
+      provider_profile_id: "provider-thinking",
+      model: "deepseek/deepseek-v4.1-flash",
+      metadata: {},
+    }] });
+    if (path.endsWith("/chat/sessions/running-tools-session/messages")) return route.fulfill({ json: [{
+      ...entity,
+      id: "running-tools-prompt",
+      engagement_id: "scratch-project",
+      session_id: "running-tools-session",
+      sequence: 1,
+      role: "user",
+      content: "Inspect the simulation corpus.",
+      citations: [],
+      metadata: {},
+    }] });
+    if (path.endsWith("/chat/sessions/running-tools-session/pending-turn")) return route.fulfill({ json: {
+      ...entity,
+      id: "running-tools-turn",
+      session_id: "running-tools-session",
+      started_at: entity.created_at,
+      status: "waiting_callback",
+      tool_call_ids: ["completed-read", "running-command"],
+      tool_calls: [
+        { tool_call_id: "completed-read", capability: "tool_output.read", display_name: "Read tool output", status: "complete", arguments: { artifact_id: "previous-output" }, summary: "Read the previous output." },
+        { tool_call_id: "running-command", capability: "ssh.simulation-host.run_command", display_name: "Command runtime", status: "running", arguments: { command: "python3 inspect.py --index corpus_index.json" }, summary: null },
+      ],
+      content: "",
+      reasoning: "",
+    } });
+    await route.fallback();
+  });
+
+  const inspect = async () => {
+    const ledger = page.getByRole("region", { name: "Work summary" });
+    await expect(ledger.locator(".activity-ledger-compact-current")).toContainText("Command on simulation-host");
+    await ledger.getByRole("button", { name: "Show activity" }).click();
+    const running = ledger.locator(".activity-ledger-audit li").filter({ hasText: "Command on simulation-host" }).locator("details");
+    const completed = ledger.locator(".activity-ledger-audit li").filter({ hasText: "Read tool output" }).locator("details");
+    await expect(running.locator("summary")).toContainText("Running");
+    await expect(completed.locator("summary")).toContainText("Completed");
+    await running.locator("summary").click();
+    await expect(running).toHaveAttribute("open");
+    await expect(running.getByText("python3 inspect.py --index corpus_index.json")).toBeVisible();
+    await expect(completed).not.toHaveAttribute("open");
+    await completed.locator("summary").click();
+    await expect(completed.getByText("Read the previous output.")).toBeVisible();
+    await running.locator("summary").click();
+    await expect(running).not.toHaveAttribute("open");
+    await expect(completed).toHaveAttribute("open");
+    expect(await ledger.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    expect((await new AxeBuilder({ page }).include(".activity-ledger").analyze()).violations).toEqual([]);
+  };
+
+  await openWorkspace(page, "/?view=chat&session=running-tools-session", "Workbench");
+  await inspect();
+  await page.reload();
+  await inspect();
+});
+
 reloadTest("assistant upgrade replaces a callback wait when its turn finishes between polls", async ({ page }) => {
   let callbackComplete = false;
   await installTruthfulCore(page);
@@ -6855,9 +6924,12 @@ test("native assistant tools use the shared activity ledger", async ({ page }, t
       ];
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
-          frames.forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
-          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-          controller.close();
+          frames.slice(0, 2).forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
+          (globalThis as typeof globalThis & { __finishNativeTool?: () => void }).__finishNativeTool = () => {
+            frames.slice(2).forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          };
         },
       });
       return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
@@ -6870,9 +6942,15 @@ test("native assistant tools use the shared activity ledger", async ({ page }, t
   await composer.fill("Review the saved evidence.");
   await page.getByRole("button", { name: "Send message" }).click();
   const ledger = page.getByRole("region", { name: "Work summary" });
-  await expect(ledger.getByText(/1 action/).first()).toBeVisible();
+  await expect(ledger.locator(".activity-ledger-compact-current")).toContainText("Search evidence");
   await ledger.getByRole("button", { name: "Show activity" }).click();
-  await ledger.getByText("Search evidence", { exact: true }).click();
+  const liveTool = ledger.locator(".activity-ledger-audit > ol > li > .activity-ledger-entry-content > details");
+  await expect(liveTool.locator(":scope > summary")).toContainText("Running");
+  await liveTool.locator(":scope > summary").click();
+  await expect(liveTool).toContainText('"query": "TLS"');
+  await page.evaluate(() => (globalThis as typeof globalThis & { __finishNativeTool?: () => void }).__finishNativeTool?.());
+  await expect(ledger.getByText(/1 action/).first()).toBeVisible();
+  await expect(liveTool.locator(":scope > summary")).toContainText("Completed");
   await expect(ledger.getByText("Found two relevant evidence records.")).toBeVisible();
   await expect(ledger.getByRole("link", { name: /Evidence evidence/ })).toHaveAttribute("href", "/evidence?id=evidence-ledger");
 

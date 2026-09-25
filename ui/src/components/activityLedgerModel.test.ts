@@ -156,6 +156,18 @@ describe("activity ledger presentation model", () => {
     expect(model.entries[0].label).toBe("Search evidence");
   });
 
+  it("names a running SSH call and prioritizes it over an earlier failure", () => {
+    const model = activityLedgerFromNative("Work summary", "streaming", [
+      { assistantId: "assistant-1", toolCallId: "failed-load", capability: "tool_catalog.load", status: "failed", summary: "Invalid input.", evidenceIds: [], artifacts: [] },
+      { assistantId: "assistant-1", toolCallId: "running-ssh", capability: "ssh.simulation-host.run_command", displayName: "Command runtime", status: "running", arguments: { command: "inspect corpus_index.json" }, evidenceIds: [], artifacts: [] },
+    ]);
+    expect(model.status).toBe("active");
+    expect(model.currentAction).toBe("Command on simulation-host");
+    expect(model.entries[0].label).toBe("Command on simulation-host");
+    expect(model.entries[0].sourceTool?.arguments).toEqual({ command: "inspect corpus_index.json" });
+    expect(model.entries[1].status).toBe("failed");
+  });
+
   it("names a brokered MCP call by its server and tool, not its routing digest", () => {
     const model = activityLedgerFromNative("Work summary", "complete", [{
       assistantId: "assistant-1",

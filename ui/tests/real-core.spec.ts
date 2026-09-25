@@ -1419,6 +1419,78 @@ test("assistant upgrade provider request breakdown survives a production LAN cha
   }
 });
 
+test("assistant upgrade running tool details survive a production LAN chat reload", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const repository = path.resolve(import.meta.dirname, "../..");
+  const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
+  const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+  const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-playwright-real-core-"));
+  const seeded = spawnSync(python, ["-c", [
+    "import sys",
+    "from pathlib import Path",
+    "from nebula.v3.chat import ChatService",
+    "from nebula.v3.domain import ChatMessage, ChatRole, ChatSession, ChatTurn, ChatTurnStatus, Engagement, ProviderProfile",
+    "from nebula.v3.storage import NebulaStore",
+    "store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
+    "project = store.create(Engagement(id='running-tool-project', name='Running tool project'))",
+    "provider = store.create(ProviderProfile(id='running-tool-provider', name='Local tool provider', provider_type='vllm', endpoint='http://127.0.0.1:1/v1', is_local=True, model_allowlist=['security-model']))",
+    "session = store.create(ChatSession(id='running-tool-session', engagement_id=project.id, title='Inspect the simulation corpus', provider_profile_id=provider.id, model='security-model', metadata={'message_count': 1, 'last_sequence': 1}))",
+    "store.create(ChatMessage(id='running-tool-prompt', engagement_id=project.id, session_id=session.id, sequence=1, role=ChatRole.USER, content='Inspect the simulation corpus.'))",
+    "turn = store.create(ChatTurn(id='running-tool-turn', engagement_id=project.id, session_id=session.id, provider_profile_id=provider.id, model='security-model', status=ChatTurnStatus.WAITING_CALLBACK, tools_enabled=True, next_step=2))",
+    "ledger = ChatService(store).turn_ledger",
+    "ledger.append(turn.id, {'step': 0, 'tool_call_id': 'finished-read', 'name': 'tool_output.read', 'display_name': 'Read tool output', 'arguments': {'artifact_id': 'previous-output'}, 'status': 'complete', 'result_summary': 'Read the previous output.'}, event_type='complete')",
+    "ledger.append(turn.id, {'step': 1, 'tool_call_id': 'running-command', 'name': 'ssh.simulation-host.run_command', 'display_name': 'Command runtime', 'arguments': {'command': 'python3 inspect.py --index corpus_index.json'}, 'status': 'running'}, event_type='started')",
+  ].join("\n"), dataDir], {
+    cwd: repository,
+    env: { ...process.env, PYTHONPATH: path.join(repository, "src") },
+    encoding: "utf8",
+  });
+  expect(seeded.status, seeded.stderr || seeded.stdout).toBe(0);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress, dataDir });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const pending = await api.get("chat/sessions/running-tool-session/pending-turn");
+    expect(pending.ok(), await pending.text()).toBe(true);
+    expect((await pending.json() as { tool_calls: Array<{ status: string; capability: string }> }).tool_calls).toMatchObject([
+      { status: "complete", capability: "tool_output.read" },
+      { status: "running", capability: "ssh.simulation-host.run_command" },
+    ]);
+    const assistantUrl = `${core.origin}/?view=chat&session=running-tool-session#token=${encodeURIComponent(core.token)}`;
+    const inspect = async () => {
+      const ledger = page.getByRole("region", { name: "Work summary" });
+      await expect(ledger.locator(".activity-ledger-compact-current")).toContainText("Command on simulation-host");
+      await ledger.getByRole("button", { name: "Show activity" }).click();
+      const running = ledger.locator(".activity-ledger-audit li").filter({ hasText: "Command on simulation-host" }).locator("details");
+      const completed = ledger.locator(".activity-ledger-audit li").filter({ hasText: "Read tool output" }).locator("details");
+      await expect(running.locator("summary")).toContainText("Running");
+      await expect(completed.locator("summary")).toContainText("Completed");
+      await running.locator("summary").click();
+      await expect(running.getByText("python3 inspect.py --index corpus_index.json")).toBeVisible();
+      await expect(completed).not.toHaveAttribute("open");
+      await completed.locator("summary").click();
+      await expect(completed.getByText("Read the previous output.")).toBeVisible();
+      await running.locator("summary").click();
+      await expect(running).not.toHaveAttribute("open");
+      await expect(completed).toHaveAttribute("open");
+      expect(await ledger.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+      expect((await new AxeBuilder({ page }).include(".activity-ledger").analyze()).violations).toEqual([]);
+    };
+    await page.goto(assistantUrl);
+    await inspect();
+    await page.goto(assistantUrl);
+    await inspect();
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
+    await testInfo.attach("running-tool-production-lan", { body: JSON.stringify({ origin: core.origin, build: "ui/dist production", viewport: page.viewportSize(), workflow: "durable pending tool calls, independent expansion, reload" }), contentType: "application/json" });
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
 test("production assistant work survives a project switch through real Core", async ({ page }) => {
   test.setTimeout(60_000);
   const lanAddress = localNetworkIpv4();

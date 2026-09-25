@@ -97,6 +97,8 @@ export function ActivityLedger({
         {receipt.length > 0 && <span>{receipt.join(" · ")}</span>}
       </p>)}
 
+      {compact && active && model.currentAction && <p className="activity-ledger-current activity-ledger-compact-current" aria-live="polite"><small>Now</small><span>{model.currentAction}</span></p>}
+
       {attentionEntries.length > 0 && <div className="activity-ledger-attention" aria-label="Activity requiring attention">
         {attentionEntries.map((entry) => entry.status === "failed" ? <details className="activity-ledger-failure status-failed" key={`attention:${entry.id}`}>
           <summary>
@@ -143,7 +145,7 @@ export function ActivityLedger({
               <span className="activity-ledger-entry-time">{timeLabel(entry.occurredAt) ?? `#${entry.sequence}`}</span>
               <div className="activity-ledger-entry-content">
                 {hasDetails ? <details>
-                  <summary><strong>{entry.label}</strong><span>{entry.statusLabel ?? activityLedgerStatusLabel(entry.status)}</span></summary>
+                  <summary><strong>{entry.label}</strong><span>{entry.statusLabel ?? activityLedgerStatusLabel(entry.status)}</span><ChevronDown size={14} aria-hidden="true" /></summary>
                   {details ?? <DefaultEntryDetails entry={entry} />}
                   {actions && <div className="activity-ledger-entry-actions">{actions}</div>}
                 </details> : <div className="activity-ledger-entry-static"><strong>{entry.label}</strong><span>{entry.statusLabel ?? activityLedgerStatusLabel(entry.status)}</span></div>}
