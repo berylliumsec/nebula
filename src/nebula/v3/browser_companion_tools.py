@@ -17,6 +17,7 @@ from .browser_companion import (
     AssistantControlPaused,
     BrowserCompanion,
     CompanionRequest,
+    CompanionRequestRefused,
 )
 from .artifacts import ArtifactStore
 from .browser_engine import BrowserEngineRegistry
@@ -38,8 +39,10 @@ from .tools import (
     InvalidToolArguments,
     PolicyDenied,
     StoreToolLedger,
+    ToolBrokerError,
     ToolExecutionResult,
     ToolSpec,
+    refused_before_execution,
 )
 
 
@@ -61,6 +64,35 @@ def _paused_denial(reason: str) -> PolicyDenied:
     )
     setattr(denial, "_nebula_before_execution", True)
     return denial
+
+
+def _request_refusal(exc: CompanionRequestRefused) -> ToolBrokerError:
+    """The tool failure for a request the browser service refused unsent.
+
+    A named argument is one to correct; otherwise the project's scope refused
+    the page, a rule the model must not repeat against.
+    """
+
+    if exc.argument is not None:
+        return refused_before_execution(
+            InvalidToolArguments(f"Invalid value for {exc.argument}: {exc}")
+        )
+    return refused_before_execution(
+        PolicyDenied(
+            PolicyDecision(
+                effect=PolicyEffect.DENY,
+                reason=str(exc),
+                rule="browser_companion_scope",
+            )
+        )
+    )
+
+
+def _unavailable(message: str) -> NotFoundError:
+    """This browser is unavailable to the call, described as a missing
+    resource is, and nothing has run yet."""
+
+    return refused_before_execution(NotFoundError(message))
 
 
 def model_browser_result(value: Any) -> Any:
@@ -154,11 +186,22 @@ class CompanionBroker:
         )
         self.artifact_store = artifact_store
         self.image_supported = image_supported and artifact_store is not None
+        session = self._available_session()
         self.spec = companion_spec(
             image_supported=self.image_supported,
-            approval_policy=self.approval_policy().value,
+            approval_policy=self.service.approval_policy(session.engagement_id).value,
         )
         self.ledger = StoreToolLedger(store)
+
+    def _available_session(self) -> BrowserSession:
+        """The session, or a refusal: closed, removed, native or revoked."""
+
+        try:
+            return self.service.session(self.session_id)
+        except (NotFoundError, ValueError) as exc:
+            # diagnostic-expected: re-raised as the unavailable resource it is,
+            # keeping the service's wording for the operator's view.
+            raise _unavailable(str(exc)) from exc
 
     def approval_policy(self) -> AutomationApprovalPolicy:
         session = self.service.session(self.session_id)
@@ -167,7 +210,7 @@ class CompanionBroker:
     async def execute(
         self, invocation: Any, scope: ScopePolicy, *, approval: Any = None
     ) -> ToolExecutionResult:
-        session = self.service.session(self.session_id)
+        session = self._available_session()
         if (
             invocation.tool_name != self.spec.name
             or invocation.engagement_id != session.engagement_id
@@ -253,6 +296,8 @@ class CompanionBroker:
                 refused = (
                     _paused_denial(str(exc))
                     if isinstance(exc, AssistantControlPaused)
+                    else _request_refusal(exc)
+                    if isinstance(exc, CompanionRequestRefused)
                     else exc
                 )
                 setattr(refused, "_nebula_before_execution", True)
@@ -324,7 +369,14 @@ class CompanionBroker:
                     )
                 data = base64.b64decode(image_data, validate=True)
                 if len(data) > 4 * 1024 * 1024:
-                    raise InvalidToolArguments("Select a smaller screenshot region.")
+                    # A capture changes nothing on the page and the image is
+                    # dropped, so the refusal leaves no effect to check.
+                    raise refused_before_execution(
+                        InvalidToolArguments(
+                            "Invalid value for width: select a smaller "
+                            "screenshot region."
+                        )
+                    )
                 artifact = self.artifact_store.put_bytes(
                     data,
                     engagement_id=session.engagement_id,
@@ -357,6 +409,18 @@ class CompanionBroker:
                 running, ToolCallStatus.DENIED, error=denial.decision.reason
             )
             raise denial from exc
+        except CompanionRequestRefused as exc:
+            # The service refused the request before sending it: a stale tab,
+            # a misplaced reference or a page outside the project's scope.
+            refused = _request_refusal(exc)
+            await self.ledger.transition(
+                running,
+                ToolCallStatus.DENIED
+                if isinstance(refused, PolicyDenied)
+                else ToolCallStatus.FAILED,
+                error=str(exc),
+            )
+            raise refused from exc
         except Exception:
             await self.ledger.transition(
                 running,
@@ -416,7 +480,14 @@ class CompanionBroker:
             and self.artifact_store is not None
             and isinstance(artifact_id, str)
         ):
-            artifact = self.store.get(Artifact, artifact_id)
+            # A replayed result names its screenshot; one this conversation
+            # cannot read is unavailable, and replaying runs nothing.
+            try:
+                artifact = self.store.get(Artifact, artifact_id)
+            except NotFoundError as exc:
+                raise _unavailable(
+                    "The screenshot is no longer available to this conversation."
+                ) from exc
             if (
                 artifact.engagement_id != invocation.engagement_id
                 or artifact.metadata.get("browser_companion_session_id")
@@ -424,9 +495,7 @@ class CompanionBroker:
                 or artifact.metadata.get("chat_session_id")
                 != invocation.chat_session_id
             ):
-                raise InvalidToolArguments(
-                    "Screenshot does not belong to this conversation."
-                )
+                raise _unavailable("Screenshot does not belong to this conversation.")
             blocks.append(
                 {
                     "type": "image",
@@ -456,7 +525,9 @@ def companion_components(
     )
     session = broker.service.session(session_id)
     if session.engagement_id != project_id:
-        raise InvalidToolArguments("Browser session belongs to another project.")
+        # As the broker refuses another project's call: unavailable to this
+        # project, described as a missing resource is, and nothing has run.
+        raise _unavailable("Browser session belongs to another project.")
     scope = broker.service.security._scope(project_id)
     result = RuntimeToolComponents(
         broker=broker,

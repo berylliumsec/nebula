@@ -13404,14 +13404,7 @@ class HarnessRuntimeService:
                     context=arguments.get("context"),
                     reasoning_effort=arguments.get("reasoning_effort"),
                 )
-                result: dict[str, Any] = {
-                    "subagent_id": record.id,
-                    "name": record.name,
-                    "model": record.model,
-                    "reasoning_effort": record.reasoning_effort or "model default",
-                    "status": "running",
-                    "note": "Running in parallel. Call subagent.wait when you need its report.",
-                }
+                result: dict[str, Any] = service.start_output(record, harness=True)
             elif name == "subagent.wait":
                 raw_ids = arguments.get("subagent_ids")
                 active_turn_id = turn.id
