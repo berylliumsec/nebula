@@ -7223,7 +7223,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
   }
 });
 
-test("completed harness output surfaces Grok commentary as live narrative", async ({ page }) => {
+test("completed harness output keeps live commentary in expandable work detail", async ({ page }) => {
   const sessionId = "grok-commentary-session";
   const turnId = "grok-commentary-turn";
   await page.route("**/api/v1/**", async (route) => {
@@ -7301,7 +7301,14 @@ test("completed harness output surfaces Grok commentary as live narrative", asyn
   await composer.fill("Inspect the workspace and explain what you are doing");
   await page.getByRole("button", { name: "Send message" }).click();
 
-  const commentary = page.getByLabel("Assistant commentary");
+  const ledger = page.getByRole("region", { name: "Work summary" });
+  await expect(ledger).toBeVisible();
+  await expect(ledger).toContainText("Running");
+  await expect(ledger).toContainText("1 update");
+  await expect(page.getByLabel("Assistant commentary")).toHaveCount(0);
+  await ledger.getByRole("button", { name: "Show activity" }).click();
+  await ledger.locator(".activity-ledger-audit summary").filter({ hasText: "I’ve mapped the workspace." }).click();
+  const commentary = ledger.getByLabel("Assistant commentary");
   await expect(commentary).toContainText("I’ve mapped the workspace. Next I’m validating parseKeywords before I make the change.");
   await expect(commentary).toBeVisible();
   await expect(commentary.locator("strong")).toHaveText("I’ve mapped the workspace.");
@@ -7321,7 +7328,7 @@ test("completed harness output surfaces Grok commentary as live narrative", asyn
   expect(commentaryGeometry.left).toBeGreaterThanOrEqual(0);
   expect(commentaryGeometry.right).toBeLessThanOrEqual(commentaryGeometry.viewportWidth + 1);
   expect(commentaryGeometry.scrollWidth).toBeLessThanOrEqual(commentaryGeometry.clientWidth + 1);
-  expect((await new AxeBuilder({ page }).include(".assistant-commentary").analyze()).violations).toEqual([]);
+  expect((await new AxeBuilder({ page }).include(".activity-ledger-compact").analyze()).violations).toEqual([]);
 });
 
 test("the workbench expands to the full viewport with compact chrome and completed harness output geometry", async ({ page }) => {
@@ -11139,14 +11146,15 @@ reloadTest("stabilization an operator allows delegation and acts on a waiting su
   await expect(page.getByRole("spinbutton", { name: "Running at once" })).toHaveValue("3");
   await page.getByRole("button", { name: "Close assistant settings" }).click();
 
-  // The rail reports what is delegated without taking over the composer.
-  const rail = page.getByRole("status", { name: "Subagents" });
-  await expect(rail).toContainText("1 running");
-  await expect(rail).toContainText("1 needs approval");
-  await expect(rail).toContainText("1 recovering");
+  // The parent's transcript owns the child's pending decision. Counts and
+  // the path to the exact approval remain visible without opening activity.
+  const request = page.getByRole("region", { name: "Subagent request needing attention" });
+  await expect(request).toContainText("Review session handling code needs your approval");
+  await expect(request).toContainText("1 running · 1 needs approval · 1 recovering");
+  await expect(page.getByRole("status", { name: "Subagents" })).toHaveCount(0);
   await expect(page.locator(".chat-composer textarea").first()).toBeEditable();
 
-  await rail.getByRole("button", { name: "Show subagents" }).click();
+  await request.getByRole("button", { name: "Review request" }).click();
   const pane = page.getByRole("region", { name: "Subagents" }).last();
   await expect(pane).toContainText("3 of 3 running · limit 3");
   await expect(pane).toContainText("Map documented API routes");
@@ -11386,10 +11394,10 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
   await expect(page.getByRole("checkbox", { name: /Provider subagents/ })).toBeChecked();
   await page.getByRole("button", { name: "Close assistant settings" }).click();
 
-  // The same rail and pane as a provider chat, naming the subagent model.
-  const rail = page.getByRole("status", { name: "Subagents" });
-  await expect(rail).toContainText("1 running");
-  await rail.getByRole("button", { name: "Show subagents" }).click();
+  // The parent request opens the same authoritative pane as a provider chat.
+  const request = page.getByRole("region", { name: "Subagent request needing attention" });
+  await expect(request).toContainText("1 running");
+  await request.getByRole("button", { name: "Review request" }).click();
   const pane = page.getByRole("region", { name: "Subagents" }).last();
   await expect(pane).toContainText("3 running · no limit · deepseek/deepseek-v3.2");
   await expect(pane).toContainText("Their tool outputs go to Local subagents");

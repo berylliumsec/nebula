@@ -92,14 +92,14 @@ export function ChatSubagentPane({
     setExpanded((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
 
   return <section className={`chat-subagent-pane${compact ? " compact" : ""}`} aria-label="Subagents">
-    <header>
+    <div className="chat-subagent-pane-header">
       <div>
         <Split size={15} aria-hidden="true" />
         <strong>Subagents</strong>
         <span className="chat-subagent-total">{subagents.length}</span>
       </div>
       <IconAction icon={X} label="Close subagents" onClick={onClose} />
-    </header>
+    </div>
 
     <p className="chat-subagent-slots">
       {limit ? `${active.length} of ${limit} running · limit ${limit}` : `${active.length} running · no limit`}

@@ -1,6 +1,6 @@
 # Conversation cleanup: parent and subagent views
 
-Status: design proposal for review. No product code has changed. Mockup text and counts are illustrative; they are not claims about a live Atlas run.
+Status: approved for implementation on 2026-09-25. Mockup text and counts are illustrative; they are not claims about a live Atlas run.
 
 ## Purpose
 
@@ -31,6 +31,19 @@ The frames use Nebula's dark palette and Geist font. They show layout and inform
 6. **Mobile:** The current state, action buttons, and composer remain reachable at 320–430 px with no horizontal clipping or hover-only controls.
 
 Core owns the transcript, activity, child status, requests, and answers. The URL owns conversation selection. React may own disclosure state and unsent input; it must not become a second authority for progress or completion. Reload, reconnect, and history replay must reconstruct the same visible state from Core.
+
+## Implementation acceptance contract
+
+| Journey step | Observable invariant | State authority | Test layer |
+| --- | --- | --- | --- |
+| Open parent or child | The selected conversation and its relationship are visible | URL plus Core session | Component and browser |
+| Stream | One current status is visible; every saved commentary update remains reachable | Core activity and transcript | Component and browser |
+| Interrupt or resume | Stop, pending work, and recovery remain visible and usable | Core turn and queue state | Real Core browser |
+| Complete | The answer leads; result links and saved work remain reachable | Core message and activity | Component and real Core browser |
+| Child needs action | Parent shows the request and links to the authoritative decision | Core child approval | Component and real Core browser |
+| Refresh or reconnect | No duplicated commentary, child status, or lost decision | Core plus URL | Real Core browser |
+| Failure and retry | The failed operation and next valid action remain visible | Core error contract | Component and real Core browser |
+| Delete or revoke | Existing conversation lifecycle behavior remains intact | Core | Existing focused coverage; presentation change does not alter deletion |
 
 ## Implementation sequence after design review
 

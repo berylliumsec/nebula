@@ -26,7 +26,9 @@ function timeLabel(value: string | undefined): string | undefined {
 function receiptParts(model: ActivityLedgerViewModel): string[] {
   const parts: string[] = [];
   if (model.totalTasks !== undefined) parts.push(`${model.completedTasks ?? 0}/${model.totalTasks} tasks`);
-  const reasoningCount = model.entries.filter(entry => entry.kind === "reasoning").length;
+  const commentaryCount = model.entries.filter(entry => Boolean(entry.sourceItem?.streams.commentary?.trim())).length;
+  if (commentaryCount) parts.push(`${commentaryCount} update${commentaryCount === 1 ? "" : "s"}`);
+  const reasoningCount = model.entries.filter(entry => entry.kind === "reasoning" && !entry.sourceItem?.streams.commentary?.trim()).length;
   if (reasoningCount) parts.push(`${reasoningCount} thinking episode${reasoningCount === 1 ? "" : "s"}`);
   if (model.actionCount) parts.push(`${model.actionCount} action${model.actionCount === 1 ? "" : "s"}`);
   if (model.attentionCount) parts.push(`${model.attentionCount} warning${model.attentionCount === 1 ? "" : "s"}`);
@@ -73,7 +75,7 @@ export function ActivityLedger({
   const active = model.status === "active" || model.status === "queued" || model.status === "attention";
   const attentionEntries = model.entries.filter((entry) => entry.status === "attention" || (!compact && entry.status === "failed"));
   const receipt = receiptParts(model);
-  const meaningful = model.entries.some((entry) => entry.countsAsAction || entry.artifactIds.length || entry.evidenceIds.length || entry.outputs.length || ["checkpoint", "plan", "goal", "file_change"].includes(entry.kind ?? "") || entry.kind === "reasoning" || ["attention", "failed", "cancelled"].includes(entry.status));
+  const meaningful = model.entries.some((entry) => entry.countsAsAction || entry.artifactIds.length || entry.evidenceIds.length || entry.outputs.length || Boolean(entry.sourceItem?.streams.commentary?.trim()) || ["checkpoint", "plan", "goal", "file_change"].includes(entry.kind ?? "") || entry.kind === "reasoning" || ["attention", "failed", "cancelled"].includes(entry.status));
   if (compact && model.status === "complete" && !meaningful && !historyPending && !model.artifactCount && !model.attentionCount) return null;
   return (
     <section className={`activity-ledger ${statusClass(model.status)}${compact ? " activity-ledger-compact" : ""}`} aria-label={model.title}>
@@ -82,6 +84,11 @@ export function ActivityLedger({
         <strong>{model.title}</strong>
         <span>{activityLedgerStatusLabel(model.status)}{model.durationMs ? ` · ${durationLabel(model.durationMs)}` : ""}</span>
       </header>}
+      {compact && active && <div className="activity-ledger-compact-header">
+        <span className={`activity-ledger-state ${statusClass(model.status)}`} aria-hidden="true" />
+        <strong>{activityLedgerStatusLabel(model.status)}</strong>
+        {model.durationMs ? <span className="activity-ledger-compact-duration">{durationLabel(model.durationMs)}</span> : null}
+      </div>}
 
       {!compact && (active ? <div className="activity-ledger-live">
         {model.phases.length > 0 && <ol className="activity-ledger-phases" aria-label="Work phases">
@@ -118,7 +125,9 @@ export function ActivityLedger({
       </div>}
 
       <footer className="activity-ledger-footer">
-        <span>{compact ? [activityLedgerStatusLabel(model.status), ...receipt].join(" · ") : `${model.actionCount} actions`}</span>
+        <span>{compact
+          ? [active ? `${model.entries.length} activity step${model.entries.length === 1 ? "" : "s"}` : activityLedgerStatusLabel(model.status), ...receipt].join(" · ")
+          : `${model.actionCount} actions`}</span>
         <button
           type="button"
           aria-expanded={expanded}

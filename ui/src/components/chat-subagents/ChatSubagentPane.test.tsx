@@ -1,9 +1,10 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../../api/client";
 import type { ChatSubagentView } from "../../api/types";
 import { ChatSubagentPane } from "./ChatSubagentPane";
+import { ChatSubagentAttention } from "./ChatSubagentAttention";
 import { ChatSubagentRail } from "./ChatSubagentRail";
 import { ChatSubagentResultCard } from "./ChatSubagentResultCard";
 import { compactTokens, elapsedLabel, subagentSummary } from "./useChatSubagents";
@@ -125,6 +126,25 @@ describe("the subagents an operator can see and act on", () => {
     expect(rail).toHaveTextContent("1 done");
     await user.click(screen.getByRole("button", { name: "Show subagents" }));
     expect(onToggle).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a child approval visible in the parent and opens its decision pane", async () => {
+    const onReview = vi.fn();
+    const waiting = subagent({
+      id: "sub-2",
+      name: "Review session handling code",
+      status: "waiting_approval",
+      approval: { id: "approval-1", status: "pending", tool: "run_command", detail: "npm ls --all --json", rationale: "Wants to run a command in the workspace" },
+    });
+    const { rerender } = render(<ChatSubagentAttention subagents={[subagent({}), waiting]} onReview={onReview} />);
+    const request = screen.getByRole("region", { name: "Subagent request needing attention" });
+    expect(request).toHaveTextContent("Review session handling code needs your approval");
+    expect(request).toHaveTextContent("Wants to run a command in the workspace");
+    expect(request).toHaveTextContent("1 running · 1 needs approval");
+    await userEvent.click(within(request).getByRole("button", { name: "Review request" }));
+    expect(onReview).toHaveBeenCalledOnce();
+    rerender(<ChatSubagentAttention subagents={[subagent({})]} onReview={onReview} />);
+    expect(screen.queryByRole("region", { name: "Subagent request needing attention" })).toBeNull();
   });
 
   it("shows a finished child's report in the parent's own words", async () => {
