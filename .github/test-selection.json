@@ -1,13 +1,13 @@
 {
-  "change_digest": "5c2313f431ba3b4680a2f2dbb3e0af26314a576efbea12845b54541d2ff7a050",
-  "reviewed_by": "Claude focused review for mission-recovery",
-  "reason": "Fixes a cluster of Mission-run and shared automation-runtime recovery defects (audit MIS-1..MIS-6) plus the last unpaged AgentRun lookup in missions.py. MIS-1: specialists record their routing response on the attempt before brokering and replay it on restart instead of re-asking the model; invocation ids/idempotency keys derive from (run, task, turn, position) not the provider's random call id; a slot the broker refuses becomes an explicit unknown observation. MIS-2: AutomationBroker refuses a RUNNING/FAILED/CANCELLED/DENIED ledger row without a trustworthy receipt (AmbiguousToolState), re-entering only from WAITING_APPROVAL with a durable decision, which also protects chat/harness command continuations. MIS-3: Mission run_command approvals route to the mission service and resume the run; the card is bound to its tool call and task and rebuilt from the durable ledger row. MIS-4: cancelling the task awaiting a foreground command terminates the process and records it cancelled. MIS-5: restart-recovery events are keyed by a per-cycle generation. MIS-6: a CANCELLING run is finalized as cancelled on restart, not resurrected. Selected: the mission lifecycle/recovery/approval suite; the specialist orchestration, batch-routing and routing-tolerance suites; the automation runtime/broker suite; the tool-failure envelope suite (unknown-outcome observation); the background results webhook suite; the row-horizon guard, which now enforces missions.py after this PR removes the last exemption; and the generic CRUD exposure guard (AgentAttempt gains a field, no new kind). MIS-4 is reconciled with #572 (HARN-5): one foreground-cancel implementation using #569's stop-status rule; this PR adds the MIS-4 test and a shielded finalizer on process_io terminate.",
-  "exclusions": "Full suites are not approved and are excluded. tests/v3/test_automation_runtime.py::test_host_scope_expiry_closes_running_commands is a pre-existing load-sensitive timing flake (0.5s scope expiry + 0.8s assertion) that fails identically on pristine origin/main under heavy concurrent load and is unrelated to this change. No UI, Playwright, native Rust/Tauri, or migration changes: AgentAttempt gains a defaulted nullable routing_response field inside existing JSON payloads (old rows validate; no schema change), and the live DB has zero Mission runs.",
+  "change_digest": "44454b4083b91d89ece85665812a296f62eade79b5960eb4cacbd615e483ffba",
+  "reviewed_by": "Claude focused review for chat-stream-follow",
+  "reason": "Chat stream follow fixes (UI-1, UI-2, UI-3, UI-7, UI-8). Backend: provider frames carry a runtime epoch and a finished runtime's frames stay readable for late viewers (follow_provider_turn, /chat/turns/{id}/events), callback_required names its wait kind, ChatTurnSummary reports wait_kind/wait_summary/subagent_ids/recoverable, /state and /session-activity treat an interrupted turn awaiting recovery as busy and stoppable, and restart recovery settles a goal turn its policy never resumes. Python selection: test_chat_stream_follow.py (new regression tests for each of those), test_chat_reconnection.py and test_session_state.py (follow cursor and snapshot contracts), test_chat_goals.py (goal resume/cancel with interrupted turns), test_playwright_impact.py (new areas), and the test_chat_api.py / test_chat.py / test_chat_subagents.py nodes that exercise follow, stop, callback waits and restart recovery. Frontend: streamChat pause/epoch handling, the follow-authority decision, catch-up read cursor, callback status copy, plus the existing chat connection, client, stream lifecycle, message reconciliation and session-state tests. Playwright: SessionsPage changed, so entry:assistant/{desktop,mobile-chromium,mobile-webkit}; the new mocked journeys at 320/390/430 on Chromium and WebKit (area:chat-stream-follow) and real-Core LAN journeys (area:chat-stream-follow-core); callback, paused-supervisor, subagent, chat-reconnection and goal-lifecycle areas that share the changed follow paths.",
+  "exclusions": "Full suites are not approved and are excluded. Pre-existing failures on origin/main 18c0d71 (verified on a pristine worktree with identical assertion failures; most expect 'started' as the first frame while #559 queues first) are excluded by node selection: test_chat_api.py::test_provider_chat_keeps_running_after_the_viewer_detaches, ::test_stopping_provider_chat_cancels_the_core_owned_turn, ::test_stopping_provider_chat_ends_followers_with_a_cancelled_event; test_chat.py::test_cancel_turn_cancels_every_open_call_in_a_provider_batch, ::test_core_shutdown_leaves_an_inflight_provider_turn_recoverable, ::test_core_update_auto_resumes_safe_supervisor_with_saved_thinking (x2); test_chat_subagents.py::test_graceful_core_update_resumes_safe_child_before_reporting_to_parent, ::test_wait_resumes_parent_with_report_and_posts_result, ::test_core_shutdown_interrupts_an_inflight_parent_tool_turn, ::test_subagent_question_pauses_it_until_the_waiting_parent_answers, ::test_message_to_a_finished_subagent_starts_another_round. These are repaired by the in-flight claude/resume-admission branch; with this change applied on top of it, test_chat_api.py (25) and test_chat_subagents.py (27) pass in full. Other test_chat_api.py/test_chat.py/test_chat_subagents.py tests do not touch the changed follow, stop, recovery or wait paths. No native tests: no Rust or desktop code changed.",
   "expected_tests": {
-    "python": 190,
-    "frontend": 0,
+    "python": 102,
+    "frontend": 122,
     "native": 0,
-    "playwright": 0
+    "playwright": 300
   },
   "python_versions": [
     "3.12"
@@ -15,17 +15,54 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_missions.py",
-    "tests/v3/test_orchestration.py",
-    "tests/v3/test_specialist_tool_batches.py",
-    "tests/v3/test_specialist_routing_tolerance.py",
-    "tests/v3/test_automation_runtime.py",
-    "tests/v3/test_tool_failures.py",
-    "tests/v3/test_process_results_webhook.py",
-    "tests/v3/test_row_horizon.py",
-    "tests/v3/test_generic_crud_exposure.py"
+    "tests/v3/test_chat_stream_follow.py",
+    "tests/v3/test_chat_reconnection.py",
+    "tests/v3/test_session_state.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/test_playwright_impact.py",
+    "tests/v3/test_chat_api.py::test_completed_provider_events_wait_for_a_late_follower",
+    "tests/v3/test_chat_api.py::test_chat_session_activity_reports_core_owned_turn_state",
+    "tests/v3/test_chat_api.py::test_chat_stream_names_exhausted_final_answer_recovery",
+    "tests/v3/test_chat_api.py::test_pending_callback_turn_returns_saved_thinking_and_partial_answer",
+    "tests/v3/test_chat_api.py::test_following_a_completed_turn_replays_its_timing_and_reasoning",
+    "tests/v3/test_chat_api.py::test_follow_reports_a_turn_that_failed_outside_chat_errors_as_an_error_frame",
+    "tests/v3/test_chat.py::test_cancelled_provider_turn_emits_cancelled_hook_and_stays_bounded",
+    "tests/v3/test_chat.py::test_active_provider_turn_is_named_before_terminal_completion",
+    "tests/v3/test_chat.py::test_cancelled_turn_pauses_the_session_goal_even_when_created_late",
+    "tests/v3/test_chat.py::test_core_startup_auto_resumes_running_goal_with_unknown_effect",
+    "tests/v3/test_chat.py::test_core_update_auto_resumes_uncertain_and_crashed_turns",
+    "tests/v3/test_chat.py::test_core_restart_recovery_bounds_concurrent_provider_turns",
+    "tests/v3/test_chat.py::test_core_restart_recovery_retries_without_operator_action",
+    "tests/v3/test_chat_subagents.py::test_subagent_tools_require_opt_in",
+    "tests/v3/test_chat_subagents.py::test_stopping_parent_stops_its_subagents",
+    "tests/v3/test_chat_subagents.py::test_restart_keeps_recoverable_subagent_round_live",
+    "tests/v3/test_chat_subagents.py::test_restart_repairs_a_late_terminal_child_write_from_the_old_core",
+    "tests/v3/test_chat_subagents.py::test_restart_resumes_a_parent_waiting_on_an_interrupted_subagent",
+    "tests/v3/test_chat_subagents.py::test_failed_parent_resume_fails_the_turn_and_posts_reports",
+    "tests/v3/test_chat_subagents.py::test_stopping_an_interrupted_parent_posts_finished_reports"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/chatStreamFollow.test.ts",
+    "ui/src/api/chatConnection.test.ts",
+    "ui/src/api/client.test.ts",
+    "ui/src/pages/providerTurnFollow.test.ts",
+    "ui/src/pages/chatStreamLifecycle.test.ts",
+    "ui/src/pages/chatMessageReconciliation.test.ts",
+    "ui/src/pages/useSessionState.test.tsx",
+    "ui/src/components/ChatCatchUp.test.tsx",
+    "ui/src/components/CallbackWaitingStatus.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit",
+    "area:chat-stream-follow",
+    "area:chat-stream-follow-core",
+    "area:automation-callback",
+    "area:paused-supervisor-recovery",
+    "area:chat-subagents",
+    "area:chat-reconnection",
+    "area:provider-goal-lifecycle-core"
+  ]
 }
