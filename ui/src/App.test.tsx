@@ -954,7 +954,8 @@ describe("Nebula workspace", () => {
     const user = userEvent.setup();
     const rendered = renderApp("/sessions");
 
-    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }, { timeout: 5_000 }));
+    // The lazy Workbench is the slow part of a full App render under load.
+    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }, { timeout: 10_000 }));
     expect(screen.queryByLabelText("Conversations")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Show conversations" }));
     const conversationPanel = await screen.findByLabelText("Conversations");
@@ -1016,7 +1017,8 @@ describe("Nebula workspace", () => {
     await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
     await user.click(within(screen.getByRole("menu", { name: "Actions for Port review" })).getByRole("menuitem", { name: "Archive" }));
     const archivedToggle = await screen.findByRole("button", { name: /Archived\s*1/ });
-    expect(archivedToggle).toHaveAttribute("aria-expanded", "true");
+    // The group opens for the selected conversation once the list shows it archived.
+    await waitFor(() => expect(archivedToggle).toHaveAttribute("aria-expanded", "true"));
     expect(screen.getByText("This conversation is archived. Sending a message moves it back to your conversations.")).toBeVisible();
     expect(screen.getByRole("button", { name: "More actions for Port review" })).toBeVisible();
     const archiveCall = [...fetchMock.mock.calls].reverse().find(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "PATCH");

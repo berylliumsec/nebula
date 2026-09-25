@@ -27,3 +27,22 @@ test("selects light artwork at display sizes and gives composed definitions uniq
   expect(new Set(ids).size).toBe(2);
   icons.forEach(icon => expect(icon.querySelector("g[clip-path]")?.getAttribute("clip-path")).toBe(`url(#${icon.querySelector("clipPath")?.id})`));
 });
+
+test("leaves an icon's artwork untouched when its parent renders again", () => {
+  const view = render(<button type="button"><Search size={14} /></button>);
+  const artwork = view.container.querySelector("g")!;
+  const records: MutationRecord[] = [];
+  const observer = new MutationObserver((items) => records.push(...items));
+  observer.observe(view.container, { childList: true, subtree: true });
+  view.rerender(<button type="button"><Search size={14} /></button>);
+  records.push(...observer.takeRecords());
+  expect(records).toEqual([]);
+  expect(view.container.querySelector("g")).toBe(artwork);
+
+  // A different weight still swaps the artwork.
+  view.rerender(<button type="button"><Search size={14} weight="light" /></button>);
+  records.push(...observer.takeRecords());
+  observer.disconnect();
+  expect(records.filter((record) => record.target === artwork)).not.toHaveLength(0);
+  expect(view.container.querySelector("svg")).toHaveAttribute("data-icon-weight", "light");
+});
