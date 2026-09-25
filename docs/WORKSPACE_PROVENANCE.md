@@ -31,13 +31,21 @@ creates, edits or deletes one, so a client cannot forge or rewrite a receipt.
 
 For Git workspaces, Core asks Git for its dirty-path list and fingerprints only
 those paths. It does not walk the workspace. Non-Git workspaces and dirty sets
-larger than the bounded limit return an unsupported receipt rather than a false
-attribution.
+past a bound return an unsupported receipt rather than a false or partial
+attribution. The bounds are 2,000 dirty paths, 256 MiB of dirty regular-file
+content, and 10 seconds for the whole snapshot (Git and hashing); the
+`unsupported_reason` names the bound, for example
+`dirty_bytes_limit_exceeded:<bytes>><limit>` or
+`snapshot_time_limit_exceeded:10s`.
 
 Before/after observations are recorded around selected chat lifecycle hooks and
-automatically discovered `tool.before`/`tool.after` hooks. If another actor's
-observation overlaps, matching mutations are marked uncertain. Hooks must not
-treat uncertain, unknown, or unsupported paths as owned by the current actor.
+automatically discovered `tool.before`/`tool.after` hooks. A chat turn records
+its observation only when a selected hook subscribes to a `chat.turn.*` event;
+tool hooks keep their own per-call observation. Core takes snapshots off its
+event loop, so a slow checkout delays only the turn or tool call it belongs to.
+If another actor's observation overlaps, matching mutations are marked
+uncertain. Hooks must not treat uncertain, unknown, or unsupported paths as
+owned by the current actor.
 
 ## Policy boundary
 

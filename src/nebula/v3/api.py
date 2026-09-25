@@ -573,6 +573,8 @@ CUSTOM_RESOURCES = {
     "action_intents",
     "automation_policies",
     "chat_turns",
+    # Write-once values a turn or goal resumes from; only their owners read them.
+    "chat_snapshot_parts",
     "context_snapshots",
     "library_items",
     "operator_profiles",
@@ -12343,7 +12345,7 @@ def _chat_turn_summary(service: ChatService, turn: ChatTurn) -> ChatTurnSummary:
         queue_position=service.provider_scheduler.position(turn.id),
         capacity_lane=turn.capacity_lane,
         content=turn.content,
-        reasoning=turn.reasoning,
+        reasoning=service.turn_reasoning(turn),
         approval_id=turn.approval_id,
         harness_turn_id=turn.harness_turn_id,
         tool_call_ids=service.turn_ledger.tool_call_ids(turn),

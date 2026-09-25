@@ -13,6 +13,7 @@ from uuid import uuid4
 if TYPE_CHECKING:
     from .application_model.service import ApplicationModelService
 
+from pydantic import ValidationError
 from sqlalchemy import (
     ColumnElement,
     String,
@@ -127,6 +128,7 @@ _CHAT_SESSION_ID_ENTITY_KINDS = frozenset(
         "chat_queues",
         "chat_read_cursors",
         "chat_schedules",
+        "chat_snapshot_parts",
         "chat_turns",
     }
 )
@@ -246,6 +248,23 @@ class StoreTransaction:
             self.add(entity)
         return entities
 
+    def add_absent(self, entity: Entity) -> bool:
+        """Add a write-once record unless its id is already stored.
+
+        For content-addressed records, whose id is derived from their value, a
+        stored id already holds the same content. Returns whether it was added.
+        """
+
+        row = self.session.get(EntityRow, entity.id)
+        if row is None:
+            self.add(entity)
+            return True
+        if row.kind != entity.entity_kind:
+            raise ConflictError(
+                f"entity {entity.id} is stored as {row.kind}, not {entity.entity_kind}"
+            )
+        return False
+
     def update(
         self,
         model: type[EntityT],
@@ -267,20 +286,28 @@ class StoreTransaction:
             raise ConflictError(
                 f"revision conflict: expected {expected_revision}, found {row.revision}"
             )
-        current = _row_to_entity(row, model)
-        payload = current.model_dump(mode="python")
+        # The stored payload is the entity's own JSON form, so the change is
+        # applied to it directly and validated once. Parsing the stored entity
+        # and dumping it again first yields the same result at twice the cost,
+        # which a large record pays on every update.
+        payload = dict(row.payload)
         payload.update(changes)
-        payload["id"] = current.id
-        payload["created_at"] = current.created_at
+        payload["id"] = row.id
         payload["updated_at"] = utc_now()
-        payload["revision"] = current.revision + 1
-        updated = model.model_validate(payload)
+        payload["revision"] = row.revision + 1
+        try:
+            updated = model.model_validate(payload)
+        except ValidationError:  # diagnostic-expected: re-raised as the stored row's corruption or the invalid change
+            # A stored row that no longer validates is corruption, reported as
+            # such; otherwise the change itself is invalid.
+            _row_to_entity(row, model)
+            raise
         result = self.session.execute(
             update(EntityRow)
             .where(
                 EntityRow.id == entity_id,
                 EntityRow.kind == model.entity_kind,
-                EntityRow.revision == current.revision,
+                EntityRow.revision == row.revision,
             )
             .values(
                 payload=_dump_entity(updated),
@@ -893,6 +920,7 @@ class NebulaStore:
         automation_run_id: str | None = None,
         automation_session_id: str | None = None,
         automation_status: str | Sequence[str] | None = None,
+        session_id: str | None = None,
         offset: int = 0,
         limit: int | None = None,
         newest_first: bool = False,
@@ -907,8 +935,9 @@ class NebulaStore:
         the schema types as an integer, a sequence lists the accepted strings
         and ``None`` requires the field to be null or absent. The keyword
         arguments match the indexed projections the table maintains for the
-        browser automation kinds; prefer them to the equivalent payload
-        field. Rows come back oldest first unless ``newest_first`` is
+        browser automation kinds, and ``session_id`` the conversation lookup
+        of the conversation record kinds; prefer them to the equivalent
+        payload field. Rows come back oldest first unless ``newest_first`` is
         set, and ``limit=None`` returns every match.
         """
 
@@ -936,6 +965,10 @@ class NebulaStore:
             if not statuses:
                 return []
             statement = statement.where(EntityRow.automation_status.in_(statuses))
+        if session_id is not None:
+            if model.entity_kind not in _CHAT_SESSION_ID_ENTITY_KINDS:
+                raise ValueError(f"{model.entity_kind} has no conversation lookup")
+            statement = statement.where(EntityRow.chat_session_id == session_id)
         for field, value in filters.items():
             column: Any = EntityRow.payload
             for part in field.split("."):
@@ -1504,6 +1537,7 @@ class NebulaStore:
                             "chat_decisions",
                             "chat_read_cursors",
                             "chat_schedules",
+                            "chat_snapshot_parts",
                         )
                     ),
                     EntityRow.chat_session_id.in_(session_ids),

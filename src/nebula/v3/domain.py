@@ -3819,6 +3819,22 @@ class ChatTurn(Entity):
         return self
 
 
+class ChatSnapshotPart(Entity):
+    """One write-once value from a conversation record's snapshot, keyed by content.
+
+    A turn's request snapshot and a goal's skill snapshots are fixed when they
+    are written, but share their rows with counters Core rewrites on every
+    routing step or goal charge. Their large values are stored here once per
+    conversation instead, so those writes rewrite only the fields that change.
+    """
+
+    entity_kind: ClassVar[str] = "chat_snapshot_parts"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    value: Any = None
+
+
 class ChatSubagentStatus(StringEnum):
     RUNNING = "running"
     COMPLETED = "completed"
@@ -4810,6 +4826,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatDecision,
     ChatReadCursor,
     ChatTurn,
+    ChatSnapshotPart,
     ChatSubagent,
     ChatSubagentMessage,
     ChatAgentMessage,

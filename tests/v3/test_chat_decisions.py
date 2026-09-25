@@ -2,6 +2,7 @@ import asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from tests.v3.test_chat_queue import setup_queue, enqueue
+from nebula.v3.chat_snapshot_parts import resolve_request_snapshot
 from nebula.v3.chat_decisions import (
     decision_instructions,
     decisions_router,
@@ -169,7 +170,9 @@ def test_queued_dispatch_uses_current_decisions_and_freezes_revision(tmp_path):
         assert turn.request_snapshot["operator_decisions"][0]["revision"] == 2
         assert (
             "Current dispatch decision"
-            in turn.request_snapshot["model_request"]["instructions"]
+            in resolve_request_snapshot(
+                store, turn.request_snapshot, session_id=turn.session_id
+            )["model_request"]["instructions"]
         )
         assert (
             client.put(

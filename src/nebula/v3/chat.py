@@ -21,6 +21,7 @@ import json
 import logging
 import re
 import threading
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -40,6 +41,16 @@ from pydantic import (
 )
 
 from .artifacts import ArtifactStore
+from .chat_snapshot_parts import (
+    REASONING_PARTS_KEY,
+    load_snapshot_part,
+    resolve_request_snapshot,
+    resolve_skill_snapshots,
+    split_request_snapshot,
+    snapshot_part,
+    split_skill_snapshots,
+    stage_snapshot_parts,
+)
 from .chat_turn_ledger import ChatTurnLedger, TurnCheckpoint
 from .provider_scheduler import ProviderAdmission, ProviderScheduler
 from .browser_tools import BrowserToolPlatform, combine_tool_components
@@ -93,6 +104,8 @@ from .domain import (
     ToolCallOrigin,
     ToolCall,
     ToolCallStatus,
+    WorkspaceProvenanceObservation,
+    ChatSnapshotPart,
     utc_now,
 )
 from .context import (
@@ -152,7 +165,7 @@ from .chat_turn_outcomes import (
     turn_outcome_metadata,
     turn_outcome_text,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, NebulaStore, NotFoundError, StoreTransaction
 from .tool_markup import frame_start as tool_frame_start
 from .tool_markup import is_frame as tool_frame_is_frame
 from .tool_markup import partial_tag_start as tool_frame_partial_start
@@ -913,15 +926,31 @@ _RETRIEVAL_PLAN_TIMEOUT_SECONDS = 30.0
 
 # A turn's thinking is bounded by what ChatMessage.reasoning can hold.
 _REASONING_LIMIT = 200_000
+# Thinking the turn row holds before it is sealed into a write-once part:
+# every routing step rewrites the row, and a long turn's thinking reaches
+# the bound above.
+_REASONING_SEAL_CHARS = 16_000
 
 
-def _reasoning_step_delta(collected: str, addition: str) -> str:
-    """The text one more thought adds to a turn's episode, blank line and all."""
+def _reasoning_step_delta(collected: str | bool, addition: str) -> str:
+    """The text one more thought adds to a turn's episode, blank line and all.
+
+    ``collected`` is the thinking so far, or whether there is any.
+    """
 
     thought = addition.strip()
     if not thought:
         return ""
     return f"\n\n{thought}" if collected else thought
+
+
+def _routing_content_delta(collected: str, content: str) -> str:
+    """The prose a routing reply adds to a turn's content, within its bound."""
+
+    if not content:
+        return ""
+    separator = "\n\n" if collected else ""
+    return (separator + content)[: max(0, 200_000 - len(collected))]
 
 
 def _joined_reasoning(collected: str, addition: str) -> str:
@@ -1145,6 +1174,10 @@ _ENDED_TURN_HOOK_FINISH_REASONS = {
     "chat.turn.failed": "failed",
     "chat.turn.cancelled": "cancelled",
 }
+# The hook events a chat turn raises itself, around one workspace observation.
+_TURN_HOOK_EVENTS = frozenset(
+    {"chat.turn.started", "chat.turn.completed", *_ENDED_TURN_HOOK_FINISH_REASONS}
+)
 _HOOK_STDERR_EXCERPT_CHARS = 500
 _HOOK_MODEL_FEEDBACK_CHARS = 8_000
 _HOOK_MODEL_DECISION_CHARS = 4_000
@@ -1669,6 +1702,10 @@ class ChatService:
         self.managed_skill_root = managed_skill_root
         self.worker_id = worker_id or f"core-worker-{uuid4()}"
         self.turn_ledger = ChatTurnLedger(store.database)
+        # Sealed reasoning parts by id; they are write-once, so a copy stays
+        # valid. Recovery passes read turns off the event loop too.
+        self._sealed_reasoning: OrderedDict[str, str] = OrderedDict()
+        self._sealed_reasoning_lock = threading.Lock()
         self.provider_scheduler = ProviderScheduler(store, worker_id=self.worker_id)
         self._global_tool_slots = asyncio.Semaphore(
             self.provider_scheduler.config.global_tool_limit
@@ -3499,14 +3536,15 @@ class ChatService:
                                 "provider_id": prepared.provider_profile.id,
                                 "model": prepared.resolved_model,
                             }
-                            if saved_turn.reasoning:
+                            saved_reasoning = self.turn_reasoning(saved_turn)
+                            if saved_reasoning:
                                 runtime.events.append(
                                     (
                                         "reasoning_delta",
                                         {
                                             "type": "reasoning_delta",
                                             **common,
-                                            "delta": saved_turn.reasoning,
+                                            "delta": saved_reasoning,
                                         },
                                     )
                                 )
@@ -4051,7 +4089,13 @@ class ChatService:
 
         skill_snapshots = [
             SkillSnapshot.model_validate(item)
-            for item in (goal.skill_snapshots if goal is not None else [])
+            for item in (
+                resolve_skill_snapshots(
+                    self.store, goal.skill_snapshots, session_id=goal.session_id
+                )
+                if goal is not None
+                else []
+            )
         ]
         if request.skill is not None:
             if engagement_id is None:
@@ -4072,16 +4116,21 @@ class ChatService:
                 existing_paths = {item.path for item in skill_snapshots}
                 if selected_snapshot.path not in existing_paths:
                     skill_snapshots.append(selected_snapshot)
-                    goal = self.store.update(
-                        ChatGoal,
-                        goal.id,
-                        {
-                            "skill_snapshots": [
-                                item.model_dump(mode="json") for item in skill_snapshots
-                            ]
-                        },
-                        expected_revision=goal.revision,
+                    # Each usage charge rewrites the goal, so the attached
+                    # instructions are stored beside it rather than in it.
+                    skill_entries, skill_parts = split_skill_snapshots(
+                        (item.model_dump(mode="json") for item in skill_snapshots),
+                        engagement_id=goal.engagement_id,
+                        session_id=goal.session_id,
                     )
+                    with self.store.transaction() as transaction:
+                        stage_snapshot_parts(transaction, skill_parts)
+                        goal = transaction.update(
+                            ChatGoal,
+                            goal.id,
+                            {"skill_snapshots": skill_entries},
+                            expected_revision=goal.revision,
+                        )
             else:
                 skill_snapshots = [selected_snapshot]
 
@@ -5007,7 +5056,6 @@ class ChatService:
         completion = self._completion(prepared, response)
         self._persist(prepared, completion)
         self._start_initial_naming(prepared, completion.message.content)
-        self._complete_turn(prepared, completion)
         self._release_execution(prepared)
         return completion
 
@@ -5540,22 +5588,27 @@ class ChatService:
         prepared.session = session or prepared.session
         if turn is not None:
             latest = self._refresh_turn(turn)
-            prepared.turn = self.store.update(
-                ChatTurn,
-                latest.id,
+            compact_snapshot, snapshot_parts = split_request_snapshot(
                 {
-                    "request_snapshot": {
-                        **latest.request_snapshot,
-                        "model_request": recovered_base.model_dump(mode="json"),
-                        "context_usage": prepared.context_usage.model_dump(mode="json"),
-                        "context_length_recovery": {
-                            "attempted": True,
-                            "metadata_revision": limits.metadata_revision,
-                        },
-                    }
+                    **latest.request_snapshot,
+                    "model_request": recovered_base.model_dump(mode="json"),
+                    "context_usage": prepared.context_usage.model_dump(mode="json"),
+                    "context_length_recovery": {
+                        "attempted": True,
+                        "metadata_revision": limits.metadata_revision,
+                    },
                 },
-                expected_revision=latest.revision,
+                engagement_id=latest.engagement_id,
+                session_id=latest.session_id,
             )
+            with self.store.transaction() as transaction:
+                stage_snapshot_parts(transaction, snapshot_parts)
+                prepared.turn = transaction.update(
+                    ChatTurn,
+                    latest.id,
+                    {"request_snapshot": compact_snapshot},
+                    expected_revision=latest.revision,
+                )
         return retry
 
     async def _verify_openrouter_route_limits(
@@ -5836,7 +5889,6 @@ class ChatService:
                     )
                 self._persist(prepared, completion)
                 self._start_initial_naming(prepared, completion.message.content)
-                self._complete_turn(prepared, completion)
                 self._release_execution(prepared)
                 payload = completion.model_dump(mode="json")
                 payload["type"] = "done"
@@ -6036,10 +6088,29 @@ class ChatService:
                     requested_at = utc_now()
                     response = await self._complete_routing_step(prepared, routing)
                     responded_at = utc_now()
-                    self._assert_execution_owner(prepared)
-                    turn = self._refresh_turn(turn)
-                    thought = _reasoning_step_delta(turn.reasoning, response.reasoning)
-                    turn = self._add_usage(turn, response)
+                    turn = self._assert_execution_owner(prepared)
+                    thought = _reasoning_step_delta(
+                        bool(
+                            turn.reasoning
+                            or turn.request_snapshot.get(REASONING_PARTS_KEY)
+                        ),
+                        response.reasoning,
+                    )
+                    # Prose written beside the tool calls is saved with the
+                    # step's usage and thinking: one turn write, not two.
+                    prose_delta = (
+                        _routing_content_delta(
+                            turn.content, _operator_answer_text(response.text)
+                        )
+                        if response.tool_calls
+                        and not (
+                            len(response.tool_calls) == 1
+                            and response.tool_calls[0].name == "finish_response"
+                            and _operator_answer_text(response.text)
+                        )
+                        else ""
+                    )
+                    turn = self._add_usage(turn, response, content_delta=prose_delta)
                     if thought:
                         # The model explains each tool it reaches for. Without
                         # this the transcript shows thinking only for the
@@ -6117,21 +6188,17 @@ class ChatService:
                         raise ChatError(
                             "goal token budget was exhausted before tool execution"
                         )
-                    if response.tool_calls:
-                        visible = _operator_answer_text(response.text)
-                        if visible:
-                            turn, delta = self._add_routing_content(turn, visible)
-                            if delta:
-                                yield (
-                                    "delta",
-                                    {
-                                        "type": "delta",
-                                        "turn_id": turn.id,
-                                        "provider_id": prepared.provider_profile.id,
-                                        "model": prepared.resolved_model,
-                                        "delta": delta,
-                                    },
-                                )
+                    if response.tool_calls and prose_delta:
+                        yield (
+                            "delta",
+                            {
+                                "type": "delta",
+                                "turn_id": turn.id,
+                                "provider_id": prepared.provider_profile.id,
+                                "model": prepared.resolved_model,
+                                "delta": prose_delta,
+                            },
+                        )
                     elif response.text.strip():
                         # A cut-off answer or unreadable control frame cannot
                         # complete the turn; retain its wire response for review.
@@ -6570,7 +6637,7 @@ class ChatService:
             final_request = self._fit_turn_goal_request(prepared, final_request)
             self._ensure_request_capacity(prepared.provider_profile, final_request)
             completed = False
-            routing_thoughts = turn.reasoning
+            routing_thoughts = self.turn_reasoning(turn)
             recovery_attempts = 0
             # An answer the model wrote before a tool call that was rejected.
             # The turn asks again, and ends on this if the attempts run out.
@@ -6640,8 +6707,7 @@ class ChatService:
                                 "provider final synthesis omitted its response"
                             )
                         attempt_completed = True
-                        self._assert_execution_owner(prepared)
-                        turn = self._refresh_turn(turn)
+                        turn = self._assert_execution_owner(prepared)
                         turn = self._add_usage(turn, event.response)
                         prepared.turn = turn
                         synthesis = event.response
@@ -6760,17 +6826,6 @@ class ChatService:
                         self._persist(prepared, completion)
                         turn = prepared.turn or turn
                         self._start_initial_naming(prepared, completion.message.content)
-                        turn = self.store.update(
-                            ChatTurn,
-                            turn.id,
-                            {
-                                "status": ChatTurnStatus.COMPLETE,
-                                "final_message_id": completion.message.id,
-                                "usage": turn.usage,
-                            },
-                            expected_revision=turn.revision,
-                        )
-                        prepared.turn = turn
                         self._release_execution(prepared)
                         payload = completion.model_dump(mode="json")
                         payload["type"] = "done"
@@ -6921,18 +6976,7 @@ class ChatService:
             },
         )
         self._persist(prepared, completion)
-        turn = prepared.turn or turn
         self._start_initial_naming(prepared, completion.message.content)
-        prepared.turn = self.store.update(
-            ChatTurn,
-            turn.id,
-            {
-                "status": ChatTurnStatus.COMPLETE,
-                "final_message_id": completion.message.id,
-                "usage": turn.usage,
-            },
-            expected_revision=turn.revision,
-        )
         self._release_execution(prepared)
         payload = completion.model_dump(mode="json")
         payload["type"] = "done"
@@ -8071,7 +8115,12 @@ class ChatService:
     def _refresh_turn(self, turn: ChatTurn) -> ChatTurn:
         return self.store.get(ChatTurn, turn.id)
 
-    def _add_usage(self, turn: ChatTurn, response: ModelResponse) -> ChatTurn:
+    def _add_usage(
+        self, turn: ChatTurn, response: ModelResponse, *, content_delta: str = ""
+    ) -> ChatTurn:
+        """Record one model response's usage and thinking, and any prose
+        ``content_delta`` it adds, in a single turn write."""
+
         usage = ChatTokenUsage(
             input_tokens=turn.usage.input_tokens + response.usage.input_tokens,
             output_tokens=turn.usage.output_tokens + response.usage.output_tokens,
@@ -8079,15 +8128,20 @@ class ChatService:
             cached_input_tokens=turn.usage.cached_input_tokens
             + response.usage.cached_input_tokens,
         )
-        updated = self.store.update(
-            ChatTurn,
-            turn.id,
-            {
-                "usage": usage,
-                "reasoning": _joined_reasoning(turn.reasoning, response.reasoning),
-            },
-            expected_revision=turn.revision,
+        reasoning_changes, reasoning_parts = self._reasoning_changes(
+            turn, response.reasoning
         )
+        changes: dict[str, Any] = {"usage": usage, **reasoning_changes}
+        if content_delta:
+            changes["content"] = turn.content + content_delta
+        with self.store.transaction() as transaction:
+            stage_snapshot_parts(transaction, reasoning_parts)
+            updated = transaction.update(
+                ChatTurn,
+                turn.id,
+                changes,
+                expected_revision=turn.revision,
+            )
         if turn.goal_id:
             self._charge_goal(
                 turn.goal_id,
@@ -8106,22 +8160,64 @@ class ChatService:
                 )
         return updated
 
-    def _add_routing_content(
-        self, turn: ChatTurn, content: str
-    ) -> tuple[ChatTurn, str]:
-        """Persist prose emitted before the tool batch finishes."""
+    def _reasoning_changes(
+        self, turn: ChatTurn, addition: str
+    ) -> tuple[dict[str, Any], list[ChatSnapshotPart]]:
+        """The turn changes that add one thought to its thinking.
 
-        separator = "\n\n" if turn.content else ""
-        delta = (separator + content)[: max(0, 200_000 - len(turn.content))]
-        if not delta:
-            return turn, ""
-        updated = self.store.update(
-            ChatTurn,
-            turn.id,
-            {"content": turn.content + delta},
-            expected_revision=turn.revision,
+        The row keeps the thoughts since the last seal; once they reach
+        ``_REASONING_SEAL_CHARS`` they become a write-once part, and parts
+        that fall wholly outside the turn's bound are dropped. Sealed texts
+        and the row's text join with the blank line between thoughts.
+        """
+
+        sealed = list(turn.request_snapshot.get(REASONING_PARTS_KEY) or [])
+        # The blank line before a thought that starts the row's text is
+        # implied by the seal before it; stored text is stripped.
+        delta = _reasoning_step_delta(turn.reasoning, addition)
+        tail = (turn.reasoning + delta)[-_REASONING_LIMIT:]
+        if len(tail) < _REASONING_SEAL_CHARS:
+            return {"reasoning": tail}, []
+        part = snapshot_part(
+            tail, engagement_id=turn.engagement_id, session_id=turn.session_id
         )
-        return updated, delta
+        sealed.append({"part_id": part.id, "chars": len(tail)})
+        while (
+            len(sealed) > 1
+            and sum(int(item["chars"]) for item in sealed[1:]) >= _REASONING_LIMIT
+        ):
+            sealed.pop(0)
+        return {
+            "reasoning": "",
+            "request_snapshot": {**turn.request_snapshot, REASONING_PARTS_KEY: sealed},
+        }, [part]
+
+    def turn_reasoning(self, turn: ChatTurn) -> str:
+        """Every thought the turn has had, oldest first, within its bound."""
+
+        sealed = turn.request_snapshot.get(REASONING_PARTS_KEY)
+        if not sealed:
+            return turn.reasoning
+        texts: list[str] = []
+        for item in sealed:
+            part_id = str(item["part_id"])
+            with self._sealed_reasoning_lock:
+                text = self._sealed_reasoning.get(part_id)
+                if text is not None:
+                    self._sealed_reasoning.move_to_end(part_id)
+            if text is None:
+                value = load_snapshot_part(
+                    self.store, part_id, session_id=turn.session_id
+                )
+                text = value if isinstance(value, str) else ""
+                with self._sealed_reasoning_lock:
+                    self._sealed_reasoning[part_id] = text
+                    while len(self._sealed_reasoning) > 64:
+                        self._sealed_reasoning.popitem(last=False)
+            texts.append(text)
+        if turn.reasoning:
+            texts.append(turn.reasoning)
+        return "\n\n".join(texts)[-_REASONING_LIMIT:]
 
     def _charge_goal(
         self,
@@ -8129,7 +8225,14 @@ class ChatService:
         usage: ChatTokenUsage,
         *,
         exhausted_reason: str = "Token budget exhausted during provider response.",
+        transaction: StoreTransaction | None = None,
     ) -> ChatGoal:
+        """Debit ``usage`` from the goal, pausing a running goal at its budget.
+
+        With ``transaction`` the charge commits with the caller's writes.
+        """
+
+        write = transaction.update if transaction is not None else self.store.update
         goal = self.store.get(ChatGoal, goal_id)
         combined = ChatTokenUsage(
             input_tokens=goal.usage.input_tokens + usage.input_tokens,
@@ -8145,7 +8248,7 @@ class ChatService:
             and combined.total_tokens >= goal.token_budget
         ):
             paused_at = utc_now()
-            paused = self.store.update(
+            paused = write(
                 ChatGoal,
                 goal.id,
                 {
@@ -8158,10 +8261,11 @@ class ChatService:
                 },
                 expected_revision=goal.revision,
             )
-            # Its subagents spend the same budget, so they stop with it.
+            # Its subagents spend the same budget, so they stop with it. The
+            # stop runs as a task, after a caller's transaction has committed.
             self.subagents.stop_goal_subagents_soon(paused, GOAL_BUDGET_STOP_NOTE)
             return paused
-        return self.store.update(
+        return write(
             ChatGoal,
             goal.id,
             {"usage": combined},
@@ -9023,9 +9127,11 @@ class ChatService:
         if not profile.enabled:
             raise ChatConfigurationError("the chat provider is no longer enabled")
         provider = self.provider_factory(profile)
-        model_request = ModelRequest.model_validate(
-            turn.request_snapshot.get("model_request")
+        # The write-once request values live beside the turn row.
+        snapshot = resolve_request_snapshot(
+            self.store, turn.request_snapshot, session_id=turn.session_id
         )
+        model_request = ModelRequest.model_validate(snapshot.get("model_request"))
         automatic_note = (
             recovery.get("automatic_note") if isinstance(recovery, dict) else None
         )
@@ -9043,12 +9149,11 @@ class ChatService:
                 }
             )
         citations = [
-            ChatCitation.model_validate(item)
-            for item in turn.request_snapshot.get("citations", [])
+            ChatCitation.model_validate(item) for item in snapshot.get("citations", [])
         ]
         hook_snapshots = [
             NativeHookSnapshot.model_validate(item)
-            for item in turn.request_snapshot.get("hook_snapshots", [])
+            for item in snapshot.get("hook_snapshots", [])
         ]
         if not turn.tools_enabled:
             resolved_model = provider.require(model_request)
@@ -9085,11 +9190,11 @@ class ChatService:
             mcp_profiles = tuple(
                 McpServerProfile.model_validate(item)
                 for key in ("mcp_snapshot", "mcp_catalog_snapshot")
-                for item in turn.request_snapshot.get(key, [])
+                for item in snapshot.get(key, [])
             )
             ssh_environments = tuple(
                 SshEnvironment.model_validate(item)
-                for item in turn.request_snapshot.get("ssh_environment_snapshot", [])
+                for item in snapshot.get("ssh_environment_snapshot", [])
             )
             include_commands = bool(
                 turn.request_snapshot.get("include_oci_tools", True)
@@ -9149,7 +9254,7 @@ class ChatService:
                 )
             skill_snapshots = [
                 SkillSnapshot.model_validate(item)
-                for item in turn.request_snapshot.get("skill_snapshots", [])
+                for item in snapshot.get("skill_snapshots", [])
             ]
             skill_components = (
                 skill_resource_components(
@@ -9308,6 +9413,12 @@ class ChatService:
             return
         if turn is None or session is None or prepared.engagement_id is None:
             raise ChatError("native hook execution requires a durable project turn")
+        if not any(
+            _TURN_HOOK_EVENTS.intersection(snapshot.manifest.events)
+            for snapshot in prepared.hook_snapshots
+        ):
+            # Only tool hooks were selected; they observe their own calls.
+            return
         actor_id = actor_id_for(
             self.store,
             owner_kind="chat",
@@ -9316,47 +9427,16 @@ class ChatService:
         )
         workspace_provenance: dict[str, Any]
         try:
-            workspace = self.workspace_resolver(prepared.engagement_id)
-            provenance = WorkspaceProvenanceService(self.store)
-            if event_name == "chat.turn.started":
-                observation = provenance.begin(
-                    workspace,
-                    engagement_id=prepared.engagement_id,
-                    scope_kind="turn",
-                    scope_id=turn.id,
-                    actor_id=actor_id,
-                    owner_kind="chat",
-                    owner_id=session.id,
-                    chat_session_id=session.id,
-                    chat_turn_id=turn.id,
-                )
-            else:
-                try:
-                    observation = provenance.finish(
-                        workspace,
-                        engagement_id=prepared.engagement_id,
-                        scope_kind="turn",
-                        scope_id=turn.id,
-                    )
-                except NotFoundError:  # diagnostic-expected: recovery without a start observation uses a same-state baseline
-                    observation = provenance.begin(
-                        workspace,
-                        engagement_id=prepared.engagement_id,
-                        scope_kind="turn",
-                        scope_id=turn.id,
-                        actor_id=actor_id,
-                        owner_kind="chat",
-                        owner_id=session.id,
-                        chat_session_id=session.id,
-                        chat_turn_id=turn.id,
-                    )
-                    observation = provenance.finish(
-                        workspace,
-                        engagement_id=prepared.engagement_id,
-                        scope_kind="turn",
-                        scope_id=turn.id,
-                    )
-            workspace_provenance = provenance.receipt(observation)
+            # Git status and dirty-file hashing take seconds on a busy
+            # checkout; off the event loop they stall only this turn.
+            workspace_provenance = await asyncio.to_thread(
+                self._observe_turn_workspace,
+                engagement_id=prepared.engagement_id,
+                session_id=session.id,
+                turn_id=turn.id,
+                actor_id=actor_id,
+                starting=event_name == "chat.turn.started",
+            )
         except Exception as exc:
             record_caught_exception(
                 "chat",
@@ -9431,6 +9511,51 @@ class ChatService:
                     f"required native hook {snapshot.id!r} did not complete: "
                     f"{outcome.error or outcome.status}"
                 )
+
+    def _observe_turn_workspace(
+        self,
+        *,
+        engagement_id: str,
+        session_id: str,
+        turn_id: str,
+        actor_id: str,
+        starting: bool,
+    ) -> dict[str, Any]:
+        """Begin or finish the turn's workspace observation; return its receipt."""
+
+        workspace = self.workspace_resolver(engagement_id)
+        provenance = WorkspaceProvenanceService(self.store)
+
+        def begin() -> WorkspaceProvenanceObservation:
+            return provenance.begin(
+                workspace,
+                engagement_id=engagement_id,
+                scope_kind="turn",
+                scope_id=turn_id,
+                actor_id=actor_id,
+                owner_kind="chat",
+                owner_id=session_id,
+                chat_session_id=session_id,
+                chat_turn_id=turn_id,
+            )
+
+        def finish() -> WorkspaceProvenanceObservation:
+            return provenance.finish(
+                workspace,
+                engagement_id=engagement_id,
+                scope_kind="turn",
+                scope_id=turn_id,
+            )
+
+        if starting:
+            observation = begin()
+        else:
+            try:
+                observation = finish()
+            except NotFoundError:  # diagnostic-expected: recovery without a start observation uses a same-state baseline
+                begin()
+                observation = finish()
+        return provenance.receipt(observation)
 
     @staticmethod
     def _record_ended_turn_hook_failure(execution: NativeHookExecution) -> None:
@@ -10515,24 +10640,35 @@ class ChatService:
             ):  # diagnostic-expected: fork without a goal copies no goal
                 goal = None
             if goal is not None:
-                self.store.create(
-                    ChatGoal(
-                        engagement_id=fork.engagement_id,
-                        session_id=fork.id,
-                        objective=goal.objective,
-                        completion_criteria=goal.completion_criteria,
-                        plan=goal.plan,
-                        token_budget=goal.token_budget,
-                        time_budget_seconds=goal.time_budget_seconds,
-                        step_budget=goal.step_budget,
-                        child_budget=goal.child_budget,
-                        skill_snapshots=goal.skill_snapshots,
-                        metadata={
-                            "forked_from_goal_id": goal.id,
-                            "workspace_is_shared": True,
-                        },
-                    )
+                # The copy's skills are stored in the fork, which outlives
+                # the source conversation if that is deleted.
+                skill_entries, skill_parts = split_skill_snapshots(
+                    resolve_skill_snapshots(
+                        self.store, goal.skill_snapshots, session_id=goal.session_id
+                    ),
+                    engagement_id=fork.engagement_id,
+                    session_id=fork.id,
                 )
+                with self.store.transaction() as transaction:
+                    stage_snapshot_parts(transaction, skill_parts)
+                    transaction.add(
+                        ChatGoal(
+                            engagement_id=fork.engagement_id,
+                            session_id=fork.id,
+                            objective=goal.objective,
+                            completion_criteria=goal.completion_criteria,
+                            plan=goal.plan,
+                            token_budget=goal.token_budget,
+                            time_budget_seconds=goal.time_budget_seconds,
+                            step_budget=goal.step_budget,
+                            child_budget=goal.child_budget,
+                            skill_snapshots=skill_entries,
+                            metadata={
+                                "forked_from_goal_id": goal.id,
+                                "workspace_is_shared": True,
+                            },
+                        )
+                    )
         return fork
 
     def rewind_session(
@@ -11766,8 +11902,11 @@ class ChatService:
             )
         # A tool turn thinks once per routing step and again while it answers.
         # The turn collected all of it; the final response holds only the last.
-        if prepared.turn is not None and prepared.turn.reasoning:
-            reasoning = prepared.turn.reasoning
+        turn_reasoning = (
+            self.turn_reasoning(prepared.turn) if prepared.turn is not None else ""
+        )
+        if turn_reasoning:
+            reasoning = turn_reasoning
         if prepared.turn is not None and prepared.turn.content:
             content = (prepared.turn.content + "\n\n" + content)[:200_000]
         return ChatCompletionResponse(
@@ -11882,9 +12021,20 @@ class ChatService:
             "message_count": last_sequence,
             "last_sequence": last_sequence,
         }
+        # Every routing step rewrites the turn row, so its large write-once
+        # request values are stored beside it, with it, once.
+        compact_snapshot, snapshot_parts = split_request_snapshot(
+            turn.request_snapshot,
+            engagement_id=turn.engagement_id,
+            session_id=turn.session_id,
+        )
+        turn = turn.model_copy(update={"request_snapshot": compact_snapshot})
         if prepared.pending_session is not None:
             session = prepared.pending_session.model_copy(update={"metadata": metadata})
-            self.store.create_many([session, *messages, turn])
+            with self.store.transaction() as transaction:
+                transaction.add_all([session, *messages])
+                stage_snapshot_parts(transaction, snapshot_parts)
+                transaction.add(turn)
             prepared.session = session
             prepared.pending_session = None
         else:
@@ -11903,7 +12053,9 @@ class ChatService:
                     },
                     expected_revision=session.revision,
                 )
-                transaction.add_all([*messages, turn])
+                transaction.add_all(messages)
+                stage_snapshot_parts(transaction, snapshot_parts)
+                transaction.add(turn)
                 if goal is not None:
                     transaction.update(
                         ChatGoal,
@@ -11924,44 +12076,10 @@ class ChatService:
                 BrowserCompanion(self.store, BrowserEngineRegistry()).bind(
                     browser_session_id, session.id
                 )
+        prepared.turn = turn
         prepared.inputs_persisted = True
         prepared.stored_messages.extend(messages)
         prepared.new_messages = []
-
-    def _complete_turn(
-        self, prepared: PreparedChat, completion: ChatCompletionResponse
-    ) -> None:
-        if prepared.turn is None or completion.message.id is None:
-            return
-        latest = self._assert_execution_owner(prepared)
-        if latest.status == ChatTurnStatus.COMPLETE:
-            prepared.turn = latest
-            return
-        prepared.turn = self.store.update(
-            ChatTurn,
-            latest.id,
-            {
-                "status": ChatTurnStatus.COMPLETE,
-                "final_message_id": completion.message.id,
-                "usage": completion.usage,
-                "error": None,
-            },
-            expected_revision=latest.revision,
-        )
-        if latest.goal_id and not prepared.tools_enabled:
-            uncharged = ChatTokenUsage(
-                input_tokens=max(
-                    0, completion.usage.input_tokens - latest.usage.input_tokens
-                ),
-                output_tokens=max(
-                    0, completion.usage.output_tokens - latest.usage.output_tokens
-                ),
-                total_tokens=max(
-                    0, completion.usage.total_tokens - latest.usage.total_tokens
-                ),
-            )
-            if uncharged.total_tokens:
-                self._charge_goal(latest.goal_id, uncharged)
 
     def _turn_timing(
         self, turn: ChatTurn | None, started_at: datetime | None = None
@@ -11997,14 +12115,102 @@ class ChatService:
         # Parallel approvals can overlap, so the wait never exceeds the turn.
         return elapsed, min(waited, elapsed) if waited else None
 
+    def _saved_turn_answer(self, turn: ChatTurn) -> ChatMessage | None:
+        """The answer already stored for ``turn``, if one is.
+
+        Outcome notes carry the turn id too, under their own ``kind``.
+        """
+
+        saved = self.store.find_entities(
+            ChatMessage,
+            {
+                "role": ChatRole.ASSISTANT.value,
+                "metadata.chat_turn_id": turn.id,
+                "metadata.kind": None,
+            },
+            session_id=turn.session_id,
+            limit=1,
+        )
+        return saved[0] if saved else None
+
+    def _adopt_saved_answer(
+        self,
+        prepared: PreparedChat,
+        completion: ChatCompletionResponse,
+        saved: ChatMessage,
+    ) -> None:
+        """Complete a turn whose answer an earlier attempt already stored.
+
+        Core releases committed the answer and the turn's completion
+        separately; a stop between them left an answered turn to resume. The
+        stored answer stands, and the turn completes on it rather than
+        storing a second answer.
+        """
+
+        completion.message.id = saved.id
+        completion.message.content = saved.content
+        completion.message.reasoning = saved.reasoning
+        completion.elapsed_ms = saved.elapsed_ms
+        completion.approval_wait_ms = saved.approval_wait_ms
+        with self.store.transaction() as transaction:
+            self._complete_turn_in(transaction, prepared, completion)
+
+    def _complete_turn_in(
+        self,
+        transaction: StoreTransaction,
+        prepared: PreparedChat,
+        completion: ChatCompletionResponse,
+    ) -> None:
+        """Mark the turn answered in the transaction that stores its answer.
+
+        One commit holds both: a stop can no longer leave a stored answer on
+        a turn that resumes and answers again.
+        """
+
+        latest = self._assert_execution_owner(prepared)
+        changes: dict[str, Any] = {
+            "status": ChatTurnStatus.COMPLETE,
+            "final_message_id": completion.message.id,
+        }
+        if not prepared.tools_enabled:
+            # A tool turn recorded each response's usage as it arrived.
+            changes.update({"usage": completion.usage, "error": None})
+        prepared.turn = transaction.update(
+            ChatTurn,
+            latest.id,
+            changes,
+            expected_revision=latest.revision,
+        )
+        if latest.goal_id and not prepared.tools_enabled:
+            uncharged = ChatTokenUsage(
+                input_tokens=max(
+                    0, completion.usage.input_tokens - latest.usage.input_tokens
+                ),
+                output_tokens=max(
+                    0, completion.usage.output_tokens - latest.usage.output_tokens
+                ),
+                total_tokens=max(
+                    0, completion.usage.total_tokens - latest.usage.total_tokens
+                ),
+            )
+            if uncharged.total_tokens:
+                self._charge_goal(latest.goal_id, uncharged, transaction=transaction)
+
     def _persist(
         self, prepared: PreparedChat, completion: ChatCompletionResponse
     ) -> None:
+        """Store the exchange and, for a durable turn, complete it atomically."""
+
         if not prepared.engagement_id:
             return
         session = prepared.session or prepared.pending_session
         if session is None:
             raise ChatError("engagement chat is missing its durable session")
+        if prepared.turn is not None and not prepared.new_messages:
+            saved = self._saved_turn_answer(prepared.turn)
+            if saved is not None:
+                self._adopt_saved_answer(prepared, completion, saved)
+                return
         start = self._next_sequence(session)
         messages: list[ChatMessage] = [
             ChatMessage(
@@ -12107,17 +12313,9 @@ class ChatService:
                 try:
                     with self.store.transaction() as transaction:
                         if prepared.turn is not None:
-                            latest_turn = self._assert_execution_owner(prepared)
-                            prepared.turn = transaction.update(
-                                ChatTurn,
-                                latest_turn.id,
-                                {
-                                    "execution_owner_id": latest_turn.execution_owner_id,
-                                    "execution_claim_id": latest_turn.execution_claim_id,
-                                    "execution_claimed_at": latest_turn.execution_claimed_at,
-                                },
-                                expected_revision=latest_turn.revision,
-                            )
+                            # Fenced by the execution claim, and one commit
+                            # with the answer it completes the turn on.
+                            self._complete_turn_in(transaction, prepared, completion)
                         latest_session = self.store.get(
                             ChatSession, prepared.session.id
                         )

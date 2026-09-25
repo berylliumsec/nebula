@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from .chat_snapshot_parts import resolve_request_snapshot
 from .chat_subagents import subagent_limit
 from .environments import enabled_snapshot_ssh_ids
 from .providers import REASONING_EFFORTS, ReasoningEffort
@@ -173,7 +174,13 @@ class ChatScheduleService:
         saved = session.metadata
         turns = self.store.list_session_entities(ChatTurn, session_id)
         latest = next((item for item in reversed(turns) if item.request_snapshot), None)
-        snapshot = latest.request_snapshot if latest is not None else {}
+        snapshot = (
+            resolve_request_snapshot(
+                self.store, latest.request_snapshot, session_id=latest.session_id
+            )
+            if latest is not None
+            else {}
+        )
         if latest is None:
             tools_enabled = bool(saved.get("tools_enabled", False))
         else:

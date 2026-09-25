@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+import threading
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
@@ -44,6 +46,9 @@ SHARED_REPLAY_FIELDS = ("reasoning_state", "response_text", "provider_metadata")
 _REPLAY_FROM = "replay_from"
 _FAILURE_SCHEMA = "nebula.tool-failure/v1"
 _RESTART_UNKNOWN_SCHEMA = "nebula.restart-uncertain/v1"
+# Turns whose folded history one ledger keeps in memory. A routing step reads
+# its turn's history several times; the rows it already folded never change.
+HISTORY_CACHE_TURNS = 16
 
 
 def _canonical(value: Any) -> bytes:
@@ -128,6 +133,24 @@ def _failure_facts(entry: Mapping[str, Any]) -> dict[str, Any] | None:
     return facts
 
 
+def _copied(value: Any) -> Any:
+    """A private copy of decoded JSON, so a caller cannot alter the cache."""
+
+    if isinstance(value, dict):
+        return {key: _copied(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_copied(item) for item in value]
+    return value
+
+
+@dataclass
+class _FoldedHistory:
+    """The latest row per step for one turn, through ``through_sequence``."""
+
+    through_sequence: int = 0
+    latest: dict[int, tuple[int, dict[str, Any]]] = field(default_factory=dict)
+
+
 @dataclass(frozen=True)
 class TurnCheckpoint:
     through_step: int
@@ -165,6 +188,8 @@ class ChatTurnLedger:
 
     def __init__(self, database: Database) -> None:
         self.database = database
+        self._folded: OrderedDict[str, _FoldedHistory] = OrderedDict()
+        self._folded_lock = threading.Lock()
 
     def _rows(self, turn_id: str) -> list[ChatTurnStepEventRow]:
         with self.database.session() as session:
@@ -358,18 +383,87 @@ class ChatTurnLedger:
                     return winner.sequence
             return sequence
 
+    def _rows_after(self, turn_id: str, sequence: int) -> list[tuple[int, int, Any]]:
+        with self.database.session() as session:
+            return [
+                (row.sequence, row.step, row.payload)
+                for row in session.execute(
+                    select(
+                        ChatTurnStepEventRow.sequence,
+                        ChatTurnStepEventRow.step,
+                        ChatTurnStepEventRow.payload,
+                    )
+                    .where(
+                        ChatTurnStepEventRow.turn_id == turn_id,
+                        ChatTurnStepEventRow.sequence > sequence,
+                    )
+                    .order_by(ChatTurnStepEventRow.sequence)
+                )
+            ]
+
     def history(self, turn: ChatTurn) -> list[dict[str, Any]]:
-        rows = self._rows(turn.id)
-        if not rows:
+        """The latest projection of every step, in the order it was recorded.
+
+        Rows are append-only and their sequences commit in order, so a fold
+        already read stays valid: each call reads only the rows after it.
+        """
+
+        with self._folded_lock:
+            cached = self._folded.get(turn.id)
+            if cached is not None:
+                self._folded.move_to_end(turn.id)
+            folded = (
+                _FoldedHistory(cached.through_sequence, dict(cached.latest))
+                if cached is not None
+                else _FoldedHistory()
+            )
+        rows = self._rows_after(turn.id, folded.through_sequence)
+        if not rows and not folded.latest:
             return [dict(item) for item in turn.tool_history if isinstance(item, dict)]
-        by_sequence = {row.sequence: row for row in rows}
-        latest: dict[int, ChatTurnStepEventRow] = {}
-        for row in rows:
-            latest[row.step] = row
+        read = {sequence: payload for sequence, _, payload in rows}
+        for sequence, step, payload in rows:
+            entry = dict(payload)
+            reference = entry.pop(_REPLAY_FROM, None)
+            if isinstance(reference, int) and not isinstance(reference, bool):
+                # The shared replay state is held by an earlier row of the
+                # same step: in this read, or already folded into the step.
+                held: Mapping[str, Any] | None = (
+                    read[reference]
+                    if reference in read
+                    else folded.latest[step][1]
+                    if step in folded.latest
+                    else self._payload_at(turn.id, reference)
+                )
+                for name in SHARED_REPLAY_FIELDS:
+                    if held is not None and name in held and name not in entry:
+                        entry[name] = held[name]
+            folded.latest[step] = (sequence, entry)
+            folded.through_sequence = max(folded.through_sequence, sequence)
+        if rows:
+            with self._folded_lock:
+                current = self._folded.get(turn.id)
+                if (
+                    current is None
+                    or current.through_sequence <= folded.through_sequence
+                ):
+                    self._folded[turn.id] = folded
+                    self._folded.move_to_end(turn.id)
+                while len(self._folded) > HISTORY_CACHE_TURNS:
+                    self._folded.popitem(last=False)
         return [
-            self._resolved(row.payload, by_sequence)
-            for row in sorted(latest.values(), key=lambda row: row.sequence)
+            _copied(entry)
+            for _, entry in sorted(folded.latest.values(), key=lambda item: item[0])
         ]
+
+    def _payload_at(self, turn_id: str, sequence: int) -> dict[str, Any] | None:
+        with self.database.session() as session:
+            row = session.scalar(
+                select(ChatTurnStepEventRow).where(
+                    ChatTurnStepEventRow.turn_id == turn_id,
+                    ChatTurnStepEventRow.sequence == sequence,
+                )
+            )
+            return dict(row.payload) if row is not None else None
 
     def event(self, turn_id: str, idempotency_key: str) -> dict[str, Any] | None:
         """The step entry one row recorded, shared replay state included."""
