@@ -40,6 +40,7 @@ from .domain import (
     utc_now,
 )
 from .orchestration import (
+    LatestCheckpointSqliteSaver,
     MissionRuntime,
     MissionPlan,
     ModelSpecialist,
@@ -54,7 +55,7 @@ from .orchestration import (
 from .providers import ModelProvider, ProviderError, provider_from_profile
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
 from .mcp import McpProbeError, mcp_tool_runtime_name, resolve_mcp_profiles
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, CorruptRecordError, NebulaStore, NotFoundError
 
 MAX_API_MISSION_TOKENS = 200_000
 MAX_API_MISSION_COST_USD = 100.0
@@ -68,6 +69,13 @@ _TERMINAL_RUN_STATUSES = {
     RunStatus.FAILED,
     RunStatus.CANCELLED,
     RunStatus.INTERRUPTED,
+}
+# Runs nothing resumes. An INTERRUPTED run is terminal for the operator but
+# still continues from its checkpoint once its effects are reconciled.
+_FINISHED_RUN_STATUSES = {
+    RunStatus.COMPLETE,
+    RunStatus.FAILED,
+    RunStatus.CANCELLED,
 }
 _TERMINAL_TASK_STATUSES = {
     TaskStatus.COMPLETE,
@@ -291,6 +299,7 @@ class MissionService:
             # recovery worker.
             if reconciled.status not in _TERMINAL_RUN_STATUSES:
                 recoveries.append(reconciled)
+        await self._discard_finished_checkpoints()
         for run in recoveries:
             try:
                 profile = self.store.get(
@@ -767,7 +776,9 @@ class MissionService:
                 task.cancel()
 
         if task is None or task.done():
-            return self._finalize_cancelled(run.id, clean_reason, actor_id)
+            cancelled = self._finalize_cancelled(run.id, clean_reason, actor_id)
+            await self._discard_finished_checkpoints([run.id])
+            return cancelled
         try:
             await asyncio.wait_for(
                 asyncio.shield(task), timeout=self.cancellation_timeout_seconds
@@ -1024,6 +1035,7 @@ class MissionService:
                     f"Mission reached terminal state: {recurrence_source.status.value}",
                     "system",
                 )
+            await self._discard_finished_checkpoints([queued.id])
             async with self._lock:
                 current_task = asyncio.current_task()
                 if self._tasks.get(queued.id) is current_task:
@@ -1167,6 +1179,7 @@ class MissionService:
             elif latest.status not in _TERMINAL_RUN_STATUSES:
                 self._finalize_failed(run.id, self._safe_error(exc))
         finally:
+            await self._discard_finished_checkpoints([run.id])
             async with self._lock:
                 current_task = asyncio.current_task()
                 if self._tasks.get(run.id) is current_task:
@@ -1498,6 +1511,7 @@ class MissionService:
                 await asyncio.sleep(0.1)
             await self._recover_execute(run_id, provider)
         finally:
+            await self._discard_finished_checkpoints([run_id])
             async with self._lock:
                 self._scheduled_tasks.pop(run_id, None)
                 if (
@@ -1909,6 +1923,49 @@ class MissionService:
             if len(page) < 1_000:
                 return
             offset += len(page)
+
+    async def _discard_finished_checkpoints(
+        self, run_ids: list[str] | None = None
+    ) -> None:
+        """Delete the LangGraph checkpoints of runs nothing will resume.
+
+        A run whose graph reached its end releases its own thread. A run that
+        finished another way (cancelled, failed by the service, or finalized
+        across a Core restart) is released here: when its worker ends, and by
+        a sweep of every thread at startup. A run that is not readable, or not
+        finished, keeps its checkpoint.
+        """
+
+        path = self.checkpoint_path
+        if path is None or not path.exists():
+            return
+        try:
+            async with LatestCheckpointSqliteSaver.from_conn_string(
+                str(path)
+            ) as checkpointer:
+                candidates = (
+                    run_ids if run_ids is not None else await checkpointer.athread_ids()
+                )
+                for run_id in candidates:
+                    try:
+                        run = self.store.get(AgentRun, run_id)
+                    except (
+                        NotFoundError,
+                        CorruptRecordError,
+                    ):  # diagnostic-expected: a thread without a readable run keeps its checkpoint
+                        continue
+                    if run.status in _FINISHED_RUN_STATUSES:
+                        await checkpointer.adelete_thread(run_id)
+        except Exception as exc:
+            # A finished run's leftover checkpoint is only storage; the next
+            # sweep removes it.
+            record_caught_exception(
+                "missions",
+                "missions.checkpoints.discard_failed",
+                "Checkpoints of finished Missions could not be removed.",
+                exc,
+                stage="checkpoint",
+            )
 
     def _discard_finished_tasks(self) -> None:
         for run_id, task in list(self._tasks.items()):

@@ -21,7 +21,14 @@ from pathlib import Path
 from typing import Any, Protocol, TypedDict, cast
 from uuid import uuid4
 
-from langgraph.checkpoint.base import BaseCheckpointSaver
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import (
+    BaseCheckpointSaver,
+    ChannelVersions,
+    Checkpoint,
+    CheckpointMetadata,
+    get_checkpoint_metadata,
+)
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
@@ -635,22 +642,10 @@ class MissionRuntime:
             "cost_usd": 0.0,
             "tool_calls": 0,
         }
-        return cast(
-            MissionState,
-            await self.graph.ainvoke(
-                state,
-                config={"configurable": {"thread_id": run.id}},
-            ),
-        )
+        return await self._invoke(state, run.id)
 
     async def resume(self, run_id: str, response: dict[str, Any]) -> MissionState:
-        return cast(
-            MissionState,
-            await self.graph.ainvoke(
-                Command(resume=response),
-                config={"configurable": {"thread_id": run_id}},
-            ),
-        )
+        return await self._invoke(Command(resume=response), run_id)
 
     async def recover(self, run_id: str) -> MissionState:
         """Continue the latest durable checkpoint after a Core restart.
@@ -658,16 +653,58 @@ class MissionRuntime:
         LangGraph resumes at the last committed boundary. Broker invocation
         identities are deterministic, so an effect whose ledger row is still
         ambiguous is returned to the specialist as an unknown failure instead
-        of being executed again.
+        of being executed again. A finished run keeps no checkpoint, so
+        there is nothing to continue and nothing runs again.
         """
 
-        return cast(
+        if (
+            await self.checkpointer.aget_tuple({"configurable": {"thread_id": run_id}})
+            is None
+        ):
+            raise MissionError(
+                f"run {run_id} has no checkpoint to resume: it finished or never started"
+            )
+        return await self._invoke(None, run_id)
+
+    async def _invoke(
+        self, graph_input: MissionState | Command[Any] | None, run_id: str
+    ) -> MissionState:
+        config: RunnableConfig = {"configurable": {"thread_id": run_id}}
+        # "sync": a superstep starts only once the checkpoint it resumes from is
+        # committed, so no node runs ahead of durable state and superseded
+        # checkpoints are pruned as the mission goes, not in a backlog.
+        state = cast(
             MissionState,
-            await self.graph.ainvoke(
-                None,
-                config={"configurable": {"thread_id": run_id}},
-            ),
+            await self.graph.ainvoke(graph_input, config=config, durability="sync"),
         )
+        await self._release_finished_thread(config)
+        return state
+
+    async def _release_finished_thread(self, config: RunnableConfig) -> None:
+        """Delete the checkpoints of a mission whose graph reached its end.
+
+        A finished thread has nothing left to resume: the terminal node has
+        already made the run's outcome durable in the store. An interrupted
+        thread (an approval) keeps its checkpoint.
+        """
+
+        try:
+            snapshot = await self.graph.aget_state(config)
+            if snapshot.next or snapshot.interrupts:
+                return
+            await self.checkpointer.adelete_thread(
+                str(config["configurable"]["thread_id"])
+            )
+        except Exception as exc:
+            # The run's outcome is already durable; Core startup removes a
+            # finished run's leftover checkpoints.
+            record_caught_exception(
+                "missions",
+                "missions.checkpoints.release_failed",
+                "A finished Mission's checkpoints could not be removed.",
+                exc,
+                stage="checkpoint",
+            )
 
     async def stream(
         self,
@@ -2272,6 +2309,110 @@ class MissionRuntime:
         )
 
 
+class LatestCheckpointSqliteSaver(AsyncSqliteSaver):
+    """A SQLite checkpointer that keeps only each thread's latest checkpoint.
+
+    Every superstep checkpoint carries the whole ``MissionState`` (LastValue
+    channels, no deltas), and ``AsyncSqliteSaver`` keeps all of them, so a
+    task's storage grew with the square of its turns. LangGraph resumes a
+    thread from its newest checkpoint and the pending writes recorded against
+    that checkpoint only; Missions never time-travel or fork. Once a newer
+    checkpoint is committed, the older checkpoints and their writes are
+    therefore superseded and are deleted.
+
+    Only rows strictly older than the committed checkpoint are removed, so the
+    checkpoint and writes a restart loads are never touched. A prune that
+    fails or is interrupted leaves the superseded rows for the next commit.
+    """
+
+    @classmethod
+    @asynccontextmanager
+    async def from_conn_string(
+        cls, conn_string: str
+    ) -> AsyncIterator[LatestCheckpointSqliteSaver]:
+        # The inherited factory constructs ``cls``; only its type is narrowed.
+        async with super().from_conn_string(conn_string) as saver:
+            yield cast(LatestCheckpointSqliteSaver, saver)
+
+    async def aput(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        """Store a checkpoint and drop the ones it supersedes, in one commit.
+
+        The row is exactly the one ``AsyncSqliteSaver.aput`` stores; the
+        prune shares its transaction so a superstep still costs one commit.
+        """
+
+        del new_versions
+        await self.setup()
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_ns = config["configurable"]["checkpoint_ns"]
+        type_, serialized_checkpoint = self.serde.dumps_typed(checkpoint)
+        serialized_metadata = json.dumps(
+            get_checkpoint_metadata(config, metadata), ensure_ascii=False
+        ).encode("utf-8", "ignore")
+        # Rows of this thread older than the checkpoint being stored.
+        superseded = (str(thread_id), checkpoint_ns, checkpoint["id"])
+        statements = (
+            (
+                "INSERT OR REPLACE INTO checkpoints (thread_id, checkpoint_ns, "
+                "checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    str(thread_id),
+                    checkpoint_ns,
+                    checkpoint["id"],
+                    config["configurable"].get("checkpoint_id"),
+                    type_,
+                    serialized_checkpoint,
+                    serialized_metadata,
+                ),
+            ),
+            (
+                "DELETE FROM writes WHERE thread_id = ? AND checkpoint_ns = ? "
+                "AND checkpoint_id < ?",
+                superseded,
+            ),
+            (
+                "DELETE FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? "
+                "AND checkpoint_id < ?",
+                superseded,
+            ),
+        )
+        async with self.lock:
+            try:
+                for statement, parameters in statements:
+                    async with self.conn.execute(statement, parameters):
+                        pass
+                await self.conn.commit()
+            except BaseException:  # diagnostic-expected: LangGraph fails the superstep with this error after the rollback
+                # Nothing of this checkpoint is kept, exactly as if Core had
+                # stopped before it: the previous one remains the latest.
+                await asyncio.shield(self.conn.rollback())
+                raise
+        return {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+                "checkpoint_id": checkpoint["id"],
+            }
+        }
+
+    async def athread_ids(self) -> list[str]:
+        """Every thread that still has a checkpoint."""
+
+        await self.setup()
+        async with (
+            self.lock,
+            self.conn.execute("SELECT DISTINCT thread_id FROM checkpoints") as cursor,
+        ):
+            return [str(row[0]) async for row in cursor]
+
+
 @asynccontextmanager
 async def sqlite_mission_runtime(
     *,
@@ -2286,7 +2427,7 @@ async def sqlite_mission_runtime(
     os.environ.setdefault("LANGGRAPH_STRICT_MSGPACK", "true")
     path = Path(checkpoint_path).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
-    async with AsyncSqliteSaver.from_conn_string(str(path)) as checkpointer:
+    async with LatestCheckpointSqliteSaver.from_conn_string(str(path)) as checkpointer:
         await checkpointer.setup()
         yield MissionRuntime(
             store=store,
@@ -2300,6 +2441,7 @@ async def sqlite_mission_runtime(
 __all__ = [
     "BudgetExceeded",
     "EvidenceVerifier",
+    "LatestCheckpointSqliteSaver",
     "MissionError",
     "MissionPlan",
     "MissionRuntime",
