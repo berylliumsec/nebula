@@ -15,6 +15,7 @@ import os
 import re
 import secrets
 import tempfile
+import threading
 import time
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta
@@ -185,6 +186,7 @@ from .container_terminal import (
     TERMINAL_MAX_DURATION_SECONDS,
 )
 from .database import Database
+from .event_history import pause_between_batches, prune_orphaned_event_history
 from .diagnostics import (
     DiagnosticManager,
     DiagnosticsError,
@@ -2248,6 +2250,30 @@ def create_app(
             await provider_chat.subagents.reconcile_after_restart()
             await start_component(
                 "chat", "follow-ups", chat_queue.startup, chat_queue.shutdown
+            )
+            # Event history of records deleted before their events went with
+            # them. Paused batches keep live writes flowing while it runs.
+            prune_stop = threading.Event()
+            prune_task = create_diagnostic_task(
+                asyncio.to_thread(
+                    prune_orphaned_event_history,
+                    store.database,
+                    pause=pause_between_batches,
+                    stop=prune_stop,
+                ),
+                feature="storage",
+                event_code="storage.event_history.prune",
+                failure_message="Removing event history of deleted records stopped.",
+                name="nebula-event-history-prune",
+            )
+
+            async def _stop_event_history_prune() -> None:
+                prune_stop.set()
+                await asyncio.wait({prune_task})
+                await asyncio.to_thread(store.event_history.close)
+
+            started.append(
+                ("storage", "event-history-prune", _stop_event_history_prune)
             )
         except BaseException:
             await stop_components()

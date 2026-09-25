@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -20,6 +20,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError
+
+from nebula.v3.database import Database
+from nebula.v3.event_history import prune_orphaned_event_history
 
 
 def _run_migration(
@@ -169,8 +172,170 @@ def _exercise_chat_session_lookup_cycle(database_url: str) -> None:
         engine.dispose()
 
 
+def _exercise_event_owner_retention_cycle(database_url: str) -> None:
+    """Event history can be deleted once its owner is gone, never before."""
+
+    engine = create_engine(database_url, future=True)
+    try:
+        _run_migration(engine, command.upgrade, "head")
+        metadata = MetaData()
+        entities = Table("entities", metadata, autoload_with=engine)
+        operations = Table("operation_events", metadata, autoload_with=engine)
+        runs = Table("run_events", metadata, autoload_with=engine)
+        now = datetime.now(timezone.utc)
+
+        def operation(
+            event_id: str, operation_id: str, kind: str, sequence: int = 1
+        ) -> dict:
+            return {
+                "id": event_id,
+                "operation_id": operation_id,
+                "operation_kind": kind,
+                "engagement_id": "retention-project",
+                "sequence": sequence,
+                "event_type": "fixture",
+                "payload": {},
+                "actor_id": None,
+                "occurred_at": now,
+                "idempotency_key": None,
+            }
+
+        def run_event(event_id: str, run_id: str, sequence: int = 1) -> dict:
+            return {
+                "id": event_id,
+                "run_id": run_id,
+                "sequence": sequence,
+                "event_type": "fixture",
+                "payload": {},
+                "actor_id": None,
+                "occurred_at": now,
+                "idempotency_key": None,
+            }
+
+        def delete_event(table: Table, event_id: str) -> int:
+            with engine.begin() as connection:
+                return connection.execute(
+                    delete(table).where(table.c.id == event_id)
+                ).rowcount
+
+        with engine.begin() as connection:
+            connection.execute(
+                entities.insert(),
+                [
+                    _legacy_row(
+                        "retention-project",
+                        "engagements",
+                        "retention-project",
+                        {"name": "Project"},
+                    ),
+                    _legacy_row(
+                        "retention-turn",
+                        "harness_turns",
+                        "retention-project",
+                        {"prompt": "kept"},
+                    ),
+                ],
+            )
+            connection.execute(
+                operations.insert(),
+                [
+                    operation("live", "retention-turn", "harness_turn"),
+                    operation("orphan", "deleted-turn", "harness_turn"),
+                    operation("terminal", "terminal-1", "container_terminal"),
+                ],
+            )
+            connection.execute(
+                runs.insert(),
+                [
+                    run_event("live-run", "retention-turn"),
+                    run_event("orphan-run", "deleted-run"),
+                ],
+            )
+
+        for table, event_id in (
+            (operations, "live"),
+            (operations, "terminal"),
+            (runs, "live-run"),
+        ):
+            with pytest.raises(DBAPIError, match="while their record exists"):
+                delete_event(table, event_id)
+        with pytest.raises(DBAPIError, match="immutable"):
+            with engine.begin() as connection:
+                connection.execute(
+                    update(operations)
+                    .where(operations.c.id == "orphan")
+                    .values(event_type="rewritten")
+                )
+        assert delete_event(operations, "orphan") == 1
+        assert delete_event(runs, "orphan-run") == 1
+
+        # The downgrade restores the unconditional refusal.
+        _run_migration(engine, command.downgrade, "0017_chat_throughput_foundation")
+        with engine.begin() as connection:
+            connection.execute(
+                operations.insert(),
+                [operation("orphan-2", "deleted-turn", "harness_turn")],
+            )
+            connection.execute(
+                runs.insert(), [run_event("orphan-run-2", "deleted-run")]
+            )
+        with pytest.raises(DBAPIError, match="immutable"):
+            delete_event(operations, "orphan-2")
+        with pytest.raises(DBAPIError, match="append-only"):
+            delete_event(runs, "orphan-run-2")
+
+        _run_migration(engine, command.upgrade, "head")
+        assert delete_event(operations, "orphan-2") == 1
+        assert delete_event(runs, "orphan-run-2") == 1
+
+        # The batched prune removes exactly that history on this database.
+        with engine.begin() as connection:
+            connection.execute(
+                operations.insert(),
+                [
+                    operation("orphan-3", "deleted-turn", "harness_turn", 1),
+                    operation("orphan-4", "deleted-turn", "harness_turn", 2),
+                ],
+            )
+            connection.execute(
+                runs.insert(), [run_event("orphan-run-3", "deleted-run")]
+            )
+        database = Database(database_url, bootstrap=False)
+        try:
+            report = prune_orphaned_event_history(
+                database, batch_size=1, min_age=timedelta(0)
+            )
+        finally:
+            database.dispose()
+        assert (report.operation_events, report.run_events, report.batches) == (2, 1, 3)
+        with engine.connect() as connection:
+            assert sorted(connection.execute(select(operations.c.id)).scalars()) == [
+                "live",
+                "terminal",
+            ]
+            assert list(connection.execute(select(runs.c.id)).scalars()) == ["live-run"]
+        # Once the project and its records are gone, so may all their history.
+        with engine.begin() as connection:
+            connection.execute(
+                delete(entities).where(
+                    entities.c.id.in_(["retention-project", "retention-turn"])
+                )
+            )
+        assert delete_event(operations, "live") == 1
+        assert delete_event(operations, "terminal") == 1
+        assert delete_event(runs, "live-run") == 1
+    finally:
+        engine.dispose()
+
+
 def test_sqlite_upgrade_downgrade_and_immutable_operation_events(tmp_path):
     _exercise_migration_cycle(f"sqlite+pysqlite:///{tmp_path / 'migrations.db'}")
+
+
+def test_sqlite_event_history_is_deletable_only_once_its_owner_is_gone(tmp_path):
+    _exercise_event_owner_retention_cycle(
+        f"sqlite+pysqlite:///{tmp_path / 'retention.db'}"
+    )
 
 
 def _legacy_row(entity_id: str, kind: str, project_id: str, payload: dict) -> dict:
@@ -302,3 +467,4 @@ def test_postgresql_upgrade_downgrade_and_immutable_operation_events():
     database_url = os.environ["NEBULA_TEST_POSTGRES_URL"]
     _exercise_migration_cycle(database_url)
     _exercise_chat_session_lookup_cycle(database_url)
+    _exercise_event_owner_retention_cycle(database_url)

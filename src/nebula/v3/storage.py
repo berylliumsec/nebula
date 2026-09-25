@@ -51,6 +51,11 @@ from .database import (
     RunEventRow,
     SearchDocumentRow,
 )
+from .event_history import (
+    EVENT_OWNER_ENTITY_KINDS,
+    RUN_EVENT_OWNER_KINDS,
+    EventHistoryPurger,
+)
 from .domain import (
     Artifact,
     ChatTurn,
@@ -85,9 +90,8 @@ def _delete_chat_turn_ledgers(session: Session, turn_ids: Any) -> None:
 
     Step events and checkpoints are append-only while their turn lives (the
     ORM refuses to update or delete a row), so replay stays deterministic.
-    They are the conversation's private history, not the audit ledger: unlike
-    run and operation events they have no database triggers, and a bulk
-    delete, like the messages and turns they replay, goes with the turn.
+    They are the conversation's private history: a bulk delete, like the
+    messages and turns they replay, goes with the turn.
     """
 
     for table in (ChatTurnStepEventRow, ChatTurnCheckpointRow):
@@ -258,6 +262,8 @@ class StoreTransaction:
 
     def __init__(self, session: Session) -> None:
         self.session = session
+        # Deleted records whose event history goes once this unit commits.
+        self.deleted_event_owners: list[str] = []
 
     def add(self, entity: Entity) -> Entity:
         row = EntityRow(
@@ -401,6 +407,8 @@ class StoreTransaction:
         ):
             self.session.delete(child)
         self.session.flush()
+        if model.entity_kind in EVENT_OWNER_ENTITY_KINDS:
+            self.deleted_event_owners.append(entity_id)
 
     def append_operation_event(
         self,
@@ -485,6 +493,8 @@ class NebulaStore:
         self.database = (
             database if isinstance(database, Database) else Database(database)
         )
+        # Removes a deleted record's event history off the deleting thread.
+        self.event_history = EventHistoryPurger(self.database)
 
     def _begin_run_write(self, connection: Any, run_id: str) -> None:
         """Serialize sequence assignment for one run on supported databases."""
@@ -507,7 +517,10 @@ class NebulaStore:
     @contextmanager
     def transaction(self) -> Iterator[StoreTransaction]:
         with self.database.session() as session:
-            yield StoreTransaction(session)
+            transaction = StoreTransaction(session)
+            yield transaction
+        if transaction.deleted_event_owners:
+            self.event_history.submit(transaction.deleted_event_owners)
 
     def create(self, entity: EntityT) -> EntityT:
         with self.transaction() as transaction:
@@ -1476,6 +1489,8 @@ class NebulaStore:
                 raise NotFoundError(
                     f"{model.entity_kind} entity not found: {entity_id}"
                 )
+        if model.entity_kind in EVENT_OWNER_ENTITY_KINDS:
+            self.event_history.submit([entity_id])
 
     def validate_chat_session_delete(
         self, session_id: str, *, expected_revision: int | None = None
@@ -1579,7 +1594,10 @@ class NebulaStore:
     def delete_chat_session(
         self, session_id: str, *, expected_revision: int | None = None
     ) -> None:
-        """Atomically remove one conversation and its private derived records."""
+        """Atomically remove one conversation and its private derived records.
+
+        Its turns' event history follows in the background.
+        """
 
         with self.database.session() as session:
             row, session_ids = self._chat_session_delete_scope(
@@ -1695,9 +1713,15 @@ class NebulaStore:
                 )
             )
             _delete_chat_turn_ledgers(session, chat_turn_ids)
-            # Operation events are an immutable audit ledger. As with deleted
-            # missions, retain those records while removing the mutable chat,
-            # harness-turn, and interaction entities that expose them in the UI.
+            # The chat and harness turns' run and operation events go once
+            # they are gone; the triggers refuse while the owners exist.
+            event_owner_ids = list(
+                session.scalars(
+                    select(EntityRow.id).where(
+                        owned_records, EntityRow.kind.in_(EVENT_OWNER_ENTITY_KINDS)
+                    )
+                )
+            )
             session.execute(delete(EntityRow).where(owned_records))
             result = session.execute(
                 delete(EntityRow).where(
@@ -1708,12 +1732,12 @@ class NebulaStore:
             )
             if result.rowcount != 1:
                 raise ConflictError("conversation changed while it was being deleted")
+        self.event_history.submit(event_owner_ids)
 
     def delete_run(self, run_id: str, *, expected_revision: int | None = None) -> None:
-        """Atomically remove a terminal mission and its mutable execution records.
+        """Atomically remove a terminal mission and its execution records.
 
-        Immutable event ledgers remain as audit records, but become inaccessible
-        through mission APIs once the owning run is removed.
+        Its event history follows in the background.
         """
 
         with self.database.session() as session:
@@ -1739,36 +1763,42 @@ class NebulaStore:
             session.execute(
                 delete(RunBudgetCounterRow).where(RunBudgetCounterRow.run_id == run_id)
             )
-            session.execute(
-                delete(EntityRow).where(
-                    or_(
-                        and_(
-                            EntityRow.kind.in_(
-                                (
-                                    "tasks",
-                                    "agent_attempts",
-                                    "tool_calls",
-                                    "approvals",
-                                    "harness_turns",
-                                    "harness_interactions",
-                                    # Browser autonomy is leased to one run; a
-                                    # surviving lease refuses the next one on
-                                    # that browser session until it expires.
-                                    "browser_automation_leases",
-                                    "browser_commands",
-                                    "browser_proxy_rules",
-                                )
-                            ),
-                            EntityRow.payload["run_id"].as_string() == run_id,
-                        ),
-                        and_(
-                            EntityRow.kind == "context_snapshots",
-                            EntityRow.payload["owner_type"].as_string() == "agent_run",
-                            EntityRow.payload["owner_id"].as_string() == run_id,
-                        ),
-                    )
-                )
+            owned_records = or_(
+                and_(
+                    EntityRow.kind.in_(
+                        (
+                            "tasks",
+                            "agent_attempts",
+                            "tool_calls",
+                            "approvals",
+                            "harness_turns",
+                            "harness_interactions",
+                            # Browser autonomy is leased to one run; a
+                            # surviving lease refuses the next one on
+                            # that browser session until it expires.
+                            "browser_automation_leases",
+                            "browser_commands",
+                            "browser_proxy_rules",
+                        )
+                    ),
+                    EntityRow.payload["run_id"].as_string() == run_id,
+                ),
+                and_(
+                    EntityRow.kind == "context_snapshots",
+                    EntityRow.payload["owner_type"].as_string() == "agent_run",
+                    EntityRow.payload["owner_id"].as_string() == run_id,
+                ),
             )
+            # Their event history goes once they are gone.
+            event_owner_ids = [
+                run_id,
+                *session.scalars(
+                    select(EntityRow.id).where(
+                        owned_records, EntityRow.kind.in_(EVENT_OWNER_ENTITY_KINDS)
+                    )
+                ),
+            ]
+            session.execute(delete(EntityRow).where(owned_records))
             result = session.execute(
                 delete(EntityRow).where(
                     EntityRow.id == run_id,
@@ -1778,11 +1808,15 @@ class NebulaStore:
             )
             if result.rowcount != 1:
                 raise ConflictError("mission changed while it was being deleted")
+        self.event_history.submit(event_owner_ids)
 
     def delete_archived_engagement(
         self, engagement_id: str, *, expected_revision: int
     ) -> None:
-        """Remove an idle archive atomically, without touching filesystem or audit ledgers."""
+        """Remove an idle archive atomically, never its files.
+
+        Its event history follows in the background.
+        """
         from .application_model.persistence import graphs, edits
         from .database import ResourceRelationRow
         from .terminal_history import TerminalCommandRow, TerminalCommandPreferenceRow
@@ -1877,6 +1911,16 @@ class NebulaStore:
                 )
             )
             _delete_chat_turn_ledgers(session, project_chat_turn_ids)
+            # Run events are keyed by Missions, chat and harness turns; every
+            # operation event carries the project.
+            run_owner_ids = list(
+                session.scalars(
+                    select(EntityRow.id).where(
+                        EntityRow.engagement_id == engagement_id,
+                        EntityRow.kind.in_(RUN_EVENT_OWNER_KINDS),
+                    )
+                )
+            )
             for table, column in (
                 (graphs, graphs.c.project_id),
                 (edits, edits.c.project_id),
@@ -1892,6 +1936,7 @@ class NebulaStore:
             session.execute(
                 delete(EntityRow).where(EntityRow.engagement_id == engagement_id)
             )
+        self.event_history.submit(run_owner_ids, [engagement_id])
 
     def engagement_has_dependents(
         self,

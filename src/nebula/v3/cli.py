@@ -14,6 +14,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 from pathlib import Path
 from typing import Annotated, Any
@@ -35,7 +36,7 @@ from .automation_tools import (
 )
 from .context import default_output_tokens
 from .credentials import CredentialStore
-from .database import Database
+from .database import Database, DatabaseInUseError, vacuum_sqlite
 from .diagnostics import (
     configure_diagnostics,
     get_diagnostics,
@@ -60,6 +61,7 @@ from .mcp_import import (
     import_mcp_config,
     mcp_config_json_schema,
 )
+from .event_history import pause_between_batches, prune_orphaned_event_history
 from .exporter import ExportError, export_engagement
 from .importer import import_2x_engagement
 from .knowledge_index import ChromaKnowledgeIndex
@@ -97,9 +99,15 @@ mcp_app = typer.Typer(
     help="Import and export MCP server profiles as mcpServers JSON.",
     no_args_is_help=True,
 )
+maintenance_app = typer.Typer(
+    name="maintenance",
+    help="Remove event history of deleted records and reclaim database space.",
+    no_args_is_help=True,
+)
 app.add_typer(runtime_app, name="runtime")
 app.add_typer(diagnostics_app, name="diagnostics")
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(maintenance_app, name="maintenance")
 
 
 @app.command("mcp-gateway", hidden=True)
@@ -997,6 +1005,59 @@ def migrate(
     )
     safe_url = make_url(database_url).render_as_string(hide_password=True)
     _print({"status": "ok", "revision": "head", "database": safe_url})
+
+
+@maintenance_app.command("prune-events")
+def maintenance_prune_events(
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+    batch_size: Annotated[
+        int, typer.Option(min=1, max=10_000, help="Rows per committed batch.")
+    ] = 5_000,
+) -> None:
+    """Delete run and operation events whose record was deleted.
+
+    Core removes this history in the background when it starts, so this is
+    only needed before `maintenance vacuum`. It is safe while Core runs.
+    """
+
+    _, store, _ = _services(data_dir)
+    started = time.monotonic()
+    report = prune_orphaned_event_history(
+        store.database, batch_size=batch_size, pause=pause_between_batches
+    )
+    _print({**report.as_dict(), "seconds": round(time.monotonic() - started, 1)})
+
+
+@maintenance_app.command("vacuum")
+def maintenance_vacuum(
+    data_dir: Annotated[Path | None, typer.Option()] = None,
+) -> None:
+    """Return the space deleted rows left in the SQLite database to the disk.
+
+    Stop Core first: this refuses while anything has the database open. It
+    needs free disk for a temporary copy of the database and a write-ahead
+    log of the same size.
+    """
+
+    root = _data_dir(data_dir)
+    _diagnostic_manager(root)
+    database_url = os.getenv("NEBULA_V3_DATABASE_URL")
+    if database_url:
+        url = make_url(database_url)
+        if url.get_backend_name() != "sqlite" or url.database in {None, "", ":memory:"}:
+            raise typer.BadParameter(
+                "vacuum rewrites a SQLite database file; this database is not one"
+            )
+        path = Path(str(url.database))
+    else:
+        path = root / "nebula.db"
+    try:
+        result = vacuum_sqlite(path)
+    except (DatabaseInUseError, FileNotFoundError) as exc:
+        # diagnostic-expected: a refused vacuum becomes a bounded operator message and exit status.
+        typer.echo(f"vacuum failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _print(result)
 
 
 @diagnostics_app.command("status")
