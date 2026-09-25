@@ -1348,6 +1348,77 @@ test("production assistant preserves exact research context and relaunch-safe dr
   }
 });
 
+test("assistant upgrade provider request breakdown survives a production LAN chat reload", async ({ page }) => {
+  test.setTimeout(60_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const modelStub = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const engagementsResponse = await api.get("engagements");
+    expect(engagementsResponse.ok()).toBe(true);
+    const engagements = await engagementsResponse.json() as Array<{ id: string }>;
+    expect(engagements[0]?.id).toBeTruthy();
+    const providerResponse = await api.post("providers", { data: {
+      name: "Request breakdown model",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+    const completionResponse = await api.post("chat/completions", { data: {
+      backend: "provider",
+      provider_id: provider.id,
+      model: "security-model",
+      engagement_id: engagements[0].id,
+      messages: [{ role: "user", content: "Show me the request breakdown." }],
+      include_knowledge: false,
+      stream: false,
+    } });
+    expect(completionResponse.ok(), await completionResponse.text()).toBe(true);
+    const completion = await completionResponse.json() as { session_id: string };
+    const contextResponse = await api.get(`chat/sessions/${completion.session_id}/context`);
+    expect(contextResponse.ok(), await contextResponse.text()).toBe(true);
+    const context = await contextResponse.json() as { last_provider_request?: {
+      instructions: number; conversation: number; tool_schemas: number;
+      tool_results: number; estimated_total: number; reported_input_tokens: number;
+    } };
+    expect(context.last_provider_request?.instructions).toBeGreaterThan(0);
+    expect(context.last_provider_request?.conversation).toBeGreaterThan(0);
+    expect(context.last_provider_request?.tool_schemas).toBe(0);
+    expect(context.last_provider_request?.tool_results).toBe(0);
+    expect(context.last_provider_request?.estimated_total).toBeGreaterThan(0);
+    expect(context.last_provider_request?.reported_input_tokens).toBe(18);
+
+    const assistantUrl = `${core.origin}/?view=chat&session=${encodeURIComponent(completion.session_id)}#token=${encodeURIComponent(core.token)}`;
+    await page.goto(assistantUrl);
+    await expect(page.getByText("Real Core retained the exact research context.")).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: /Open context details/ }).click();
+    const inspector = page.getByLabel("Session inspector").or(page.getByRole("dialog", { name: "Conversation details" }));
+    await expect(inspector.getByText(/context meter estimates saved conversation/i)).toBeVisible();
+    await inspector.getByText("Last provider request").click();
+    await expect(inspector.getByText(/18 reported by provider/)).toBeVisible();
+    await expect(inspector.getByText(/Tool schemas/)).toHaveCount(0);
+    await page.goto(assistantUrl);
+    await expect(page.getByText("Real Core retained the exact research context.")).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: /Open context details/ }).click();
+    await expect(inspector.getByText("Last provider request")).toBeVisible();
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
+
 test("production assistant work survives a project switch through real Core", async ({ page }) => {
   test.setTimeout(60_000);
   const lanAddress = localNetworkIpv4();

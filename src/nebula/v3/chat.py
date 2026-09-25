@@ -121,8 +121,10 @@ from .context import (
     ContextLimits,
     ContextSource,
     ContextStatus,
+    ProviderRequestInput,
     estimate_messages,
     estimate_model_request,
+    estimate_model_request_parts,
     estimate_tokens,
     lexical_score,
     memory_text,
@@ -767,6 +769,8 @@ class PreparedChat:
     queue_claim: tuple[str, int, str] | None = None
     execution_claim_id: str | None = None
     hook_snapshots: list[Any] = field(default_factory=list)
+    last_provider_request: ProviderRequestInput | None = None
+    provider_request_attempts: int = 0
 
 
 @dataclass
@@ -1291,15 +1295,15 @@ def _tool_free_request(request: ModelRequest) -> ModelRequest:
 
 
 def _tool_inventory_instructions(specs: Any) -> str:
-    """Expose runtime capability metadata to final synthesis."""
+    """Name loaded deferred tools absent from the final function declarations."""
+
+    if not specs:
+        return ""
 
     inventory = [
         {
             "name": spec.name,
             "description": spec.description,
-            "risk_class": spec.risk_class.value,
-            "network_access": spec.network_access,
-            "requires_approval": spec.requires_approval,
         }
         for spec in sorted(specs.values(), key=lambda item: item.name)
     ]
@@ -5465,16 +5469,36 @@ class ChatService:
         self, prepared: PreparedChat, request: ModelRequest
     ) -> ModelResponse:
         try:
-            return await prepared.provider.complete(request)
+            self._record_provider_request(prepared, request)
+            response = await prepared.provider.complete(request)
         except ProviderContextLengthError:
             retry = await self._recover_context_length_rejection(prepared, request)
             try:
-                return await prepared.provider.complete(retry)
+                self._record_provider_request(prepared, retry)
+                response = await prepared.provider.complete(retry)
             except ProviderContextLengthError as exc:
                 raise ChatConfigurationError(
                     "the provider rejected the compacted request context; reduce "
                     "mandatory instructions or configure a lower context cap"
                 ) from exc
+        self._record_provider_response(prepared, response)
+        return response
+
+    @staticmethod
+    def _record_provider_request(prepared: PreparedChat, request: ModelRequest) -> None:
+        prepared.provider_request_attempts += 1
+        prepared.last_provider_request = estimate_model_request_parts(
+            request
+        ).model_copy(update={"attempt": prepared.provider_request_attempts})
+
+    @staticmethod
+    def _record_provider_response(
+        prepared: PreparedChat, response: ModelResponse
+    ) -> None:
+        if prepared.last_provider_request is not None:
+            prepared.last_provider_request = prepared.last_provider_request.model_copy(
+                update={"reported_input_tokens": response.usage.input_tokens}
+            )
 
     async def _complete_final_answer_with_recovery(
         self, prepared: PreparedChat, request: ModelRequest
@@ -5790,6 +5814,7 @@ class ChatService:
         while True:
             output_started = False
             try:
+                self._record_provider_request(prepared, request)
                 async for event in prepared.provider.stream(request):
                     if (
                         event.type == StreamEventType.ERROR
@@ -5804,6 +5829,8 @@ class ChatService:
                         StreamEventType.TOOL_CALL,
                     }:
                         output_started = True
+                    if event.type == StreamEventType.COMPLETED and event.response:
+                        self._record_provider_response(prepared, event.response)
                     yield event
                 return
             except ProviderContextLengthError:
@@ -7037,7 +7064,7 @@ class ChatService:
                             {
                                 name: spec
                                 for name, spec in components.specs.items()
-                                if name not in deferred_names or name in loaded_names
+                                if name in deferred_names and name in loaded_names
                             }
                         )
                         + _reference_instructions(
@@ -11337,6 +11364,15 @@ class ChatService:
         if images_supported is None:
             images_supported = profile.capabilities.vision
         messages = self._session_messages(session)
+        last_provider_request = next(
+            (
+                message.metadata.get("last_provider_request")
+                for message in reversed(messages)
+                if message.role == ChatRole.ASSISTANT
+                and isinstance(message.metadata.get("last_provider_request"), dict)
+            ),
+            None,
+        )
         estimated_forms = {
             message.id: _estimation_message(
                 message.role,
@@ -11408,6 +11444,11 @@ class ChatService:
             route_input_limit=limits.route_input_limit,
             route_limits_required=limits.route_limits_required,
             estimated_input_tokens=active_estimated,
+            last_provider_request=(
+                ProviderRequestInput.model_validate(last_provider_request)
+                if last_provider_request is not None
+                else None
+            ),
             compacted_through=through,
             source_references=latest.source_references if latest else [],
             compaction_usage=latest.usage if latest else ChatTokenUsage(),
@@ -12814,32 +12855,45 @@ class ChatService:
                 finish_reason=completion.finish_reason,
                 provider_request_id=completion.provider_request_id,
                 citations=completion.citations,
-                metadata=(
-                    {
-                        "chat_turn_id": prepared.turn.id,
-                        "tool_call_ids": self._turn_tool_call_ids(prepared.turn),
-                        "tool_results": [
-                            {
-                                "tool_call_id": item.get("tool_call_id"),
-                                "capability": item.get("name"),
-                                "display_name": item.get("display_name"),
-                                "status": item.get("status"),
-                                "summary": item.get("result_summary"),
-                                "evidence_ids": item.get("evidence_ids", []),
-                                "result_artifact_id": item.get("result_artifact_id"),
-                                "artifacts": item.get("artifacts", []),
-                            }
-                            for item in self._turn_history(prepared.turn)
-                        ],
-                        **(
-                            {"tool_suggestions": completion.tool_suggestions}
-                            if completion.tool_suggestions
-                            else {}
-                        ),
-                    }
-                    if prepared.turn is not None
-                    else {}
-                ),
+                metadata={
+                    **(
+                        {
+                            "chat_turn_id": prepared.turn.id,
+                            "tool_call_ids": self._turn_tool_call_ids(prepared.turn),
+                            "tool_results": [
+                                {
+                                    "tool_call_id": item.get("tool_call_id"),
+                                    "capability": item.get("name"),
+                                    "display_name": item.get("display_name"),
+                                    "status": item.get("status"),
+                                    "summary": item.get("result_summary"),
+                                    "evidence_ids": item.get("evidence_ids", []),
+                                    "result_artifact_id": item.get(
+                                        "result_artifact_id"
+                                    ),
+                                    "artifacts": item.get("artifacts", []),
+                                }
+                                for item in self._turn_history(prepared.turn)
+                            ],
+                            **(
+                                {"tool_suggestions": completion.tool_suggestions}
+                                if completion.tool_suggestions
+                                else {}
+                            ),
+                        }
+                        if prepared.turn is not None
+                        else {}
+                    ),
+                    **(
+                        {
+                            "last_provider_request": prepared.last_provider_request.model_dump(
+                                mode="json"
+                            )
+                        }
+                        if prepared.last_provider_request is not None
+                        else {}
+                    ),
+                },
             )
         )
         entities: list[Any] = []

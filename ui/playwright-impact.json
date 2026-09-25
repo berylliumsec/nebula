@@ -149,6 +149,16 @@
       {"area":"provider-operator-context-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains unresolved operator questions until removal","runtime":"real-core","shard":"1/1"},
       {"area":"provider-operator-context-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains unresolved operator questions until removal","runtime":"real-core","shard":"1/1"}
     ],
+    "provider-request-breakdown-core": [
+      {"area":"provider-request-breakdown-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"provider-request-breakdown-core","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"provider-request-breakdown-core","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"provider-request-breakdown-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"provider-request-breakdown-core","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"provider-request-breakdown-core","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"provider-request-breakdown-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"},
+      {"area":"provider-request-breakdown-core","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"}
+    ],
     "durable-conversation-core": [
       {"area":"durable-conversation-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade foundation production LAN reads durable conversation","runtime":"real-core","shard":"1/1"},
       {"area":"durable-conversation-core","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade foundation production LAN reads durable conversation","runtime":"real-core","shard":"1/1"},

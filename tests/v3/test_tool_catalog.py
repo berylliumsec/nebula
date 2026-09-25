@@ -523,11 +523,15 @@ def test_tools_array_is_identical_across_search_load_and_call(tmp_path):
     assert replayed.name == CATALOG_CALL
     assert replayed.arguments == {"name": MCP_TOOL, "arguments": {"value": "x"}}
     # Final synthesis declares the routing list, with calling off, and names
-    # the used on-demand tool in its inventory, not unused ones.
+    # only the used on-demand tool missing from those declarations.
     final = provider.requests[-1]
     assert final.tool_choice == ToolChoice.NONE
     assert _tools(final) == _tools(routing[0])
     assert MCP_TOOL in final.instructions
+    inventory = final.instructions.split("BEGIN COMMAND-RUNTIME CAPABILITIES (JSON)\n")[
+        1
+    ].split("\n")[0]
+    assert [item["name"] for item in json.loads(inventory)] == [MCP_TOOL]
 
 
 def test_final_synthesis_omits_on_demand_tools_that_were_never_loaded(tmp_path):
@@ -537,11 +541,7 @@ def test_final_synthesis_omits_on_demand_tools_that_were_never_loaded(tmp_path):
     asyncio.run(service.complete(prepared))
 
     final = provider.requests[-1]
-    assert "BEGIN COMMAND-RUNTIME CAPABILITIES" in final.instructions
-    inventory = final.instructions.split("BEGIN COMMAND-RUNTIME CAPABILITIES (JSON)\n")[
-        1
-    ].split("\n")[0]
-    assert MCP_TOOL not in {item["name"] for item in json.loads(inventory)}
+    assert "BEGIN COMMAND-RUNTIME CAPABILITIES" not in final.instructions
 
 
 def test_preloaded_tool_is_callable_from_the_first_step(tmp_path):

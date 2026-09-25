@@ -11,6 +11,8 @@ from nebula.v3.context import (
     ContextMemory,
     ContextSource,
     estimate_messages,
+    estimate_model_request,
+    estimate_model_request_parts,
     estimate_tokens,
     known_model_limits,
     lexical_score,
@@ -31,13 +33,45 @@ from nebula.v3.providers import (
     ModelProvider,
     ModelRequest,
     ModelResponse,
+    ModelToolResult,
     ModelUsage,
+    ToolDefinition,
     ProviderConfig,
     ProviderHealth,
     ProviderKind,
     json_schema_instruction,
 )
 from nebula.v3.storage import NebulaStore
+
+
+def test_request_breakdown_counts_tool_images_once_without_retaining_content():
+    request = ModelRequest(
+        instructions="Project guidance and reference text",
+        messages=[{"role": "user", "content": "Inspect the screenshot"}],
+        tools=[
+            ToolDefinition(
+                name="browser_capture",
+                description="Capture the page",
+                input_schema={"type": "object", "properties": {}},
+            )
+        ],
+        tool_results=[
+            ModelToolResult(
+                call_id="call-1",
+                name="browser_capture",
+                output={"status": "complete"},
+                attachments=[{"type": "image", "data": "A" * 100_000}],
+            )
+        ],
+    )
+    parts = estimate_model_request_parts(request)
+
+    assert parts.estimated_total == estimate_model_request(request)
+    assert parts.instructions > 0
+    assert parts.conversation > 0
+    assert parts.tool_schemas > 0
+    assert 2_048 <= parts.tool_results < 3_000
+    assert "A" * 100 not in parts.model_dump_json()
 
 
 class MemoryProvider(ModelProvider):

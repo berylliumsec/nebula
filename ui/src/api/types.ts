@@ -1960,11 +1960,23 @@ export interface ContextStatus {
   routeContextWindow?: number;
   routeInputLimit?: number;
   estimatedInputTokens: number;
+  lastProviderRequest?: ProviderRequestInput;
   compactedThrough: number;
   sourceReferences: ContextSourceReference[];
   compactionUsage: ChatUsage;
   compactionCostUsd: number;
   snapshot?: ContextSnapshot;
+}
+
+export interface ProviderRequestInput {
+  instructions: number;
+  conversation: number;
+  toolSchemas: number;
+  toolResults: number;
+  other: number;
+  estimatedTotal: number;
+  reportedInputTokens?: number;
+  attempt: number;
 }
 
 export type ChatStreamEvent =

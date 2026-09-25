@@ -1,42 +1,35 @@
 {
-  "change_digest": "4099a739e4f67ca1352502a98e5fdb0b5a454a95238f0c5e16c5b857f2e9267c",
-  "reviewed_by": "Claude focused review for prune-event-history",
-  "reason": "Run and operation events of deleted records are pruned. Migration 0018 replaces the unconditional no-delete triggers on run_events and operation_events (SQLite and PostgreSQL) with owner-aware ones: updates stay refused, a delete is refused while the owning record (run_id's Mission/chat turn/harness turn; the project, and the operation_id's record for listed kinds) exists. Deleting a conversation, Mission, archived project or single owning record hands the ids to a background purger that deletes their history in paused 1,000-row batches; Core prunes older leftovers at startup; the CLI gains maintenance prune-events and maintenance vacuum. tests/v3/test_event_history_retention.py covers the triggers, mapping, batched and idempotent prune, settle age and stop, the four delete paths, the deferred purge, terminal audit and export after a prune, the startup prune and vacuum. tests/v3/test_migrations.py (also on PostgreSQL in the database-migrations job) covers upgrade/downgrade of 0018 and the prune on each dialect. The other files cover the delete paths (storage, guarded delete, archived project deletion, temporary chat, chat API, browser research/assessment deletes), the readers of kept history (terminal history and container terminal replay, doctor, exporter, session state, approval continuation, harness activity, report sign-off, operators) and the Core lifespan beside unreadable rows.",
-  "exclusions": "Full suites are not approved and are excluded. No UI, native or Playwright code changes: the operator surfaces are unchanged (a deleted conversation already disappeared from the UI; its stored history now goes too), so frontend, native and Playwright selections are empty. Provider, harness adapter, Mission orchestration and chat routing code is unchanged and not selected; their event writers were only read to map event ownership. test_executions/test_execution_ai are not selected: execution events are only removed after their execution is deleted, which the retention tests cover at the storage layer.",
+  "change_digest": "95949c5d08d4a9008d939e05ca458fdf93ef1e420a8ea81286768f077ac77fd0",
+  "reviewed_by": "Codex focused review for provider request breakdown",
+  "reason": "Direct provider chats now retain a content-free breakdown of the last outbound request, expose it in context status and the session inspector, and omit duplicate built-in tool descriptions from final synthesis. The selected Python tests cover request accounting, durable chat status, and loaded versus unloaded deferred tools. The component test covers readable breakdown details. One production real-Core LAN journey covers provider dispatch, persistence, inspector display, reload, and desktop/mobile browser geometry.",
+  "exclusions": "No full suite approval was given. Other provider adapters and harness-owned context are unchanged. Native tests are unrelated. The real-Core journey uses a local model stub, not a paid cloud provider. Mobile profiles are emulated; no physical device is available. The selected journey does not exercise tool execution in the browser because the Python tool-loop tests cover request construction and synthesis.",
   "expected_tests": {
-    "python": 291,
-    "frontend": 0,
+    "python": 4,
+    "frontend": 1,
     "native": 0,
-    "playwright": 0
+    "playwright": 8
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_event_history_retention.py",
-    "tests/v3/test_migrations.py",
-    "tests/v3/test_storage.py",
-    "tests/v3/test_storage_waste.py",
-    "tests/v3/test_guarded_delete.py",
-    "tests/v3/test_archived_project_deletion.py",
-    "tests/v3/test_cli.py",
-    "tests/v3/test_exporter.py",
-    "tests/v3/test_terminal_history.py",
-    "tests/v3/test_temporary_chat.py",
-    "tests/v3/test_browser_research.py",
-    "tests/v3/test_browser_assessments.py",
-    "tests/v3/test_session_state.py",
-    "tests/v3/test_approval_continuation.py",
-    "tests/v3/test_startup_unreadable_rows.py",
-    "tests/v3/test_container_terminal.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_harness_activity_cost.py",
-    "tests/v3/test_operators.py",
-    "tests/v3/test_report_signoff.py"
+    "tests/v3/test_context.py::test_request_breakdown_counts_tool_images_once_without_retaining_content",
+    "tests/v3/test_chat.py::test_local_chat_retrieves_only_its_engagement_and_persists",
+    "tests/v3/test_tool_catalog.py::test_tools_array_is_identical_across_search_load_and_call",
+    "tests/v3/test_tool_catalog.py::test_final_synthesis_omits_on_demand_tools_that_were_never_loaded"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/ProviderRequestInputDetails.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:provider-request-breakdown-core/assistant-real-desktop",
+    "entry:provider-request-breakdown-core/assistant-real-compact",
+    "entry:provider-request-breakdown-core/assistant-real-chromium-320",
+    "entry:provider-request-breakdown-core/assistant-real-chromium-390",
+    "entry:provider-request-breakdown-core/assistant-real-chromium-430",
+    "entry:provider-request-breakdown-core/assistant-real-webkit-320",
+    "entry:provider-request-breakdown-core/assistant-real-webkit-390",
+    "entry:provider-request-breakdown-core/assistant-real-webkit-430"
+  ]
 }
