@@ -33,7 +33,9 @@ Implemented and previously verified:
 - Hook output cannot mutate approval state.
 - Restart marks running hooks interrupted. Unknown workspace/external effects block
   resume and require explicit operator reconciliation; effects are never replayed.
-  A hook declaring `side_effects=none` may retry.
+  A hook declaring `side_effects=none` may retry. (Superseded on 2026-09-22:
+  recovery now carries unknown effects forward and resumes automatically; see
+  `execution-recovery-lifecycle.md`.)
 - Authenticated APIs expose the project catalog, safe execution summaries, and
   revision-bound hook reconciliation.
 

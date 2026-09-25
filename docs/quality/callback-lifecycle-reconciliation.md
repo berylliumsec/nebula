@@ -13,7 +13,8 @@ settles the child report through the existing supervisor path.
 
 - `CommandExecution` owns producer liveness and terminal process status.
 - `ToolCall` owns the durable invocation status and result.
-- `ChatTurn.tool_history` owns provider-visible continuation history.
+- The turn ledger (`ChatTurnLedger`; `ChatTurn.tool_history` for turns written
+  before it, #559) owns provider-visible continuation history.
 - `ChatSubagent` owns the child round shown to its supervisor and operator.
 - Core owns reconciliation during normal execution, startup, reconnect, and
   periodic recovery; the browser only renders the resulting durable state.
@@ -21,7 +22,8 @@ settles the child report through the existing supervisor path.
 Observable invariants:
 
 1. A terminal callback producer cannot leave its `ToolCall` indefinitely
-   `running` or its `ChatTurn` indefinitely `waiting_callback`.
+   `running` or its `ChatTurn` indefinitely `waiting_callback`. A producer
+   `interrupted` by a Core stop or crash is terminal for the wait.
 2. Process termination without a callback does not prove the external effect's
    outcome. Provider history records `side_effects: unknown` and
    `retry_safe: false`.
@@ -29,13 +31,18 @@ Observable invariants:
    concurrent message delivery cannot leave the old tool call looking live.
    If an earlier release already settled the turn with that stale row, periodic
    reconciliation backfills the same terminal receipt without replaying work.
-4. A successful or failed authoritative callback retains the existing callback
-   completion path.
+4. A successful or failed authoritative callback reaches the model as a valid
+   `nebula.tool-result/v2` receipt with the posted summary and references to
+   the posted output. A receipt that arrives after the wait settled is kept as
+   `late_callback_receipt` on the call and reopens nothing.
 5. A still-running producer remains waiting and is never classified early.
-5. Startup and the normal runtime terminal notification converge on the same
-   idempotent continuation path.
-6. Once the child turn settles, the existing subagent delivery path removes
+6. Startup and the normal runtime terminal notification converge on the same
+   idempotent continuation path. The resumed turn keeps `waiting_callback`
+   through provider admission, so the outcome is projected before routing.
+7. Once the child turn settles, the existing subagent delivery path removes
    false running state and reports to an idle or waiting parent exactly once.
+8. Operator Stop terminates the background commands holding the stopped turn's
+   callback lease. The results key reaches only the process.
 
 ## Lifecycle coverage
 
@@ -45,7 +52,8 @@ Observable invariants:
 - Failure: required; producer terminal without callback becomes unknown.
 - Retry: automatic reconciliation retries without replaying the invocation.
 - Reconnect/refresh: durable Core state is re-read and rendered.
-- Interrupt/stop: existing terminal producer states use the same classifier.
+- Interrupt/stop: terminal and interrupted producer states use the same
+  classifier; Stop ends the callback-bound commands.
 - Fork/delete/revoke: not changed by this defect.
 
 ## Planned proof
