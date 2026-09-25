@@ -522,12 +522,16 @@ class ToolOutputService:
         return artifact
 
     def _call_artifacts(self, call: ToolCall) -> list[Artifact]:
+        recorded = self.store.list_tool_call_artifacts(call.engagement_id, call.id)
+        identifiers = {artifact.id for artifact in recorded}
         artifacts = [
             artifact
-            for artifact in self.store.list_tool_call_artifacts(
-                call.engagement_id, call.id
-            )
+            for artifact in recorded
             if artifact.metadata.get("kind") != "receipt"
+            # A redacted copy of a stream this call also recorded: search
+            # already redacts every line it returns from the stream itself,
+            # so scanning the copy only returned each match twice.
+            and not (artifact.redacted and artifact.parent_artifact_id in identifiers)
         ]
         return sorted(artifacts, key=lambda item: (item.created_at, item.id))
 

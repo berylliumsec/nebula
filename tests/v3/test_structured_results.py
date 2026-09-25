@@ -320,7 +320,10 @@ def test_goal_dashboard_broker_records_publish_execution_as_immutable_evidence(
 
     assert result.exit_code == 0
     assert result.receipt is not None
-    assert len(result.receipt.artifacts) == 3
+    # Publishing runs no process, so only its parsed output is an artifact:
+    # no empty stdout and stderr placeholders.
+    assert [item.kind for item in result.receipt.artifacts] == ["parsed"]
+    assert result.receipt.parser.artifact_id == result.receipt.artifacts[0].artifact_id
     assert len(result.evidence_ids) == 1
     assert store.count(StructuredResult, engagement_id="project") == 1
 

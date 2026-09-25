@@ -725,6 +725,39 @@ def _regular_files_beneath(root: Path) -> Iterator[Path]:
                 continue
 
 
+def _produced_streams(result: ToolExecutionResult) -> bool:
+    """Whether the tool produced process output to keep as stream artifacts."""
+
+    return bool(
+        result.stdout
+        or result.stderr
+        or result.observed_stdout_bytes
+        or result.observed_stderr_bytes
+        or any(
+            path is not None and path.is_file()
+            for path in (result.stdout_artifact_path, result.stderr_artifact_path)
+        )
+    )
+
+
+def _mcp_text_json_values(blocks: list[dict[str, Any]]) -> list[Any]:
+    """The JSON values that an MCP result's text blocks serialize, if any."""
+
+    values: list[Any] = []
+    for block in blocks:
+        text = block.get("text") if block.get("type") == "text" else None
+        if not isinstance(text, str) or text.lstrip()[:1] not in {"{", "["}:
+            continue
+        try:
+            values.append(json.loads(text))
+        except (
+            ValueError,
+            RecursionError,
+        ):  # diagnostic-expected: a text block that is not JSON is kept as it is
+            continue
+    return values
+
+
 def _compact_tool_summary(
     result: ToolExecutionResult, status: ToolResultStatus
 ) -> str | None:
@@ -940,20 +973,24 @@ class StoreToolEvidenceRecorder:
                 )
             )
 
-        await store_stream(
-            kind="stdout",
-            path=result.stdout_artifact_path,
-            fallback=result.stdout,
-            observed=result.observed_stdout_bytes,
-            truncated=result.stdout_truncated,
-        )
-        await store_stream(
-            kind="stderr",
-            path=result.stderr_artifact_path,
-            fallback=result.stderr,
-            observed=result.observed_stderr_bytes,
-            truncated=result.stderr_truncated,
-        )
+        # MCP servers, web search and the built-ins run no process: their
+        # empty stream placeholders were two artifacts and two receipt
+        # references per call with nothing to read.
+        if _produced_streams(result):
+            await store_stream(
+                kind="stdout",
+                path=result.stdout_artifact_path,
+                fallback=result.stdout,
+                observed=result.observed_stdout_bytes,
+                truncated=result.stdout_truncated,
+            )
+            await store_stream(
+                kind="stderr",
+                path=result.stderr_artifact_path,
+                fallback=result.stderr,
+                observed=result.observed_stderr_bytes,
+                truncated=result.stderr_truncated,
+            )
 
         parser_configured = bool(
             spec.parser or spec.parser_contract or result.output or result.parser_error
@@ -988,8 +1025,15 @@ class StoreToolEvidenceRecorder:
         elif result.parser_error:
             warnings.append(f"optional parser failed: {result.parser_error}")
 
+        text_values = _mcp_text_json_values(result.mcp_content_blocks)
         for index, block in enumerate(result.mcp_content_blocks):
             block_type = str(block.get("type") or "unknown")
+            if block_type == "structured_content" and any(
+                value == block.get("value") for value in text_values
+            ):
+                # MCP servers also send structured content serialized as a
+                # text block; that block, in the server's own layout, keeps it.
+                continue
             media_type = "application/json"
             payload: bytes
             filename = f"tool-call-{call.id}-mcp-{index:03d}.json"

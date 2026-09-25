@@ -31,6 +31,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .database import (
+    ChatTurnCheckpointRow,
+    ChatTurnStepEventRow,
     Database,
     EntityRow,
     OperationEventRow,
@@ -66,6 +68,20 @@ def _recovery_pending(payload: dict[str, Any]) -> bool:
     return isinstance(recovery, dict) and bool(
         recovery.get("required") or recovery.get("automatic_retry_pending")
     )
+
+
+def _delete_chat_turn_ledgers(session: Session, turn_ids: Any) -> None:
+    """Remove the provider-history ledgers of the chat turns being deleted.
+
+    Step events and checkpoints are append-only while their turn lives (the
+    ORM refuses to update or delete a row), so replay stays deterministic.
+    They are the conversation's private history, not the audit ledger: unlike
+    run and operation events they have no database triggers, and a bulk
+    delete, like the messages and turns they replay, goes with the turn.
+    """
+
+    for table in (ChatTurnStepEventRow, ChatTurnCheckpointRow):
+        session.execute(delete(table).where(table.turn_id.in_(turn_ids)))
 
 
 def not_temporary_chat_session() -> ColumnElement[bool]:
@@ -1607,6 +1623,7 @@ class NebulaStore:
                     ProviderTurnQueueRow.turn_id.in_(chat_turn_ids)
                 )
             )
+            _delete_chat_turn_ledgers(session, chat_turn_ids)
             # Operation events are an immutable audit ledger. As with deleted
             # missions, retain those records while removing the mutable chat,
             # harness-turn, and interaction entities that expose them in the UI.
@@ -1779,16 +1796,16 @@ class NebulaStore:
                     RunBudgetCounterRow.run_id.in_(counter_owner_ids)
                 )
             )
+            project_chat_turn_ids = select(EntityRow.id).where(
+                EntityRow.engagement_id == engagement_id,
+                EntityRow.kind == "chat_turns",
+            )
             session.execute(
                 delete(ProviderTurnQueueRow).where(
-                    ProviderTurnQueueRow.turn_id.in_(
-                        select(EntityRow.id).where(
-                            EntityRow.engagement_id == engagement_id,
-                            EntityRow.kind == "chat_turns",
-                        )
-                    )
+                    ProviderTurnQueueRow.turn_id.in_(project_chat_turn_ids)
                 )
             )
+            _delete_chat_turn_ledgers(session, project_chat_turn_ids)
             for table, column in (
                 (graphs, graphs.c.project_id),
                 (edits, edits.c.project_id),
@@ -1922,21 +1939,38 @@ class NebulaStore:
             connection.close()
 
     def replay_events(
-        self, run_id: str, *, after_sequence: int = 0, limit: int = 1000
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 1000,
+        event_type_prefix: str | None = None,
+        payload_values: Mapping[str, Sequence[str]] | None = None,
     ) -> list[RunEvent]:
+        """Return one run's events after ``after_sequence``, in order.
+
+        ``event_type_prefix`` keeps one family of event types and
+        ``payload_values`` keeps only events whose top-level payload field is
+        one of the listed values, both filtered in SQL on the run's index.
+        """
+
         if after_sequence < 0:
             raise ValueError("after_sequence cannot be negative")
         if not 1 <= limit <= 10_000:
             raise ValueError("limit must be between 1 and 10000")
-        statement = (
-            select(RunEventRow)
-            .where(
-                RunEventRow.run_id == run_id,
-                RunEventRow.sequence > after_sequence,
-            )
-            .order_by(RunEventRow.sequence)
-            .limit(limit)
+        statement = select(RunEventRow).where(
+            RunEventRow.run_id == run_id,
+            RunEventRow.sequence > after_sequence,
         )
+        if event_type_prefix:
+            statement = statement.where(
+                RunEventRow.event_type.startswith(event_type_prefix, autoescape=True)
+            )
+        for field_name, accepted in (payload_values or {}).items():
+            statement = statement.where(
+                RunEventRow.payload[field_name].as_string().in_(list(accepted))
+            )
+        statement = statement.order_by(RunEventRow.sequence).limit(limit)
         with self.database.session() as session:
             rows = session.scalars(statement).all()
             return [self._row_to_event(row) for row in rows]
