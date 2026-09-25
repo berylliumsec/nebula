@@ -1,10 +1,10 @@
 {
-  "change_digest": "1d72ccde6b51673c33c30575dca3c8f1367c1cf9161097f93bb18ac70723896a",
+  "change_digest": "7ef2fb1b64e461f518402cc2ad785c7025aa893be7e909cd166b3233aa44c18e",
   "reviewed_by": "Claude focused review for restart-recovery",
-  "reason": "Restart and shutdown recovery, callback-wait reconciliation, goal continuation, operator stop, the Core-stopping status of terminated commands, scheduled occurrences and the periodic recovery tick changed in chat.py, chat_subagents.py, chat_schedules.py, automation_runtime.py, automation_tools.py, tools.py, storage.py and api.py. test_restart_recovery_lifecycle.py proves each finding; the whole files for chat, subagents and their lifecycle, chat API, turn-end hooks, automation runtime, schedules, process-results webhook, goals, follow-up queue, tool loop, turn outcomes, subagent settings, session lookups and the row-horizon guard cover the neighbouring journeys, now that #568 and #570 made them green.",
+  "reason": "Restart and shutdown recovery, callback-wait reconciliation, goal continuation, operator stop, the Core-stopping status of terminated commands, scheduled occurrences and the periodic recovery tick changed in chat.py, chat_subagents.py, chat_schedules.py, automation_runtime.py, automation_tools.py, tools.py, storage.py and api.py. test_restart_recovery_lifecycle.py proves each finding; the whole files for chat, subagents and their lifecycle, chat API, turn-end hooks, automation runtime, schedules, process-results webhook, goals, follow-up queue, tool loop, turn outcomes, subagent settings, session lookups, the row-horizon guard and generic CRUD exposure (api.py) cover the neighbouring journeys, now that #568, #570 and #576 made them green.",
   "exclusions": "Full suites are not approved and are excluded. test_chat_final_synthesis_recovery.py is excluded: its test_final_synthesis_recovers_from_a_nameless_tool_call_fragment node fails identically on pristine origin/main 9718333 and this change does not touch final synthesis. No UI, Playwright, frontend or native code changed; missions, harness adapters and provider transports are unchanged.",
   "expected_tests": {
-    "python": 342,
+    "python": 376,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -31,7 +31,8 @@
     "tests/v3/test_subagent_choice_sticks.py",
     "tests/v3/test_subagent_choice_new_chats.py",
     "tests/v3/test_session_record_lookups.py",
-    "tests/v3/test_row_horizon.py"
+    "tests/v3/test_row_horizon.py",
+    "tests/v3/test_generic_crud_exposure.py"
   ],
   "frontend": [],
   "native": [],
