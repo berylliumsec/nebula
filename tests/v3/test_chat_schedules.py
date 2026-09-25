@@ -191,26 +191,45 @@ def test_schedule_without_its_provider_is_paused_not_fatal(tmp_path):
     assert latest.revision == schedule.revision + 1
 
 
-def _running_goal(store: NebulaStore, session_id: str = "session"):
+def _running_goal(
+    store: NebulaStore, session_id: str = "session", *, step_budget: int | None = None
+):
     goals = ChatGoalService(store)
     created = goals.create(
         session_id,
-        GoalCreate(objective="Keep going", completion_criteria=["Bounded"]),
+        GoalCreate(
+            objective="Keep going",
+            completion_criteria=["Bounded"],
+            step_budget=step_budget,
+        ),
     )
     return goals.write(
         session_id, GoalWrite(expected_revision=created.revision, action="start")
     )
 
 
+async def _fire_and_settle(service: ChatService) -> None:
+    """Fire due schedules, then wait for the turns they dispatched."""
+
+    await service.fire_due_schedules()
+    while pending := [
+        runtime.task
+        for runtime in service._active_provider_turns.values()
+        if runtime.task is not None and not runtime.task.done()
+    ]:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 def test_due_schedule_runs_a_goal_turn(tmp_path):
     store = NebulaStore(tmp_path / "schedules.db")
     store.create(Engagement(id="project", name="Project"))
     _scheduled_session(store)
-    goal = _running_goal(store)
+    # One step, so the goal pauses instead of continuing after the occurrence.
+    goal = _running_goal(store, step_budget=1)
     provider = FakeProvider("provider", local=True)
 
     asyncio.run(
-        ChatService(store, provider_factory=lambda _: provider).fire_due_schedules()
+        _fire_and_settle(ChatService(store, provider_factory=lambda _: provider))
     )
 
     latest = ChatScheduleService(store).get("session")
@@ -299,14 +318,14 @@ def test_schedule_follows_the_conversation_model(tmp_path):
         {"model_allowlist": ["model-a", "model-b"]},
         expected_revision=store.get(ProviderProfile, "provider").revision,
     )
-    _running_goal(store)
+    _running_goal(store, step_budget=1)
     provider = FakeProvider("provider", local=True)
     provider.config = provider.config.model_copy(
         update={"model_allowlist": ["model-a", "model-b"]}
     )
 
     asyncio.run(
-        ChatService(store, provider_factory=lambda _: provider).fire_due_schedules()
+        _fire_and_settle(ChatService(store, provider_factory=lambda _: provider))
     )
 
     latest = ChatScheduleService(store).get("session")

@@ -57,6 +57,7 @@ from .tool_results import (
 )
 from .tools import (
     ApprovalRequired,
+    RETRIEVAL_TOOL_NAMES,
     InvalidToolArguments,
     PolicyDenied,
     StoreToolLedger,
@@ -408,12 +409,7 @@ class AutomationBroker:
                     call, ToolCallStatus.FAILED, error=str(error)
                 )
             raise error
-        retrieval = invocation.tool_name in {
-            "tool_output.search",
-            "tool_output.read",
-            "workspace.search",
-            "workspace.read",
-        }
+        retrieval = invocation.tool_name in RETRIEVAL_TOOL_NAMES
         if call.status == ToolCallStatus.COMPLETE and isinstance(call.result, dict):
             if retrieval:
                 return ToolExecutionResult(output=call.result)

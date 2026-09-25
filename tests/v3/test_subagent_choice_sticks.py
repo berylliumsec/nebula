@@ -197,6 +197,17 @@ def _turns(store: NebulaStore) -> list[ChatTurn]:
     )
 
 
+async def _schedule_outcome(store: NebulaStore) -> str | None:
+    """The status a dispatched occurrence records once its turn task ends."""
+
+    for _ in range(500):
+        status = ChatScheduleService(store).get(SESSION).last_status
+        if status != "started":
+            return status
+        await asyncio.sleep(0.01)
+    raise AssertionError("the scheduled occurrence never recorded its outcome")
+
+
 async def _settled(store: NebulaStore, count: int) -> list[ChatTurn]:
     for _ in range(500):
         turns = _turns(store)
@@ -272,7 +283,8 @@ def test_goal_continuation_follows_subagents_checked_mid_turn(tmp_path):
 def test_scheduled_run_keeps_subagents_checked_after_the_last_send(tmp_path):
     async def scenario() -> None:
         store, _, chat, client = _setup(tmp_path)
-        goals = _goal(store)
+        # One goal step: the goal pauses instead of continuing past the run.
+        goals = _goal(store, step_budget=1)
         await chat.complete(await chat.prepare_async(_manual_turn()))
         _patch(
             client,
@@ -284,10 +296,11 @@ def test_scheduled_run_keeps_subagents_checked_after_the_last_send(tmp_path):
         _start(goals)
         _schedule(store)
 
+        # The occurrence is dispatched like goal auto-continue, not awaited.
         await chat.fire_due_schedules()
+        _, scheduled = await _settled(store, 2)
 
-        assert ChatScheduleService(store).get(SESSION).last_status == "complete"
-        _, scheduled = _turns(store)
+        assert await _schedule_outcome(store) == "complete"
         assert scheduled.request_snapshot.get("allow_subagents") is True
         assert scheduled.request_snapshot.get("max_active_subagents") == 2
         assert scheduled.request_snapshot["model_request"]["reasoning_effort"] == "low"
@@ -303,16 +316,16 @@ def test_scheduled_run_keeps_subagents_checked_after_the_last_send(tmp_path):
 def test_first_scheduled_run_uses_the_saved_choice(tmp_path):
     async def scenario() -> None:
         store, _, chat, client = _setup(tmp_path)
-        goals = _goal(store)
+        goals = _goal(store, step_budget=1)
         # Checked before the conversation's first turn: no snapshot to copy.
         _patch(client, SESSION, allow_subagents=True)
         _start(goals)
         _schedule(store)
 
         await chat.fire_due_schedules()
+        (scheduled,) = await _settled(store, 1)
 
-        assert ChatScheduleService(store).get(SESSION).last_status == "complete"
-        (scheduled,) = _turns(store)
+        assert await _schedule_outcome(store) == "complete"
         assert scheduled.request_snapshot.get("allow_subagents") is True
         assert store.get(ChatSession, SESSION).metadata["allow_subagents"] is True
         await chat.shutdown()

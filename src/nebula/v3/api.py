@@ -2066,7 +2066,16 @@ def create_app(
                 metadata={"component": component},
             )
 
+        def mark_core_stopping() -> None:
+            # Components stop in reverse start order, so owners cancel their
+            # turns and commands before the runtime and chat shut down. Both
+            # learn first that the cancellation is Core stopping.
+            provider_chat.shutting_down = True
+            if automation_runtime is not None:
+                automation_runtime.begin_stopping()
+
         async def stop_components() -> list[BaseException]:
+            mark_core_stopping()
             failures: list[BaseException] = []
             while started:
                 feature, component, shutdown = started.pop()
@@ -2182,26 +2191,9 @@ def create_app(
                             exc,
                             stage="schedule",
                         )
-                    try:
-                        provider_chat.resume_turns_stopped_by_core()
-                    except Exception as exc:
-                        record_caught_exception(
-                            "chat",
-                            "chat.restart_recovery_tick_failed",
-                            "A chat restart recovery pass failed; the next pass retries.",
-                            exc,
-                            stage="restart-recovery",
-                        )
-                    try:
-                        provider_chat.reconcile_waiting_callbacks()
-                    except Exception as exc:
-                        record_caught_exception(
-                            "chat",
-                            "chat.callback_recovery_tick_failed",
-                            "A callback reconciliation pass failed; the next pass retries.",
-                            exc,
-                            stage="callback-recovery",
-                        )
+                    # Its scans run off the event loop and read only rows
+                    # that can still need recovery; each step fails alone.
+                    await provider_chat.recovery_tick()
 
             schedule_loop = create_diagnostic_task(
                 _chat_schedule_loop(),
@@ -2212,6 +2204,10 @@ def create_app(
             )
 
             def _stop_chat_schedules() -> None:
+                # Marked before the loop is cancelled, so work the cancellation
+                # reaches is parked for the next boot as Core stopping, not
+                # recorded as an operator stop.
+                mark_core_stopping()
                 schedule_loop.cancel()
 
             started.append(("chat", "schedules", _stop_chat_schedules))

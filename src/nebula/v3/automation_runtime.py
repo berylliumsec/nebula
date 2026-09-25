@@ -862,6 +862,11 @@ class AutomationRuntimeManager:
         self._inventory: list[dict[str, str]] = []
         self._prepared_runner_profile_id: str | None = None
         self._prepared_runner_profile_revision: int | None = None
+        # Set once Core begins stopping. Processes it tears down then end as
+        # INTERRUPTED, the state a crash leaves after the next startup, and
+        # their owners are not woken mid-teardown: the next boot reconciles
+        # both cases through the same path.
+        self._stopping = False
         self._refresh_cached_runtime()
 
     def bind_process_terminal_observer(
@@ -1055,7 +1060,31 @@ class AutomationRuntimeManager:
             return f"Core restarted; runtime teardown failed: {str(exc)[:2_000]}"
         return "Core restarted; detached runtime teardown requested"
 
+    def begin_stopping(self) -> None:
+        """Mark Core as stopping before any component starts tearing down.
+
+        Owners cancel their work before this runtime's own shutdown runs; a
+        command stopped from then on is interrupted by Core, not cancelled.
+        """
+
+        self._stopping = True
+
+    def _stop_status(self) -> CommandExecutionStatus:
+        """How a command Core terminates ends: interrupted while Core stops.
+
+        Core stopping is not a decision about the command; it takes the state
+        a crash leaves after the next startup. Otherwise the caller or the
+        operator chose to stop it.
+        """
+
+        return (
+            CommandExecutionStatus.INTERRUPTED
+            if self._stopping
+            else CommandExecutionStatus.CANCELLED
+        )
+
     async def shutdown(self) -> None:
+        self.begin_stopping()
         await asyncio.gather(
             *(self.close_session(session_id) for session_id in list(self._sessions)),
             return_exceptions=True,
@@ -1539,11 +1568,11 @@ class AutomationRuntimeManager:
             # which would leave the process running with no timeout either.
             await asyncio.shield(process.final_task)
         except asyncio.CancelledError:
-            # The caller stopped waiting (an operator Stop, or a turn that
-            # ended). A foreground command has no one left to read its
-            # result, so it stops too and finalizes as cancelled.
+            # The caller stopped waiting (an operator Stop, a turn that
+            # ended, or Core stopping). A foreground command has no one left
+            # to read its result, so it stops too.
             if not process.final_task.done():
-                process.forced_status = CommandExecutionStatus.CANCELLED
+                process.forced_status = self._stop_status()
                 await asyncio.shield(process.backend.terminate())
             raise
         return await self._poll(managed, process, MAX_POLL_BYTES)
@@ -1679,7 +1708,7 @@ class AutomationRuntimeManager:
             )
         for process in list(managed.processes.values()):
             if process.final_task is not None and not process.final_task.done():
-                process.forced_status = CommandExecutionStatus.CANCELLED
+                process.forced_status = self._stop_status()
                 await process.backend.terminate()
         await asyncio.gather(
             *(
@@ -2197,12 +2226,18 @@ class AutomationRuntimeManager:
                         if status == CommandExecutionStatus.TIMED_OUT
                         else "command was cancelled"
                         if status == CommandExecutionStatus.CANCELLED
+                        else "Core stopped before the process completed"
+                        if status == CommandExecutionStatus.INTERRUPTED
                         else None
                     ),
                 },
                 expected_revision=current.revision,
             )
-            if process.execution.background and self.process_terminal_observer:
+            if (
+                process.execution.background
+                and self.process_terminal_observer
+                and status != CommandExecutionStatus.INTERRUPTED
+            ):
                 try:
                     self.process_terminal_observer(process.execution.process_id)
                 except Exception as exc:
