@@ -51,6 +51,11 @@ from .chat_snapshot_parts import (
     split_skill_snapshots,
     stage_snapshot_parts,
 )
+from .chat_turn_headers import (
+    ChatTurnHeader,
+    engagement_turn_headers,
+    session_turn_headers,
+)
 from .chat_turn_ledger import ChatTurnLedger, TurnCheckpoint
 from .provider_scheduler import ProviderAdmission, ProviderScheduler
 from .browser_tools import BrowserToolPlatform, combine_tool_components
@@ -9885,15 +9890,27 @@ class ChatService:
         recovery = turn.request_snapshot.get("recovery", {})
         return bool(recovery.get("required") or recovery.get("automatic_retry_pending"))
 
+    @staticmethod
+    def _header_is_pending(turn: ChatTurnHeader) -> bool:
+        """``_turn_is_pending`` for a turn header, without its payload."""
+
+        if turn.status not in _UNFINISHED_TURN_STATUSES:
+            return False
+        if turn.status != ChatTurnStatus.INTERRUPTED.value:
+            return True
+        return turn.recovery_required or turn.automatic_retry_pending
+
     def pending_turn(self, session_id: str) -> ChatTurn | None:
         self.store.get(ChatSession, session_id)
-        active = [
-            item
-            for item in self.store.list_session_entities(
-                ChatTurn, session_id, statuses=list(_UNFINISHED_TURN_STATUSES)
-            )
-            if self._turn_is_pending(item)
-        ]
+        # Browsers poll this; only the blocking turn's payload is read in full.
+        with self.store.database.session() as database:
+            active = [
+                item
+                for item in session_turn_headers(
+                    database, session_id, newest_first=False
+                )
+                if self._header_is_pending(item)
+            ]
         if len(active) > 1:
             raise ChatHistoryConflict("chat session has multiple active turns")
         return self.reconcile_recorded_effects(active[0].id) if active else None
@@ -10165,47 +10182,55 @@ class ChatService:
             "interrupted hook state changed while recovering recorded effects; reload"
         )
 
-    def pending_turns(self, engagement_id: str) -> dict[str, ChatTurn]:
+    def pending_turns(self, engagement_id: str) -> dict[str, ChatTurnHeader]:
         """Return the pending turn of every conversation in a project, by session.
 
-        One SQL query over the project's unfinished turns replaces a
-        ``pending_turn`` lookup per conversation, so the activity listing costs
-        the same for a project with thousands of conversations as for one
-        with ten.
+        One indexed read of the project's turn versions replaces a
+        ``pending_turn`` lookup per conversation, and revision-keyed headers
+        replace a JSON status scan over every turn payload, which cost tens of
+        milliseconds per activity poll on a busy project.
         """
 
-        pending: dict[str, ChatTurn] = {}
-        for turn in self.store.find_entities(
-            ChatTurn,
-            {"status": list(_UNFINISHED_TURN_STATUSES)},
-            engagement_id=engagement_id,
-        ):
-            if not self._turn_is_pending(turn):
-                continue
-            if turn.session_id in pending:
-                raise ChatHistoryConflict("chat session has multiple active turns")
-            pending[turn.session_id] = turn
+        pending: dict[str, ChatTurnHeader] = {}
+        with self.store.database.session() as database:
+            for turn in engagement_turn_headers(database, engagement_id):
+                if not self._header_is_pending(turn):
+                    continue
+                if turn.session_id in pending:
+                    raise ChatHistoryConflict("chat session has multiple active turns")
+                pending[turn.session_id] = turn
         return pending
 
     def recoverable_final_answer_turn(self, session_id: str) -> ChatTurn | None:
         """Return the latest turn only when its failed synthesis can be resumed."""
 
         self.store.get(ChatSession, session_id)
-        turns = self.store.list_session_entities(ChatTurn, session_id)
-        if not turns:
+        with self.store.database.session() as database:
+            headers = session_turn_headers(database, session_id)
+        if not headers:
             return None
-        latest = max(turns, key=lambda item: (item.created_at, item.id))
-        recovery = latest.request_snapshot.get("final_answer_recovery")
-        attempts = recovery.get("attempts") if isinstance(recovery, dict) else None
+        latest = max(headers, key=lambda item: (item.created_at, item.id))
+        attempts = latest.final_answer_recovery_attempts
         if (
-            latest.status != ChatTurnStatus.FAILED
+            latest.status != ChatTurnStatus.FAILED.value
             or latest.final_message_id is not None
-            or not isinstance(attempts, int)
-            or isinstance(attempts, bool)
+            or attempts is None
             or attempts < 2
         ):
             return None
-        return latest
+        turn = self.store.get(ChatTurn, latest.id)
+        # The header named a version; confirm the row still qualifies.
+        recovery = turn.request_snapshot.get("final_answer_recovery")
+        current = recovery.get("attempts") if isinstance(recovery, dict) else None
+        if (
+            turn.status != ChatTurnStatus.FAILED
+            or turn.final_message_id is not None
+            or not isinstance(current, int)
+            or isinstance(current, bool)
+            or current < 2
+        ):
+            return None
+        return turn
 
     def reconcile_interrupted_tool(
         self,

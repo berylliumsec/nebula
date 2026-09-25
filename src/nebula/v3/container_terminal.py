@@ -82,6 +82,11 @@ TERMINAL_OUTPUT_CHUNK_BYTES = 32_768
 TERMINAL_MAX_DURATION_SECONDS = 24 * 60 * 60
 TERMINAL_IDLE_TIMEOUT_SECONDS = 0
 TERMINAL_COMMAND = ("--noprofile", "--norc", "-i")
+# The container refreshes its public IP file every five minutes, but every open
+# tab polled it every 15 s and each poll spawned a runtime ``exec``. Reads are
+# shared per terminal for this long; a failed read is retried sooner.
+PUBLIC_IP_CACHE_SECONDS = 30.0
+PUBLIC_IP_FAILURE_CACHE_SECONDS = 10.0
 LOGGER = logging.getLogger(__name__)
 
 
@@ -402,6 +407,18 @@ class ContainerTerminalAttachment:
     detached: bool = False
 
 
+@dataclass
+class _PublicIpRead:
+    """The last public IP observation read from one terminal's container."""
+
+    process: object
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    expires_at: float = 0.0
+    address: str | None = None
+    observed_at: datetime | None = None
+    failure: tuple[str, str, int] | None = None
+
+
 class ContainerTerminalService:
     """Owns short-lived terminal review, tickets, capacity, and cleanup."""
 
@@ -454,6 +471,7 @@ class ContainerTerminalService:
         self._idempotency: dict[tuple[str, str], tuple[str, str]] = {}
         self._workspace_locks: dict[str, asyncio.Lock] = {}
         self._workspace_operations: set[str] = set()
+        self._public_ip_reads: dict[str, _PublicIpRead] = {}
         self._shutting_down = False
 
     async def startup(self) -> None:
@@ -569,19 +587,51 @@ class ContainerTerminalService:
                     "public IP is still being checked inside the container",
                     status_code=503,
                 )
-        try:
-            raw = await process.read_public_ip_status()
-            lines = raw.splitlines()
-            if len(lines) != 2:
-                raise ValueError("unexpected public IP status shape")
-            address = str(ipaddress.ip_address(lines[0].strip()))
-            observed_at = datetime.fromtimestamp(int(lines[1]), tz=timezone.utc)
-        except (OSError, ValueError, SandboxError) as exc:
-            raise ContainerTerminalError(
+            # Forget reads of terminals that have ended.
+            for stale in set(self._public_ip_reads) - set(self._sessions):
+                self._public_ip_reads.pop(stale, None)
+            read = self._public_ip_reads.get(session_id)
+            if read is None or read.process is not process:
+                read = _PublicIpRead(process=process)
+                self._public_ip_reads[session_id] = read
+        # Concurrent polls of one terminal share a single container exec.
+        async with read.lock:
+            if read.expires_at <= monotonic():
+                try:
+                    raw = await process.read_public_ip_status()
+                    lines = raw.splitlines()
+                    if len(lines) != 2:
+                        raise ValueError("unexpected public IP status shape")
+                    read.address = str(ipaddress.ip_address(lines[0].strip()))
+                    read.observed_at = datetime.fromtimestamp(
+                        int(lines[1]), tz=timezone.utc
+                    )
+                    read.failure = None
+                    read.expires_at = monotonic() + PUBLIC_IP_CACHE_SECONDS
+                except (
+                    OSError,
+                    ValueError,
+                    SandboxError,
+                ):  # diagnostic-expected: reported to the caller as public_ip_unavailable (503)
+                    read.address = read.observed_at = None
+                    read.failure = (
+                        "public_ip_unavailable",
+                        "the container has not reported a valid public IP yet",
+                        503,
+                    )
+                    read.expires_at = monotonic() + PUBLIC_IP_FAILURE_CACHE_SECONDS
+            address, observed_at, failure = (
+                read.address,
+                read.observed_at,
+                read.failure,
+            )
+        if failure is not None or address is None or observed_at is None:
+            code, detail, status_code = failure or (
                 "public_ip_unavailable",
                 "the container has not reported a valid public IP yet",
-                status_code=503,
-            ) from exc
+                503,
+            )
+            raise ContainerTerminalError(code, detail, status_code=status_code)
         return ContainerTerminalPublicIpStatus(
             address=address,
             observed_at=observed_at,

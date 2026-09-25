@@ -10,9 +10,10 @@ import hashlib
 import json
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .chat_turn_headers import ChatTurnHeader, session_turn_headers
 from .database import EntityRow, OperationEventRow, SessionProjectionRow
 from .domain import (
     Approval,
@@ -29,7 +30,7 @@ from .storage import NebulaStore, NotFoundError
 TERMINAL = {"complete", "failed", "cancelled", "interrupted"}
 
 
-def _recovery_pending(turn: ChatTurn) -> bool:
+def _recovery_pending(turn: ChatTurnHeader) -> bool:
     """An interrupted turn that still blocks its conversation.
 
     ``pending-turn`` keeps it as the conversation's active turn until Core
@@ -37,12 +38,9 @@ def _recovery_pending(turn: ChatTurn) -> bool:
     finished: it is busy, and stopping it is the operator's way out.
     """
 
-    if turn.status.value != "interrupted":
+    if turn.status != "interrupted":
         return False
-    recovery = turn.request_snapshot.get("recovery")
-    return isinstance(recovery, dict) and bool(
-        recovery.get("required") or recovery.get("automatic_retry_pending")
-    )
+    return turn.recovery_required or turn.automatic_retry_pending
 
 
 def session_state(
@@ -100,40 +98,70 @@ def session_projection(store: NebulaStore, session: ChatSession) -> dict[str, An
         return _project(database, session.id)
 
 
+def _session_approvals(
+    database: Session,
+    session: ChatSession,
+    turn_ids: list[str],
+    approval_ids: list[str],
+) -> list[Approval]:
+    """This conversation's approvals, found through indexed columns only.
+
+    Approvals record their conversation in the indexed ``chat_session_id``
+    projection. A turn also names its own approval by id. Only an approval
+    written without a conversation needs its ``chat_turn_id`` read from JSON,
+    and that scan is limited to those rows instead of the whole project.
+    """
+
+    statements = [
+        select(EntityRow).where(
+            EntityRow.kind == Approval.entity_kind,
+            EntityRow.chat_session_id == session.id,
+        )
+    ]
+    if approval_ids:
+        statements.append(
+            select(EntityRow).where(
+                EntityRow.kind == Approval.entity_kind,
+                EntityRow.id.in_(approval_ids),
+            )
+        )
+    if turn_ids:
+        statements.append(
+            select(EntityRow).where(
+                EntityRow.kind == Approval.entity_kind,
+                EntityRow.chat_session_id.is_(None),
+                EntityRow.engagement_id == session.engagement_id,
+                EntityRow.payload["chat_turn_id"].as_string().in_(turn_ids),
+            )
+        )
+    found: dict[str, Approval] = {}
+    for statement in statements:
+        for row in database.scalars(statement):
+            if row.id not in found and row.engagement_id == session.engagement_id:
+                found[row.id] = Approval.model_validate(row.payload)
+    return list(found.values())
+
+
 def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]:
     row = database.get(EntityRow, session_id)
     if row is None or row.kind != ChatSession.entity_kind:
         raise NotFoundError(f"chat session not found: {session_id}")
     session = ChatSession.model_validate(row.payload)
     # The read uses the same transaction as the cached watermark assignment.
-    turn_query = select(EntityRow).where(
-        EntityRow.kind == ChatTurn.entity_kind,
-        EntityRow.engagement_id == session.engagement_id,
-        EntityRow.chat_session_id == session.id,
-    )
+    # Turn rows hold whole tool histories; this poll needs only their status
+    # fields, which revision-keyed headers provide without parsing payloads.
     turns = [
-        ChatTurn.model_validate(row.payload)
-        for row in database.scalars(
-            turn_query.order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
-        )
+        item
+        for item in session_turn_headers(database, session.id)
+        if item.engagement_id == session.engagement_id
     ]
     turn_ids = [turn.id for turn in turns]
-    approvals = [
-        Approval.model_validate(row.payload)
-        for row in database.scalars(
-            select(EntityRow).where(
-                EntityRow.kind == Approval.entity_kind,
-                EntityRow.engagement_id == session.engagement_id,
-                or_(
-                    EntityRow.chat_session_id == session.id,
-                    EntityRow.payload["chat_turn_id"].as_string().in_(turn_ids),
-                    EntityRow.id.in_(
-                        [turn.approval_id for turn in turns if turn.approval_id]
-                    ),
-                ),
-            )
-        )
-    ]
+    approvals = _session_approvals(
+        database,
+        session,
+        turn_ids,
+        [turn.approval_id for turn in turns if turn.approval_id],
+    )
     questions = [
         HarnessInteraction.model_validate(row.payload)
         for row in database.scalars(
@@ -159,7 +187,7 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
     active_ids = {
         item.id
         for item in turns
-        if (item.status.value not in TERMINAL or _recovery_pending(item))
+        if (item.status not in TERMINAL or _recovery_pending(item))
         and (
             item.harness_turn_id not in harnesses
             or harnesses[item.harness_turn_id].status.value not in TERMINAL
@@ -265,11 +293,14 @@ def _project(database: Session, session_id: str, runtime=None) -> dict[str, Any]
             )
         decision["progress"] = "observed" if sequence is not None else "not_observed"
         decision["progress_sequence"] = sequence
-    execution = turn.status.value if turn else "idle"
+    execution = turn.status if turn else "idle"
     if turn and _recovery_pending(turn):
-        execution = (
-            "recovering" if core_resumes_interrupted_turn(turn) else "needs_stop"
+        # Only an interrupted turn needs its full recovery record read.
+        interrupted = database.get(EntityRow, turn.id)
+        resumes = interrupted is not None and core_resumes_interrupted_turn(
+            ChatTurn.model_validate(interrupted.payload)
         )
+        execution = "recovering" if resumes else "needs_stop"
     if harness and execution not in TERMINAL:
         execution = harness.status.value
     execution = {"routing": "running"}.get(execution, execution)

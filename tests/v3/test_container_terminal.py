@@ -524,6 +524,74 @@ async def test_public_ip_comes_from_the_live_project_terminal(tmp_path):
 
 
 @async_test
+async def test_public_ip_polls_share_one_container_read_for_a_short_window(
+    tmp_path, monkeypatch
+):
+    from nebula.v3 import container_terminal
+    from nebula.v3.sandbox import SandboxUnavailable
+
+    _store, engagement, _runner, _platform, service = continuity_fixture(tmp_path)
+    request = ContainerTerminalPreflightRequest(engagement_id=engagement.id)
+    preview = await service.preflight(request)
+    started = await service.start(
+        ContainerTerminalStartRequest(
+            **request.model_dump(),
+            preview_token=preview.preview_token,
+            preview_fingerprint=preview.preview_fingerprint,
+            client_idempotency_key="public-ip-cache",
+        )
+    )
+    attachment = await service.attach(started.session_id, started.websocket_ticket)
+    process = service._sessions[started.session_id].process
+    reads: list[str] = []
+    outcome = {"value": "203.0.113.42\n1788518400\n"}
+
+    async def read_public_ip_status() -> str:
+        reads.append("exec")
+        await asyncio.sleep(0)
+        if outcome["value"] is None:
+            raise SandboxUnavailable("public IP has not been observed yet")
+        return outcome["value"]
+
+    monkeypatch.setattr(process, "read_public_ip_status", read_public_ip_status)
+    clock = {"now": 1_000.0}
+    monkeypatch.setattr(container_terminal, "monotonic", lambda: clock["now"])
+
+    # Every open tab polls; concurrent and repeated polls share one exec.
+    first, second = await asyncio.gather(
+        service.engagement_public_ip(engagement.id),
+        service.engagement_public_ip(engagement.id),
+    )
+    assert first.address == second.address == "203.0.113.42"
+    clock["now"] += container_terminal.PUBLIC_IP_CACHE_SECONDS - 1
+    await service.engagement_public_ip(engagement.id)
+    assert reads == ["exec"]
+
+    # After the window the container is asked again and a change is seen.
+    outcome["value"] = "198.51.100.7\n1788518460\n"
+    clock["now"] += 2
+    assert (await service.engagement_public_ip(engagement.id)).address == "198.51.100.7"
+    assert reads == ["exec", "exec"]
+
+    # A failed read is also shared, then retried after its shorter window.
+    outcome["value"] = None
+    clock["now"] += container_terminal.PUBLIC_IP_CACHE_SECONDS + 1
+    for _ in range(2):
+        with pytest.raises(ContainerTerminalError) as failure:
+            await service.engagement_public_ip(engagement.id)
+        assert failure.value.code == "public_ip_unavailable"
+        assert failure.value.status_code == 503
+    assert len(reads) == 3
+    outcome["value"] = "203.0.113.42\n1788518520\n"
+    clock["now"] += container_terminal.PUBLIC_IP_FAILURE_CACHE_SECONDS + 1
+    assert (await service.engagement_public_ip(engagement.id)).address == "203.0.113.42"
+    assert len(reads) == 4
+
+    await service.detach(attachment)
+    await service.close(started.session_id)
+
+
+@async_test
 async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     store, engagement, _policy, runner, platform, service = fixture(tmp_path)
     store.append_operation_event(

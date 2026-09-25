@@ -17,7 +17,7 @@ import json
 from datetime import datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from .domain import (
@@ -29,6 +29,7 @@ from .domain import (
     StructuredResultStats,
     utc_now,
 )
+from .conditional_reads import conditional, content_etag
 from .storage import NebulaStore
 from .tools import (
     IdempotencyBehavior,
@@ -360,21 +361,36 @@ def structured_results_router(store: NebulaStore) -> APIRouter:
     )
     def list_results(
         project_id: str,
+        request: Request,
+        response: Response,
         stream: str | None = Query(default=None, max_length=200),
         chat_session_id: str | None = Query(default=None, max_length=200),
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=50, ge=1, le=200),
-    ) -> list[StructuredResultSummary]:
+    ) -> Any:
         store.get(Engagement, project_id)
-        # Retention caps a project's results, so newest-first paging reads the
-        # whole set rather than pushing an ordering into the shared index.
-        matching = [
-            item
-            for item in reversed(_all_results(store, project_id))
-            if (stream is None or item.stream == stream)
-            and (chat_session_id is None or item.chat_session_id == chat_session_id)
-        ]
-        return [summarize(item) for item in matching[offset : offset + limit]]
+        # The conversation filter runs in SQL, so a chat's poll parses only
+        # its own page of results instead of every result the project keeps.
+        filters = {
+            key: value
+            for key, value in (
+                ("stream", stream),
+                ("chat_session_id", chat_session_id),
+            )
+            if value is not None
+        }
+        page = store.find_entities(
+            StructuredResult,
+            filters,
+            engagement_id=project_id,
+            offset=offset,
+            limit=limit,
+            newest_first=True,
+        )
+        summaries = [summarize(item) for item in page]
+        # Open conversations poll this; an unchanged page answers 304.
+        unchanged = conditional(request, response, content_etag("results", summaries))
+        return unchanged or summaries
 
     @router.post(
         "/projects/{project_id}/structured-results",

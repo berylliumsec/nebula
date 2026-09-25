@@ -166,6 +166,7 @@ from .chat import (
 from .chat_subagents import core_resumes_interrupted_turn, is_subagent_session
 from .chat_media import MAX_CHAT_IMAGE_BYTES, ChatImageError, validate_chat_image
 from .chat_schedules import ChatScheduleService, ScheduleCreate, ScheduleWrite
+from .conditional_reads import conditional, content_etag, revision_etag
 from .container_terminal import (
     ContainerTerminalCapacity,
     ContainerTerminalCapabilities,
@@ -1067,6 +1068,15 @@ class ChatTurnSummary(NebulaModel):
     # Whether Core resumes this interrupted turn by itself. Otherwise only
     # the operator's stop settles it.
     recoverable: bool = False
+
+
+class PendingChatTurnStatus(NebulaModel):
+    """Which turn blocks a conversation, for polls that need no transcript."""
+
+    id: str
+    session_id: str
+    status: ChatTurnStatus
+    revision: int = Field(ge=1)
 
 
 class NativeHookExecutionSummary(NebulaModel):
@@ -2300,11 +2310,12 @@ def create_app(
             "Authorization",
             "Content-Type",
             "If-Match",
+            "If-None-Match",
             "Last-Event-ID",
             "X-Nebula-Operation-ID",
             "X-Nebula-Sensitive-Data-Acknowledged",
         ],
-        expose_headers=["X-Request-ID", "Server-Timing"],
+        expose_headers=["ETag", "X-Request-ID", "Server-Timing"],
     )
     app.add_middleware(GZipMiddleware, minimum_size=1_024, compresslevel=1)
     # Added last so timing includes FastAPI serialization and the inner gzip
@@ -9778,27 +9789,51 @@ def create_app(
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/state",
+        response_model=dict[str, Any],
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def get_chat_session_state(session_id: str, response: Response) -> dict[str, Any]:
+    def get_chat_session_state(
+        session_id: str, request: Request, response: Response
+    ) -> Any:
         from .session_state import session_state
 
-        response.headers["Cache-Control"] = "no-store"
-        return session_state(store, store.get(ChatSession, session_id), harness_runtime)
+        state = session_state(
+            store, store.get(ChatSession, session_id), harness_runtime
+        )
+        # The display revision advances exactly when the projection changes,
+        # so it validates the whole snapshot for an unchanged poll.
+        unchanged = conditional(
+            request, response, revision_etag("state", state["revision"])
+        )
+        return unchanged or state
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/pending-turn",
-        response_model=ChatTurnSummary | None,
+        response_model=ChatTurnSummary | PendingChatTurnStatus | None,
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def get_pending_chat_turn(session_id: str) -> ChatTurnSummary | None:
+    def get_pending_chat_turn(
+        session_id: str,
+        view: Literal["summary", "status"] = "summary",
+    ) -> ChatTurnSummary | PendingChatTurnStatus | None:
         service = chat_service()
         turn = service.pending_turn(session_id)
         if turn is None:
             turn = service.recoverable_final_answer_turn(session_id)
-        return _chat_turn_summary(chat_service(), turn) if turn is not None else None
+        if turn is None:
+            return None
+        if view == "status":
+            # Waiting and recovery polls only ask whether the blocking turn
+            # moved on; they skip the ledger reads and the streamed text.
+            return PendingChatTurnStatus(
+                id=turn.id,
+                session_id=turn.session_id,
+                status=turn.status,
+                revision=turn.revision,
+            )
+        return _chat_turn_summary(service, turn)
 
     @app.post(
         f"{API_PREFIX}/chat/turns/{{turn_id}}/cancel",
@@ -10168,8 +10203,8 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     def list_chat_session_activity(
-        engagement_id: str,
-    ) -> list[ChatSessionActivity]:
+        engagement_id: str, request: Request, response: Response
+    ) -> Any:
         activity: list[ChatSessionActivity] = []
         pending = chat_service().pending_turns(engagement_id)
         offset = 0
@@ -10192,16 +10227,21 @@ def create_app(
                             and (
                                 turn.status == ChatTurnStatus.WAITING_APPROVAL
                                 # Core resumes a recoverable interrupted turn
-                                # itself; any other one waits for a stop.
+                                # itself; any other one waits for a stop. Only
+                                # an interrupted turn's full record is read.
                                 or turn.status == ChatTurnStatus.INTERRUPTED
-                                and not core_resumes_interrupted_turn(turn)
+                                and not core_resumes_interrupted_turn(
+                                    store.get(ChatTurn, turn.id)
+                                )
                             )
                             else "working"
                         ),
                         turn_id=turn.id if turn else None,
                     )
                 )
-        return activity
+        # The conversation list polls this; an unchanged answer is a 304.
+        unchanged = conditional(request, response, content_etag("activity", activity))
+        return unchanged or activity
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/messages",
