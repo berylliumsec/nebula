@@ -31,7 +31,9 @@ export interface ChatSubagentState {
  * active and stops when they all finish, so an idle conversation costs nothing.
  * `live` keeps it polling while a response runs, because that response may
  * start the first child at any moment. A hidden page is not polled; it reads
- * again as soon as it is visible. An unchanged list keeps its identity.
+ * again as soon as it is visible. An unchanged list keeps its identity, and a
+ * poll sends the validator it last received so Core answers 304 when nothing
+ * changed.
  */
 export function useChatSubagents(
   api: ApiClient | undefined,
@@ -60,12 +62,16 @@ export function useChatSubagents(
     let stopped = false;
     let failures = 0;
     let first = true;
+    let etag: string | undefined;
 
     const read = async (signal: AbortSignal): Promise<PollOutcome> => {
       if (first) setLoading(true);
       try {
-        const page = await api.listChatSubagents(sessionId, signal);
+        const answer = await api.listChatSubagentsIfChanged(sessionId, etag, signal);
         if (stopped) return "stop";
+        // 304: Core's list still matches what is shown.
+        if (answer) etag = answer.etag;
+        const page = answer ? answer.items : shown.current;
         // Setting unchanged state still re-renders the page once; skip it.
         if (errorShown.current) {
           errorShown.current = false;

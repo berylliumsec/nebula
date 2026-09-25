@@ -19,6 +19,7 @@ import {
   X,
 } from "lucide-react";
 import type { ApiClient } from "../api/client";
+import { sameJson, startVisiblePoll } from "../api/visiblePoll";
 import { ContainerTerminalSocket, type ContainerTerminalErrorMetadata, type ContainerTerminalExit, type ContainerTerminalSocketState } from "../api/containerTerminal";
 import type {
   ContainerTerminalCapacity,
@@ -819,25 +820,30 @@ export function ContainerTerminalPanel({
   // must not tear down active terminal sockets.
   }, [apiBaseUrl, apiToken, engagementId, bootstrapAttempt]);
 
+  // Audit health only annotates a terminal the operator is looking at. The
+  // panel stays mounted behind other views to keep its shells alive, so it
+  // reads while shown in a visible page, once as soon as it is shown again,
+  // and never behind the chat or in a background tab.
   useEffect(() => {
-    if (typeof api.terminalCommandHistoryStatus !== "function") return;
+    if (!active || typeof api.terminalCommandHistoryStatus !== "function") return;
     const controller = new AbortController();
-    const refresh = async () => {
-      try {
-        setAuditHealth(await api.terminalCommandHistoryStatus(engagementId, controller.signal));
-        setAuditHealthUnavailable(false);
-      } catch (caughtError) {
-        void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_07", "A handled interface operation failed.", caughtError, "container_terminal_panel");
-        if (!controller.signal.aborted) setAuditHealthUnavailable(true);
-      }
-    };
-    void refresh();
-    const interval = globalThis.setInterval(() => void refresh(), 3_000);
-    return () => {
-      controller.abort();
-      globalThis.clearInterval(interval);
-    };
-  }, [api, engagementId]);
+    startVisiblePoll({
+      intervalMs: 3_000,
+      signal: controller.signal,
+      read: async (signal) => {
+        try {
+          const next = await api.terminalCommandHistoryStatus(engagementId, signal);
+          if (signal.aborted) return;
+          setAuditHealth((current) => sameJson(current, next) ? current : next);
+          setAuditHealthUnavailable(false);
+        } catch (caughtError) {
+          void logCaughtDiagnostic("interface.container_terminal_panel.caught_failure_07", "A handled interface operation failed.", caughtError, "container_terminal_panel");
+          if (!signal.aborted) setAuditHealthUnavailable(true);
+        }
+      },
+    });
+    return () => controller.abort();
+  }, [active, api, engagementId]);
 
   const removeTab = (key: string) => {
     launchControllersRef.current.get(key)?.abort();

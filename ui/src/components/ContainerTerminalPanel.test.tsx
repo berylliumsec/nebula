@@ -1,5 +1,5 @@
 import { StrictMode } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../api/client";
@@ -322,6 +322,54 @@ describe("ContainerTerminalPanel", () => {
     const focusCalls = terminalSpies.focus.mock.calls.length;
     fireEvent.pointerDown(screen.getAllByLabelText("Terminal output").at(-1)!);
     expect(terminalSpies.focus).toHaveBeenCalledTimes(focusCalls + 1);
+  });
+
+  it("reads Project audit health only while the terminal is shown in a visible page", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let visibility: DocumentVisibilityState = "visible";
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+    const setVisibility = (next: DocumentVisibilityState) => {
+      visibility = next;
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    try {
+      const terminalCommandHistoryStatus = vi.fn().mockResolvedValue({ engagementId: "engagement-1", enabled: true, auditGapCount: 0 });
+      const api = {
+        baseUrl: "http://127.0.0.1:8765/api/v1",
+        getToken: () => "test-token",
+        recoverContainerTerminals: vi.fn().mockResolvedValue({ sessions: [{ session: session("terminal-behind-chat"), runtime }] }),
+        containerTerminalCapacity: vi.fn().mockResolvedValue(capacity(1)),
+        terminalCommandHistoryStatus,
+      } as unknown as ApiClient;
+      const panel = (active: boolean) => <DialogProvider><ContainerTerminalPanel active={active} api={api} engagementId="engagement-1" engagementName="Lab" setupTerminalStatus="ready" /></DialogProvider>;
+      const view = render(panel(false));
+      await waitFor(() => expect(socketSpies.connect).toHaveBeenCalledTimes(1));
+      // Mounted behind the chat, it keeps its shell but asks Core nothing.
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(terminalCommandHistoryStatus).not.toHaveBeenCalled();
+
+      // Shown: one read at once, then one poll every 3 s.
+      view.rerender(panel(true));
+      await waitFor(() => expect(terminalCommandHistoryStatus).toHaveBeenCalledTimes(1));
+      await act(() => vi.advanceTimersByTimeAsync(9_000));
+      expect(terminalCommandHistoryStatus).toHaveBeenCalledTimes(4);
+
+      // A background tab waits, then reads as soon as it is visible again.
+      setVisibility("hidden");
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(terminalCommandHistoryStatus).toHaveBeenCalledTimes(4);
+      setVisibility("visible");
+      await waitFor(() => expect(terminalCommandHistoryStatus).toHaveBeenCalledTimes(5));
+
+      // Back behind the chat, the poll stops.
+      view.rerender(panel(false));
+      await act(() => vi.advanceTimersByTimeAsync(30_000));
+      expect(terminalCommandHistoryStatus).toHaveBeenCalledTimes(5);
+      expect(terminalCommandHistoryStatus.mock.calls.every(([project]) => project === "engagement-1")).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      delete (document as unknown as { visibilityState?: DocumentVisibilityState }).visibilityState;
+    }
   });
 
   it("allows the network boundary notice to be dismissed", async () => {

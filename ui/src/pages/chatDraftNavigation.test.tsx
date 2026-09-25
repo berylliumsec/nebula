@@ -42,6 +42,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// A full App render, the lazy Workbench and typed input take 3-5 s under load,
+// against vitest's 5 s default (CI passes --testTimeout=15000).
 it("restores an unsent new-chat draft after visiting a saved conversation", async () => {
   const entity = { created_at: "2026-07-12T10:00:00Z", updated_at: "2026-07-12T11:00:00Z", revision: 1 };
   const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
@@ -87,4 +89,4 @@ it("restores an unsent new-chat draft after visiting a saved conversation", asyn
 
   await waitFor(() => expect(composer).toHaveValue("unsent new-chat draft"));
   expect(fetchMock.mock.calls.some(([input]) => new URL(String(input)).pathname.endsWith("/chat/completions"))).toBe(false);
-});
+}, 15_000);

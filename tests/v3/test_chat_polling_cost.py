@@ -209,6 +209,86 @@ def test_state_route_answers_not_modified_until_the_projection_changes(tmp_path)
     assert changed.headers["etag"] != etag
 
 
+def test_subagents_route_answers_not_modified_until_a_child_changes(tmp_path):
+    from nebula.v3.domain import ChatSubagent, ChatSubagentStatus
+
+    store, engagement, profile, parent, _ = _conversation(tmp_path, turns=1)
+
+    def delegate(name: str, **fields) -> ChatSubagent:
+        child = store.create(
+            ChatSession(
+                engagement_id=engagement.id,
+                title=name,
+                provider_profile_id=profile.id,
+                model="model-a",
+                parent_session_id=parent.id,
+            )
+        )
+        return store.create(
+            ChatSubagent(
+                engagement_id=engagement.id,
+                parent_session_id=parent.id,
+                parent_turn_id="turn",
+                child_session_id=child.id,
+                name=name,
+                task=f"{name}.",
+                **fields,
+            )
+        )
+
+    finished_at = utc_now()
+    done = delegate(
+        "Map routes",
+        status=ChatSubagentStatus.COMPLETED,
+        started_at=finished_at - timedelta(seconds=40),
+        finished_at=finished_at,
+        result="Three routes.",
+    )
+    client = TestClient(create_app(store, auth_token="test-token"))
+    path = f"/api/v1/chat/sessions/{parent.id}/subagents"
+
+    first = client.get(path, headers=_auth())
+    assert first.status_code == 200
+    assert first.headers["cache-control"] == "no-store"
+    etag = first.headers["etag"]
+    assert [item["name"] for item in first.json()["subagents"]] == ["Map routes"]
+
+    # The rail polls while a response runs: an unchanged list costs no body.
+    unchanged = client.get(path, headers={**_auth(), "If-None-Match": etag})
+    assert unchanged.status_code == 304
+    assert unchanged.content == b""
+    assert unchanged.headers["etag"] == etag
+
+    # A new child, and a finished child's changed record, each answer anew.
+    delegate("Check headers")
+    started = client.get(path, headers={**_auth(), "If-None-Match": etag})
+    assert started.status_code == 200
+    assert [item["name"] for item in started.json()["subagents"]] == [
+        "Map routes",
+        "Check headers",
+    ]
+    assert started.headers["etag"] != etag
+    etag = started.headers["etag"]
+
+    store.update(
+        ChatSubagent,
+        done.id,
+        {"result": "Four routes."},
+        expected_revision=done.revision,
+    )
+    revised = client.get(path, headers={**_auth(), "If-None-Match": etag})
+    assert revised.status_code == 200
+    assert revised.json()["subagents"][0]["result"] == "Four routes."
+
+    # Another conversation's validator never matches this one.
+    other = client.get(
+        f"/api/v1/chat/sessions/{done.child_session_id}/subagents",
+        headers={**_auth(), "If-None-Match": revised.headers["etag"]},
+    )
+    assert other.status_code == 200
+    assert other.json()["subagents"] == []
+
+
 def test_catch_up_reads_headers_and_links_only_failures(
     tmp_path, parsed_turns, monkeypatch
 ):

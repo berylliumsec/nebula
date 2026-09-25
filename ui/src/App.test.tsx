@@ -503,6 +503,8 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: "Assistant settings" })).toHaveTextContent("Codex");
   });
 
+  // A full App render, the lazy Workbench and typed input take 3-5 s under
+  // load, against vitest's 5 s default (CI passes --testTimeout=15000).
   it("streams analyst chat with explicit provider/model selection and cloud knowledge consent", async () => {
     const entity = {
       created_at: "2026-07-12T10:00:00Z",
@@ -564,6 +566,10 @@ describe("Nebula workspace", () => {
           manifest_sha256: "a".repeat(64), executable_sha256: "b".repeat(64),
         }]), { status: 200 });
       }
+      // Since #548 a send first confirms the provider credential with Core.
+      if (url.pathname.endsWith(`/credentials/${encodeURIComponent("env:OPENAI_API_KEY")}/status`)) {
+        return new Response(JSON.stringify({ reference: "env:OPENAI_API_KEY", persistence: "environment", available: true, state: "available" }), { status: 200 });
+      }
       if (url.pathname.endsWith("/chat/completions")) {
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
@@ -618,7 +624,7 @@ describe("Nebula workspace", () => {
       messages: [{ role: "user", content: "Review the scope" }],
     });
     expect(await screen.findByText("Lifecycle hooks · 1/1 completed")).toBeVisible();
-  });
+  }, 15_000);
 
   it("reconciles an interrupted provider hook then resumes from Core state", async () => {
     const entity = {

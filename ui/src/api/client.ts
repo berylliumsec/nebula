@@ -1315,6 +1315,8 @@ interface WireContextStatus extends JsonObject {
 
 interface WireChatStreamEvent extends JsonObject {
   type:
+    | "queued"
+    | "admitted"
     | "started"
     | "delta"
     | "message_delta"
@@ -1418,6 +1420,10 @@ interface WireChatStreamEvent extends JsonObject {
   payload?: JsonObject;
   harness_session_id?: string;
   harness_turn_id?: string;
+  queued_at?: string;
+  admitted_at?: string;
+  queue_position?: number | null;
+  capacity_lane?: "direct" | "background";
 }
 
 interface WireHarnessActivityEventPage extends JsonObject {
@@ -2151,6 +2157,12 @@ const MAX_LIST_LIMIT = 1_000;
 /** Longest provider call Core may make while preparing a turn before it answers. */
 const CHAT_ACCEPTANCE_TIMEOUT_MS = 15 * 60_000;
 const CHAT_RECONNECT_HEADER_TIMEOUT_MS = 45_000;
+/**
+ * Core queues every provider turn before it admits it, and a free slot admits
+ * it within milliseconds. A wait is reported only once it lasts this long, so
+ * a turn that starts at once never shows a queue position.
+ */
+const CHAT_QUEUE_NOTICE_DELAY_MS = 400;
 
 function engagementQuery(engagementId: string, offset: number): string {
   return `engagement_id=${encodeURIComponent(engagementId)}&limit=${MAX_LIST_LIMIT}&offset=${offset}`;
@@ -7550,6 +7562,20 @@ export class ApiClient {
     ).then((value) => (value.subagents ?? []).map(mapChatSubagent));
   }
 
+  /** ``listChatSubagents`` for a poll: undefined when Core answered 304. */
+  async listChatSubagentsIfChanged(
+    sessionId: string,
+    etag: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<{ items: ChatSubagentView[]; etag?: string } | undefined> {
+    const answer = await this.requestIfChanged<{ subagents: WireChatSubagent[] }>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/subagents`,
+      etag,
+      { signal },
+    );
+    return answer && { items: (answer.value.subagents ?? []).map(mapChatSubagent), etag: answer.etag };
+  }
+
   stopChatSubagent(sessionId: string, subagentId: string, signal?: AbortSignal): Promise<ChatSubagentView> {
     return this.request<WireChatSubagent>(
       `chat/sessions/${encodeURIComponent(sessionId)}/subagents/${encodeURIComponent(subagentId)}/stop`,
@@ -9279,6 +9305,15 @@ export class ApiClient {
     // ends this stream on purpose; Core resumes it later in a new runtime.
     let pausedForCallback = false;
     let cancelled = false;
+    // The first queued frame waits here until its wait has lasted; any later
+    // frame of the turn means Core moved on and drops it. Once reported, each
+    // new position is passed on at once.
+    let heldQueue: { event: ChatStreamEvent; timer: ReturnType<typeof setTimeout> } | undefined;
+    let queueReported = false;
+    const dropHeldQueue = () => {
+      if (heldQueue) clearTimeout(heldQueue.timer);
+      heldQueue = undefined;
+    };
 
     const processBlock = (block: string) => {
       const lines = block.replace(/\r/g, "").split("\n");
@@ -9313,6 +9348,8 @@ export class ApiClient {
       if (typeof wire.epoch === "string" && wire.epoch !== epoch) {
         if (epoch !== undefined) {
           cursor = 0;
+          dropHeldQueue();
+          queueReported = false;
           onEvent({type: "restarted", turnId: wire.turn_id ?? turnId});
         }
         epoch = wire.epoch;
@@ -9324,6 +9361,7 @@ export class ApiClient {
         cursor = wire.sequence;
         attempts = 0;
       }
+      if (wire.type !== "queued") dropHeldQueue();
       if (wire.type === "error") {
         protocolFailure = true;
         const event: ChatStreamEvent = {
@@ -9338,6 +9376,47 @@ export class ApiClient {
         // turn is over, so the viewer must settle instead of reconnecting.
         cancelled = true;
         onEvent({ type: "cancelled", turnId: wire.turn_id ?? turnId, detail: wire.detail || "response stopped" });
+        return;
+      }
+      // A provider turn waits in Core's capacity queue before it starts; each
+      // position change is a frame, and admission ends the wait.
+      if (wire.type === "queued") {
+        const queuedTurnId = wire.turn_id ?? turnId;
+        if (!queuedTurnId) return;
+        const event: ChatStreamEvent = {
+          type: "queued",
+          turnId: queuedTurnId,
+          queuedAt: wire.queued_at ?? new Date().toISOString(),
+          queuePosition: typeof wire.queue_position === "number" ? wire.queue_position : undefined,
+          capacityLane: wire.capacity_lane === "background" ? "background" : "direct",
+          detail: wire.detail || "Waiting for Core capacity",
+        };
+        if (queueReported) onEvent(event);
+        // A newer position replaces the held one; the wait keeps its start.
+        else if (heldQueue) heldQueue.event = event;
+        else {
+          heldQueue = {
+            event,
+            timer: setTimeout(() => {
+              const held = heldQueue;
+              heldQueue = undefined;
+              if (!held || signal?.aborted) return;
+              queueReported = true;
+              onEvent(held.event);
+            }, CHAT_QUEUE_NOTICE_DELAY_MS),
+          };
+        }
+        return;
+      }
+      if (wire.type === "admitted") {
+        const admittedTurnId = wire.turn_id ?? turnId;
+        if (!admittedTurnId) return;
+        onEvent({
+          type: "admitted",
+          turnId: admittedTurnId,
+          admittedAt: wire.admitted_at ?? new Date().toISOString(),
+          capacityLane: wire.capacity_lane === "background" ? "background" : "direct",
+        });
         return;
       }
       if (wire.type === "started") {
@@ -9554,75 +9633,80 @@ export class ApiClient {
       }
     };
 
-    while (true) {
-      let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-      const attemptController = new AbortController();
-      const abortAttempt = () => attemptController.abort();
-      signal?.addEventListener("abort", abortAttempt, {once: true});
-      // Core prepares a new or resumed turn (retrieval planning, compaction and
-      // route verification, each a model call) before it answers with headers,
-      // so acceptance gets the longest provider budget; a reconnect only
-      // attaches to a running turn and keeps the short one.
-      const headerTimer = setTimeout(abortAttempt, recovering ? CHAT_RECONNECT_HEADER_TIMEOUT_MS : CHAT_ACCEPTANCE_TIMEOUT_MS);
-      try {
-        if (signal?.aborted) throw new DOMException("Viewer detached", "AbortError");
-        const headers = new Headers({Accept: "text/event-stream", "Content-Type": "application/json"});
-        this.authorizeHeaders(headers, recovering ? "GET" : "POST");
-        const response = await this.fetchImpl(
-          recovering
-            ? `${this.baseUrl}/chat/turns/${encodeURIComponent(turnId!)}/events?after=${cursor}${epoch ? `&epoch=${encodeURIComponent(epoch)}` : ""}`
-            : resumeTurnId
-              ? `${this.baseUrl}/chat/turns/${encodeURIComponent(resumeTurnId)}/resume`
-              : `${this.baseUrl}/chat/completions`,
-          {method: recovering ? "GET" : "POST", headers, signal: attemptController.signal, credentials: "same-origin",
-            body: recovering || resumeTurnId ? undefined : JSON.stringify(chatRequestBody(body, true))},
-        );
-        clearTimeout(headerTimer);
-        if (!response.ok) throw await responseError(response);
-        if (!response.body) throw new Error("The chat response stream was empty.");
-        reader = response.body.getReader();
-        if (recovering) onEvent({type: "connection", state: "connected"});
-        const decoder = new TextDecoder();
-        let buffer = "";
-        while (true) {
-          const {value, done} = await readChatChunk(reader);
+    try {
+      while (true) {
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+        const attemptController = new AbortController();
+        const abortAttempt = () => attemptController.abort();
+        signal?.addEventListener("abort", abortAttempt, {once: true});
+        // Core prepares a new or resumed turn (retrieval planning, compaction and
+        // route verification, each a model call) before it answers with headers,
+        // so acceptance gets the longest provider budget; a reconnect only
+        // attaches to a running turn and keeps the short one.
+        const headerTimer = setTimeout(abortAttempt, recovering ? CHAT_RECONNECT_HEADER_TIMEOUT_MS : CHAT_ACCEPTANCE_TIMEOUT_MS);
+        try {
           if (signal?.aborted) throw new DOMException("Viewer detached", "AbortError");
-          buffer += decoder.decode(value, {stream: !done});
-          let separator = buffer.search(/\r?\n\r?\n/);
-          while (separator >= 0) {
-            const block = buffer.slice(0, separator);
-            const match = buffer.slice(separator).match(/^\r?\n\r?\n/);
-            buffer = buffer.slice(separator + (match?.[0].length ?? 2));
-            processBlock(block);
-            separator = buffer.search(/\r?\n\r?\n/);
+          const headers = new Headers({Accept: "text/event-stream", "Content-Type": "application/json"});
+          this.authorizeHeaders(headers, recovering ? "GET" : "POST");
+          const response = await this.fetchImpl(
+            recovering
+              ? `${this.baseUrl}/chat/turns/${encodeURIComponent(turnId!)}/events?after=${cursor}${epoch ? `&epoch=${encodeURIComponent(epoch)}` : ""}`
+              : resumeTurnId
+                ? `${this.baseUrl}/chat/turns/${encodeURIComponent(resumeTurnId)}/resume`
+                : `${this.baseUrl}/chat/completions`,
+            {method: recovering ? "GET" : "POST", headers, signal: attemptController.signal, credentials: "same-origin",
+              body: recovering || resumeTurnId ? undefined : JSON.stringify(chatRequestBody(body, true))},
+          );
+          clearTimeout(headerTimer);
+          if (!response.ok) throw await responseError(response);
+          if (!response.body) throw new Error("The chat response stream was empty.");
+          reader = response.body.getReader();
+          if (recovering) onEvent({type: "connection", state: "connected"});
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const {value, done} = await readChatChunk(reader);
+            if (signal?.aborted) throw new DOMException("Viewer detached", "AbortError");
+            buffer += decoder.decode(value, {stream: !done});
+            let separator = buffer.search(/\r?\n\r?\n/);
+            while (separator >= 0) {
+              const block = buffer.slice(0, separator);
+              const match = buffer.slice(separator).match(/^\r?\n\r?\n/);
+              buffer = buffer.slice(separator + (match?.[0].length ?? 2));
+              processBlock(block);
+              separator = buffer.search(/\r?\n\r?\n/);
+            }
+            if (completed || pausedForApproval || pausedForCallback || cancelled) return completed;
+            if (done) break;
           }
+          if (buffer.trim()) processBlock(buffer);
           if (completed || pausedForApproval || pausedForCallback || cancelled) return completed;
-          if (done) break;
+          throw new Error("The chat connection ended before the turn completed.");
+        } catch (error) {
+          if (signal?.aborted || protocolFailure) throw error;
+          if (error instanceof ApiError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status)) throw error;
+          // Core answered before accepting the message, so that answer (and its
+          // error reference) is the definitive outcome: nothing is uncertain.
+          if (!turnId && error instanceof ApiError) throw error;
+          // A lost initial acceptance response is uncertain: never POST again.
+          if (!turnId) throw new Error("The chat connection was lost before acceptance was confirmed. Reload the conversation to check whether the message was accepted before sending it again.");
+          if (attempts >= 8) throw new Error("Could not reconnect to this turn. Reload the conversation to read its saved state; the message has not been resubmitted.");
+          recovering = true;
+          onEvent({type: "connection", state: "reconnecting"});
+        } finally {
+          clearTimeout(headerTimer);
+          signal?.removeEventListener("abort", abortAttempt);
+          attemptController.abort();
+          if (reader) {
+            // Cancel only the viewer; Core retains ownership of execution.
+            void reader.cancel().catch(() => { /* diagnostic-expected: an already closed viewer needs no further cancellation. */ });
+          }
         }
-        if (buffer.trim()) processBlock(buffer);
-        if (completed || pausedForApproval || pausedForCallback || cancelled) return completed;
-        throw new Error("The chat connection ended before the turn completed.");
-      } catch (error) {
-        if (signal?.aborted || protocolFailure) throw error;
-        if (error instanceof ApiError && error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status)) throw error;
-        // Core answered before accepting the message, so that answer (and its
-        // error reference) is the definitive outcome: nothing is uncertain.
-        if (!turnId && error instanceof ApiError) throw error;
-        // A lost initial acceptance response is uncertain: never POST again.
-        if (!turnId) throw new Error("The chat connection was lost before acceptance was confirmed. Reload the conversation to check whether the message was accepted before sending it again.");
-        if (attempts >= 8) throw new Error("Could not reconnect to this turn. Reload the conversation to read its saved state; the message has not been resubmitted.");
-        recovering = true;
-        onEvent({type: "connection", state: "reconnecting"});
-      } finally {
-        clearTimeout(headerTimer);
-        signal?.removeEventListener("abort", abortAttempt);
-        attemptController.abort();
-        if (reader) {
-          // Cancel only the viewer; Core retains ownership of execution.
-          void reader.cancel().catch(() => { /* diagnostic-expected: an already closed viewer needs no further cancellation. */ });
-        }
+        await waitForChatReconnect(attempts++, signal);
       }
-      await waitForChatReconnect(attempts++, signal);
+    } finally {
+      // A wait still held when the stream ends is never reported.
+      dropHeldQueue();
     }
   }
 
