@@ -1,5 +1,5 @@
 {
-  "change_digest": "6a2c2fab615d8406ef7b07ac694727c29b88946f14781283aa9cbbe80f7f1a60",
+  "change_digest": "a09a3f7c8f0cc20236690a5cc8c74ad9f24ff85ae7ab5e44cde11df9e5065621",
   "reviewed_by": "Claude focused review for lifecycle-docs",
   "reason": "Documentation only. P20 updates docs/design/execution-recovery-lifecycle.md (provider admission queue, resume paths, interrupted-turn exits, state machines for tool calls, subagent rounds, goals, callback leases, harness turns and Mission runs, defect closure D16-D52), docs/design/native-subagents.md, docs/quality/callback-lifecycle-reconciliation.md, docs/NEBULA3.md (subagent tool list), docs/design/openrouter-native-harness.md and docs/design/openrouter-native-harness-handoff.md (superseded restart/delegation notes). No source, test, UI, native or workflow file changes, so no test at any layer exercises the diff.",
   "exclusions": "Every layer is empty because the diff touches only Markdown under docs/: no Python, frontend, native or Playwright test reads or renders these files except tests/v3/test_operator_help.py, which asserts two unchanged strings in docs/NEBULA3.md (run locally as a sanity check, 2 passed; not selected). Full suites are not approved and are excluded. The mermaid diagrams were parsed and rendered with mermaid 11 in headless Chromium outside CI.",
