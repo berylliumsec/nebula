@@ -2422,12 +2422,19 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
         call = store.get(ToolCall, latest_chat_turn.tool_call_ids[0])
         assert call.tool_name == "knowledge.list"
         assert call.status == ToolCallStatus.COMPLETE
-        with pytest.raises(HarnessConfigurationError, match="accepts only"):
-            await runtime._gateway_call(
-                session,
-                "knowledge.list",
-                {"engagement_id": other.id},
-            )
+        # Another project's sources are never reachable by argument.
+        rejected = await runtime._gateway_call(
+            session,
+            "knowledge.list",
+            {"engagement_id": other.id},
+        )
+        assert rejected["isError"] is True
+        failure = rejected["structuredContent"]
+        assert failure["schema"] == "nebula.tool-failure/v1"
+        assert failure["category"] == "invalid_arguments"
+        assert failure["invalid_input"] == "engagement_id"
+        assert failure["side_effects"] == "none"
+        assert "private" not in json.dumps(rejected)
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
 
@@ -2453,7 +2460,9 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
             {},
         )
         assert denied["isError"] is True
-        assert "not enabled" in denied["content"][0]["text"]
+        assert denied["structuredContent"]["schema"] == "nebula.tool-failure/v1"
+        assert denied["structuredContent"]["category"] == "permission_denied"
+        assert denied["structuredContent"]["side_effects"] == "none"
         runtime._active.pop(disabled_session.id)
         await runtime.close_session(disabled_session.id)
 
@@ -3301,7 +3310,6 @@ def test_browser_gateway_rechecks_conversation_binding_before_execution(
 ):
     from nebula.v3.browser_companion import BrowserCompanion
     from nebula.v3.browser_engine import BrowserEngineRegistry
-    from nebula.v3.harnesses import HarnessConfigurationError
 
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)
@@ -3338,10 +3346,19 @@ def test_browser_gateway_rechecks_conversation_binding_before_execution(
         )
         monkeypatch.setattr(runtime, "_active_gateway_turn", lambda _: turn)
         BrowserCompanion(store, BrowserEngineRegistry()).bind(browser.id, None)
-        with pytest.raises(HarnessConfigurationError, match="No browser is attached"):
-            await runtime._gateway_call(
-                session, "browser.companion", {"operation": "tabs"}
-            )
+        response = await runtime._gateway_call(
+            session,
+            "browser.companion",
+            {"operation": "tabs", "url": "https://example.test/"},
+        )
+        # The detached browser is unavailable to this conversation, and the
+        # refusal came before any browser operation (#520 failure contract).
+        assert response["isError"] is True
+        failure = response["structuredContent"]
+        assert failure["schema"] == "nebula.tool-failure/v1"
+        assert failure["category"] == "unavailable_resource"
+        assert failure["side_effects"] == "none"
+        assert failure["retry_safe"] is False
 
     asyncio.run(scenario())
 
@@ -4263,30 +4280,50 @@ def test_legacy_grok_host_mode_forks_before_resuming_cwd_bound_session(tmp_path)
 
 
 @pytest.mark.parametrize(
-    "name,arguments,required",
+    "name,arguments,invalid,required",
     [
-        ("workspace.read", {}, "path"),
-        ("workspace.search", {}, "query"),
-        ("workspace.search", {"query": "text", "glob": "*.md"}, "query"),
+        ("workspace.read", {}, "path", "path"),
+        ("workspace.search", {}, "query", "query"),
+        ("workspace.search", {"query": "text", "glob": "*.md"}, "glob", "query"),
     ],
 )
 def test_workspace_retrieval_reports_actionable_argument_errors(
-    tmp_path, name, arguments, required
+    tmp_path, name, arguments, invalid, required
 ):
-    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
-    _, _, turn = runtime.prepare_chat(
-        engagement_id=engagement.id,
-        profile_id=profile.id,
-        model=None,
-        prompt="Read the local notes",
-        chat_session_id=None,
-        harness_session_id=None,
-        mcp_server_ids=[],
-    )
-    with pytest.raises(Exception, match=f"Required: {required}") as error:
-        asyncio.run(runtime._gateway_retrieval(turn, name, arguments))
-    assert "Correct the arguments and retry" in str(error.value)
-    assert "keyword" not in str(error.value)
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        _, chat_turn, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Read the local notes",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        session = store.get(HarnessSession, turn.harness_session_id)
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=turn.id, connection=None, task=None
+        )
+        response = await runtime._gateway_call(session, name, arguments)
+        # The harness model reads the schema-guided failure (#520): the field
+        # to correct and the schema it was offered, never a Python error.
+        assert response["isError"] is True
+        failure = response["structuredContent"]
+        assert failure["schema"] == "nebula.tool-failure/v1"
+        assert failure["category"] == "invalid_arguments"
+        assert failure["invalid_input"] == invalid
+        assert failure["effective_input_schema"]["required"] == [required]
+        assert failure["side_effects"] == "none"
+        assert failure["retry_safe"] is True
+        assert failure["next_action"].startswith("Correct the indicated argument")
+        assert "keyword" not in response["content"][0]["text"]
+        [call_id] = store.get(ChatTurn, chat_turn.id).tool_call_ids
+        assert store.get(ToolCall, call_id).status == ToolCallStatus.FAILED
+        runtime._active.pop(session.id)
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("change", ["model", "profile", "mcp", "provider"])

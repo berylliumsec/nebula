@@ -13063,6 +13063,7 @@ class HarnessRuntimeService:
             phase = (
                 "before_execution"
                 if name in _GATEWAY_RETRIEVAL_SCHEMAS
+                or getattr(exc, "_nebula_before_execution", False)
                 or isinstance(
                     exc, (InvalidToolArguments, PolicyDenied, ValidationError)
                 )
@@ -13137,9 +13138,11 @@ class HarnessRuntimeService:
                 )
                 != companion_id
             ):
-                raise HarnessConfigurationError(
-                    "No browser is attached to this conversation."
-                )
+                # The operator detached or moved the browser: the resource is
+                # unavailable to this conversation, and nothing has run yet.
+                detached = NotFoundError("No browser is attached to this conversation.")
+                setattr(detached, "_nebula_before_execution", True)
+                raise detached
             components = companion_components(
                 self.store,
                 turn.engagement_id,

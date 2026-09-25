@@ -464,11 +464,13 @@ def test_synthesis_and_its_recovery_declare_the_routing_tools_with_calling_off(
 
     assert completion.message.content == ANSWER
     routing, _, synthesis, recovery = _turn_requests(provider)
-    assert routing.tool_choice == "required"
+    # Routing lets the model choose since #521, which also dropped the
+    # finish_response tool (an older route may still call it).
+    assert routing.tool_choice == "auto"
     # The same definitions, byte for byte and in the same order, so the
     # function list a provider caches for routing serves the synthesis too.
     assert _dumped(synthesis.tools) == _dumped(routing.tools)
-    assert [tool.name for tool in synthesis.tools] == ["safe_read", "finish_response"]
+    assert [tool.name for tool in synthesis.tools] == ["safe_read"]
     assert synthesis.tool_choice == NONE
     assert synthesis.parallel_tool_calls is False
     assert [result.call_id for result in synthesis.tool_results] == ["call-1"]

@@ -472,12 +472,18 @@ class ToolCatalogBroker:
             return ToolExecutionResult(output=self._load(invocation.arguments))
         if invocation.tool_name == CATALOG_CALL:
             # A valid call is unwrapped into the real tool before it reaches a
-            # broker, so reaching here means the target is not on demand.
-            raise InvalidToolArguments(
+            # broker, so reaching here means the target is not on demand and
+            # nothing ran: the model can correct the name and call again.
+            refused = InvalidToolArguments(
                 f"{invocation.arguments.get('name')!r} is not an on-demand tool; "
                 f"use {CATALOG_SEARCH} to find one"
             )
-        raise InvalidToolArguments(f"unknown catalog tool {invocation.tool_name!r}")
+        else:
+            refused = InvalidToolArguments(
+                f"unknown catalog tool {invocation.tool_name!r}"
+            )
+        setattr(refused, "_nebula_before_execution", True)
+        raise refused
 
     def _search(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
         query = str(arguments.get("query", ""))
