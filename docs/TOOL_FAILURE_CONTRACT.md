@@ -100,7 +100,22 @@ one category on both paths.
 | `message_parent` from outside a subagent or after its round ended | `permission_denied` |
 | Agent messaging turned off, outside a chat, or for another project | `permission_denied` |
 | Blank task or message, unknown subagent or peer id, unknown `reasoning_effort`, nothing to wait for | `invalid_arguments` (before execution) |
-| Core tried to start a subagent or its next round and could not | `execution_failed` |
+| Core tried to start a subagent or its next round and could not (and a retry of that same start) | `execution_failed` |
+
+A retried start (a vendor retry of the same call, a replayed step) returns the
+child the first call started with its current `status`: `running`, or the
+state it finished in, not a new child and not a start failure.
+
+## Browser companion refusals
+
+| Refusal | Category |
+| --- | --- |
+| Arguments the request cannot hold, a region capture the runtime cannot receive | `invalid_arguments` (before execution) |
+| A tab no longer open, a file reference outside an upload, a credential reference that does not fit | `invalid_arguments` naming the argument (before execution) |
+| A region screenshot too large to keep (the capture changes nothing) | `invalid_arguments` (`width`), `side_effects: none` |
+| A page outside the project's scope | `permission_denied` (before execution) |
+| Control paused, a Nebula approval handed to the browser | `permission_denied` (before execution) |
+| Another project's browser, a detached, closed or revoked browser session, a replayed screenshot that is gone | `unavailable_resource` (before execution) |
 
 A limit is checked after the rules, so a call that is not permitted is never
 told to wait and retry, and a goal's budget before the running-at-once limit,

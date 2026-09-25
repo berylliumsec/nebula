@@ -1824,9 +1824,57 @@ class SubagentService:
                     "error": error,
                     # The parent already has this failure as its tool error.
                     "reported_at": utc_now(),
+                    # A replay of the same start reports the same failure.
+                    "parent_request": {**latest.parent_request, "not_started": True},
                 },
                 expected_revision=latest.revision,
             )
+
+    def start_output(self, record: ChatSubagent, *, harness: bool) -> dict[str, Any]:
+        """The start result for ``record``, in the state it is actually in.
+
+        ``start`` returns the child an earlier identical call started (a
+        vendor retry, a replayed step), which may have finished since. Its
+        real status goes back, so the model neither waits on a child that
+        already reported nor takes a finished one for running. A start that
+        never ran fails again the way it failed the first time.
+        """
+
+        wait_tool = "subagent.wait" if harness else "wait_subagents"
+        message_tool = "subagent.message" if harness else "message_subagent"
+        if record.status == ChatSubagentStatus.FAILED and (
+            record.parent_request.get("not_started") is True
+            # Rows kept by a failed cleanup before the marker existed.
+            or (record.error or "").startswith("Subagent could not start")
+        ):
+            raise SubagentNotStarted(record.error or "subagent could not start")
+        if record.status == ChatSubagentStatus.RUNNING:
+            note = f"Running in parallel. Call {wait_tool} when you need its report."
+        elif self._reported(record):
+            note = (
+                f"This call already started it, and it has {record.status.value}. "
+                f"You received its report earlier; {message_tool} starts another "
+                "round."
+            )
+        else:
+            note = (
+                f"This call already started it, and it has {record.status.value}. "
+                + (
+                    # A harness result carries unreceived reports as updates.
+                    f"Its report comes in this result's updates or from {wait_tool}."
+                    if harness
+                    else f"Call {wait_tool} for its report."
+                )
+            )
+        output: dict[str, Any] = {
+            "subagent_id": record.id,
+            "name": record.name,
+            **({"model": record.model} if harness else {}),
+            "reasoning_effort": record.reasoning_effort or "model default",
+            "status": record.status.value,
+            "note": note,
+        }
+        return output
 
     # -- rounds ------------------------------------------------------------
 
@@ -4132,16 +4180,8 @@ class SubagentBroker:
                 if isinstance(arguments.get("reasoning_effort"), str)
                 else None,
             )
-            if record.status == ChatSubagentStatus.FAILED:
-                raise SubagentNotStarted(record.error or "subagent could not start")
             return ToolExecutionResult(
-                output={
-                    "subagent_id": record.id,
-                    "name": record.name,
-                    "reasoning_effort": record.reasoning_effort or "model default",
-                    "status": "running",
-                    "note": "Running in parallel. Call wait_subagents when you need its report.",
-                }
+                output=self.service.start_output(record, harness=False)
             )
         if name == "list_subagents":
             return ToolExecutionResult(output=self.service.list_output(session_id))

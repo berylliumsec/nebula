@@ -33,7 +33,9 @@ Static mockups; names, steps and token counts are illustrative.
   `capacity_reached` (wait for one to finish, then retry; the limit and the
   running count travel as `limit`), and the instructions state it too. A goal
   whose token budget is used up refuses a start as `budget_exhausted`.
-  Retried steps reuse the same child (idempotency key).
+  Retried steps reuse the same child (idempotency key), and the result
+  carries its current status, so a retry after it finished does not read as
+  running.
 - `wait_subagents` (mode `all` or `any`) pauses the parent turn in
   `waiting_callback` and frees its provider slot. When the wait is satisfied,
   Core resumes it through the provider queue; the turn keeps

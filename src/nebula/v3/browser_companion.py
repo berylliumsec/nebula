@@ -24,7 +24,7 @@ from .browser_engine import (
     BrowserEngineRegistry,
     LocalBrowserdAdapter,
 )
-from .browser_security import BrowserSecurityService
+from .browser_security import BrowserSecurityService, BrowserWorkflowError
 from .domain import (
     Artifact,
     BrowserIdentity,
@@ -71,6 +71,19 @@ class CompanionFileCreate(NebulaModel):
 
 class AssistantControlPaused(ValueError):
     """The operator paused assistant control; nothing was sent to the browser."""
+
+
+class CompanionRequestRefused(ValueError):
+    """A request refused before anything was sent to the browser.
+
+    ``argument`` names the request field at fault. Without one, the project's
+    scope refused the page. Still a ValueError, so operator routes answer it
+    as before; the assistant's tool reads the cause from these fields.
+    """
+
+    def __init__(self, message: str, *, argument: str | None = None) -> None:
+        super().__init__(message)
+        self.argument = argument
 
 
 # A ``running`` action older than its approval window plus this grace lost the
@@ -542,22 +555,14 @@ class BrowserCompanion:
                     None,
                 )
                 if not tab:
-                    raise ValueError("The browser tab is no longer available.")
-                self.security._require_in_scope(
-                    self.security._scope(session.engagement_id),
-                    tab["url"],
-                    "browser.read",
-                    RiskClass.PASSIVE,
-                )
+                    raise CompanionRequestRefused(
+                        "The browser tab is no longer available.", argument="tab_id"
+                    )
+                self._require_in_scope(session, tab["url"], "browser.read")
             if request.operation == "navigate":
                 if not request.url:
-                    raise ValueError("Enter a page URL.")
-                self.security._require_in_scope(
-                    self.security._scope(session.engagement_id),
-                    request.url,
-                    "browser.navigate",
-                    RiskClass.PASSIVE,
-                )
+                    raise CompanionRequestRefused("Enter a page URL.", argument="url")
+                self._require_in_scope(session, request.url, "browser.navigate")
             if assistant and self.session(session_id).metadata.get(
                 "assistant_paused", True
             ):
@@ -573,15 +578,19 @@ class BrowserCompanion:
             if request.operation == "upload":
                 payload["upload_file"] = self.file_payload(session_id, request.file_ref)
             elif request.file_ref:
-                raise ValueError("Attached file references are only valid for uploads.")
+                raise CompanionRequestRefused(
+                    "Attached file references are only valid for uploads.",
+                    argument="file_ref",
+                )
             if request.credential_ref:
                 if (
                     request.operation != "fill"
                     or request.text
                     or request.credential_ref not in protected
                 ):
-                    raise ValueError(
-                        "Select an available credential attached to this browser; protected fills cannot contain plain text."
+                    raise CompanionRequestRefused(
+                        "Select an available credential attached to this browser; protected fills cannot contain plain text.",
+                        argument="credential_ref",
                     )
                 payload["text"] = protected[request.credential_ref]
             result = await self._companion_call(adapter, session.identity_id, payload)
@@ -639,6 +648,21 @@ class BrowserCompanion:
                         expected_revision=latest.revision,
                     )
             return result
+
+    def _require_in_scope(
+        self, session: BrowserSession, target: str, action: str
+    ) -> None:
+        try:
+            self.security._require_in_scope(
+                self.security._scope(session.engagement_id),
+                target,
+                action,
+                RiskClass.PASSIVE,
+            )
+        except BrowserWorkflowError as exc:
+            # diagnostic-expected: re-raised as the refusal it is; the caller
+            # reports it and nothing was sent to the browser.
+            raise CompanionRequestRefused(str(exc)) from exc
 
     async def _companion_call(
         self, adapter: Any, identity_id: str, payload: dict[str, Any]
