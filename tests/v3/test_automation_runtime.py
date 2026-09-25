@@ -1734,15 +1734,17 @@ def test_cancelled_foreground_command_stops_its_process(tmp_path):
 
 
 def test_host_scope_expiry_closes_running_commands(tmp_path):
+    import time
     from datetime import timedelta
 
     async def scenario():
         manager, store, _, engagement, _ = runtime(tmp_path)
         scope = store.get(ScopePolicy, engagement.scope_policy_id)
+        not_after = utc_now() + timedelta(seconds=0.5)
         store.update(
             ScopePolicy,
             scope.id,
-            {"not_after": utc_now() + timedelta(seconds=0.5)},
+            {"not_after": not_after},
             expected_revision=scope.revision,
         )
         manager.update_project_policy(
@@ -1760,15 +1762,24 @@ def test_host_scope_expiry_closes_running_commands(tmp_path):
             owner_id="expiring-host",
             request=RunCommandRequest(command="sleep 30", background=True),
         )
-        await asyncio.sleep(0.8)
-        assert (
+        # The boundary kills the process at once, but the session reads
+        # closed only after the command's output is stored, which takes
+        # longer on a loaded host. Wait for that, well inside the 30 seconds
+        # the command would otherwise run.
+        deadline = time.monotonic() + 10
+        while (
             store.get(AutomationSession, result.session_id).status
-            == AutomationSessionStatus.CLOSED
-        )
-        assert (
-            store.get(CommandExecution, result.execution_id).status
-            == CommandExecutionStatus.CANCELLED
-        )
+            != AutomationSessionStatus.CLOSED
+            and time.monotonic() < deadline
+        ):
+            await asyncio.sleep(0.05)
+        session = store.get(AutomationSession, result.session_id)
+        execution = store.get(CommandExecution, result.execution_id)
+        assert session.status == AutomationSessionStatus.CLOSED
+        assert execution.status == CommandExecutionStatus.CANCELLED
+        # Closed by the scope boundary, not before it.
+        assert execution.completed_at >= not_after
+        assert session.completed_at >= not_after
         await manager.shutdown()
 
     asyncio.run(scenario())

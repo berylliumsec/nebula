@@ -25,7 +25,7 @@ from .domain import (
     ToolCallStatus,
 )
 from .runtime_platform import RuntimeToolComponents
-from .storage import NebulaStore
+from .storage import NebulaStore, NotFoundError
 from .tools import (
     AmbiguousToolState,
     InvalidToolArguments,
@@ -150,9 +150,14 @@ class CompanionBroker:
             not invocation.chat_session_id
             or session.metadata.get("conversation_id") != invocation.chat_session_id
         ):
-            raise InvalidToolArguments(
+            # The operator detached or moved the browser: the resource is
+            # unavailable to this conversation, and nothing has run yet. The
+            # harness gateway refuses the same state the same way.
+            detached = NotFoundError(
                 "This browser is no longer attached to this conversation."
             )
+            setattr(detached, "_nebula_before_execution", True)
+            raise detached
         if session.metadata.get("assistant_paused", True):
             raise InvalidToolArguments(
                 "Browser control is paused. Ask the operator to resume it beside the page."

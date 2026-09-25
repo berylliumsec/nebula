@@ -1,62 +1,38 @@
 {
-  "change_digest": "e0dc0edbfe1ab0f6694f525b54504c1837ebce478e4a6dc18538be2e8dcf14e1",
-  "reviewed_by": "Claude focused review for chat-stream-follow",
-  "reason": "Chat stream follow fixes (UI-1, UI-2, UI-3, UI-7, UI-8). Backend: provider frames carry a runtime epoch and a finished runtime's frames stay readable for late viewers (follow_provider_turn, /chat/turns/{id}/events), callback_required names its wait kind, ChatTurnSummary reports wait_kind/wait_summary/subagent_ids/recoverable, /state and /session-activity treat an interrupted turn awaiting recovery as busy and stoppable, and restart recovery settles a goal turn its policy never resumes. Python selection: test_chat_stream_follow.py (new regression tests for each of those), test_chat_reconnection.py and test_session_state.py (follow cursor and snapshot contracts), test_chat_goals.py (goal resume/cancel with interrupted turns), test_restart_recovery_lifecycle.py and test_chat_subagent_lifecycle.py (the recovery pass and subagent stop this change settles through), test_playwright_impact.py (new areas), test_chat_api.py and test_chat_subagents.py in full (follow, stop, late followers, pending-turn summaries, subagent waits and resume), and the test_chat.py nodes that exercise stop, naming during a live turn, and restart recovery. Frontend: streamChat pause/epoch handling, the follow-authority decision, catch-up read cursor, callback status copy, plus the existing chat connection, client, stream lifecycle, message reconciliation and session-state tests. Playwright: SessionsPage changed, so entry:assistant/{desktop,mobile-chromium,mobile-webkit}; the new mocked journeys at 320/390/430 on Chromium and WebKit (area:chat-stream-follow) and real-Core LAN journeys (area:chat-stream-follow-core); callback, paused-supervisor, subagent, chat-reconnection and goal-lifecycle areas that share the changed follow paths.",
-  "exclusions": "Full suites are not approved and are excluded. Other test_chat.py tests (routing, compaction, prompt building, tool execution) do not touch the changed follow, stop, recovery or wait paths; only its stop and restart-recovery nodes are selected. No native tests: no Rust or desktop code changed. The previously red follow/stop/subagent nodes are green on this base since #568 merged, so nothing is excluded by node.",
+  "change_digest": "ced5dcd56b8ec719c9aa53a6e35d6afeec5cfd9873626fc2ab176b2a1ea42182",
+  "reviewed_by": "Claude focused review for red-tests-repair",
+  "reason": "Repairs the 30 test nodes red on pristine origin/main 3e65cc9 (re-checked at b4debc3; rebased onto 4d44dfd) plus one load-sensitive node, each traced (git bisect or before/after runs) to the commit that changed the behaviour. Product fixes: context.py treats a published output limit at or above the window as no separate limit (since #521 such a model defaulted its output to window-1, leaving one input token, so every chat was refused); chat.py counts catalog discovery calls before the running one (#559's ledger made the limit refuse the 8th search instead of the 9th); harnesses.py and browser_companion_tools.py classify a detached-browser refusal (harness gateway and provider/mission paths) as an unavailable resource with no side effects, and the gateway honours the before-execution marker; tool_catalog.py marks its pre-execution refusals; vault_probe.py moves the secretstorage import out of its try (frozen-runtime guard). Stale tests are updated to the contracts that replaced theirs: #520 tool-failure envelopes (test_harnesses x5, test_tool_catalog x2, subagent limit), #521 visible routing prose, automatic tool choice without finish_response and model output maxima (test_chat_leftovers x3, test_chat_final_synthesis_recovery, test_synthesis_tool_declarations, test_model_output_budget x15), #536 allow_agent_messaging (test_api goal conversation), and a bounded wait for scope-expiry close in test_automation_runtime. Selected: every file holding a repaired node, whole, plus the direct suites of the changed code (test_context.py, test_tool_failures.py, test_chat_tool_loop.py, test_diagnostic_sensitive.py, test_browser_companion.py, which holds the new provider-chat detached-browser regression).",
+  "exclusions": "Full suites are not approved and are excluded. Only the one repaired node of tests/v3/test_api.py is selected: api.py is unchanged and the rest of that file passes on pristine main. No UI, native or Playwright selection: src/nebula/v3/** matches the core-api catch-all, but no route, request/response shape or rendered surface changed; the changes are model-facing failure classification, output sizing and one catalog count. Harness and provider-chat suites beyond test_harnesses.py and test_harness_provider_subagents.py are not selected: the gateway change only adds a before-execution condition and the browser refusal class. No real-Core or live-provider run: every change is exercised end to end through ChatService or the harness gateway with local stores. python_browser is on because test_browser_companion.py holds a real-Chromium capture test (test_real_chromium_capture_retains_fields_and_rejects_changed_document).",
   "expected_tests": {
-    "python": 181,
-    "frontend": 122,
+    "python": 471,
+    "frontend": 0,
     "native": 0,
-    "playwright": 300
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
   ],
-  "python_browser": false,
+  "python_browser": true,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_stream_follow.py",
-    "tests/v3/test_chat_reconnection.py",
-    "tests/v3/test_session_state.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/test_playwright_impact.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_chat_subagent_lifecycle.py",
-    "tests/v3/test_restart_recovery_lifecycle.py",
-    "tests/v3/test_chat.py::test_cancelled_provider_turn_emits_cancelled_hook_and_stays_bounded",
-    "tests/v3/test_chat.py::test_active_provider_turn_is_named_before_terminal_completion",
-    "tests/v3/test_chat.py::test_cancelled_turn_pauses_the_session_goal_even_when_created_late",
-    "tests/v3/test_chat.py::test_cancel_turn_cancels_every_open_call_in_a_provider_batch",
-    "tests/v3/test_chat.py::test_core_shutdown_leaves_an_inflight_provider_turn_recoverable",
-    "tests/v3/test_chat.py::test_core_update_auto_resumes_safe_supervisor_with_saved_thinking",
-    "tests/v3/test_chat.py::test_core_startup_auto_resumes_running_goal_with_unknown_effect",
-    "tests/v3/test_chat.py::test_core_update_auto_resumes_uncertain_and_crashed_turns",
-    "tests/v3/test_chat.py::test_core_restart_recovery_bounds_concurrent_provider_turns",
-    "tests/v3/test_chat.py::test_core_restart_recovery_retries_without_operator_action"
+    "tests/v3/test_chat_leftovers.py",
+    "tests/v3/test_chat_final_synthesis_recovery.py",
+    "tests/v3/test_synthesis_tool_declarations.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_harness_provider_subagents.py",
+    "tests/v3/test_harnesses.py",
+    "tests/v3/test_packaging.py",
+    "tests/v3/test_credentials.py",
+    "tests/v3/test_diagnostic_sensitive.py",
+    "tests/v3/test_automation_runtime.py",
+    "tests/v3/test_browser_companion.py",
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_tool_failures.py",
+    "tests/v3/test_model_output_budget.py",
+    "tests/v3/test_context.py",
+    "tests/v3/test_api.py::test_goal_conversation_exists_before_its_first_message"
   ],
-  "frontend": [
-    "ui/src/api/chatStreamFollow.test.ts",
-    "ui/src/api/chatConnection.test.ts",
-    "ui/src/api/client.test.ts",
-    "ui/src/pages/providerTurnFollow.test.ts",
-    "ui/src/pages/chatStreamLifecycle.test.ts",
-    "ui/src/pages/chatMessageReconciliation.test.ts",
-    "ui/src/pages/useSessionState.test.tsx",
-    "ui/src/components/ChatCatchUp.test.tsx",
-    "ui/src/components/CallbackWaitingStatus.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit",
-    "area:chat-stream-follow",
-    "area:chat-stream-follow-core",
-    "area:automation-callback",
-    "area:paused-supervisor-recovery",
-    "area:chat-subagents",
-    "area:chat-reconnection",
-    "area:provider-goal-lifecycle-core"
-  ]
+  "playwright": []
 }

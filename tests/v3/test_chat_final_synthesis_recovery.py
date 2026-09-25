@@ -190,12 +190,19 @@ def test_final_synthesis_recovers_from_a_nameless_tool_call_fragment(tmp_path):
     assert done[-1]["message"]["content"] == "Recovered answer."
     assert _visible(events) == "Recovered answer."
     assert [call.tool_name for call in broker.calls] == ["safe_read"]
+
     # The synthesis requests declared the routing tools with calling off; the
-    # second one is the recovery.
+    # second one is the recovery. Routing offers no finish tool since #521.
+    def declared(payload: dict) -> list[str]:
+        return [tool["function"]["name"] for tool in payload.get("tools", [])]
+
+    assert declared(seen[0]) == ["safe_read"]
     assert [
-        (len(payload.get("tools", [])), payload.get("tool_choice"))
-        for payload in seen[2:]
-    ] == [(2, "none"), (2, "none")]
+        (declared(payload), payload.get("tool_choice")) for payload in seen[2:]
+    ] == [
+        (declared(seen[0]), "none"),
+        (declared(seen[0]), "none"),
+    ]
     turn = store.get(ChatTurn, "turn")
     assert turn.status == ChatTurnStatus.COMPLETE
     assert turn.request_snapshot["final_answer_recovery"]["reason"] == "tool_call"

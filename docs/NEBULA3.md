@@ -283,7 +283,10 @@ Analyst chats and model-facing mission dependency context are compacted
 automatically when the estimated input approaches 75 percent of the configured
 model capacity. Provider profiles may declare `context_window` and
 `max_output_tokens` in their options; Core conservatively assumes an 8,192-token
-window and a 2,048-token output allowance when no limits are configured.
+window and a 2,048-token output allowance when no limits are configured. When
+the model's catalog or known limits publish an output limit, that limit is the
+default output allowance. A published output limit at or above the window is
+not a separate limit, so the 2,048-token allowance applies instead.
 
 Compaction uses the conversation or mission's selected provider and model, so it
 can add model latency, token usage, and cost. Workbench and Activity show the

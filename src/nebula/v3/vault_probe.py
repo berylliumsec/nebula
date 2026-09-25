@@ -102,12 +102,14 @@ def secret_service_state(
 ) -> VaultState:
     """Read the Linux collection's lock state without raising a prompt."""
 
-    try:
-        # secretstorage is a Linux-only dependency, so keyring installs it only
-        # there. Importing it here keeps Core importable on macOS and Windows,
-        # where this backend is never selected.
-        import secretstorage
+    # secretstorage is a Linux-only dependency, so keyring installs it only
+    # there. Importing it here keeps Core importable on macOS and Windows,
+    # where this backend is never selected. vault_state() gets here only after
+    # keyring's priority check found the module, so the import stays outside
+    # the try: Core's runtime has no conditional import fallbacks.
+    import secretstorage
 
+    try:
         with closing(secretstorage.dbus_init()) as connection:
             collection = secret_service_collection(backend, connection)
             return "locked" if collection.is_locked() else "available"

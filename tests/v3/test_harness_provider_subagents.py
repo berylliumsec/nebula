@@ -657,11 +657,15 @@ def test_operator_limit_reaches_the_harness_and_is_enforced(tmp_path):
             == limited
         )
         await runtime.start_chat_turn(turn.id)
-        assert seen["refused"]["isError"] is True
-        assert (
-            "operator allows 1 running at once"
-            in (seen["refused"]["content"][0]["text"])
-        )
+        # The refusal is a schema-guided failure (#520), which carries no
+        # Core error text; the limit reaches the model in its instructions.
+        # Which failure category a capacity refusal gets is not settled by
+        # docs/TOOL_FAILURE_CONTRACT.md, so it is not pinned here.
+        refused = seen["refused"]
+        assert refused["isError"] is True
+        assert refused["structuredContent"]["schema"] == "nebula.tool-failure/v1"
+        assert refused["structuredContent"]["tool"] == "subagent.start"
+        assert refused["structuredContent"]["side_effects"] == "none"
         (record,) = store.list_entities(ChatSubagent)
         assert "at most 1 run at once" in instructions(adapter.opens[0])
 

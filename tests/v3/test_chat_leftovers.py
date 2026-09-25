@@ -1,7 +1,8 @@
 """Gaps left after the provider dialect and replay fixes (#499, #502, #504, #505).
 
 - A routing step's commentary that runs into a tool frame Core could not read
-  shows only the commentary, wherever the frame starts.
+  shows only the commentary, wherever the frame starts. Since #521 that
+  commentary is visible answer text rather than reasoning.
 - Context compaction on a provider without structured output gets the memory
   schema in its instructions.
 - Context-length recovery works for a turn completed without streaming: a
@@ -113,9 +114,6 @@ def test_routing_commentary_stops_at_an_unreadable_frame_beside_a_real_call(
                     ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})
                 ],
             ),
-            _response(
-                calls=[ToolCall(id="finish-1", name="finish_response", arguments={})]
-            ),
             _response(text="The safe tool returned a."),
         ],
         broker,
@@ -123,7 +121,8 @@ def test_routing_commentary_stops_at_an_unreadable_frame_beside_a_real_call(
 
     events = _stream(service, prepared)
 
-    shown = "".join(
+    shown = "".join(payload["delta"] for name, payload in events if name == "delta")
+    thought = "".join(
         payload["delta"] for name, payload in events if name == "reasoning_delta"
     )
     turn = store.get(ChatTurn, "turn")
@@ -131,13 +130,21 @@ def test_routing_commentary_stops_at_an_unreadable_frame_beside_a_real_call(
     assert [(call.tool_name, call.arguments) for call in broker.calls] == [
         ("safe_read", {"value": "a"})
     ]
-    for reasoning in (shown, turn.reasoning):
-        assert "The operator wants the value." in reasoning
-        # The commentary before the frame is the model's narration and stays.
-        assert COMMENTARY in reasoning
-        # The frame is protocol Core could not read, never operator text.
+    [stored] = [
+        item
+        for item in service.session_messages("session")
+        if item.role == ChatRole.ASSISTANT
+    ]
+    # Prose beside a call is visible answer text, separate from reasoning
+    # (#521): the commentary before the frame is the model's and stays.
+    for content in (shown, stored.content):
+        assert content == f"{COMMENTARY}\n\nThe safe tool returned a."
+    for reasoning in (thought, turn.reasoning, stored.reasoning):
+        assert reasoning == "The operator wants the value."
+    # The frame is protocol Core could not read, never operator text.
+    for text in (shown, stored.content, thought, turn.reasoning):
         for marker in ("<tool_call>", "arg_key", "tool▁", "DSML", "value=a"):
-            assert marker not in reasoning
+            assert marker not in text
 
 
 # --- Compaction schema without structured output -----------------------------

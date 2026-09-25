@@ -6516,7 +6516,13 @@ class ChatService:
                 try:
                     if (
                         call.name in CATALOG_DISCOVERY_NAMES
-                        and discovery_calls(self._turn_history(turn))
+                        and discovery_calls(
+                            item
+                            for item in self._turn_history(turn)
+                            # The ledger already holds this call's running
+                            # intent; count only the calls before it.
+                            if item.get("step") != step
+                        )
                         >= MAX_CATALOG_CALLS_PER_TURN
                     ):
                         # Refused rather than removed from the function list,

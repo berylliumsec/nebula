@@ -568,14 +568,18 @@ def test_core_imports_where_secretstorage_is_absent():
 def test_missing_secretstorage_is_reported_instead_of_raising(monkeypatch):
     import sys
 
+    import keyring.backends.SecretService as secret_service
     from keyring.backends.SecretService import Keyring
 
-    from nebula.v3.vault_probe import secret_service_state
+    from nebula.v3.vault_probe import vault_state
 
+    # What a host without secretstorage looks like to keyring: its own guarded
+    # import left no module behind, so the backend's priority check refuses.
+    monkeypatch.delattr(secret_service, "secretstorage", raising=False)
     monkeypatch.setitem(sys.modules, "secretstorage", None)
     caught: list[Exception] = []
-    assert secret_service_state(Keyring(), on_caught=caught.append) == "unavailable"
-    assert isinstance(caught[0], ImportError)
+    assert vault_state(Keyring(), on_caught=caught.append) == "unavailable"
+    assert "SecretStorage required" in str(caught[0])
 
 
 class ChainedKeyring:

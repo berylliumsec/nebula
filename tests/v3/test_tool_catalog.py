@@ -594,7 +594,15 @@ def test_call_to_an_unknown_tool_is_an_error_the_model_can_correct(tmp_path):
     assert turn.status == ChatTurnStatus.COMPLETE
     entry = turn.tool_history[0]
     assert entry["name"] == CATALOG_CALL and entry["status"] == "failed"
-    assert "not an on-demand tool" in json.dumps(entry["provider_result"])
+    # The schema-guided failure (#520) carries no error text: the model
+    # corrects the name from the schema, and nothing ran before the refusal.
+    failure = json.loads(entry["provider_result"])
+    assert failure["schema"] == "nebula.tool-failure/v1"
+    assert failure["category"] == "invalid_arguments"
+    assert "name" in failure["effective_input_schema"]["properties"]
+    assert failure["side_effects"] == "none"
+    assert failure["retry_safe"] is True
+    assert failure["next_action"].startswith("Correct the indicated argument")
 
 
 def test_discovery_limit_is_refused_without_changing_the_tools_array(tmp_path):
@@ -628,7 +636,10 @@ def test_discovery_limit_is_refused_without_changing_the_tools_array(tmp_path):
     assert all(_tools(item) == _tools(routing[0]) for item in routing)
     history = store.get(ChatTurn, "turn").tool_history
     assert [item["status"] for item in history][-1] == "failed"
-    assert "search limit" in json.dumps(history[-1]["provider_result"])
+    refused = json.loads(history[-1]["provider_result"])
+    assert refused["schema"] == "nebula.tool-failure/v1"
+    assert refused["tool"] == CATALOG_SEARCH
+    assert len(history) == MAX_CATALOG_CALLS_PER_TURN + 1
     assert all(item["status"] == "complete" for item in history[:-1])
 
 

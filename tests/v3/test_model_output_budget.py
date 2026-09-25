@@ -3,7 +3,9 @@
 The chat UI never sends a maximum output, so the default is what every turn
 gets. Reasoning models spend their thinking tokens from that same allowance,
 so a flat 2,048 cut them off mid-thought. A known model output limit now sizes
-the default instead, bounded so input keeps most of the window.
+the default instead: since #521 it is the model's published maximum. A
+published limit at or above the window is no separate output limit, so the
+2,048 fallback applies rather than an output that leaves no room for input.
 """
 
 import asyncio
@@ -81,23 +83,22 @@ def _local(*descriptors: dict[str, object], **options: int) -> ProviderProfile:
 
 
 @pytest.mark.parametrize(
-    ("provider_type", "model", "window"),
+    ("provider_type", "model", "window", "published_output"),
     [
-        ("openai_compatible", "glm-4.6", 202_752),
-        ("openai", "gpt-5.2", 400_000),
-        ("anthropic", "claude-opus-4-5", 200_000),
+        ("openai_compatible", "glm-4.6", 202_752, 131_072),
+        ("openai", "gpt-5.2", 400_000, 128_000),
+        ("anthropic", "claude-opus-4-5", 200_000, 64_000),
     ],
 )
-def test_known_model_default_output_uses_catalog_ceiling(
-    provider_type: str, model: str, window: int
+def test_known_model_default_output_is_its_published_maximum(
+    provider_type: str, model: str, window: int, published_output: int
 ):
     limits = resolve_context_limits(_hosted(provider_type), model=model)
 
     assert limits.source == "known_model"
     assert limits.context_window == window
-    # min(published output, 32,000, window // 4): 32,000 for all three.
-    assert limits.max_output_tokens == 32_000
-    assert limits.input_capacity == window - 32_000
+    assert limits.max_output_tokens == published_output
+    assert limits.input_capacity == window - published_output
 
 
 @pytest.mark.parametrize(
@@ -125,22 +126,23 @@ def test_openrouter_catalog_models_default_to_their_published_output(
     limits = resolve_context_limits(profile, model=model, required_parameters={"tools"})
 
     assert limits.context_window == window
-    assert limits.max_output_tokens == 32_000
+    assert limits.max_output_tokens == published_output
 
 
 @pytest.mark.parametrize(
     ("window", "published_output", "expected"),
     [
-        # The 32,000 ceiling binds.
-        (131_072, 32_768, 32_000),
-        # A quarter of the window binds, keeping three quarters for input.
-        (32_768, 32_768, 8_192),
-        (16_384, 16_384, 4_096),
-        # The model's own limit binds.
+        # The model's own limit is the default.
+        (131_072, 32_768, 32_768),
         (100_000, 8_000, 8_000),
+        # A limit at or above the window is no separate output limit: the
+        # fallback applies instead of an output that leaves no input.
+        (32_768, 32_768, 2_048),
+        (16_384, 16_384, 2_048),
+        (16_384, 20_000, 2_048),
     ],
 )
-def test_default_output_is_bounded_by_model_output_ceiling_and_window(
+def test_default_output_is_the_published_limit_when_it_fits_the_window(
     window: int, published_output: int, expected: int
 ):
     profile = _local(
@@ -155,14 +157,13 @@ def test_default_output_is_bounded_by_model_output_ceiling_and_window(
 
     assert limits.max_output_tokens == expected
     assert limits.input_capacity == window - expected
-    assert limits.input_capacity >= window * 3 // 4
     assert limits.target_input_tokens == (window - expected) * 3 // 4
 
 
 def test_unknown_output_keeps_the_2048_fallback_while_known_output_grows():
     known = resolve_context_limits(
         _local(
-            {"id": "model-a", "context_window": 65_536, "max_output_tokens": 65_536}
+            {"id": "model-a", "context_window": 65_536, "max_output_tokens": 16_384}
         ),
         model="model-a",
     )
@@ -269,12 +270,12 @@ def test_explicit_operator_and_request_maxima_still_win():
         ).max_output_tokens
         == 1_000
     )
-    # A request may ask past the 32,000 default ceiling, up to the model limit.
+    # A request may ask for more than the default, up to the model limit.
     assert (
         resolve_context_limits(
-            profile, model="glm-4.6", requested_output_tokens=60_000
+            profile, model="glm-4.6", requested_output_tokens=200_000
         ).max_output_tokens
-        == 60_000
+        == 131_072
     )
 
 
@@ -324,10 +325,10 @@ def test_prepared_chat_request_sends_the_model_output_default(tmp_path, monkeypa
         )
     )
 
-    assert prepared.model_request.max_output_tokens == 32_000
+    assert prepared.model_request.max_output_tokens == 32_768
     limits = json.loads(prepared.model_request.metadata["resolved_context_limits"])
-    assert limits["max_output_tokens"] == 32_000
-    assert limits["input_capacity"] == 131_072 - 32_000
+    assert limits["max_output_tokens"] == 32_768
+    assert limits["input_capacity"] == 131_072 - 32_768
 
     asyncio.run(service.complete(prepared))
     answered = [
@@ -335,17 +336,83 @@ def test_prepared_chat_request_sends_the_model_output_default(tmp_path, monkeypa
         for request in provider.requests
         if not request.metadata.get("operation")
     ]
-    assert answered[-1].max_output_tokens == 32_000
+    assert answered[-1].max_output_tokens == 32_768
+
+
+def test_published_output_at_the_window_still_leaves_room_to_chat(
+    tmp_path, monkeypatch
+):
+    # vLLM serves one combined max_model_len, so a descriptor can publish the
+    # window as its output limit. That default once left one input token and
+    # every message was refused as too large for the window.
+    _, engagement, profile, provider, service = _chat_service(
+        tmp_path, monkeypatch, window=32_768, output=32_768
+    )
+
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            messages=[{"role": "user", "content": "What changed?"}],
+            include_knowledge=False,
+            stream=True,
+        )
+    )
+
+    assert prepared.model_request.max_output_tokens == 2_048
+    limits = json.loads(prepared.model_request.metadata["resolved_context_limits"])
+    assert limits["input_capacity"] == 32_768 - 2_048
+    asyncio.run(service.complete(prepared))
+    answered = [
+        request
+        for request in provider.requests
+        if not request.metadata.get("operation")
+    ]
+    assert answered[-1].max_output_tokens == 2_048
+
+
+def test_verified_routes_without_a_published_output_keep_input_room():
+    # OpenRouter endpoints that publish no max_completion_tokens are stored
+    # with their window as the output limit.
+    profile = _hosted(
+        "openrouter",
+        model_descriptors=[
+            {
+                "id": "author/model-a",
+                "context_window": 131_072,
+                "route_limits_verified": True,
+                "route_limits": [
+                    {
+                        "provider_name": "only",
+                        "context_window": 131_072,
+                        "max_input_tokens": 131_072,
+                        "max_output_tokens": 131_072,
+                        "supported_parameters": ["tools"],
+                        "status": 0,
+                    }
+                ],
+            }
+        ],
+    )
+
+    limits = resolve_context_limits(
+        profile, model="author/model-a", required_parameters={"tools"}
+    )
+
+    assert limits.route_limits_verified is True
+    assert limits.max_output_tokens == 2_048
+    assert limits.input_capacity == 131_072 - 2_048
 
 
 def test_history_past_the_smaller_input_capacity_compacts_instead_of_failing(
     tmp_path, monkeypatch
 ):
-    # 32K window: the default output grows from 2,048 to 8,192, so input
-    # capacity drops from 30,720 to 24,576. A conversation that fitted the old
-    # capacity but not the new one is compacted, not refused by pre-flight.
+    # 32K window: the default output grows from 2,048 to the model's 8,192,
+    # so input capacity drops from 30,720 to 24,576. A conversation that
+    # fitted the old capacity but not the new one is compacted, not refused
+    # by pre-flight.
     store, engagement, profile, provider, service = _chat_service(
-        tmp_path, monkeypatch, window=32_768, output=32_768
+        tmp_path, monkeypatch, window=32_768, output=8_192
     )
     session = store.create(
         ChatSession(
@@ -479,7 +546,7 @@ def test_analysis_mission_specialist_uses_the_model_output_default(tmp_path):
     unbounded = service._components(_run(engagement, profile), provider)
     specialist = unbounded.specialists[SpecialistRole.SCOPE_PLANNING]
     assert isinstance(specialist, ModelSpecialist)
-    assert specialist.max_output_tokens == 32_000
+    assert specialist.max_output_tokens == 32_768
 
     # A mission token budget smaller than the allowance still bounds it.
     bounded = service._components(
@@ -499,7 +566,7 @@ def test_browser_mission_specialist_uses_the_model_output_default(tmp_path):
 
     specialist = components.specialists[SpecialistRole.NETWORK_SERVICE]
     assert isinstance(specialist, BrokeredToolSpecialist)
-    assert specialist.max_output_tokens == 32_000
+    assert specialist.max_output_tokens == 32_768
 
 
 def test_automation_mission_specialist_uses_the_model_output_default(tmp_path):
@@ -532,7 +599,7 @@ def test_mission_output_default_falls_back_without_profile_limits(tmp_path):
 
     store, engagement, profile = _mission_setup(tmp_path)
 
-    assert default_output_tokens(store, profile.id, "security-model") == 32_000
+    assert default_output_tokens(store, profile.id, "security-model") == 32_768
     assert (
         default_output_tokens(store, profile.id, "security-model", token_budget=900)
         == 900
@@ -617,4 +684,4 @@ def test_cli_analysis_mission_sends_the_model_output_default(tmp_path, monkeypat
     )
 
     assert result.exit_code == 0, result.stdout
-    assert sent == [32_000]
+    assert sent == [32_768]

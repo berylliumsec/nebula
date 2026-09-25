@@ -248,6 +248,8 @@ def test_goal_conversation_exists_before_its_first_message(api):
         "hook_ids": ["audit"],
         "reasoning_effort": None,
         "allow_subagents": False,
+        # The durable operator choice for main-agent messaging (#536).
+        "allow_agent_messaging": False,
         "max_active_subagents": None,
         "message_count": 0,
         "last_sequence": 0,

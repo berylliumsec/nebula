@@ -326,6 +326,13 @@ def resolve_context_limits(
         context_window = DEFAULT_CONTEXT_WINDOW
         source = "fallback"
         estimated = True
+    if model_output >= context_window:
+        # A published output limit at or above the window never binds: output
+        # stays below the window anyway. It is no separate output limit (the
+        # rule scripts/refresh_known_model_limits.py applies to catalog data,
+        # and what an endpoint without max_completion_tokens reports), so it
+        # must not size the default to the whole window and leave no input.
+        model_output = 0
     output_caps = [max(1, context_window - 1)]
     if model_output:
         output_caps.append(model_output)
