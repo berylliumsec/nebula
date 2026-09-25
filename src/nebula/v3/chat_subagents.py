@@ -60,6 +60,7 @@ from typing import (
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .diagnostics import create_diagnostic_task, record_caught_exception
+from .chat_snapshot_parts import resolve_request_snapshot
 from .environments import enabled_snapshot_ssh_ids
 from .domain import (
     CHAT_SUBAGENT_TERMINAL_STATUSES,
@@ -1669,8 +1670,12 @@ class SubagentService:
 
         if record.parent_backend == ChatBackend.HARNESS or parent_turn is None:
             return []
+        # A provider turn stores its host snapshot beside the turn row.
+        snapshot = resolve_request_snapshot(
+            self.store, parent_turn.request_snapshot, session_id=parent_turn.session_id
+        )
         return enabled_snapshot_ssh_ids(
-            self.store, parent_turn.request_snapshot.get("ssh_environment_snapshot")
+            self.store, snapshot.get("ssh_environment_snapshot")
         )
 
     @staticmethod

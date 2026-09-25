@@ -1702,8 +1702,10 @@ class ChatService:
         self.managed_skill_root = managed_skill_root
         self.worker_id = worker_id or f"core-worker-{uuid4()}"
         self.turn_ledger = ChatTurnLedger(store.database)
-        # Sealed reasoning parts by id; they are write-once, so a copy stays valid.
+        # Sealed reasoning parts by id; they are write-once, so a copy stays
+        # valid. Recovery passes read turns off the event loop too.
         self._sealed_reasoning: OrderedDict[str, str] = OrderedDict()
+        self._sealed_reasoning_lock = threading.Lock()
         self.provider_scheduler = ProviderScheduler(store, worker_id=self.worker_id)
         self._global_tool_slots = asyncio.Semaphore(
             self.provider_scheduler.config.global_tool_limit
@@ -8199,17 +8201,19 @@ class ChatService:
         texts: list[str] = []
         for item in sealed:
             part_id = str(item["part_id"])
-            text = self._sealed_reasoning.get(part_id)
+            with self._sealed_reasoning_lock:
+                text = self._sealed_reasoning.get(part_id)
+                if text is not None:
+                    self._sealed_reasoning.move_to_end(part_id)
             if text is None:
                 value = load_snapshot_part(
                     self.store, part_id, session_id=turn.session_id
                 )
                 text = value if isinstance(value, str) else ""
-                self._sealed_reasoning[part_id] = text
-                while len(self._sealed_reasoning) > 64:
-                    self._sealed_reasoning.popitem(last=False)
-            else:
-                self._sealed_reasoning.move_to_end(part_id)
+                with self._sealed_reasoning_lock:
+                    self._sealed_reasoning[part_id] = text
+                    while len(self._sealed_reasoning) > 64:
+                        self._sealed_reasoning.popitem(last=False)
             texts.append(text)
         if turn.reasoning:
             texts.append(turn.reasoning)

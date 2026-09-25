@@ -460,8 +460,8 @@ def test_a_part_resolves_only_for_the_conversation_that_stored_it(tmp_path):
     )
     with store.transaction() as transaction:
         stage_snapshot_parts(transaction, parts)
-    # The goal CRUD route accepts any skill entry; one naming the owner's
-    # part must not carry the owner's instructions into this conversation.
+    # However a reference to the owner's part reaches another conversation's
+    # goal, it must not carry the owner's instructions there.
     foreign = store.create(
         ChatGoal(
             engagement_id="project",
@@ -1011,3 +1011,68 @@ def test_ledger_history_reads_each_row_once_and_hands_out_copies(tmp_path):
     other_worker.append(turn.id, {"step": 12, "status": "complete"})
     assert ledger.history(turn)[-1]["step"] == 12
     assert ledger.history(turn) == other_worker.history(turn)
+
+
+def test_subagent_gets_the_ssh_hosts_of_a_parent_whose_snapshot_is_split(tmp_path):
+    """The hosts a child inherits are read back from the parent's snapshot part."""
+
+    from nebula.v3.domain import SshEnvironment
+    from nebula.v3.tools import InvalidToolArguments, ToolCallOrigin, ToolInvocation
+    from tests.v3.test_chat_subagent_lifecycle import _session
+    from tests.v3.test_chat_subagents import RoutedProvider, _setup
+
+    async def scenario() -> list:
+        store, _, _, chat = _setup(tmp_path, RoutedProvider([], []))
+        store.create(SshEnvironment(id="ssh-a", alias="lab-a", enabled=True))
+        parent_session = _session(store)
+        hosts = [{"id": "ssh-a", "alias": "lab-a", "notes": "n" * 2_000}]
+        compact, parts = split_request_snapshot(
+            {
+                "include_oci_tools": True,
+                "ssh_environment_snapshot": hosts,
+                "allow_subagents": True,
+            },
+            engagement_id="project",
+            session_id=parent_session.id,
+        )
+        assert "ssh_environment_snapshot" not in compact
+        parent = ChatTurn(
+            engagement_id="project",
+            session_id=parent_session.id,
+            provider_profile_id="provider",
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            request_snapshot=compact,
+        )
+        with store.transaction() as transaction:
+            stage_snapshot_parts(transaction, parts)
+            transaction.add(parent)
+        captured: list = []
+
+        async def capture(request):
+            captured.append(request)
+            raise RuntimeError("stop before the provider")
+
+        chat.prepare_async = capture  # type: ignore[method-assign]
+        with pytest.raises(InvalidToolArguments):
+            await chat.subagents.start(
+                ToolInvocation(
+                    engagement_id="project",
+                    run_id=parent.id,
+                    origin=ToolCallOrigin.CHAT,
+                    chat_session_id=parent_session.id,
+                    chat_turn_id=parent.id,
+                    tool_name="start_subagent",
+                    workspace=tmp_path,
+                    idempotency_key="start-1",
+                ),
+                task="Check the host.",
+                name=None,
+                context=None,
+            )
+        await chat.shutdown()
+        return captured
+
+    captured = asyncio.run(scenario())
+
+    assert captured[0].ssh_environment_ids == ["ssh-a"]

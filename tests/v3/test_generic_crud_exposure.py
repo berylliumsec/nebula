@@ -52,6 +52,8 @@ SERVICE_OWNED_KINDS = (
     "chat_turns",
     "chat_queues",
     "chat_decisions",
+    # Write-once values a turn or goal resumes from.
+    "chat_snapshot_parts",
     "native_checkpoints",
     "native_hook_executions",
     "workspace_provenance_observations",
