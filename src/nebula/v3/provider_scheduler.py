@@ -233,6 +233,38 @@ class ProviderScheduler:
                 row.state = "cancelled"
                 row.completed_at = utc_now()
 
+    def admitted(self, turn_id: str) -> bool:
+        """Whether this process holds a provider slot for ``turn_id``."""
+
+        return turn_id in self._active
+
+    def withdraw(self, turn_id: str) -> None:
+        """Release a queued admission its runtime gave up on, as its turn stands.
+
+        Parked when the turn can still resume, otherwise over; a turn still
+        queued keeps its row, so a restart restores it.
+        """
+
+        with self.store.database.session() as session:
+            session.execute(
+                update(ProviderTurnQueueRow)
+                .where(
+                    ProviderTurnQueueRow.turn_id == turn_id,
+                    ProviderTurnQueueRow.state == "queued",
+                    or_(
+                        ~_turn_exists(),
+                        _turn_status() != ChatTurnStatus.QUEUED.value,
+                    ),
+                )
+                .values(
+                    state=_released_state(),
+                    completed_at=utc_now(),
+                    lease_owner=None,
+                    lease_expires_at=None,
+                )
+                .execution_options(synchronize_session=False)
+            )
+
     def settle(self, turn_id: str | None = None) -> list[str]:
         """Close queued or parked admissions whose turn ended or no longer exists.
 

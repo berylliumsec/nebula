@@ -927,3 +927,60 @@ def test_recovery_closes_admissions_that_ended_turns_left_open(
         await service.shutdown()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stage", ["admission", "claim"])
+def test_a_turn_that_cannot_start_fails_and_says_what_to_do(tmp_path, stage):
+    """An admission or claim failure left the turn queued (or routing) with
+    its row open, reading as waiting for capacity until a Core restart."""
+
+    from nebula.v3.chat import ChatHistoryConflict
+    from nebula.v3.chat_turn_outcomes import TURN_OUTCOME_FINISH_REASON
+    from nebula.v3.domain import ChatMessage
+
+    async def scenario():
+        store, service, prepared, provider = _prepared(
+            tmp_path, [_response(text="unused")], RecordingBroker()
+        )
+        if stage == "admission":
+
+            async def admit(turn_id):
+                del turn_id
+                raise RuntimeError("database is locked")
+
+            service.provider_scheduler.admit = admit  # type: ignore[method-assign]
+        else:
+
+            def claim(prepared):
+                del prepared
+                raise ChatHistoryConflict(
+                    "chat goal is already owned by another Core worker"
+                )
+
+            service._claim_execution = claim  # type: ignore[method-assign]
+        turn_id = service.start_provider_turn(prepared)
+
+        with pytest.raises(ChatError, match="Core could not start this response"):
+            await _drain(service, turn_id)
+
+        failed = store.get(ChatTurn, turn_id)
+        assert failed.status == ChatTurnStatus.FAILED
+        assert failed.error is not None
+        assert "send the message again" in failed.error
+        assert failed.execution_claim_id is None
+        assert _queue_state(store, turn_id) == "complete"
+        assert service.provider_scheduler.metrics()["queued"] == 0
+        assert service.provider_scheduler.metrics()["active"] == 0
+        # The conversation takes the next message, and the transcript says
+        # why the operator's message went unanswered.
+        assert service.pending_turn(prepared.turn.session_id) is None
+        notes = [
+            message
+            for message in store.list_entities(ChatMessage)
+            if message.finish_reason == TURN_OUTCOME_FINISH_REASON
+        ]
+        assert len(notes) == 1
+        assert provider.requests == []
+        await service.shutdown()
+
+    asyncio.run(scenario())

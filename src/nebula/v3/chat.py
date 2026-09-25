@@ -2356,47 +2356,57 @@ class ChatService:
                 exc,
                 stage="startup-recovery",
             )
-            current = self.store.get(ChatTurn, saved.id)
-            if (
-                current.status
-                in (
-                    ChatTurnStatus.INTERRUPTED,
-                    ChatTurnStatus.ROUTING,
-                )
-                and current.execution_claim_id is None
-            ):
-                current_recovery = current.request_snapshot.get("recovery")
-                retry_recovery = (
-                    {
-                        **current_recovery,
-                        "auto_resume_attempted_at": None,
-                        "automatic_retry_pending": True,
-                    }
-                    if isinstance(current_recovery, dict)
-                    else current_recovery
-                )
-                self.store.update(
-                    ChatTurn,
-                    current.id,
-                    {
-                        "status": ChatTurnStatus.INTERRUPTED,
-                        "error": (
-                            "Automatic recovery could not start; Core will retry "
-                            "on the next recovery pass."
-                        ),
-                        "request_snapshot": {
-                            **current.request_snapshot,
-                            "recovery": retry_recovery,
-                        },
-                    },
-                    expected_revision=current.revision,
-                )
+            self._retry_recovery_next_pass(saved.id)
             if goal is not None:
                 self._pause_running_session_goal(
                     saved.session_id,
                     "Automatic recovery is waiting for the next Core recovery pass.",
                 )
         return False
+
+    def _retry_recovery_next_pass(self, turn_id: str) -> ChatTurn | None:
+        """Leave a restart-recovery resume that could not start for the next pass.
+
+        The turn is interrupted again with its automatic retry pending, unless
+        it moved on or another worker claimed it (None).
+        """
+
+        current = self.store.get(ChatTurn, turn_id)
+        if (
+            current.status
+            not in (
+                ChatTurnStatus.INTERRUPTED,
+                ChatTurnStatus.ROUTING,
+            )
+            or current.execution_claim_id is not None
+        ):
+            return None
+        current_recovery = current.request_snapshot.get("recovery")
+        retry_recovery = (
+            {
+                **current_recovery,
+                "auto_resume_attempted_at": None,
+                "automatic_retry_pending": True,
+            }
+            if isinstance(current_recovery, dict)
+            else current_recovery
+        )
+        return self.store.update(
+            ChatTurn,
+            current.id,
+            {
+                "status": ChatTurnStatus.INTERRUPTED,
+                "error": (
+                    "Automatic recovery could not start; Core will retry "
+                    "on the next recovery pass."
+                ),
+                "request_snapshot": {
+                    **current.request_snapshot,
+                    "recovery": retry_recovery,
+                },
+            },
+            expected_revision=current.revision,
+        )
 
     def _replayable_intent(
         self, turn_id: str, intent: Mapping[str, Any]
@@ -3110,6 +3120,7 @@ class ChatService:
         admission: ProviderAdmission | None = None
         admission_task: asyncio.Task[ProviderAdmission] | None = None
         recovery_slot = False
+        producing = False
         try:
             assert prepared.turn is not None
             if automatic_recovery:
@@ -3169,6 +3180,7 @@ class ChatService:
                     )
                 )
                 runtime.condition.notify_all()
+            producing = True
             await self._produce_provider_turn(prepared, runtime)
         except asyncio.CancelledError:
             if admission_task is not None and not admission_task.done():
@@ -3186,6 +3198,15 @@ class ChatService:
                 stage="provider-admission",
             )
             runtime.error = exc
+            if not producing and prepared.turn is not None:
+                # The producer settles every turn it starts; one that never
+                # started would otherwise read as waiting or running forever.
+                runtime.error = await self._settle_unstarted_turn(
+                    prepared,
+                    exc,
+                    holds_admission=admission is not None,
+                    automatic_recovery=automatic_recovery,
+                )
         finally:
             if admission is not None and prepared.turn is not None:
                 await admission.release(prepared.turn.id)
@@ -3195,6 +3216,101 @@ class ChatService:
                 async with runtime.condition:
                     runtime.done = True
                     runtime.condition.notify_all()
+
+    async def _settle_unstarted_turn(
+        self,
+        prepared: PreparedChat,
+        error: BaseException,
+        *,
+        holds_admission: bool,
+        automatic_recovery: bool,
+    ) -> BaseException:
+        """Settle a turn whose admission or execution claim failed.
+
+        Nothing admits a queued turn again once its admission failed, so the
+        turn kept its state (queued, or routing once admitted) and its queue
+        row until a restart restored it. A restart-recovery resume follows the
+        automatic-start contract: interrupted again, and the next recovery
+        pass retries it. Any other turn fails with what went wrong and what to
+        do next. A turn another runtime or worker owns, or one that already
+        ended, is left as it is. Returns the error the turn's followers get.
+        """
+
+        assert prepared.turn is not None
+        turn_id = prepared.turn.id
+        try:
+            try:
+                latest = self.store.get(ChatTurn, turn_id)
+            except NotFoundError:  # diagnostic-expected: the turn went with its conversation; only its admission remains
+                self._settle_admission(turn_id)
+                return error
+            claim_id = prepared.execution_claim_id
+            if (
+                latest.execution_claim_id is not None
+                and latest.execution_claim_id != claim_id
+            ) or (not holds_admission and self.provider_scheduler.admitted(turn_id)):
+                return error
+            if automatic_recovery:
+                retried = self._retry_recovery_next_pass(turn_id)
+                if retried is None:
+                    return error
+                self.provider_scheduler.withdraw(turn_id)
+                self._pause_running_session_goal(
+                    latest.session_id,
+                    "Automatic recovery is waiting for the next Core recovery pass.",
+                )
+                return ChatError(retried.error or str(error))
+            if latest.status not in {
+                ChatTurnStatus.QUEUED,
+                ChatTurnStatus.ROUTING,
+                ChatTurnStatus.FINALIZING,
+                ChatTurnStatus.WAITING_APPROVAL,
+                ChatTurnStatus.WAITING_CALLBACK,
+            }:
+                # Ended, or interrupted and owned by restart recovery.
+                self._settle_admission(turn_id)
+                return error
+            detail = (
+                f"Core could not start this response ({type(error).__name__}: "
+                f"{error}). Nothing ran for it after it was queued; send the "
+                "message again to retry."
+            )[:1_000]
+            prepared.turn = self.store.update(
+                ChatTurn,
+                latest.id,
+                {"status": ChatTurnStatus.FAILED, "error": detail},
+                expected_revision=latest.revision,
+            )
+            self._release_execution(prepared)
+            self.provider_scheduler.withdraw(turn_id)
+            self.record_turn_outcome(turn_id)
+            self._pause_running_session_goal(
+                latest.session_id,
+                "Response could not start. Review the error, then resume the goal.",
+            )
+            try:
+                await self.subagents.turn_settled(turn_id)
+            except Exception as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.subagent.settle_failed",
+                    "Subagent state could not be updated after a response settled.",
+                    exc,
+                    stage="subagent-settle",
+                )
+            failed = ChatError(detail)
+            failed.__cause__ = error
+            return failed
+        except Exception as exc:
+            # The turn keeps its state; a restart restores a queued row.
+            record_caught_exception(
+                "chat",
+                "chat.provider_admission.settle_failed",
+                "A provider turn that could not start could not be settled.",
+                exc,
+                stage="provider-admission",
+            )
+            return error
 
     def has_active_provider_turn(self, turn_id: str) -> bool:
         runtime = self._active_provider_turns.get(turn_id)
