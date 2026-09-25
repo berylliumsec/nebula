@@ -1,10 +1,10 @@
 {
-  "change_digest": "899be597200905805a22b67e45f50c5fb8fb0504c8afa0be14749ba91812fcaa",
-  "reviewed_by": "Claude focused review for mission-checkpoint-growth",
-  "reason": "MIS-8: Mission LangGraph checkpoints grew with the square of a task's turns (~34 MB persisted / ~67 MB DB file per 100 turns) because AsyncSqliteSaver keeps every superstep's checkpoint and each carries the whole MissionState. LatestCheckpointSqliteSaver.aput now stores the same row and, in one transaction, deletes this thread's older checkpoints and writes; MissionRuntime runs the graph with durability=sync and releases a finished thread; MissionService discards finished runs' checkpoints on worker end, on stop, and at startup. The selection covers the mission graph, specialist replay/approval, restart recovery and the row-horizon guard on the two edited modules. tests/v3/test_mission_checkpoint_retention.py is new: it pins the bounded storage and proves restart recovery is byte-for-byte unchanged by pruning across four crash points (between supersteps, during a routing call, during a tool effect, after completion) by comparing the stock saver against the pruning saver, and pins the service cleanup. test_orchestration, test_missions, test_specialist_tool_batches and test_specialist_routing_tolerance exercise the graph, checkpointing and #571's recovery/approval/batch contract that this change must preserve. test_row_horizon guards missions.py for unpaged reads (edited). Three single nodes cover the mission-start API path (test_automation_runtime), the analysis-mission specialist (test_model_output_budget) and the CLI mission runtime (test_cli), all of which route through the edited MissionRuntime/MissionService. Real-Core check ran on a scratch Core (branch build, port 42633, OpenRouter deepseek/deepseek-v4.1-flash, host mode): an analysis mission completed keeping at most one checkpoint and zero after finishing; a command mission crashed mid-run (SIGKILL with a checkpoint present) recovered on restart (recovery generation 1), ran each command exactly once, finished terminal on its token budget, and released its checkpoint to zero, with no saver errors in the Core log.",
-  "exclusions": "Full suites are not approved and are excluded. This is a backend-only change to Mission checkpoint persistence (src/nebula/v3/orchestration.py, src/nebula/v3/missions.py) with no UI, API-shape, mobile, LAN or migration surface, so frontend, native and Playwright layers have no relevant tests and are empty. The load-sensitive host test tests/v3/test_automation_runtime.py::test_host_scope_expiry_closes_running_commands is not selected: it is unrelated to checkpoint persistence and fails identically on pristine origin/main under concurrent load (documented in the 2026-09-24 batch); only the mission-degradation node from that file is relevant and is selected. Chat/harness command paths share the broker but their persistence is unchanged by this change and covered elsewhere.",
+  "change_digest": "f8e1af0a33d90b2080377f1b9d1de7988975b3e4a5d50aab33749271315033f7",
+  "reviewed_by": "Claude focused review for refusal-leftovers",
+  "reason": "Two follow-ups to #587. (1) A retried subagent start (harness vendor retry, provider step replay) now returns the child's real status through SubagentService.start_output on both paths instead of a hard-coded running; a start that never ran fails again. (2) Browser companion refusals left after #581/#586 are classified per docs/TOOL_FAILURE_CONTRACT.md: another project's browser and a closed/revoked session are unavailable_resource, the service's pre-dispatch refusals (stale tab, misplaced file or credential reference, out-of-scope page) are invalid_arguments or permission_denied before execution, and the post-capture screenshot refusals report no side effects. Selected: the new test_subagent_start_replay.py and the whole of test_browser_companion.py (new provider-loop, harness-gateway and broker tests; needs Chromium for its real-browser test), the subagent files whose start path changed (test_harness_provider_subagents.py, test_chat_subagents.py, test_subagent_refusal_categories.py, test_chat_subagent_lifecycle.py, test_subagent_delivery.py), test_assistant_browser_viewer.py for the companion service's operator routes, and the browser-gateway nodes in test_harnesses.py and the companion stream node in test_api.py.",
+  "exclusions": "Full suites are not approved and are excluded. No UI, native Rust/Tauri or Playwright code changed and the UI does not read failure categories, so frontend, native and playwright are empty. The rest of test_harnesses.py and test_api.py is unaffected: only _gateway_subagent's start result and the companion broker changed, and the selected nodes cover the browser gateway paths. The companion service's operator routes keep answering ValueError as before (CompanionRequestRefused subclasses it); test_browser_security.py, test_browser_host.py and test_browserd.py cover browserd and assessments, which are unchanged.",
   "expected_tests": {
-    "python": 91,
+    "python": 156,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -12,18 +12,22 @@
   "python_versions": [
     "3.12"
   ],
-  "python_browser": false,
+  "python_browser": true,
   "python_node": false,
   "python": [
-    "tests/v3/test_mission_checkpoint_retention.py",
-    "tests/v3/test_orchestration.py",
-    "tests/v3/test_missions.py",
-    "tests/v3/test_specialist_tool_batches.py",
-    "tests/v3/test_specialist_routing_tolerance.py",
-    "tests/v3/test_row_horizon.py",
-    "tests/v3/test_automation_runtime.py::test_default_mission_degrades_to_analysis_when_command_runtime_is_unprepared",
-    "tests/v3/test_model_output_budget.py::test_analysis_mission_specialist_uses_the_model_output_default",
-    "tests/v3/test_cli.py::test_cli_run_uses_an_explicit_vllm_profile_without_tools"
+    "tests/v3/test_browser_companion.py",
+    "tests/v3/test_subagent_start_replay.py",
+    "tests/v3/test_harness_provider_subagents.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_subagent_refusal_categories.py",
+    "tests/v3/test_chat_subagent_lifecycle.py",
+    "tests/v3/test_subagent_delivery.py",
+    "tests/v3/test_assistant_browser_viewer.py",
+    "tests/v3/test_harnesses.py::test_linked_retry_refreshes_current_browser_binding",
+    "tests/v3/test_harnesses.py::test_browser_gateway_rechecks_conversation_binding_before_execution",
+    "tests/v3/test_harnesses.py::test_browser_gateway_refuses_paused_control_as_a_denial_before_execution",
+    "tests/v3/test_harnesses.py::test_browser_gateway_refuses_a_change_paused_while_its_page_is_read",
+    "tests/v3/test_api.py::test_companion_stream_closes_with_4404_for_a_missing_session"
   ],
   "frontend": [],
   "native": [],
