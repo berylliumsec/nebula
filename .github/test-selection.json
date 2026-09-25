@@ -1,13 +1,13 @@
 {
-  "change_digest": "2111139d67c8cbba69d4eb257028c44df9716f8e17cb1484051829ef754613e1",
-  "reviewed_by": "Claude focused review for grant-attribution",
-  "reason": "Saving a project's scope keeps who granted each unchanged grant. PUT /engagements/{id}/scope and the generic scope-policies create/replace/patch routes now share _attribute_scope_grants: a saved grant whose authority (MissionGrant.authority(): risk classes, tool names and targets as sets, plus expiry) matches an unclaimed stored grant keeps the stored granted_by and granted_at (the client's echoed attribution only breaks ties between stored grants of equal authority); new or changed grants are credited to the active operator at save time, and an already-expired new or changed grant is refused. tests/v3/test_api_crud_validation.py holds the three new regression tests (dedicated route unchanged/changed/new/forged, expired refusal, generic replace and patch with the equal-authority tiebreak) beside #581's forgery and smoke-patch tests. tests/v3/test_domain.py covers the MissionGrant model the authority key was added to. tests/v3/test_web_search.py, test_tool_catalog.py and test_tool_suggestions.py save scope fields through the dedicated route whose payload assembly was restructured. tests/v3/test_generic_crud_exposure.py covers the generic CRUD route surface whose ScopePolicy hook changed.",
-  "exclusions": "Full suites are not approved and are excluded. No UI, native or Playwright change: the UI only echoes grants it read (EngagementPolicySettings and WorkbenchBrowser send scope.grants with expectedRevision) and displays no grant attribution, so frontend, native and playwright are empty. Browser automation's grant coverage check reads only risk classes, targets and expiry, which this change never alters. Python 3.12 only: no version-specific code.",
+  "change_digest": "f4615d79138c39b1eb59e9e7ea8a036c10d1b2f8329821be436008ff5d53cab9",
+  "reviewed_by": "Claude focused review for output-budget-default",
+  "reason": "resolve_context_limits (src/nebula/v3/context.py) now defaults a turn's output to min(published limit, max(25% of the window, min(8,192, half the window))) instead of the model's published maximum (#521); a published limit at or above the window or none at all uses the share, only an unknown window keeps 2,048, and profile/request maxima stay explicit. Python selects the output-budget and context-limit contracts (test_model_output_budget, test_context), the built-in help file that now describes the rule (test_operator_help), and every test file that configures a model window or descriptors and reaches the resolver through chat preparation, compaction, context status routes, the capability probe, final-answer retries, subagent delivery, goals, harness outcomes, missions/orchestration and the CLI mission path (test_api, test_chat_api, test_chat_goals, test_chat_leftovers, test_chat, test_chat_stream_follow, test_codex_turn_outcomes, test_history_content_fidelity, test_inference_timeouts_probe_budget, test_turn_outcome_history, test_turn_prompt_cache, test_subagent_delivery, test_synthesis_tool_declarations, test_in_turn_context_pruning, test_missions, test_orchestration, test_chat_tool_loop). Frontend: SettingsPage.test.tsx pins the provider dialog's Maximum output tokens help copy, which now states the new default. Playwright runs the stabilization area (it holds the shared-dialog contract test that opens Add model provider) on desktop Chromium, mobile Chromium 320 and mobile WebKit.",
+  "exclusions": "Full suites are not approved and are excluded. Provider adapters (providers.py), model catalog parsing, known_model_limits.py and scripts/refresh_known_model_limits.py are unchanged: the published figures stay raw and the rule is applied once in the resolver, so adapter, catalog and route-parsing tests (test_providers, test_openai_compatible_parameters, test_deepseek_glm_compat, test_reasoning_controls, test_native_adapter_*) are not selected. No native, harness-runtime or SessionsPage change, so native tests and the assistant/SessionsPage Playwright entries are not selected. The UI change is one help sentence inside the existing provider dialog; the desktop-interface and mobile-layout areas the impact rules map SettingsPage.tsx to are whole-spec runs and are replaced by the stabilization entries that open that dialog. The context.py -> core-api (whole real-core.spec.ts) mapping is likewise not selected; the real-Core OpenRouter journey was run by hand against a scratch Core.",
   "expected_tests": {
-    "python": 189,
-    "frontend": 0,
+    "python": 459,
+    "frontend": 7,
     "native": 0,
-    "playwright": 0
+    "playwright": 108
   },
   "python_versions": [
     "3.12"
@@ -15,14 +15,34 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_api_crud_validation.py",
-    "tests/v3/test_domain.py",
-    "tests/v3/test_web_search.py",
-    "tests/v3/test_tool_catalog.py",
-    "tests/v3/test_tool_suggestions.py",
-    "tests/v3/test_generic_crud_exposure.py"
+    "tests/v3/test_model_output_budget.py",
+    "tests/v3/test_context.py",
+    "tests/v3/test_operator_help.py",
+    "tests/v3/test_api.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_leftovers.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_stream_follow.py",
+    "tests/v3/test_codex_turn_outcomes.py",
+    "tests/v3/test_history_content_fidelity.py",
+    "tests/v3/test_inference_timeouts_probe_budget.py",
+    "tests/v3/test_turn_outcome_history.py",
+    "tests/v3/test_turn_prompt_cache.py",
+    "tests/v3/test_subagent_delivery.py",
+    "tests/v3/test_synthesis_tool_declarations.py",
+    "tests/v3/test_in_turn_context_pruning.py",
+    "tests/v3/test_missions.py",
+    "tests/v3/test_orchestration.py",
+    "tests/v3/test_chat_tool_loop.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/pages/SettingsPage.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:stabilization/desktop",
+    "entry:stabilization/mobile-chromium-small",
+    "entry:stabilization/mobile-webkit"
+  ]
 }
