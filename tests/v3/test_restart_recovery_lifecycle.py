@@ -947,7 +947,9 @@ def test_foreground_command_cancelled_while_core_stops_is_interrupted(tmp_path):
 
         assert await cancelled_status("before-stop") == CommandExecutionStatus.CANCELLED
         manager.begin_stopping()
-        assert await cancelled_status("during-stop") == CommandExecutionStatus.INTERRUPTED
+        assert (
+            await cancelled_status("during-stop") == CommandExecutionStatus.INTERRUPTED
+        )
         await manager.shutdown()
 
     asyncio.run(scenario())
