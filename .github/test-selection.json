@@ -12,7 +12,7 @@
   "python_versions": [
     "3.12"
   ],
-  "python_browser": false,
+  "python_browser": true,
   "python_node": false,
   "python": [
     "tests/v3/test_storage_waste.py",
