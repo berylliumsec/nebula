@@ -1,22 +1,28 @@
 {
-  "change_digest": "1e59251cb11accaf139a740ea27762ad89fe35dd1bb581fec9d33c56b4719665",
-  "reviewed_by": "Codex focused review for supervisor-selected subagent effort",
-  "reason": "The provider and harness supervisors can spawn a child with an explicit reasoning effort. An omitted effort now starts the child at low, independent of the parent level. Three collected Python cases cover both runtime paths, the explicit override, invalid levels, and the advertised tool instructions. One collected production real-Core browser journey in each of desktop Chromium and mobile Chromium/WebKit verifies the durable child effort, visible wait, resumed answer, and reload at a LAN origin.",
-  "exclusions": "No full-suite approval was given. Native and frontend component code are unchanged. Other browser projects and unrelated operator journeys are excluded because the UI layout and browser capabilities did not change; 390 px mobile profiles cover the selected journey. Browser profiles are emulated rather than physical devices. The real-Core journey uses a local scripted model rather than an external provider account.",
-  "expected_tests": {"python": 3, "frontend": 0, "native": 0, "playwright": 3},
-  "python_versions": ["3.12"],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_chat_subagents.py::test_subagents_default_to_low_unless_the_supervisor_selects_an_effort",
-    "tests/v3/test_harness_provider_subagents.py::test_harness_subagents_default_to_low_unless_the_supervisor_selects_an_effort",
-    "tests/v3/test_harness_provider_subagents.py::test_waits_stay_below_each_harness_tool_timeout"
+  "change_digest": "000bd86219476b8d3a272a1adbd93cf35c8c6ada56f262dce69d2e241ee436dd",
+  "reviewed_by": "Codex focused review of supervisor task transcript formatting",
+  "reason": "A saved subagent task is a user-role chat message. It was rendered as a plain paragraph while assistant and agent messages used safe Markdown. The selected component tests cover Markdown safety, exact code text, and disabled execution. The selected child-conversation browser case verifies inline code, ordered steps, long-path containment, navigation, and reload at desktop and mobile Chromium/WebKit widths. The real-Core edit case verifies persisted Markdown, reload, exact stored source, and the existing edit workflow.",
+  "exclusions": "No full-suite approval was given. Python and native code are unchanged. The browser matrix uses emulated mobile devices; no physical device was available. Formatting does not use origin-sensitive browser APIs, so the real-Core persistence test uses loopback. Unrelated chat features and backend suites are excluded.",
+  "expected_tests": {
+    "python": 0,
+    "frontend": 7,
+    "native": 0,
+    "playwright": 9
+  },
+  "python": [],
+  "frontend": [
+    "ui/src/components/assistantMarkdown.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:conversation-progress/assistant-real-desktop",
-    "entry:conversation-progress/assistant-real-chromium-390",
-    "entry:conversation-progress/assistant-real-webkit-390"
+    "entry:subagent-sidebar/desktop",
+    "entry:subagent-sidebar/compact",
+    "entry:subagent-sidebar/mobile-chromium-small",
+    "entry:subagent-sidebar/mobile-chromium-ledger-390",
+    "entry:subagent-sidebar/mobile-chromium-wide",
+    "entry:subagent-sidebar/mobile-webkit-small",
+    "entry:subagent-sidebar/mobile-webkit",
+    "entry:subagent-sidebar/mobile-webkit-wide",
+    "entry:chat-edit-in-place/assistant-real-desktop"
   ]
 }

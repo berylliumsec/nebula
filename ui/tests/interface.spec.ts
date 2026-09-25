@@ -2776,6 +2776,8 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
   const parent = { ...entity, id: "sidebar-parent", engagement_id: "scratch-project", title: "Main investigation", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
   const childA = { ...entity, id: "sidebar-child-a", engagement_id: "scratch-project", title: "Subagent · API mapping", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "deepseek/deepseek-flash-latest-with-a-deliberately-long-provider-model-identifier", metadata: { subagent_id: "sub-a" } };
   const childB = { ...entity, id: "sidebar-child-b", engagement_id: "scratch-project", title: "Subagent · Edge review", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: { subagent_id: "sub-b" } };
+  const task = "Resolve `activate` at `0x100002580`.\n\nRequired work:\n1. Resolve the binding.\n2. Check every `memcpy` call.\n\nDeliverable: `projects/research/artifacts/evidence/" + "long_path_segment_".repeat(12) + "result.json`.";
+  const taskMessage = { ...entity, id: "sidebar-task", engagement_id: "scratch-project", session_id: childB.id, sequence: 1, role: "user", content: task, citations: [], metadata: {} };
   const branch = { ...entity, id: "sidebar-branch", engagement_id: "scratch-project", title: "Ordinary branch", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: {} };
   const items = [childA, branch, childB, parent];
   await page.route("**/api/v1/**", async route => {
@@ -2784,7 +2786,7 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
     if (path.endsWith("/chat/session-activity")) return route.fulfill({ json: [{ session_id: childB.id, state: "waiting", turn_id: "waiting-turn" }] });
     const selected = items.find(item => path.endsWith(`/chat-sessions/${item.id}`));
     if (selected && route.request().method() === "GET") return route.fulfill({ json: selected });
-    if (/\/chat\/sessions\/sidebar-[^/]+\/messages$/.test(path)) return route.fulfill({ json: [] });
+    if (/\/chat\/sessions\/sidebar-[^/]+\/messages$/.test(path)) return route.fulfill({ json: path.endsWith(`/${childB.id}/messages`) ? [taskMessage] : [] });
     if (/\/chat\/sessions\/sidebar-[^/]+\/pending-turn$/.test(path)) return route.fulfill({ json: null });
     await route.fallback();
   });
@@ -2825,8 +2827,15 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
   await sidebar.locator('[data-session-id="sidebar-child-b"]').click();
   await expect(page).toHaveURL(/session=sidebar-child-b/);
   await expect(page.getByText("Subagent conversation · files remain shared.")).toBeVisible();
+  const renderedTask = page.locator(".chat-message.operator .assistant-markdown");
+  await expect(renderedTask.locator("code")).toContainText(["activate", "0x100002580", "memcpy"]);
+  await expect(renderedTask.locator("ol > li")).toHaveCount(2);
+  await expect(renderedTask.locator("ol > li").first()).toContainText("Resolve the binding.");
+  await expect(page.locator(".chat-message.operator").getByRole("button", { name: /Run/ })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
   await page.reload();
+  await expect(page.locator(".chat-message.operator .assistant-markdown ol > li")).toHaveCount(2);
   sidebar = await openSidebar();
   await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toBeVisible();
   await expect(sidebar.getByRole("button", { name: "Collapse 2 subagents for Main investigation" })).toHaveAttribute("aria-expanded", "true");

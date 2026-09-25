@@ -681,6 +681,7 @@ const NO_ACTIVITY: HarnessActivityItem[] = [];
 const NO_TOOL_CARDS: ToolLifecycleCard[] = [];
 const NO_INTERACTIONS: HarnessInteraction[] = [];
 const NO_ANSWERS: Record<string, string> = {};
+const NO_RUNNABLE_LANGUAGES = new Set<ExecutionLanguage>();
 
 /**
  * One transcript message. It is memoized on explicit props, so a page render
@@ -738,9 +739,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       {message.role === "assistant" && message.toolSuggestions && <ToolSuggestionChip summary={message.toolSuggestions} />}
       {message.role === "assistant" && !progressContent && <HarnessThinking items={messageActivityItems} />}
       {message.role === "assistant" && !progressContent && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming" && Boolean(message.reasoning)} />}
-      {displayContent && (message.role === "assistant" || agentMessage
-        ? <AssistantMarkdown content={displayContent} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} blockOrdinalOffset={answerBlockOrdinalOffset} />
-        : editing
+      {displayContent && (editing
           ? <form className="chat-message-edit" onSubmit={event => {event.preventDefault(); void actions.resendEditedMessage();}}>
             <textarea
               aria-label="Edit message"
@@ -764,7 +763,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
               <button className="button primary" type="submit" disabled={editing.busy || !editing.text.trim()}>{editing.busy ? <><LoaderCircle className="spin" size={13} /> Resending</> : "Resend"}</button>
             </div>
           </form>
-          : <p>{displayContent}</p>)}
+          : <AssistantMarkdown content={displayContent} messageId={message.id} durable={message.role !== "user" && message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={message.role === "user" ? NO_RUNNABLE_LANGUAGES : shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} blockOrdinalOffset={answerBlockOrdinalOffset} />)}
       {message.id && subagentResult && <ChatSubagentResultCard
         subagent={subagentResult}
         onOpenConversation={id => void actions.selectSession(id)}
