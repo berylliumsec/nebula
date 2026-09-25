@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from .database import ChatTurnCheckpointRow, ChatTurnStepEventRow, Database
 from .domain import ChatTurn, utc_now
+from .tool_results import without_results_api_key
 
 # The checkpoint advances in blocks: once this many steps, or this many
 # tokens of them, have left the recent window since the last advance.
@@ -59,6 +60,18 @@ def _canonical(value: Any) -> bytes:
 
 def _token_estimate(value: Any) -> int:
     return max(1, (len(_canonical(value)) + 3) // 4)
+
+
+def _without_callback_key(entry: dict[str, Any]) -> dict[str, Any]:
+    """``entry`` without the callback key its waiting receipt once carried.
+
+    Rows recorded before the key left the receipt keep it at rest; neither
+    the model, the operator's tool card nor any API reads it back.
+    """
+
+    result = entry.get("provider_result")
+    scrubbed = without_results_api_key(result)
+    return entry if scrubbed is result else {**entry, "provider_result": scrubbed}
 
 
 def _event_type(entry: dict[str, Any]) -> str:
@@ -310,7 +323,7 @@ class ChatTurnLedger:
             for field in SHARED_REPLAY_FIELDS:
                 if field in holder.payload and field not in entry:
                     entry[field] = holder.payload[field]
-        return entry
+        return _without_callback_key(entry)
 
     def append(
         self,
@@ -320,6 +333,7 @@ class ChatTurnLedger:
         idempotency_key: str | None = None,
         event_type: str | None = None,
     ) -> int:
+        entry = _without_callback_key(entry)
         step = int(entry.get("step", 0))
         key = idempotency_key or (
             f"step:{step}:{event_type or _event_type(entry)}:"
@@ -419,7 +433,11 @@ class ChatTurnLedger:
             )
         rows = self._rows_after(turn.id, folded.through_sequence)
         if not rows and not folded.latest:
-            return [dict(item) for item in turn.tool_history if isinstance(item, dict)]
+            return [
+                _without_callback_key(dict(item))
+                for item in turn.tool_history
+                if isinstance(item, dict)
+            ]
         read = {sequence: payload for sequence, _, payload in rows}
         for sequence, step, payload in rows:
             entry = dict(payload)
@@ -437,7 +455,7 @@ class ChatTurnLedger:
                 for name in SHARED_REPLAY_FIELDS:
                     if held is not None and name in held and name not in entry:
                         entry[name] = held[name]
-            folded.latest[step] = (sequence, entry)
+            folded.latest[step] = (sequence, _without_callback_key(entry))
             folded.through_sequence = max(folded.through_sequence, sequence)
         if rows:
             with self._folded_lock:

@@ -513,15 +513,18 @@ class AutomationBroker:
         receipt = self._receipt(call.id, invocation.tool_name, result)
         waiting_callback = bool(result.results_url and result.results_api_key)
         if waiting_callback:
+            # The key reaches only the process, as NEBULA_RESULTS_KEY. The
+            # receipt is durable and model-visible, so it never carries it.
             receipt = receipt.model_copy(
                 update={
                     "results_url": result.results_url,
-                    "results_api_key": result.results_api_key,
                     "incomplete": True,
                     "next_actions": ["process_io"],
                     "warnings": [
                         *receipt.warnings,
-                        "POST the results API key to results_url when the work finishes.",
+                        "The command POSTs its results to NEBULA_RESULTS_URL with "
+                        "the X-Nebula-Api-Key header set to NEBULA_RESULTS_KEY "
+                        "when the work finishes.",
                     ],
                 }
             )

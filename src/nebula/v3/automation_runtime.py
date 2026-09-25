@@ -181,14 +181,52 @@ class CommandResult(BaseModel):
     tool_call_id: str | None = None
 
 
+MAX_RESULTS_STDOUT_CHARACTERS = 64 * 1024
+MAX_RESULTS_OUTPUT_BYTES = 64 * 1024
+# The largest JSON body a valid results POST can need: the summary, stdout
+# and output at their limits, with room for JSON escaping.
+MAX_PROCESS_RESULTS_BODY_BYTES = 1024 * 1024
+
+
 class ProcessResultsRequest(BaseModel):
+    """What a background command POSTs to its results URL."""
+
     model_config = ConfigDict(extra="forbid")
 
     status: Literal["complete", "failed"] = "complete"
     summary: str | None = Field(default=None, max_length=1_000)
     exit_code: int | None = Field(default=None, ge=0, le=255)
     output: dict[str, Any] = Field(default_factory=dict)
-    stdout: str = Field(default="", max_length=64 * 1024)
+    stdout: str = Field(default="", max_length=MAX_RESULTS_STDOUT_CHARACTERS)
+
+    @field_validator("output")
+    @classmethod
+    def _bounded_output(cls, value: dict[str, Any]) -> dict[str, Any]:
+        size = len(
+            json.dumps(
+                value, ensure_ascii=False, separators=(",", ":"), default=str
+            ).encode("utf-8")
+        )
+        if size > MAX_RESULTS_OUTPUT_BYTES:
+            raise ValueError(
+                f"output is {size} bytes of JSON; the limit is "
+                f"{MAX_RESULTS_OUTPUT_BYTES}. Write larger results to a file in "
+                "the workspace and name it in output."
+            )
+        return value
+
+
+class ProcessResultsAccepted(BaseModel):
+    """The results webhook's acknowledgement.
+
+    It confirms what Core recorded without echoing the process record back;
+    a command that prints the response then keeps only this in its stdout.
+    """
+
+    accepted: Literal[True] = True
+    process_id: str
+    status: CommandExecutionStatus
+    exit_code: int | None = None
 
 
 class AutomationRuntimeInfo(BaseModel):
@@ -1618,12 +1656,13 @@ class AutomationRuntimeManager:
                     "error": None
                     if request.status == "complete"
                     else (request.summary or "callback reported failure"),
+                    # The posted stdout and output live in their artifacts;
+                    # the record keeps only what its receipt needs, so it
+                    # stays small wherever it is listed.
                     "metadata": {
                         **execution.metadata,
                         "results_received": True,
                         "results_summary": request.summary,
-                        "results_output": request.output,
-                        "results_stdout": request.stdout[: 64 * 1024],
                         **{
                             f"results_{kind}_artifact_id": artifact.id
                             for kind, artifact in posted
@@ -1652,7 +1691,7 @@ class AutomationRuntimeManager:
         }
         posted: list[tuple[Literal["stdout", "output"], Artifact]] = []
         if request.stdout:
-            data = request.stdout[: 64 * 1024].encode("utf-8")
+            data = request.stdout.encode("utf-8")
             posted.append(
                 (
                     "stdout",
@@ -2272,8 +2311,25 @@ class AutomationRuntimeManager:
             )
             current = self.store.get(CommandExecution, process.execution.id)
             if current.metadata.get("results_received"):
-                process.execution = current
-                return current
+                # The callback already settled the outcome and woke the
+                # owner; the process's own output still joins the record so
+                # process_io and receipts find it as for any command.
+                process.execution = self.store.update(
+                    CommandExecution,
+                    current.id,
+                    {
+                        "stdout_artifact_id": stdout.id,
+                        "stderr_artifact_id": stderr.id,
+                        "redacted_stdout_artifact_id": redacted_stdout.id,
+                        "redacted_stderr_artifact_id": redacted_stderr.id,
+                        "observed_stdout_bytes": process.stdout.observed,
+                        "observed_stderr_bytes": process.stderr.observed,
+                        "stdout_truncated": process.stdout.truncated,
+                        "stderr_truncated": process.stderr.truncated,
+                    },
+                    expected_revision=current.revision,
+                )
+                return process.execution
             process.execution = self.store.update(
                 CommandExecution,
                 current.id,

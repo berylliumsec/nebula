@@ -8472,7 +8472,7 @@ class ChatService:
         """Classify one broker result into its durable tool-history fields.
 
         Shared by the fresh execution path and the approval resume so that a
-        background command (a receipt carrying results_url and results_api_key)
+        background command (a receipt carrying its results_url and process_id)
         parks the turn in WAITING_CALLBACK from either path.
         """
 
@@ -8499,9 +8499,7 @@ class ChatService:
                 "status": receipt.status.value if receipt else "failed",
             }
             model_result = failure
-        waiting_callback = bool(
-            receipt and receipt.results_url and receipt.results_api_key
-        )
+        waiting_callback = bool(receipt and receipt.results_url and receipt.process_id)
         fields = {
             "status": (
                 "waiting_callback"
@@ -8867,8 +8865,8 @@ class ChatService:
 
         The posted summary, redacted and bounded, is the part placed in model
         context. The posted stdout and structured output stay artifacts the
-        receipt names, as any command's captured output does. The results URL
-        and key the waiting receipt carried are not repeated.
+        receipt names, as any command's captured output does. The waiting
+        receipt's results URL is not repeated.
         """
 
         completed = execution.status == CommandExecutionStatus.COMPLETED

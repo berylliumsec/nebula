@@ -1,14 +1,25 @@
 import asyncio
+import hashlib
 import json
+import sqlite3
+from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
-from nebula.v3.automation_runtime import ProcessResultsRequest, RunCommandRequest
+from nebula.v3.automation_runtime import (
+    MAX_RESULTS_OUTPUT_BYTES,
+    ProcessIORequest,
+    ProcessResultsRequest,
+    RunCommandRequest,
+)
 from nebula.v3.automation_tools import AutomationBroker, AutomationToolComponents
 from nebula.v3.chat import ChatService, PreparedChat
+from nebula.v3.chat_turn_ledger import ChatTurnLedger
+from nebula.v3.database import ChatTurnStepEventRow
 from nebula.v3.domain import (
     Approval,
     ApprovalStatus,
@@ -19,6 +30,9 @@ from nebula.v3.domain import (
     ChatSession,
     ChatTurn,
     ChatTurnStatus,
+    CommandExecution,
+    CommandExecutionStatus,
+    Engagement,
     RiskClass,
     ProviderProfile,
     ScopePolicy,
@@ -28,11 +42,14 @@ from nebula.v3.domain import (
     utc_now,
 )
 from nebula.v3.providers import ModelMessage, ModelRequest, ModelResponse, ToolCall
+from nebula.v3.storage import NebulaStore
 from nebula.v3.tool_results import (
     MAX_EXCERPT_BYTES,
     ToolArtifactRef,
     ToolOutputService,
     ToolResultReceipt,
+    sanitize_model_history_result,
+    serialize_model_result,
 )
 from tests.v3.test_automation_runtime import runtime
 from tests.v3.test_chat import FakeProvider
@@ -93,7 +110,14 @@ def test_background_command_issues_lan_results_url_and_api_key(tmp_path):
             json={"status": "complete", "summary": "scan finished", "exit_code": 0},
         )
         assert accepted.status_code == 200, accepted.text
-        assert accepted.json()["status"] == "completed"
+        # A small acknowledgement, not the process record: a command that
+        # prints the response keeps only this in its own stdout.
+        assert accepted.json() == {
+            "accepted": True,
+            "process_id": started.process_id,
+            "status": "completed",
+            "exit_code": 0,
+        }
         replay = client.post(
             f"/api/v1/automation-processes/{started.process_id}/results",
             headers={"X-Nebula-Api-Key": started.results_api_key},
@@ -510,6 +534,12 @@ async def _approved_background_command_chat(
     return manager, store, chat, turn, provider, prepared_for
 
 
+def _results_key(manager, process_id: str) -> str:
+    """The results key, which only the process receives, in its environment."""
+
+    return manager._processes[process_id].backend.extra_env["NEBULA_RESULTS_KEY"]
+
+
 def _approve_pending(store, turn_id: str) -> ChatTurn:
     paused = store.get(ChatTurn, turn_id)
     assert paused.status == ChatTurnStatus.WAITING_APPROVAL
@@ -531,9 +561,9 @@ def _approve_pending(store, turn_id: str) -> ChatTurn:
 def test_approved_background_command_waits_for_its_callback(tmp_path):
     """An approval resume must park a background command exactly like a fresh run.
 
-    The receipt of an approved background command carries results_url and
-    results_api_key; the resumed turn has to wait in WAITING_CALLBACK for the
-    LAN webhook instead of recording the call as complete with no output.
+    The receipt of an approved background command carries its results_url;
+    the resumed turn has to wait in WAITING_CALLBACK for the LAN webhook
+    instead of recording the call as complete with no output.
     """
 
     async def scenario():
@@ -568,8 +598,9 @@ def test_approved_background_command_waits_for_its_callback(tmp_path):
         assert entry["process_id"] == process_id
         assert entry["results_url"] == callback["results_url"]
         assert entry["trusted_result"] is False
-        results_api_key = json.loads(entry["provider_result"])["results_api_key"]
-        assert results_api_key
+        # Only the process receives the key; the durable receipt never does.
+        assert json.loads(entry["provider_result"])["results_api_key"] is None
+        results_api_key = _results_key(manager, process_id)
 
         # The webhook now lands on a turn that is actually waiting for it.
         manager.accept_results(
@@ -622,7 +653,7 @@ def test_approval_and_results_webhook_resume_through_provider_admission(tmp_path
         waiting = store.get(ChatTurn, turn.id)
         assert waiting.status == ChatTurnStatus.WAITING_CALLBACK
         entry = waiting.tool_history[-1]
-        results_api_key = json.loads(entry["provider_result"])["results_api_key"]
+        results_api_key = _results_key(manager, entry["process_id"])
 
         manager.accept_results(
             entry["process_id"],
@@ -763,7 +794,7 @@ def test_callback_result_reaches_the_model_through_the_results_webhook(
         waiting = store.get(ChatTurn, turn.id)
         assert waiting.status == ChatTurnStatus.WAITING_CALLBACK
         entry = waiting.tool_history[-1]
-        results_api_key = json.loads(entry["provider_result"])["results_api_key"]
+        results_api_key = _results_key(manager, entry["process_id"])
 
         # The app's wake is the one this test's chat serves, so the webhook
         # route itself drives accept_results and the resume.
@@ -877,7 +908,7 @@ def test_failed_callback_reaches_the_model_as_a_failed_receipt(tmp_path):
         entry = store.get(ChatTurn, turn.id).tool_history[-1]
         manager.accept_results(
             entry["process_id"],
-            json.loads(entry["provider_result"])["results_api_key"],
+            _results_key(manager, entry["process_id"]),
             ProcessResultsRequest(
                 status="failed",
                 summary="target 203.0.113.7 refused every probe",
@@ -974,5 +1005,380 @@ def test_producer_that_ends_without_its_callback_reaches_the_model_as_unknown(
         assert call.status == ToolCallStatus.FAILED
         assert call.result == failure
         await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def _rows_holding(database: Path, needle: str) -> list[str]:
+    """The tables of Core's database with a row whose text holds ``needle``."""
+
+    with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+        tables = [
+            str(name)
+            for (name,) in connection.execute(
+                "select name from sqlite_master where type = 'table'"
+            )
+        ]
+        return [
+            table
+            for table in tables
+            if any(
+                needle in repr(row)
+                for row in connection.execute(f'select * from "{table}"')
+            )
+        ]
+
+
+def test_results_key_reaches_only_the_process(tmp_path, monkeypatch):
+    """The results key authorizes one POST; nothing durable or visible holds it.
+
+    The process gets it as NEBULA_RESULTS_KEY. No database row, stream event
+    or provider request carries it, and Core keeps only its digest to check
+    the POST.
+    """
+
+    async def scenario():
+        provider = _ReactiveProvider(
+            [_RUN_IN_BACKGROUND, _response(), _response(text="Done.")]
+        )
+        (
+            manager,
+            store,
+            chat,
+            turn,
+            _,
+            prepared_for,
+        ) = await _approved_background_command_chat(
+            tmp_path,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            provider=provider,
+        )
+        chat.prepare_resume = lambda turn_id: prepared_for(  # type: ignore[method-assign]
+            store.get(ChatTurn, turn_id)
+        )
+        chat.start_provider_turn(prepared_for(turn))
+        parked = [item async for item in chat.follow_provider_turn(turn.id)]
+        assert parked[-1][0] == "callback_required", parked
+        (step,) = chat._turn_history(store.get(ChatTurn, turn.id))
+        process_id = step["process_id"]
+        key = _results_key(manager, process_id)
+        assert key
+        assert manager._processes[process_id].backend.extra_env[
+            "NEBULA_RESULTS_URL"
+        ] == (f"http://10.0.0.8:8765/api/v1/automation-processes/{process_id}/results")
+        execution = store.get(CommandExecution, manager._execution_id(process_id))
+        assert (
+            execution.metadata["results_key_sha256"]
+            == hashlib.sha256(key.encode("utf-8")).hexdigest()
+        )
+        waiting = json.loads(step["provider_result"])
+        assert waiting["results_api_key"] is None
+        assert waiting["results_url"] == step["results_url"]
+        assert store.get(DurableToolCall, step["tool_call_id"]).result == waiting
+        assert key not in json.dumps(parked, default=str)
+        assert _rows_holding(tmp_path / "nebula.db", key) == []
+
+        wake = ChatService.continue_after_tool_callback
+        monkeypatch.setattr(
+            ChatService,
+            "continue_after_tool_callback",
+            lambda _self, process_id: wake(chat, process_id),
+        )
+        app = create_app(
+            store,
+            artifact_store=manager.artifact_store,
+            auth_token="test-token",
+            automation_runtime=manager,
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            posted = await client.post(
+                f"/api/v1/automation-processes/{process_id}/results",
+                headers={"X-Nebula-Api-Key": key},
+                json={"status": "complete", "summary": "done", "exit_code": 0},
+            )
+        assert posted.status_code == 200, posted.text
+        assert posted.json() == {
+            "accepted": True,
+            "process_id": process_id,
+            "status": "completed",
+            "exit_code": 0,
+        }
+        finished = [item async for item in chat.follow_provider_turn(turn.id)]
+        assert finished[-1][0] == "done", finished
+        assert key not in json.dumps(finished, default=str)
+        assert all(
+            key not in request.model_dump_json() for request in provider.requests
+        )
+        assert _rows_holding(tmp_path / "nebula.db", key) == []
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_callback_key_recorded_before_it_left_the_receipt_is_never_read_back(
+    tmp_path,
+):
+    """Rows written while waiting receipts carried the key keep it at rest only.
+
+    The ledger, a turn from before the ledger, the tool call API and model
+    replay all return the receipt without it, so neither the operator's tool
+    card nor the model ever sees it again.
+    """
+
+    store = NebulaStore(tmp_path / "nebula.db")
+    engagement = store.create(Engagement(name="Legacy callback"))
+    legacy_key = "legacy-results-key-5d0c1e9a7b"
+    results_url = "http://10.0.0.8:8765/api/v1/automation-processes/proc/results"
+    receipt = {
+        "schema": "nebula.tool-result/v2",
+        "tool_call_id": "tool-legacy",
+        "tool_name": "run_command",
+        "tool_version": "1",
+        "status": "completed",
+        "process_id": "proc",
+        "summary": "Process is running with id proc",
+        "incomplete": True,
+        "next_actions": ["process_io"],
+        "results_url": results_url,
+        "results_api_key": legacy_key,
+    }
+    entry = {
+        "step": 0,
+        "model_call_id": "call-1",
+        "tool_call_id": "tool-legacy",
+        "name": "run_command",
+        "status": "waiting_callback",
+        "process_id": "proc",
+        "results_url": results_url,
+        "provider_result": serialize_model_result(receipt),
+        "arguments": {"command": "wait-forever", "background": True},
+    }
+    turns = {}
+    for turn_id in ("turn-before-ledger", "turn-in-ledger"):
+        turns[turn_id] = store.create(
+            ChatTurn(
+                id=turn_id,
+                engagement_id=engagement.id,
+                session_id="session-legacy",
+                provider_profile_id="provider",
+                model="model-a",
+                status=ChatTurnStatus.WAITING_CALLBACK,
+                # A turn from before the ledger kept its steps on the row.
+                tool_history=[entry] if turn_id == "turn-before-ledger" else [],
+            )
+        )
+    with store.database.session() as session:
+        # A ledger row written while the waiting receipt carried the key.
+        session.add(
+            ChatTurnStepEventRow(
+                id="legacy-row",
+                turn_id="turn-in-ledger",
+                sequence=1,
+                step=0,
+                event_type="waiting_callback",
+                tool_call_id="tool-legacy",
+                payload=entry,
+                occurred_at=utc_now(),
+                idempotency_key="legacy-waiting",
+            )
+        )
+    store.create(
+        DurableToolCall(
+            id="tool-legacy",
+            engagement_id=engagement.id,
+            run_id="turn-in-ledger",
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id="session-legacy",
+            chat_turn_id="turn-in-ledger",
+            tool_name="run_command",
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.ACTIVE_SCAN,
+            arguments=entry["arguments"],
+            result=receipt,
+            started_at=utc_now(),
+        )
+    )
+    assert _rows_holding(tmp_path / "nebula.db", legacy_key)
+
+    ledger = ChatTurnLedger(store.database)
+    for turn in turns.values():
+        (read,) = ledger.history(turn)
+        assert legacy_key not in json.dumps(read)
+        assert json.loads(read["provider_result"])["results_url"] == results_url
+    tail = ledger.tail("turn-in-ledger", 5)
+    event = ledger.event("turn-in-ledger", "legacy-waiting")
+    assert tail is not None and event is not None
+    assert legacy_key not in json.dumps([tail, event])
+    # Importing the pre-ledger turn does not copy the key into a new row.
+    ledger.import_legacy(turns["turn-before-ledger"])
+    assert ledger.has_events("turn-before-ledger")
+    with sqlite3.connect(f"file:{tmp_path / 'nebula.db'}?mode=ro", uri=True) as db:
+        imported = db.execute(
+            "select payload from chat_turn_step_events where turn_id = ?",
+            ("turn-before-ledger",),
+        ).fetchall()
+    assert imported and legacy_key not in repr(imported)
+
+    # Replayed to a model, the old receipt is still a valid v2 receipt.
+    replayed = sanitize_model_history_result(
+        entry["provider_result"], tool_call_id="tool-legacy", tool_name="run_command"
+    )
+    assert replayed["schema"] == "nebula.tool-result/v2"
+    assert replayed["tool_version"] == "1"
+    assert replayed["results_api_key"] is None
+    assert ToolResultReceipt.model_validate(receipt).results_api_key is None
+
+    client = TestClient(create_app(store, auth_token="test-token"))
+    headers = {"Authorization": "Bearer test-token"}
+    single = client.get("/api/v1/tool-calls/tool-legacy", headers=headers)
+    listed = client.get(
+        "/api/v1/tool-calls", params={"engagement_id": engagement.id}, headers=headers
+    )
+    assert single.status_code == 200, single.text
+    assert listed.status_code == 200, listed.text
+    assert single.json()["result"]["results_url"] == results_url
+    assert legacy_key not in single.text
+    assert legacy_key not in listed.text
+
+
+def test_process_output_that_ends_after_its_callback_joins_the_record(tmp_path):
+    """Captured stdout and stderr are linked even when results arrived first.
+
+    The callback settled the outcome, so status and exit code stay as posted,
+    and process_io finds the process's own output like any command's.
+    """
+
+    async def scenario():
+        manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
+        manager.callback_origin = "http://10.0.0.8:8765"
+        policy = manager.project_policy(engagement.id)
+        manager.update_project_policy(
+            engagement.id,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=True,
+            runner_profile_id="runner",
+            max_timeout_ms=30_000,
+            expected_revision=policy.revision,
+        )
+        notified: list[str] = []
+        manager.bind_process_terminal_observer(notified.append)
+        started = await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="chat",
+            owner_id="session-1",
+            request=RunCommandRequest(command="wait-forever", background=True),
+            tool_call_id="tool-late-output",
+            chat_session_id="session-1",
+            chat_turn_id="turn-1",
+        )
+        accepted = manager.accept_results(
+            started.process_id,
+            started.results_api_key or "",
+            ProcessResultsRequest(status="complete", summary="posted", exit_code=0),
+        )
+        assert accepted.stdout_artifact_id is None
+        managed = manager._processes[started.process_id]
+        await managed.backend.terminate()
+        assert managed.final_task is not None
+        finished = await managed.final_task
+
+        assert finished.status == CommandExecutionStatus.COMPLETED
+        assert finished.exit_code == 0
+        assert finished.metadata["results_summary"] == "posted"
+        assert finished.stdout_artifact_id is not None
+        assert finished.stderr_artifact_id is not None
+        assert finished.redacted_stdout_artifact_id is not None
+        assert finished.observed_stdout_bytes > 0
+        # The callback already woke the owner; the exit does not wake it again.
+        assert notified == []
+        assert store.get(CommandExecution, finished.id) == finished
+        io = await manager.process_io(
+            started.process_id, ProcessIORequest(), engagement_id=engagement.id
+        )
+        assert io.stdout_artifact_id == finished.stdout_artifact_id
+        assert io.stderr_artifact_id == finished.stderr_artifact_id
+
+    asyncio.run(scenario())
+
+
+def test_results_webhook_bounds_what_a_command_posts(tmp_path):
+    """Oversized results are refused with the limit; the process can still post."""
+
+    async def scenario():
+        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+        manager.callback_origin = "http://10.0.0.8:8765"
+        policy = manager.project_policy(engagement.id)
+        manager.update_project_policy(
+            engagement.id,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=True,
+            runner_profile_id="runner",
+            max_timeout_ms=30_000,
+            expected_revision=policy.revision,
+        )
+        started = await manager.run_command(
+            engagement_id=engagement.id,
+            owner_kind="chat",
+            owner_id="session-1",
+            request=RunCommandRequest(command="wait-forever", background=True),
+            tool_call_id="tool-bounded",
+            chat_session_id="session-1",
+            chat_turn_id="turn-1",
+        )
+        url = f"/api/v1/automation-processes/{started.process_id}/results"
+        headers = {"X-Nebula-Api-Key": started.results_api_key or ""}
+        app = create_app(
+            store,
+            artifact_store=artifacts,
+            auth_token="test-token",
+            automation_runtime=manager,
+        )
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            oversized_output = await client.post(
+                url,
+                headers=headers,
+                json={"output": {"rows": ["x" * 100] * 1_000}},
+            )
+            assert oversized_output.status_code == 422, oversized_output.text
+            assert f"the limit is {MAX_RESULTS_OUTPUT_BYTES}" in oversized_output.text
+            oversized_body = await client.post(
+                url,
+                headers={**headers, "Content-Type": "application/json"},
+                content=b'{"stdout": "' + b"y" * (1024 * 1024) + b'"}',
+            )
+            assert oversized_body.status_code == 413, oversized_body.text
+            assert "1 MiB" in oversized_body.text
+            execution = store.get(
+                CommandExecution, manager._execution_id(started.process_id)
+            )
+            assert execution.status == CommandExecutionStatus.RUNNING
+            assert not execution.metadata.get("results_received")
+
+            within = await client.post(
+                url,
+                headers=headers,
+                json={
+                    "summary": "fits",
+                    "output": {"rows": ["x" * 100] * 500},
+                    "stdout": "line\n" * 100,
+                },
+            )
+            assert within.status_code == 200, within.text
+            assert within.json()["status"] == "completed"
+        recorded = store.get(
+            CommandExecution, manager._execution_id(started.process_id)
+        )
+        # The posted output lives in its artifacts, not on the record that the
+        # process list and the webhook would otherwise repeat.
+        assert "results_output" not in recorded.metadata
+        assert "results_stdout" not in recorded.metadata
+        assert recorded.metadata["results_output_artifact_id"]
+        assert recorded.metadata["results_stdout_artifact_id"]
+        with pytest.raises(ValueError, match="the limit is"):
+            ProcessResultsRequest(output={"rows": ["x" * 100] * 1_000})
 
     asyncio.run(scenario())

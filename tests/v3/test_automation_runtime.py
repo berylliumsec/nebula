@@ -100,6 +100,9 @@ class FakeProcess(RuntimeBackendProcess):
         self.stdout = asyncio.StreamReader()
         self.stderr = asyncio.StreamReader()
         self.writes: list[bytes] = []
+        # What the runtime put in the process environment, e.g. the results
+        # URL and key a background command posts with.
+        self.extra_env: dict[str, str] = {}
         self._done: asyncio.Future[int] = asyncio.get_running_loop().create_future()
         self.stdout.feed_data(output)
         if not stays_running:
@@ -143,7 +146,7 @@ class FakeSession(RuntimeBackendSession):
         cwd: str,
         extra_env: dict[str, str] | None = None,
     ) -> FakeProcess:
-        del process_id, extra_env
+        del process_id
         if command == "write-generated-file":
             (self.workspace / cwd / "generated.txt").write_text(
                 "generated", encoding="utf-8"
@@ -157,6 +160,7 @@ class FakeSession(RuntimeBackendSession):
             output,
             stays_running=command == "wait-forever",
         )
+        process.extra_env = dict(extra_env or {})
         self.processes.append(process)
         return process
 

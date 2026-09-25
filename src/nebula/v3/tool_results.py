@@ -18,7 +18,7 @@ from time import monotonic
 from typing import Annotated, Any, BinaryIO, Iterator, Literal, Protocol, TypeAlias
 
 import regex  # type: ignore[import-untyped]
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .artifacts import ArtifactStore
 from .domain import Artifact, ChatTurn, ToolCall, ToolCallOrigin
@@ -174,8 +174,18 @@ class ToolResultReceipt(BaseModel):
         default_factory=lambda: ["tool_output.search", "tool_output.read"]
     )
     results_url: str | None = Field(default=None, max_length=1_000)
-    results_api_key: str | None = Field(default=None, max_length=200)
+    # Receipts recorded before the callback key left history carried it here.
+    # It is accepted so they still validate, and never kept: the key only
+    # authorizes its own process's results POST, which reads it from
+    # NEBULA_RESULTS_KEY, and no model, operator view or ledger needs it.
+    results_api_key: None = None
     process_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("results_api_key", mode="before")
+    @classmethod
+    def _drop_results_api_key(cls, value: object) -> None:
+        del value
+        return None
 
     def as_model_result(self) -> dict[str, Any]:
         return self.model_dump(mode="json", by_alias=True)
@@ -1014,6 +1024,30 @@ def serialize_model_result(value: dict[str, Any]) -> str:
     )
 
 
+def without_results_api_key(value: Any) -> Any:
+    """``value`` with a recorded background-command callback key removed.
+
+    A dict or its JSON text comes back with ``results_api_key`` cleared; any
+    other value, and one that never carried a key, comes back unchanged.
+    """
+
+    if isinstance(value, str):
+        if '"results_api_key"' not in value:
+            return value
+        try:
+            decoded = json.loads(value)
+        except (
+            json.JSONDecodeError
+        ):  # diagnostic-expected: text that is not a receipt carries no key field
+            return value
+        if not isinstance(decoded, dict) or decoded.get("results_api_key") is None:
+            return value
+        return _render_model_result({**decoded, "results_api_key": None})
+    if isinstance(value, dict) and value.get("results_api_key") is not None:
+        return {**value, "results_api_key": None}
+    return value
+
+
 _HISTORY_RESULT_SCHEMAS = {
     TOOL_RESULT_SCHEMA,
     "nebula.tool-failure/v1",
@@ -1124,4 +1158,5 @@ __all__ = [
     "model_result_bytes",
     "sanitize_model_history_result",
     "serialize_model_result",
+    "without_results_api_key",
 ]
