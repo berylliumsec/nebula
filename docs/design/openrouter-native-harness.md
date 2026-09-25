@@ -218,7 +218,10 @@ turn, reject exhausted step/token budgets before dispatch, and reconcile provide
 usage afterward. Workbench Chat now reloads the Core goal, exposes draft creation,
 optional token/time/step limits and explicit Start/Pause/Resume/Cancel controls, and
 attaches only a running goal to the next provider request. Restart-paused multi-turn
-execution remains open. Active elapsed time now accumulates only while running;
+execution remains open. Active elapsed time now accumulates only while Core works
+on a running goal: while one of its turns is produced or one of its subagents runs
+(since September 24, 2026, idle gaps between turns and waits for Core capacity, an
+approval or a background callback no longer count);
 dispatch pauses before an expired time/step/token limit, and child capacity is
 revision-safe and cumulative for later delegation. Workbench Chat exposes child
 limits, active elapsed time, explicit Block with a reason, and Complete with a

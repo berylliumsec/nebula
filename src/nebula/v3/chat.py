@@ -205,6 +205,8 @@ from .project_instructions import (
     project_instructions_text,
 )
 from .chat_subagents import (
+    GOAL_BUDGET_STOP_NOTE,
+    PARENT_STOPPED_NOTE,
     SUBAGENT_CHILD_INSTRUCTIONS,
     SUBAGENT_LIMIT_CEILING,
     SubagentService,
@@ -2425,6 +2427,8 @@ class ChatService:
     def _claim_execution(self, prepared: PreparedChat) -> None:
         """Atomically fence one Core worker around a provider turn and its goal."""
 
+        from .chat_goals import active_time_changes
+
         turn = prepared.turn
         if turn is None:
             return
@@ -2472,6 +2476,8 @@ class ChatService:
                             "execution_owner_id": self.worker_id,
                             "execution_claim_id": claim_id,
                             "execution_claimed_at": claimed_at,
+                            # Producing a goal turn is active time.
+                            **active_time_changes(goal, working=True, now=claimed_at),
                         },
                         expected_revision=goal.revision,
                     )
@@ -2508,6 +2514,8 @@ class ChatService:
         return latest
 
     def _release_execution(self, prepared: PreparedChat) -> None:
+        from .chat_goals import ChatGoalService, active_time_changes
+
         turn = prepared.turn
         claim_id = prepared.execution_claim_id
         if turn is None or claim_id is None:
@@ -2519,6 +2527,19 @@ class ChatService:
         ):
             return
         goal = self.store.get(ChatGoal, latest.goal_id) if latest.goal_id else None
+        # A parked or settled turn stops the goal's active time unless one of
+        # its subagents still works.
+        idle_changes = (
+            active_time_changes(
+                goal,
+                working=ChatGoalService(self.store).has_working_subagents(
+                    latest.session_id
+                ),
+                now=utc_now(),
+            )
+            if goal is not None
+            else {}
+        )
         with self.store.transaction() as transaction:
             prepared.turn = transaction.update(
                 ChatTurn,
@@ -2542,6 +2563,7 @@ class ChatService:
                         "execution_owner_id": None,
                         "execution_claim_id": None,
                         "execution_claimed_at": None,
+                        **idle_changes,
                     },
                     expected_revision=goal.revision,
                 )
@@ -2741,9 +2763,16 @@ class ChatService:
                     exc,
                     stage="provider-turn-stop",
                 )
+        if runtime is not None and not runtime.done:
+            # A task cancelled before its first step never ran the cleanup
+            # that marks its work done; without this the stopped turn would
+            # read as active forever and refuse to resume or restart.
+            async with runtime.condition:
+                runtime.done = True
+                runtime.condition.notify_all()
         self.provider_scheduler.cancel(turn_id)
         cancelled = self.cancel_turn(turn_id)
-        await self.subagents.stop_for_parent_turn(turn_id)
+        await self.subagents.stop_for_parent_turn(turn_id, reason=PARENT_STOPPED_NOTE)
         # Reports that finished while the turn was parked (waiting for
         # approval, interrupted, or a wait that could not resume) were held
         # back for it; the conversation is idle now, so post them in order.
@@ -3427,7 +3456,7 @@ class ChatService:
             ):
                 exhausted_reason = "Goal active-time budget is exhausted."
             if exhausted_reason is not None:
-                self.store.update(
+                paused = self.store.update(
                     ChatGoal,
                     goal.id,
                     {
@@ -3439,6 +3468,10 @@ class ChatService:
                     },
                     expected_revision=goal.revision,
                 )
+                if exhausted_reason == "Goal token budget is exhausted.":
+                    self.subagents.stop_goal_subagents_soon(
+                        paused, GOAL_BUDGET_STOP_NOTE
+                    )
                 raise ChatConfigurationError(exhausted_reason.lower())
 
         from .native_hooks import (
@@ -6361,8 +6394,68 @@ class ChatService:
     def _fit_turn_goal_request(
         self, prepared: PreparedChat, request: ModelRequest
     ) -> ModelRequest:
-        goal_id = prepared.turn.goal_id if prepared.turn is not None else None
-        return self._fit_goal_request_budget(goal_id, request) if goal_id else request
+        turn = prepared.turn
+        if turn is None:
+            return request
+        if turn.goal_id:
+            return self._fit_goal_request_budget(turn.goal_id, request)
+        # A subagent spends its parent goal's tokens, so the goal's remaining
+        # budget bounds each of its requests too.
+        goal_id = self.subagents.child_goal_id(turn)
+        return self._fit_subagent_goal_budget(goal_id, request) if goal_id else request
+
+    def _fit_subagent_goal_budget(
+        self, goal_id: str, request: ModelRequest
+    ) -> ModelRequest:
+        """Fit a subagent's request inside its parent goal's remaining tokens.
+
+        Only the token budget applies: the goal's own turns stop at a pause,
+        while a subagent the operator's pause left running may finish its
+        task as long as the budget holds.
+        """
+
+        try:
+            goal = self.store.get(ChatGoal, goal_id)
+        except NotFoundError:  # diagnostic-expected: the goal was removed; nothing bounds the subagent any more
+            return request
+        if goal.token_budget is None:
+            return request
+        available_output = (
+            goal.token_budget
+            - goal.usage.total_tokens
+            - estimate_model_request(request)
+        )
+        if available_output < 1:
+            if goal.status == ChatGoalStatus.RUNNING:
+                paused_at = utc_now()
+                try:
+                    goal = self.store.update(
+                        ChatGoal,
+                        goal.id,
+                        {
+                            "status": ChatGoalStatus.PAUSED,
+                            "paused_at": paused_at,
+                            "active_since": None,
+                            "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
+                            "blocked_reason": (
+                                "Goal token budget cannot fit a subagent's next "
+                                "provider request."
+                            ),
+                        },
+                        expected_revision=goal.revision,
+                    )
+                except ConflictError:  # diagnostic-expected: another turn moved the goal first; this subagent stops regardless
+                    pass
+                else:
+                    self.subagents.stop_goal_subagents_soon(goal, GOAL_BUDGET_STOP_NOTE)
+            raise ChatConfigurationError(
+                "the goal's token budget cannot fit this subagent's next provider "
+                "request"
+            )
+        requested_output = request.max_output_tokens or available_output
+        return request.model_copy(
+            update={"max_output_tokens": min(requested_output, available_output)}
+        )
 
     def _may_retry_final_answer(
         self, prepared: PreparedChat, attempts: int
@@ -6509,7 +6602,7 @@ class ChatService:
         available_output = remaining - estimate_model_request(request)
         if available_output < 1:
             paused_at = utc_now()
-            self.store.update(
+            paused = self.store.update(
                 ChatGoal,
                 goal.id,
                 {
@@ -6523,6 +6616,7 @@ class ChatService:
                 },
                 expected_revision=goal.revision,
             )
+            self.subagents.stop_goal_subagents_soon(paused, GOAL_BUDGET_STOP_NOTE)
             raise ChatConfigurationError(
                 "goal token budget cannot fit the next provider request"
             )
@@ -7421,6 +7515,17 @@ class ChatService:
                 turn.goal_id,
                 ChatTokenUsage.model_validate(response.usage.model_dump()),
             )
+        elif updated.request_snapshot.get("subagent_child"):
+            try:
+                self.subagents.charge_child_usage(updated)
+            except Exception as exc:  # diagnostic-expected: the round's settle charges whatever this debit missed
+                record_caught_exception(
+                    "chat",
+                    "chat.subagent.usage_charge_deferred",
+                    "A subagent's usage could not be charged to its goal yet.",
+                    exc,
+                    stage="subagent-usage",
+                )
         return updated
 
     def _add_routing_content(
@@ -7462,7 +7567,7 @@ class ChatService:
             and combined.total_tokens >= goal.token_budget
         ):
             paused_at = utc_now()
-            return self.store.update(
+            paused = self.store.update(
                 ChatGoal,
                 goal.id,
                 {
@@ -7475,6 +7580,9 @@ class ChatService:
                 },
                 expected_revision=goal.revision,
             )
+            # Its subagents spend the same budget, so they stop with it.
+            self.subagents.stop_goal_subagents_soon(paused, GOAL_BUDGET_STOP_NOTE)
+            return paused
         return self.store.update(
             ChatGoal,
             goal.id,
@@ -9825,6 +9933,19 @@ class ChatService:
                 "message_ids": [message.id for message in replaced],
             }
         )
+        # Subagents the retracted replies started belong to the exchange being
+        # edited away: they report nothing into the edited conversation, and
+        # the caller stops the ones still running (``stop_retracted``).
+        retracted_turn_ids = {
+            turn_id
+            for message in replaced
+            if isinstance(turn_id := message.metadata.get("chat_turn_id"), str)
+        }
+        retracted_subagents = [
+            record
+            for record in self.subagents.for_session(session.id)
+            if record.parent_turn_id in retracted_turn_ids
+        ]
         with self.store.transaction() as transaction:
             retracted = [
                 transaction.update(
@@ -9842,6 +9963,8 @@ class ChatService:
                 )
                 for message in replaced
             ]
+            for record in retracted_subagents:
+                self.subagents.retract(transaction, record, retraction_id=retraction_id)
             session = transaction.update(
                 ChatSession,
                 session.id,
@@ -9853,6 +9976,8 @@ class ChatService:
                 },
                 expected_revision=session.revision,
             )
+        for record in retracted_subagents:
+            self.subagents.close_retracted_messages(record)
         retained = [
             message for message in messages if message.sequence < boundary.sequence
         ]

@@ -9,6 +9,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from .chat_subagents import subagent_limit
+from .environments import enabled_snapshot_ssh_ids
 from .providers import REASONING_EFFORTS, ReasoningEffort
 from .domain import (
     ChatSchedule,
@@ -16,7 +17,6 @@ from .domain import (
     ChatTurn,
     McpServerProfile,
     ProviderProfile,
-    SshEnvironment,
     utc_now,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
@@ -192,20 +192,12 @@ class ChatScheduleService:
                 continue
             if server.enabled:
                 mcp_server_ids.append(server_id)
-        ssh_environment_ids: list[str] | None = None
         hosts = snapshot.get("ssh_environment_snapshot")
-        if isinstance(hosts, list):
-            ssh_environment_ids = []
-            for host in hosts:
-                host_id = host.get("id") if isinstance(host, dict) else None
-                if not isinstance(host_id, str):
-                    continue
-                try:
-                    environment = self.store.get(SshEnvironment, host_id)
-                except NotFoundError:  # diagnostic-expected: the host was removed since the last turn; the occurrence runs without it
-                    continue
-                if environment.enabled:
-                    ssh_environment_ids.append(host_id)
+        ssh_environment_ids = (
+            enabled_snapshot_ssh_ids(self.store, hosts)
+            if isinstance(hosts, list)
+            else None
+        )
         effort = saved.get("reasoning_effort")
         return ScheduledTurnSettings(
             tools_enabled=tools_enabled,

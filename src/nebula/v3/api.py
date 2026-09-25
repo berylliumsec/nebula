@@ -10238,6 +10238,9 @@ def create_app(
         session, retained, replaced = chat_service().rewind_session(
             session_id, before_message_id=request.before_message_id
         )
+        # Subagents the edited exchange started stop instead of working on
+        # and reporting into the conversation that replaced it.
+        await chat_service().subagents.stop_retracted(session_id)
         if session.backend == ChatBackend.HARNESS:
             # The vendor session keeps its own transcript, so the conversation
             # continues on a fresh one that replays only the retained messages.

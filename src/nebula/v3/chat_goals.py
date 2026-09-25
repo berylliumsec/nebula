@@ -10,12 +10,15 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from .chat_subagents import SUBAGENT_LIMIT_CEILING
+from .diagnostics import record_caught_exception
 from .domain import (
     CHAT_GOAL_CHILD_LIMIT,
     ChatBackend,
     ChatGoal,
     ChatGoalStatus,
     ChatSession,
+    ChatSubagent,
+    ChatSubagentStatus,
     ChatTurn,
     ChatTurnStatus,
     Engagement,
@@ -88,9 +91,86 @@ class GoalConversationCreated(BaseModel):
     goal: ChatGoal
 
 
+def active_time_changes(goal: ChatGoal, *, working: bool, now: datetime) -> dict:
+    """Open or close a running goal's active stretch to match its work.
+
+    Active time is time Nebula works on the goal: while a Core worker
+    produces one of its turns, or one of its subagents runs. Waiting between
+    turns, for Core capacity, on an approval or on a background command's
+    callback is not, and neither is a pause. ``active_since`` is set exactly
+    while such a stretch is open; the closed stretches are banked in
+    ``elapsed_seconds``.
+    """
+
+    if goal.status != ChatGoalStatus.RUNNING:
+        return {}
+    if working and goal.active_since is None:
+        return {"active_since": now}
+    if not working and goal.active_since is not None:
+        return {
+            "active_since": None,
+            "elapsed_seconds": goal.active_elapsed_seconds(now),
+        }
+    return {}
+
+
 class ChatGoalService:
     def __init__(self, store: NebulaStore):
         self.store = store
+
+    def has_working_subagents(self, session_id: str) -> bool:
+        """Whether a subagent of this conversation is still running."""
+
+        return bool(
+            self.store.find_entities(
+                ChatSubagent,
+                {
+                    "parent_session_id": session_id,
+                    "status": ChatSubagentStatus.RUNNING.value,
+                },
+                limit=1,
+            )
+        )
+
+    def settle_active_time(self, session_id: str) -> None:
+        """Bank or reopen active time after a conversation's work changed.
+
+        Claiming and releasing a goal turn update the stretch in the same
+        write; this covers what happens between them, such as the goal's last
+        running subagent finishing while no turn is being produced.
+        """
+
+        last_error: ConflictError | None = None
+        for _ in range(3):
+            try:
+                goal = self.get(session_id)
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: most conversations have no goal
+                return
+            working = goal.execution_claim_id is not None or (
+                self.has_working_subagents(session_id)
+            )
+            changes = active_time_changes(goal, working=working, now=utc_now())
+            if not changes:
+                return
+            try:
+                self.store.update(
+                    ChatGoal, goal.id, changes, expected_revision=goal.revision
+                )
+                return
+            except (
+                ConflictError
+            ) as exc:  # diagnostic-expected: reread a concurrent goal write
+                last_error = exc
+        if last_error is not None:
+            record_caught_exception(
+                "chat",
+                "chat.goal.active_time_settle_failed",
+                "A goal's active time could not be updated after its work changed.",
+                last_error,
+                stage="goal-active-time",
+            )
 
     def get(self, session_id: str) -> ChatGoal:
         self.store.get(ChatSession, session_id)
@@ -104,10 +184,17 @@ class ChatGoalService:
     def read(self, session_id: str) -> ChatGoal:
         """Return current presentation state without advancing durable revision."""
         goal = self.get(session_id)
-        if goal.status != ChatGoalStatus.RUNNING:
+        if goal.status != ChatGoalStatus.RUNNING or goal.active_since is None:
             return goal
+        # The open stretch is reported as banked up to now and still open from
+        # now, so a client that adds the time since ``active_since`` to
+        # ``elapsed_seconds`` counts it once, not twice.
+        now = utc_now()
         return goal.model_copy(
-            update={"elapsed_seconds": goal.active_elapsed_seconds(utc_now())}
+            update={
+                "elapsed_seconds": goal.active_elapsed_seconds(now),
+                "active_since": now,
+            }
         )
 
     def create(self, session_id: str, body: GoalCreate) -> ChatGoal:

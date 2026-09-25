@@ -273,6 +273,28 @@ def resolve_ssh_environments(
     return tuple(enriched)
 
 
+def enabled_snapshot_ssh_ids(store: NebulaStore, hosts: Any) -> list[str]:
+    """Ids of a turn's recorded SSH hosts that are still saved and enabled.
+
+    A turn Core starts on its own repeats the hosts an earlier turn was given.
+    A host the operator removed or disabled since is dropped rather than
+    failing that turn, and nothing outside the recorded hosts is added.
+    """
+
+    ids: list[str] = []
+    for host in hosts if isinstance(hosts, list) else []:
+        host_id = host.get("id") if isinstance(host, dict) else None
+        if not isinstance(host_id, str):
+            continue
+        try:
+            environment = store.get(SshEnvironment, host_id)
+        except NotFoundError:  # diagnostic-expected: the host was removed since that turn; the new turn runs without it
+            continue
+        if environment.enabled:
+            ids.append(host_id)
+    return ids
+
+
 def ssh_tool_name(alias: str) -> str:
     stem = re.sub(r"[^a-z0-9_-]+", "-", alias.casefold()).strip("-_")[:60] or "host"
     if stem != alias:
