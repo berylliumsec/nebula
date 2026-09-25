@@ -980,10 +980,24 @@ def _utf8_prefix(value: str, maximum_bytes: int) -> str:
     return encoded[:maximum_bytes].decode("utf-8", errors="ignore") + "…"
 
 
+def _render_model_result(value: dict[str, Any]) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def model_result_bytes(value: dict[str, Any]) -> int:
+    """The size ``serialize_model_result`` holds to ``MAX_EXCERPT_BYTES``.
+
+    Producers that pack several items into one result measure with this, so
+    what they built is exactly what the model receives.
+    """
+
+    return len(_render_model_result(value).encode("utf-8"))
+
+
 def serialize_model_result(value: dict[str, Any]) -> str:
     """One shared serialization path for receipts and bounded retrievers."""
 
-    rendered = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    rendered = _render_model_result(value)
     if len(rendered.encode("utf-8")) <= MAX_EXCERPT_BYTES:
         return rendered
     # Retrieval handlers are expected to enforce the bound before this point.
@@ -1107,6 +1121,7 @@ __all__ = [
     "WorkspaceOutputService",
     "artifact_ref",
     "bytes_are_searchable",
+    "model_result_bytes",
     "sanitize_model_history_result",
     "serialize_model_result",
 ]

@@ -31,7 +31,13 @@ Static mockups; names, steps and token counts are illustrative.
   told the limit. Retried steps reuse the same child (idempotency key).
 - `wait_subagents` (mode `all` or `any`) pauses the parent turn in
   `waiting_callback`. When the wait is satisfied, Core resumes it and the tool
-  result carries each child's final answer as its report.
+  result carries each child's final answer as its report. Without ids and
+  with nothing running it waits on the finished children whose reports the
+  parent has not received. The resume check matches the subagent and
+  agent-message tools by a contract version (`subagents-v1`,
+  `agent-messages-v1`), not a hash of their specs, so a Core update that
+  rewords them or adds a ToolSpec field resumes a parked parent; digests
+  recorded before the versions read as version 1.
 - Once the parent is idle, every finished child is posted to the parent
   conversation as an assistant message with `metadata.kind = "subagent_result"`,
   so later turns remember it. If the parent's goal is running and no children
@@ -88,7 +94,24 @@ Parent and child exchange durable `ChatSubagentMessage` records
   messages; `subagent.start`/`message`/`stop` results carry unread `updates`;
   a running Codex or Claude turn is steered with a "Subagent update"; and
   whatever the harness has not received is prepended to its next prompt, once.
-  Grok cannot be steered, so it relies on the other paths.
+  Grok cannot be steered, so it relies on the other paths. What a prompt
+  carries counts as received once the vendor accepted it (its `started`
+  event), so a turn that fails to start, and its retry, keep it.
+- Every delivery fits its bound: a provider tool result the 8 KiB
+  model-delivery bound (a larger one would reach the model as a placeholder),
+  a harness tool result 16,000 bytes (below Grok's 20,000-byte MCP output
+  cap), a harness prompt or steer 40,000 characters. Only news travels: a
+  message the parent has not read and a report it has not received; a wait on
+  a subagent whose report arrived earlier says `report_received_earlier`
+  instead of sending it again. What does not fit is flagged
+  (`report_follows`, `messages_follow`) and waits; a working provider turn gets
+  it in the Core-added steps before its next routing call, where a report or
+  message too long for one result arrives in numbered parts (`report_part`,
+  `part`), and a harness gets it from `subagent.list` or its next prompt.
+  Nothing is marked received until it went out whole. A report is the
+  child's final answer up to 20,000 characters; a longer one keeps its
+  opening and its last 3,000 characters and says how much was cut between
+  them, so the parent does not ask the child to send it again.
 
 ## Failures reach the parent
 
@@ -116,7 +139,9 @@ API: `GET /chat/sessions/{id}/subagents`,
 Composer strip `ChatSubagentRail`, docked `ChatSubagentPane` (sheet at ≤1100 px
 and inside Terminal/Browser side panels), inline `ChatSubagentResultCard`, and a
 "Subagents" toggle in Assistant settings. The list endpoint is polled every 2 s
-while any subagent is active, and while a response that may delegate runs.
+while any subagent is active, and while a response that may delegate runs. It
+reads a finished child's step count and last steps from the end of its ledger,
+once per process, and loads neither its turn nor its history.
 
 ## Harness chats delegating to a provider model
 
@@ -148,8 +173,10 @@ in the same file (`108:2`): H1 settings popover `108:3`, H2 desktop pane
   `provider_subagent.max_active`; changing it reopens the connection so the
   instructions state it. Depth stays 1.
 - The gateway serves one call per session and Codex times a Nebula tool out
-  after 900 s, so `subagent.wait` blocks for at most `timeout_seconds`
-  (default 300, max 600) and returns unfinished children in `still_running`.
+  after 900 s (Grok after 6000 s, its `tool_timeout_sec` default), so
+  `subagent.wait` blocks for at most `timeout_seconds` (default 300, max 600)
+  and returns unfinished children in `still_running`. A wait whose harness
+  turn ended meanwhile marks nothing received.
 - When the harness turn ends, finished reports are posted as
   `subagent_result` messages. Reports the harness has not received through a
   wait (`reported_at` unset) are prepended to its next turn's prompt, once.

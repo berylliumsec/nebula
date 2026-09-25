@@ -337,11 +337,19 @@ def skill_resource_components(
     selected = [item for item in snapshots if item.resources]
     if not selected:
         return None
+    # Named fields, not a model dump: a paused turn rebuilds this digest on
+    # resume, and a field a later Core adds to the reference must not change it.
     manifests = [
         {
             "skill_path": item.path,
             "resources": [
-                resource.model_dump(mode="json") for resource in item.resources
+                {
+                    "path": resource.path,
+                    "relative_path": resource.relative_path,
+                    "sha256": resource.sha256,
+                    "size_bytes": resource.size_bytes,
+                }
+                for resource in item.resources
             ],
         }
         for item in selected

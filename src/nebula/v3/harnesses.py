@@ -437,12 +437,19 @@ _GATEWAY_AGENT_MESSAGE_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
 def _subagent_wait_limits(kind: HarnessKind | None) -> tuple[int, int]:
     """Default and longest subagent.wait for a harness, below its tool timeout.
 
-    Codex gives the Nebula server 900 s per call and Claude's SDK waits far
-    longer. Nebula does not know Grok's limit, so it waits briefly there and
-    lets the model call again.
+    Codex gives the Nebula server 900 s per call, Claude's SDK waits far
+    longer, and Grok times an MCP tool call out after ``tool_timeout_sec``,
+    6000 s unless configured (Grok CLI 1.0.40 user guide, MCP servers); the
+    ACP servers Nebula passes carry no timeout of their own. Each re-wait is a
+    full model step, so every harness waits the long default. A harness Nebula
+    does not know waits briefly and calls again.
     """
 
-    if kind in {HarnessKind.CODEX_APP_SERVER, HarnessKind.CLAUDE_AGENT_SDK}:
+    if kind in {
+        HarnessKind.CODEX_APP_SERVER,
+        HarnessKind.CLAUDE_AGENT_SDK,
+        HarnessKind.GROK_ACP,
+    }:
         return HARNESS_WAIT_DEFAULT_SECONDS, HARNESS_WAIT_MAX_SECONDS
     return 60, 120
 
@@ -9955,8 +9962,11 @@ class HarnessRuntimeService:
             runtime_context = (
                 runtime_context or ""
             ) + SubagentService.harness_report_context(subagent_update)
+        # Both are marked received only once the vendor accepted the prompt
+        # carrying them (_mark_prompt_context_delivered); a turn that fails to
+        # start leaves them for the retry or the next prompt.
         agent_update = (
-            self.agent_messages.inbox(chat.id, mark=False)
+            self.agent_messages.inbox(chat.id, mark=False, harness=True, text=True)
             if allow_agent_messaging and self.agent_messages is not None
             else {"messages": []}
         )
@@ -9965,6 +9975,11 @@ class HarnessRuntimeService:
                 "\n\nNebula peer-agent messages (act on them when relevant; reply "
                 "with agent.send):\n"
                 + json.dumps(agent_update["messages"], ensure_ascii=False)
+                + (
+                    "\nMore peer-agent messages are waiting; agent.read returns them."
+                    if agent_update.get("more_messages")
+                    else ""
+                )
             )
         oci_snapshot = session.metadata.get("command_runtime_snapshot")
         if not isinstance(oci_snapshot, dict) and oci_components is not None:
@@ -10101,12 +10116,6 @@ class HarnessRuntimeService:
                     },
                 )
             )
-        if subagent_update and self.provider_subagents is not None:
-            self.provider_subagents.mark_delivered(subagent_update)
-        if agent_update["messages"] and self.agent_messages is not None:
-            self.agent_messages.mark_message_ids_delivered(
-                [item["message_id"] for item in agent_update["messages"]]
-            )
         return chat, chat_turn, harness_turn
 
     def _verified_provider_subagent(
@@ -10132,6 +10141,23 @@ class HarnessRuntimeService:
             ChatError
         ):  # diagnostic-expected: an unverified choice waits for a later turn
             return None
+
+    def _mark_prompt_context_delivered(self, turn: HarnessTurn) -> None:
+        """The vendor accepted this turn's prompt: record the subagent reports
+        and messages and peer messages it carried as received. Idempotent."""
+
+        report_ids = turn.metadata.get("subagent_reports_delivered") or []
+        message_ids = turn.metadata.get("subagent_messages_delivered") or []
+        agent_ids = turn.metadata.get("agent_messages_delivered") or []
+        if (report_ids or message_ids) and self.provider_subagents is not None:
+            self.provider_subagents.mark_ids_delivered(
+                report_ids=[str(item) for item in report_ids],
+                message_ids=[str(item) for item in message_ids],
+            )
+        if agent_ids and self.agent_messages is not None:
+            self.agent_messages.mark_message_ids_delivered(
+                [str(item) for item in agent_ids]
+            )
 
     def _bind_session_provider_subagent(
         self, session: HarnessSession, setting: dict[str, Any] | None
@@ -10630,6 +10656,8 @@ class HarnessRuntimeService:
             final_message = ""
             usage = ChatTokenUsage()
             external_turn_id: str | None = None
+            # Set once the vendor accepted the prompt (its started event).
+            prompt_accepted = False
             interrupted_reason: str | None = None
             terminal_error: str | None = None
             terminal_diagnostic: dict[str, Any] | None = None
@@ -10713,6 +10741,25 @@ class HarnessRuntimeService:
                     )
                     if event.external_turn_id:
                         external_turn_id = event.external_turn_id
+                    if not prompt_accepted and event.type in {"started", "completed"}:
+                        prompt_accepted = True
+                        try:
+                            self._mark_prompt_context_delivered(turn)
+                        except Exception as exc:
+                            # Unmarked, they are offered again next turn: a
+                            # repeat, never a loss.
+                            record_caught_exception(
+                                "harnesses",
+                                "harnesses.prompt_context.mark_failed",
+                                "Subagent or peer updates in a harness prompt "
+                                "could not be marked received.",
+                                exc,
+                                stage="stream",
+                                metadata={
+                                    "entity_type": "harness_turn",
+                                    "entity_id": turn.id,
+                                },
+                            )
                     if event.type == "message_delta" and event.delta:
                         remaining = MAX_NORMALIZED_TEXT - len(final_message)
                         if remaining > 0:
@@ -13311,7 +13358,7 @@ class HarnessRuntimeService:
                         "the start of your next turn."
                     )
             elif name == "subagent.list":
-                result = service.list_output(parent_session_id)
+                result = service.list_output(parent_session_id, harness=True)
             elif name == "subagent.message":
                 result = await service.send_to_child(
                     parent_session_id,
@@ -13332,10 +13379,7 @@ class HarnessRuntimeService:
             if name in {"subagent.start", "subagent.message", "subagent.stop"}:
                 # A harness receives subagent news only through these results,
                 # a steer or its next prompt, so each result carries it.
-                update = service.pending_update(parent_session_id)
-                if update:
-                    result["updates"] = update.views
-                    service.mark_delivered(update)
+                result = service.with_harness_updates(parent_session_id, result)
         except (
             InvalidToolArguments,
             ChatError,

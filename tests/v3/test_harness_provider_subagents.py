@@ -434,9 +434,11 @@ def test_late_report_reaches_the_harness_at_its_next_turn(tmp_path):
         )
         assert "Cookies lack SameSite." in second.prompt
         assert "arrived after your last turn" in second.prompt
-        assert store.get(ChatSubagent, record.id).reported_at is not None
+        # Received only once the vendor accepts the prompt carrying it.
+        assert store.get(ChatSubagent, record.id).reported_at is None
         await runtime.start_chat_turn(second.id)
         assert "Cookies lack SameSite." in adapter.connections[0].prompts[-1]
+        assert store.get(ChatSubagent, record.id).reported_at is not None
 
         # A report is handed over once.
         _, _, third = _prepare(
@@ -779,14 +781,15 @@ def test_subagent_gateway_calls_read_as_delegated_work(tmp_path):
 
 
 def test_waits_stay_below_each_harness_tool_timeout(tmp_path):
-    # Codex allows a Nebula tool call 900 s; Grok's limit is unknown, so its
-    # waits are short and the model calls again.
+    # Codex allows a Nebula tool call 900 s and Grok 6000 s (its documented
+    # tool_timeout_sec default; the ACP servers Nebula passes set none), so
+    # both wait up to 300 s by default: each re-wait is a full model step.
     codex = _gateway_subagent_tools(HarnessKind.CODEX_APP_SERVER)["subagent.wait"]
     grok = _gateway_subagent_tools(HarnessKind.GROK_ACP)["subagent.wait"]
     assert codex[1]["properties"]["timeout_seconds"]["maximum"] == 600
     assert "default 300" in codex[0]
-    assert grok[1]["properties"]["timeout_seconds"]["maximum"] == 120
-    assert "default 60" in grok[0]
+    assert grok[1]["properties"]["timeout_seconds"]["maximum"] == 600
+    assert "default 300" in grok[0]
     session = HarnessSession(
         engagement_id="project",
         harness_profile_id="grok",
@@ -807,7 +810,7 @@ def test_waits_stay_below_each_harness_tool_timeout(tmp_path):
         vendor="Grok",
         gateway_tools=({"name": _portable_gateway_tool_name("subagent.start")},),
     )
-    assert "waits up to 60 seconds" in instructions
+    assert "waits up to 300 seconds" in instructions
 
 
 def test_harness_subagents_take_its_reasoning_level_unless_told_otherwise(tmp_path):
@@ -1047,11 +1050,16 @@ def test_harness_gets_unread_subagent_messages_at_its_next_turn(tmp_path):
         assert "Which region?" in second.prompt
         assert "continued without your answer" in second.prompt
         assert "Used us-east-1." in second.prompt
+        # Received once the vendor accepts the prompt that carries it.
+        assert (
+            store.get(ChatSubagentMessage, question.id).status
+            == ChatSubagentMessageStatus.PENDING
+        )
+        await runtime.start_chat_turn(second.id)
         assert (
             store.get(ChatSubagentMessage, question.id).status
             == ChatSubagentMessageStatus.DELIVERED
         )
-        await runtime.start_chat_turn(second.id)
         await chat.shutdown()
 
     asyncio.run(scenario())

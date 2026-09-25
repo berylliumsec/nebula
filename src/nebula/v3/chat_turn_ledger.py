@@ -397,6 +397,43 @@ class ChatTurnLedger:
             rows = {holder.sequence: holder} if holder is not None else {}
             return self._resolved(row.payload, rows)
 
+    def tail(self, turn_id: str, count: int) -> tuple[int, list[dict[str, Any]]] | None:
+        """The step count and last ``count`` steps of ``history``, read
+        without the rest; None when the turn has no ledger rows."""
+
+        with self.database.session() as session:
+            steps = list(
+                session.scalars(
+                    select(ChatTurnStepEventRow.step)
+                    .where(ChatTurnStepEventRow.turn_id == turn_id)
+                    .distinct()
+                    .order_by(ChatTurnStepEventRow.step.desc())
+                    .limit(count)
+                )
+            )
+            if not steps:
+                return None
+            rows = list(
+                session.scalars(
+                    select(ChatTurnStepEventRow)
+                    .where(
+                        ChatTurnStepEventRow.turn_id == turn_id,
+                        ChatTurnStepEventRow.step >= min(steps),
+                    )
+                    .order_by(ChatTurnStepEventRow.sequence)
+                )
+            )
+        # A row naming its step's first row for shared replay state finds it
+        # here: that row belongs to the same step.
+        by_sequence = {row.sequence: row for row in rows}
+        latest: dict[int, ChatTurnStepEventRow] = {}
+        for row in rows:
+            latest[row.step] = row
+        return max(steps) + 1, [
+            self._resolved(row.payload, by_sequence)
+            for row in sorted(latest.values(), key=lambda row: row.sequence)
+        ]
+
     def tool_call_ids(self, turn: ChatTurn) -> list[str]:
         ids = [
             str(entry["tool_call_id"])

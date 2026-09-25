@@ -55,9 +55,9 @@ disclosed.
 | --- | --- | --- |
 | Off to on | Setting remains checked after refresh | Session metadata is reloaded from Core |
 | Discover | Only eligible project peers appear | Hidden targets are never named in errors |
-| Send to active provider | Peer message is injected before the next tool step | A message arriving after history load stays pending for routing |
+| Send to active provider | Peer message is injected before the next tool step, in numbered parts when too long for one 8 KiB result | A message arriving after history load stays pending for routing; it is marked once the step is saved |
 | Send to active harness | Current turn is steered when supported | Failed/unavailable steering leaves the durable message queued |
-| Send to idle peer | Transcript callout appears; peer remains idle | Next turn receives and marks the exact queued snapshot |
+| Send to idle peer | Transcript callout appears; peer remains idle | Next turn receives the exact queued snapshot; a harness marks it once the vendor accepted that prompt, so a failed start or its retry keeps it |
 | Retry/reconnect | One message and one transcript entry | Stable sender-scoped idempotency key |
 | Disable/archive | Conversation disappears from future discovery | Already-sent transcript entries remain visible |
 | Delete sender | Recipient retains content and sender ID | UI falls back to `Deleted conversation` for unread delivery |

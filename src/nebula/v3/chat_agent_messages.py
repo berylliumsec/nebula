@@ -12,11 +12,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Collection, Iterable
 from uuid import NAMESPACE_URL, uuid5
 
-from .chat_subagents import is_subagent_session
+from .chat_subagents import (
+    CORE_DELIVERY_RESULTS,
+    HARNESS_REPORT_CONTEXT_CHARACTERS,
+    CoreDelivery,
+    DeliveryItem,
+    harness_result_fits,
+    is_subagent_session,
+    pack_delivery,
+    provider_result_fits,
+)
 from .domain import (
     ChatAgentMessage,
     ChatAgentMessageStatus,
@@ -50,6 +60,15 @@ Core also delivers unread messages before your next tool step. Agents cannot
 message subagents, archived conversations, temporary assistants, themselves, or
 conversations in another project. Do not send progress chatter. Sending a
 message does not start an idle agent; it receives the message on its next turn."""
+
+# The contract a paused turn resumes against; see SUBAGENT_TOOLS_CONTRACT.
+AGENT_MESSAGE_TOOLS_CONTRACT = "agent-messages-v1"
+# Before contract versions the digest hashed every ToolSpec field.
+_LEGACY_AGENT_MESSAGE_DIGEST = re.compile(r"agent-messages-[0-9a-f]{16}")
+_INBOX_NOTE = (
+    "Messages from independent peer agents in this project. Act on "
+    "their content when relevant; reply with send_agent_message."
+)
 
 _UNFINISHED = {
     ChatTurnStatus.QUEUED,
@@ -158,9 +177,7 @@ class AgentMessageService:
                 except ConflictError:  # diagnostic-expected: optimistic delivery retry
                     continue
 
-    def inbox(self, recipient_session_id: str, *, mark: bool = True) -> dict[str, Any]:
-        recipient = self.store.get(ChatSession, recipient_session_id)
-        messages = self.pending(recipient.id)
+    def _views(self, messages: Iterable[ChatAgentMessage]) -> list[dict[str, Any]]:
         views: list[dict[str, Any]] = []
         for message in messages:
             try:
@@ -179,17 +196,88 @@ class AgentMessageService:
                     "sent_at": message.created_at.isoformat(),
                 }
             )
-        if mark and messages:
-            self._mark_delivered(messages)
-        return {
+        return views
+
+    def _items(self, recipient_session_id: str) -> list[DeliveryItem]:
+        messages = self.pending(recipient_session_id)
+        items: list[DeliveryItem] = []
+        for message, view in zip(messages, self._views(messages)):
+
+            def make(
+                text: str,
+                part: str | None,
+                last: bool,
+                base: dict[str, Any] = view,
+            ) -> dict[str, Any]:
+                del last
+                return {**base, "content": text, **({"part": part} if part else {})}
+
+            # One key: messages arrive in the order they were sent.
+            items.append(
+                DeliveryItem(
+                    key="inbox", text=message.content, make=make, source=message
+                )
+            )
+        return items
+
+    @staticmethod
+    def _render(
+        views: list[dict[str, Any]], more: bool, *, harness: bool = False
+    ) -> dict[str, Any]:
+        output: dict[str, Any] = {
             "messages": views,
-            "note": (
-                "Messages from independent peer agents in this project. Act on "
-                "their content when relevant; reply with send_agent_message."
-                if views
-                else "No new messages from peer agents."
-            ),
+            "note": _INBOX_NOTE
+            if views or more
+            else "No new messages from peer agents.",
         }
+        if any("part" in view for view in views):
+            output["note"] += (
+                " A message too long for one result arrives in numbered parts."
+            )
+        if more:
+            output["more_messages"] = "More messages did not fit in this result; " + (
+                "call agent.read to receive them."
+                if harness
+                else "Core delivers them before your next step."
+            )
+        return output
+
+    def inbox(
+        self,
+        recipient_session_id: str,
+        *,
+        mark: bool = True,
+        harness: bool = False,
+        text: bool = False,
+    ) -> dict[str, Any]:
+        """Unread peer messages as one result that fits its bound.
+
+        A provider tool result fits the model-delivery bound, a harness tool
+        result its MCP output, and with ``text`` a harness prompt; a harness
+        always gets at least the oldest message. Only what the result carries
+        is marked, and a snapshot for a prompt (``mark`` off) is marked once
+        the vendor accepted it.
+        """
+
+        recipient = self.store.get(ChatSession, recipient_session_id)
+        items = self._items(recipient.id)
+
+        def render(views: list[dict[str, Any]], more: bool) -> dict[str, Any]:
+            return self._render(views, more, harness=harness)
+
+        def fits(output: dict[str, Any]) -> bool:
+            if text:
+                return (
+                    len(json.dumps(output["messages"], ensure_ascii=False))
+                    <= HARNESS_REPORT_CONTEXT_CHARACTERS
+                )
+            return (harness_result_fits if harness else provider_result_fits)(output)
+
+        results, left = pack_delivery(items, render, fits, force_first=harness)
+        delivered = results[0].delivered if results else []
+        if mark and delivered:
+            self._mark_delivered(item.source for item in delivered)
+        return render(results[0].views if results else [], bool(left))
 
     def mark_history_delivered(
         self, session_id: str, loaded_message_ids: Collection[str]
@@ -218,30 +306,55 @@ class AgentMessageService:
 
     def routing_delivery(
         self, turn: ChatTurn, tool_names: Collection[str]
-    ) -> tuple[str, dict[str, Any], str] | None:
+    ) -> CoreDelivery | None:
+        """Unread peer messages for a working provider turn, as the results
+        of steps Core adds before its next routing call; a message too long
+        for one result arrives in numbered parts."""
+
         if "read_agent_messages" not in tool_names:
             return None
-        messages = self.pending(turn.session_id)
-        if not messages:
+        items = self._items(turn.session_id)
+        if not items:
             return None
-        output = self.inbox(turn.session_id)
-        count = len(output["messages"])
-        return (
-            "read_agent_messages",
-            output,
-            f"{count} message{'' if count == 1 else 's'} from peer agents",
+        results, left = pack_delivery(
+            items,
+            self._render,
+            provider_result_fits,
+            parts=True,
+            max_results=CORE_DELIVERY_RESULTS,
+        )
+        steps: list[tuple[dict[str, Any], str]] = []
+        for index, result in enumerate(results, 1):
+            part = next((view["part"] for view in result.views if "part" in view), None)
+            count = len(result.delivered)
+            steps.append(
+                (
+                    self._render(result.views, bool(left) and index == len(results)),
+                    f"Part {part} of a message from a peer agent"
+                    if part
+                    else f"{count} message{'' if count == 1 else 's'} from peer agents",
+                )
+            )
+        delivered = [item.source for result in results for item in result.delivered]
+        if not steps:
+            return None
+        return CoreDelivery(
+            "read_agent_messages", steps, lambda: self._mark_delivered(delivered)
         )
 
     def list_output(self, invocation: ToolInvocation) -> dict[str, Any]:
         session = self._invoking_session(invocation)
         return {
             "agents": self.peers(session),
-            "unread": self.inbox(session.id, mark=False)["messages"],
+            "unread": self._views(self.pending(session.id)),
             "note": "Use a session_id from this list with send_agent_message.",
         }
 
     def read_output(self, invocation: ToolInvocation) -> dict[str, Any]:
-        return self.inbox(self._invoking_session(invocation).id)
+        return self.inbox(
+            self._invoking_session(invocation).id,
+            harness=invocation.runtime_session_kind == "harness",
+        )
 
     def _existing(
         self, sender_session_id: str, idempotency_key: str | None
@@ -475,13 +588,6 @@ def agent_message_components(
     workspace: Path,
     scope: ScopePolicy | None = None,
 ) -> RuntimeToolComponents:
-    specs = agent_message_specs()
-    digest = hashlib.sha256(
-        json.dumps(
-            {name: spec.model_dump(mode="json") for name, spec in specs.items()},
-            sort_keys=True,
-        ).encode("utf-8")
-    ).hexdigest()
     return RuntimeToolComponents(
         broker=AgentMessageBroker(service),
         scope=scope
@@ -490,16 +596,27 @@ def agent_message_components(
             engagement_id=engagement_id,
         ),
         workspace=workspace,
-        specs=specs,
-        runtime_digest=f"agent-messages-{digest[:16]}",
+        specs=agent_message_specs(),
+        runtime_digest=AGENT_MESSAGE_TOOLS_CONTRACT,
     )
+
+
+def contract_digest_segment(segment: str) -> str:
+    """One segment of a recorded runtime digest, with the agent-message
+    tools' pre-version fingerprint read as contract version 1."""
+
+    if _LEGACY_AGENT_MESSAGE_DIGEST.fullmatch(segment):
+        return AGENT_MESSAGE_TOOLS_CONTRACT
+    return segment
 
 
 __all__ = [
     "AGENT_MESSAGE_ROUTING_INSTRUCTIONS",
+    "AGENT_MESSAGE_TOOLS_CONTRACT",
     "AGENT_MESSAGE_TOOL_NAMES",
     "AgentMessageBroker",
     "AgentMessageService",
     "agent_message_components",
     "agent_message_specs",
+    "contract_digest_segment",
 ]
