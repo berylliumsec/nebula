@@ -2708,7 +2708,7 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
       expect(response.ok(), await response.text()).toBe(true);
       return (await response.json() as {session_id: string}).session_id;
     };
-    const originalTask = "Summarize `activate`.\n\nRequired work:\n1. Resolve the binding.\n2. Check the `memcpy` calls.";
+    const originalTask = "Summarize `activate`.\n\nRequired work:\n1. Resolve the binding.\n2. Check the `memcpy` calls.\n\n```json\n{\"binding\": \"cross-image\"}\n```";
     const sessionId = await send(originalTask);
     expect(await send("Any update on the certificate?", sessionId)).toBe(sessionId);
     const url = `${core.origin}/?view=chat&session=${sessionId}#token=${encodeURIComponent(core.token)}`;
@@ -2716,6 +2716,8 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
     const operator = page.locator(".chat-message.operator");
     await expect(operator.first().locator(".assistant-markdown ol > li")).toHaveCount(2);
     await expect(operator.first().locator(".assistant-markdown code")).toContainText(["activate", "memcpy"]);
+    await expect(operator.first().locator(".assistant-code-block code")).toHaveText('{"binding": "cross-image"}\n');
+    await expect(operator.first().getByRole("button", {name: "Copy exact code"})).toBeVisible();
     const edited = operator.filter({hasText: "Any update on the certificate?"});
     await expect(edited).toBeVisible({timeout: 20_000});
     await edited.hover();
@@ -2740,6 +2742,7 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
     await page.goto(url);
     await expect(operator).toHaveCount(2, {timeout: 20_000});
     await expect(operator.first().locator(".assistant-markdown ol > li")).toHaveCount(2);
+    await expect(operator.first().locator(".assistant-code-block code")).toHaveText('{"binding": "cross-image"}\n');
     const replacedGroup = page.locator(".chat-replaced-group").first();
     await expect(replacedGroup.locator("summary")).toContainText("2 replaced messages");
     await replacedGroup.locator("summary").click();

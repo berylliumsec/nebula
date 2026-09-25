@@ -60,7 +60,8 @@
   :root[data-theme] .sessions-page .chat-avatar { display: none; }
   :root[data-theme] .sessions-page .chat-message.operator { max-width: 86%; border-radius: 20px; }
   :root[data-theme] .sessions-page .assistant-code-block { border-radius: 14px; background: var(--surface); }
-  :root[data-theme] .sessions-page .assistant-code-block > header { min-height: 40px; border-bottom: 0; background: transparent; }
+  :root[data-theme] .sessions-page .assistant-code-block > header { min-height: 44px; border-bottom: 0; background: transparent; }
+  :root[data-theme] .sessions-page .assistant-code-block button { min-width: 44px; min-height: 44px; }
   :root[data-theme] .sessions-page .assistant-code-block pre { color: var(--text); background: transparent; }
   :root[data-theme] .sessions-page .assistant-markdown table { border-radius: 12px; }
   :root[data-theme] .sessions-page .chat-composer { width: calc(100% - 24px); margin: 6px 12px 10px; border-radius: 24px; }

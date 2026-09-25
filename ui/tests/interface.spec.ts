@@ -2772,11 +2772,28 @@ test("stabilization conversations sidebar icon reveals the left pane", async ({ 
   await page.screenshot({path: testInfo.outputPath("conversations-sidebar.png")});
 });
 
-reloadTest("assistant upgrade nests subagents beneath a collapsed main conversation", async ({ page }) => {
+reloadTest("assistant upgrade nests subagents beneath a collapsed main conversation", async ({ page }, testInfo) => {
   const parent = { ...entity, id: "sidebar-parent", engagement_id: "scratch-project", title: "Main investigation", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
   const childA = { ...entity, id: "sidebar-child-a", engagement_id: "scratch-project", title: "Subagent · API mapping", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "deepseek/deepseek-flash-latest-with-a-deliberately-long-provider-model-identifier", metadata: { subagent_id: "sub-a" } };
   const childB = { ...entity, id: "sidebar-child-b", engagement_id: "scratch-project", title: "Subagent · Edge review", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: { subagent_id: "sub-b" } };
-  const task = "Resolve `activate` at `0x100002580`.\n\nRequired work:\n1. Resolve the binding.\n2. Check every `memcpy` call.\n\nDeliverable: `projects/research/artifacts/evidence/" + "long_path_segment_".repeat(12) + "result.json`.";
+  const longCodeLine = "0x100002580: bl 0x100009a84  ".repeat(20);
+  const task = [
+    "Resolve `activate` at `0x100002580`.",
+    "",
+    "Required work:",
+    "1. Resolve the binding.",
+    "2. Check every `memcpy` call.",
+    "",
+    "```",
+    longCodeLine,
+    "```",
+    "",
+    "```json",
+    '{"binding": "cross-image"}',
+    "```",
+    "",
+    "Deliverable: `projects/research/artifacts/evidence/" + "long_path_segment_".repeat(12) + "result.json`.",
+  ].join("\n");
   const taskMessage = { ...entity, id: "sidebar-task", engagement_id: "scratch-project", session_id: childB.id, sequence: 1, role: "user", content: task, citations: [], metadata: {} };
   const branch = { ...entity, id: "sidebar-branch", engagement_id: "scratch-project", title: "Ordinary branch", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: {} };
   const items = [childA, branch, childB, parent];
@@ -2831,11 +2848,33 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
   await expect(renderedTask.locator("code")).toContainText(["activate", "0x100002580", "memcpy"]);
   await expect(renderedTask.locator("ol > li")).toHaveCount(2);
   await expect(renderedTask.locator("ol > li").first()).toContainText("Resolve the binding.");
+  const codeBlocks = renderedTask.locator(".assistant-code-block");
+  await expect(codeBlocks).toHaveCount(2);
+  await expect(codeBlocks.first().locator("code")).toHaveText(longCodeLine + "\n");
+  await expect(codeBlocks.nth(1).locator("code")).toHaveText('{"binding": "cross-image"}\n');
+  await expect(codeBlocks.first().locator("header > span")).toHaveText("code");
+  await expect(codeBlocks.nth(1).locator("header > span")).toHaveText("json");
+  await expect(codeBlocks.first().locator("header")).toHaveCSS("position", "static");
+  await expect(codeBlocks.first().locator("header")).toHaveCSS("opacity", "1");
+  const copyCode = codeBlocks.first().getByRole("button", { name: "Copy exact code" });
+  await expect(copyCode).toBeVisible();
+  if (mobile) {
+    const bounds = await copyCode.boundingBox();
+    expectTouchTarget(bounds?.width, "copy code width");
+    expectTouchTarget(bounds?.height, "copy code height");
+  }
+  expect(await codeBlocks.first().locator("pre").evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
+  expect(await page.locator(".chat-message.operator").first().evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  const betweenBlocks = await codeBlocks.evaluateAll(([first, second]) => second.getBoundingClientRect().top - first.getBoundingClientRect().bottom);
+  expect(betweenBlocks).toBeLessThan(40);
   await expect(page.locator(".chat-message.operator").getByRole("button", { name: /Run/ })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await codeBlocks.first().scrollIntoViewIfNeeded();
+  await page.screenshot({path: testInfo.outputPath("subagent-task-code.png")});
 
   await page.reload();
   await expect(page.locator(".chat-message.operator .assistant-markdown ol > li")).toHaveCount(2);
+  await expect(page.locator(".chat-message.operator .assistant-code-block")).toHaveCount(2);
   sidebar = await openSidebar();
   await expect(sidebar.locator('[data-session-id="sidebar-child-b"]')).toBeVisible();
   await expect(sidebar.getByRole("button", { name: "Collapse 2 subagents for Main investigation" })).toHaveAttribute("aria-expanded", "true");

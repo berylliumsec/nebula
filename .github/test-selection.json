@@ -1,19 +1,28 @@
 {
-  "change_digest": "4eeab83f7f71ba35b912ea8624334d9ed0213e2904ef9e7e9f27f55a52fbf2bc",
-  "reviewed_by": "Codex documentation review against current source and workflows",
-  "reason": "Documentation-only corrections to development and release commands, published-versus-source release notes, UI API paths, reviewed execution, focused CI coverage, and obsolete Homebrew and parity-backlog status. No application code, workflow, or test behavior changed. Local Markdown links and referenced paths, synchronized version metadata, and the diff-bound selection receipt provide the relevant checks.",
-  "exclusions": "Zero Python, frontend, native, and Playwright tests are selected because the diff changes only documentation and this selection record. Full suites, browser/device journeys, and package release gates are excluded; those commands are documented but no product behavior is changed or claimed verified here.",
+  "change_digest": "618ebfbcff85823c72a4f525f18dfe34edb7270fc9dfc8e81850ecd45eb69094",
+  "reviewed_by": "Codex focused review of deployed subagent transcript overflow and fenced-code rendering",
+  "reason": "The live service serves an older build than merged user-message Markdown. This diff scopes operator timestamp styling so it cannot hide nested code headers, removes extra Markdown block spacing, and gives mobile code controls usable touch size. Eight Markdown component cases check exact labeled/unlabeled code, copy, safety, and disabled user execution. The eight selected subagent browser profiles check code headers and controls, ordered text, long-path containment, internal code scrolling, spacing, navigation, and reload. One real-Core edit case checks fenced-code rendering, exact durable source, and reload.",
+  "exclusions": "No full-suite approval was given. Python and native code are unchanged. The browser matrix uses emulated mobile devices; no physical device is available. Formatting uses no origin-sensitive browser API, so real-Core persistence uses loopback. Unrelated chat features and backend suites are excluded.",
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
+    "frontend": 8,
     "native": 0,
-    "playwright": 0
+    "playwright": 9
   },
-  "python_versions": ["3.12"],
-  "python_browser": false,
-  "python_node": false,
   "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/assistantMarkdown.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:subagent-sidebar/desktop",
+    "entry:subagent-sidebar/compact",
+    "entry:subagent-sidebar/mobile-chromium-small",
+    "entry:subagent-sidebar/mobile-chromium-ledger-390",
+    "entry:subagent-sidebar/mobile-chromium-wide",
+    "entry:subagent-sidebar/mobile-webkit-small",
+    "entry:subagent-sidebar/mobile-webkit",
+    "entry:subagent-sidebar/mobile-webkit-wide",
+    "entry:chat-edit-in-place/assistant-real-desktop"
+  ]
 }
