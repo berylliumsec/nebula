@@ -3547,6 +3547,8 @@ class SubagentService:
             ConflictError
         ):  # diagnostic-expected: another worker took the turn over; its state stands
             return
+        # It failed while parked, so admission release never saw it end.
+        self.chat._settle_admission(latest.id)
         # Before the held reports post, so the note follows the message the
         # failed turn was answering.
         self.chat.record_turn_outcome(latest.id)

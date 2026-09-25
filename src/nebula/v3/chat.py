@@ -1892,6 +1892,8 @@ class ChatService:
                     stage="startup-recovery",
                 )
         await self.subagents.reconcile_after_restart(preserve_graceful=True)
+        # Before the restore, so no turn that already ended is restored.
+        await self._settle_ended_admissions()
         self._restore_queued_turns()
         self.reconcile_waiting_callbacks()
 
@@ -1929,6 +1931,42 @@ class ChatService:
             },
             expected_revision=goal.revision,
         )
+
+    async def _settle_ended_admissions(self) -> None:
+        """Close the admission of every turn that ended while queued or parked.
+
+        The scheduler reads only open admissions, filtered in SQL, off the
+        event loop. A failure leaves them for the next pass.
+        """
+
+        try:
+            await asyncio.to_thread(self.provider_scheduler.settle)
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.provider_queue.settle_failed",
+                "Admissions of ended provider turns could not be closed; the next pass retries.",
+                exc,
+                stage="provider-queue-recovery",
+            )
+
+    def _settle_admission(self, turn_id: str) -> None:
+        """Close an ended turn's queued or parked admission; never raises.
+
+        The turn has already ended, and a failure here only leaves the
+        admission to the periodic recovery pass.
+        """
+
+        try:
+            self.provider_scheduler.settle(turn_id)
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.provider_queue.settle_failed",
+                "An ended provider turn's admission could not be closed; the next recovery pass retries.",
+                exc,
+                stage="provider-queue-recovery",
+            )
 
     def _restore_queued_turns(self) -> None:
         """Start again what the previous Core accepted but never admitted.
@@ -3352,6 +3390,7 @@ class ChatService:
                 exc,
                 stage="tool-call-recovery",
             )
+        await self._settle_ended_admissions()
         try:
             await self.reconcile_idle_running_goals()
         except Exception as exc:
@@ -3871,6 +3910,9 @@ class ChatService:
                         expected_revision=latest.revision,
                     )
                     self._release_execution(prepared)
+                    # The admission was released first, and parked if the
+                    # turn was waiting then; the turn has ended since.
+                    self._settle_admission(latest.id)
                 # Before subagent reports held for this turn are posted, so
                 # the note follows the operator's message it answers.
                 self.record_turn_outcome(turn.id)
@@ -5192,6 +5234,8 @@ class ChatService:
             expected_revision=latest.revision,
         )
         self._release_execution(prepared)
+        # A turn that ended before it was admitted leaves a queued admission.
+        self._settle_admission(latest.id)
 
     async def complete(self, prepared: PreparedChat) -> ChatCompletionResponse:
         ended: tuple[BaseException, str, ChatTurnStatus]
@@ -10617,8 +10661,11 @@ class ChatService:
     ) -> ChatTurn:
         turn = self.store.get(ChatTurn, turn_id)
         if turn.status == ChatTurnStatus.COMPLETE:
+            self._settle_admission(turn.id)
             return turn
         if turn.status == ChatTurnStatus.CANCELLED:
+            # Also closes an admission an earlier stop left parked.
+            self._settle_admission(turn.id)
             self.record_turn_outcome(turn.id)
             self._pause_running_session_goal(
                 turn.session_id,
@@ -10700,6 +10747,9 @@ class ChatService:
                     },
                     expected_revision=goal.revision,
                 )
+        # A turn stopped while queued or parked (waiting for an approval or a
+        # callback, or interrupted) ends here, not in admission release.
+        self._settle_admission(cancelled.id)
         self.record_turn_outcome(cancelled.id)
         self._pause_running_session_goal(
             turn.session_id,

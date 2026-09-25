@@ -7,6 +7,8 @@ import base64
 from datetime import datetime, timezone
 from pathlib import Path
 from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
+from pydantic import ValidationError as PydanticValidationError
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -204,12 +206,28 @@ class CompanionBroker:
             )
             setattr(inline, "_nebula_before_execution", True)
             raise inline
-        Draft202012Validator(self.spec.input_schema).validate(invocation.arguments)
-        request = CompanionRequest.model_validate(invocation.arguments)
-        if request.capture_kind == "region" and not self.image_supported:
-            raise InvalidToolArguments(
-                "Ask the operator to select and attach a screenshot region."
-            )
+        try:
+            Draft202012Validator(self.spec.input_schema).validate(invocation.arguments)
+            try:
+                request = CompanionRequest.model_validate(invocation.arguments)
+            except PydanticValidationError as exc:
+                # diagnostic-expected: raised as the argument error it is. A
+                # value the schema cannot express (a NaN coordinate) is an
+                # argument to correct too, not a failed browser operation.
+                raise InvalidToolArguments(
+                    "Browser arguments do not match the browser request."
+                ) from exc
+            if request.capture_kind == "region" and not self.image_supported:
+                raise InvalidToolArguments(
+                    "Invalid value for capture_kind: ask the operator to select "
+                    "and attach a screenshot region."
+                )
+        except (ValidationError, InvalidToolArguments) as exc:
+            # diagnostic-expected: re-raised to the chat or mission tool loop,
+            # which reports it. Refused before the call is recorded, so
+            # nothing reached the browser.
+            setattr(exc, "_nebula_before_execution", True)
+            raise
         call = await self.ledger.reserve(invocation, self.spec)
         if call.status == ToolCallStatus.COMPLETE and isinstance(call.result, dict):
             return self.execution_result(call.result, invocation)

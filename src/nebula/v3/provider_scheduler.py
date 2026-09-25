@@ -8,11 +8,65 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, case, exists, func, or_, select, update
 
-from .database import ProviderTurnQueueRow
+from .database import EntityRow, ProviderTurnQueueRow
 from .domain import ChatTurn, ChatTurnStatus, utc_now
 from .storage import ConflictError, NebulaStore
+
+# A turn waiting in one of these states resumes through admission again, so
+# its admission stays parked until it does.
+_PARKED_TURN_STATUSES = (
+    ChatTurnStatus.WAITING_APPROVAL.value,
+    ChatTurnStatus.WAITING_CALLBACK.value,
+    ChatTurnStatus.INTERRUPTED.value,
+)
+# A turn in one of these states has ended; nothing admits it again.
+_ENDED_TURN_STATUSES = (
+    ChatTurnStatus.COMPLETE.value,
+    ChatTurnStatus.FAILED.value,
+    ChatTurnStatus.CANCELLED.value,
+)
+# Admission states a later turn event still has to close.
+_OPEN_ADMISSION_STATES = ("queued", "parked")
+
+
+def _turn_exists() -> ColumnElement[bool]:
+    return exists().where(
+        EntityRow.id == ProviderTurnQueueRow.turn_id,
+        EntityRow.kind == ChatTurn.entity_kind,
+    )
+
+
+def _turn_status() -> ColumnElement[str | None]:
+    """The admission's turn status, read in SQL: no record is validated."""
+
+    return (
+        select(EntityRow.payload["status"].as_string())
+        .where(
+            EntityRow.id == ProviderTurnQueueRow.turn_id,
+            EntityRow.kind == ChatTurn.entity_kind,
+        )
+        .scalar_subquery()
+    )
+
+
+def _released_state() -> ColumnElement[str]:
+    """The state an admission takes once provider work for its turn stops.
+
+    Parked while the turn can still resume through admission; otherwise
+    over, as cancelled when the turn was stopped or no longer exists.
+    """
+
+    status = _turn_status()
+    return case(
+        (status.in_(_PARKED_TURN_STATUSES), "parked"),
+        (
+            or_(~_turn_exists(), status == ChatTurnStatus.CANCELLED.value),
+            "cancelled",
+        ),
+        else_="complete",
+    )
 
 
 def _bounded_env(name: str, default: int, *, maximum: int = 32) -> int:
@@ -154,23 +208,23 @@ class ProviderScheduler:
 
     def _complete(self, turn_id: str) -> None:
         self._active.pop(turn_id, None)
-        turn = self.store.get(ChatTurn, turn_id)
+        # Read in SQL, so a turn that is gone or unreadable still frees the
+        # admission (and, in ProviderAdmission.release, its slots).
         with self.store.database.session() as session:
-            row = session.get(ProviderTurnQueueRow, turn_id)
-            if row is not None and row.state == "running":
-                row.state = (
-                    "parked"
-                    if turn.status
-                    in {
-                        ChatTurnStatus.WAITING_APPROVAL,
-                        ChatTurnStatus.WAITING_CALLBACK,
-                        ChatTurnStatus.INTERRUPTED,
-                    }
-                    else "complete"
+            session.execute(
+                update(ProviderTurnQueueRow)
+                .where(
+                    ProviderTurnQueueRow.turn_id == turn_id,
+                    ProviderTurnQueueRow.state == "running",
                 )
-                row.completed_at = utc_now()
-                row.lease_owner = None
-                row.lease_expires_at = None
+                .values(
+                    state=_released_state(),
+                    completed_at=utc_now(),
+                    lease_owner=None,
+                    lease_expires_at=None,
+                )
+                .execution_options(synchronize_session=False)
+            )
 
     def cancel(self, turn_id: str) -> None:
         with self.store.database.session() as session:
@@ -179,13 +233,69 @@ class ProviderScheduler:
                 row.state = "cancelled"
                 row.completed_at = utc_now()
 
+    def settle(self, turn_id: str | None = None) -> list[str]:
+        """Close queued or parked admissions whose turn ended or no longer exists.
+
+        Admission release settles a running admission; a turn that ends while
+        queued or parked (stopped, denied, or failed while it waited) ends
+        without the scheduler. Pass ``turn_id`` to close one turn's admission;
+        with none this closes every such admission, reading only open rows in
+        SQL. Admissions of turns that can still resume stay parked, and an
+        unreadable turn keeps its admission for a repaired record. Returns the
+        turns whose admission it closed; a second pass closes none.
+        """
+
+        ended = [
+            ProviderTurnQueueRow.state.in_(_OPEN_ADMISSION_STATES),
+            or_(~_turn_exists(), _turn_status().in_(_ENDED_TURN_STATUSES)),
+        ]
+        if turn_id is not None:
+            ended.append(ProviderTurnQueueRow.turn_id == turn_id)
+        with self.store.database.session() as session:
+            settled = list(
+                session.scalars(select(ProviderTurnQueueRow.turn_id).where(*ended))
+            )
+            if settled:
+                # The same conditions again, in the statement that writes: a
+                # turn resumed since the read keeps its new admission.
+                session.execute(
+                    update(ProviderTurnQueueRow)
+                    .where(ProviderTurnQueueRow.turn_id.in_(settled), *ended)
+                    .values(
+                        state=_released_state(),
+                        completed_at=func.coalesce(
+                            ProviderTurnQueueRow.completed_at, utc_now()
+                        ),
+                        lease_owner=None,
+                        lease_expires_at=None,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+        return settled
+
     def recover(self) -> list[str]:
         """Return queued turns and reset leases abandoned by a stopped Core."""
 
         with self.store.database.session() as session:
+            # ChatService startup owns the corresponding running-turn
+            # interruption. The admission only drops its stale lease, and
+            # stays parked if that left the turn resumable.
+            session.execute(
+                update(ProviderTurnQueueRow)
+                .where(ProviderTurnQueueRow.state == "running")
+                .values(
+                    state=_released_state(),
+                    completed_at=utc_now(),
+                    lease_owner=None,
+                    lease_expires_at=None,
+                )
+                .execution_options(synchronize_session=False)
+            )
             rows = list(
                 session.scalars(
-                    select(ProviderTurnQueueRow).order_by(
+                    select(ProviderTurnQueueRow)
+                    .where(ProviderTurnQueueRow.state == "queued")
+                    .order_by(
                         ProviderTurnQueueRow.accepted_at,
                         ProviderTurnQueueRow.turn_id,
                     )
@@ -193,21 +303,13 @@ class ProviderScheduler:
             )
             queued: list[str] = []
             for row in rows:
-                if row.state == "queued":
-                    expiry = row.lease_expires_at
-                    if expiry is not None and expiry.tzinfo is None:
-                        expiry = expiry.replace(tzinfo=utc_now().tzinfo)
-                    if expiry is not None and expiry <= utc_now():
-                        row.lease_owner = None
-                        row.lease_expires_at = None
-                    queued.append(row.turn_id)
-                elif row.state == "running":
-                    # ChatService startup owns the corresponding running-turn
-                    # interruption. The queue row only drops its stale lease.
-                    row.state = "complete"
-                    row.completed_at = utc_now()
+                expiry = row.lease_expires_at
+                if expiry is not None and expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=utc_now().tzinfo)
+                if expiry is not None and expiry <= utc_now():
                     row.lease_owner = None
                     row.lease_expires_at = None
+                queued.append(row.turn_id)
             return queued
 
     def position(self, turn_id: str) -> int | None:

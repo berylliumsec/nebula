@@ -53,6 +53,7 @@ from .storage import ConflictError, NebulaStore
 PROMPT_VERSION = "post-tool-analysis/v1"
 SOURCE_LIMIT = 32 * 1024
 OUTPUT_LIMIT = 64 * 1024
+_OUTPUT_EVENT_PAGE = 10_000
 
 
 def _json_object(text: str) -> str:
@@ -1209,17 +1210,17 @@ class ExecutionAIService:
         source_excerpt = bounded_excerpt(source, SOURCE_LIMIT, "source")
         output_parts: list[str] = []
         stream_parts: dict[str, list[str]] = {"stdout": [], "stderr": []}
-        offset = 0
+        # Only this execution's output events, in the order it wrote them, on
+        # the (operation_id, sequence) index: never the Project's whole log.
+        after_sequence = 0
         while True:
-            events = self.store.list_operation_events(
-                execution.engagement_id, offset=offset, limit=10_000
+            events = self.store.replay_operation_events(
+                execution.id,
+                after_sequence=after_sequence,
+                limit=_OUTPUT_EVENT_PAGE,
+                event_types=("execution.stdout", "execution.stderr"),
             )
             for event in events:
-                if event.operation_id != execution.id or event.event_type not in {
-                    "execution.stdout",
-                    "execution.stderr",
-                }:
-                    continue
                 text = event.payload.get("text")
                 if isinstance(text, str) and text:
                     stream = (
@@ -1228,9 +1229,9 @@ class ExecutionAIService:
                     clean = redacted_display(text)
                     stream_parts[stream].append(clean)
                     output_parts.append(f"[{stream}] {clean}")
-            if len(events) < 10_000:
+            if len(events) < _OUTPUT_EVENT_PAGE:
                 break
-            offset += len(events)
+            after_sequence = events[-1].sequence
         if not output_parts:
             for stream, artifact_id in (
                 ("stdout", execution.redacted_stdout_artifact_id),
