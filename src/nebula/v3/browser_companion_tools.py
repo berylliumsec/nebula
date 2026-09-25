@@ -11,7 +11,11 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from .application_model.workflow import BROWSER_MODEL_WORKFLOW
-from .browser_companion import BrowserCompanion, CompanionRequest
+from .browser_companion import (
+    AssistantControlPaused,
+    BrowserCompanion,
+    CompanionRequest,
+)
 from .artifacts import ArtifactStore
 from .browser_engine import BrowserEngineRegistry
 from .domain import (
@@ -35,6 +39,26 @@ from .tools import (
     ToolExecutionResult,
     ToolSpec,
 )
+
+
+# Operations that change the page: each is proposed for the operator's inline
+# approval unless the project policy approves scoped changes.
+PROPOSED_OPERATIONS = frozenset({"click", "fill", "select", "press", "upload"})
+
+
+def _paused_denial(reason: str) -> PolicyDenied:
+    """The operator withheld control: a denial to ask about, not an argument to
+    correct, and refused before the browser acted."""
+
+    denial = PolicyDenied(
+        PolicyDecision(
+            effect=PolicyEffect.DENY,
+            reason=reason,
+            rule="browser_companion_paused",
+        )
+    )
+    setattr(denial, "_nebula_before_execution", True)
+    return denial
 
 
 def model_browser_result(value: Any) -> Any:
@@ -165,21 +189,21 @@ class CompanionBroker:
             setattr(detached, "_nebula_before_execution", True)
             raise detached
         if session.metadata.get("assistant_paused", True):
-            # The operator withheld control: a denial to ask about, not an
-            # argument to correct, and refused before anything runs.
-            paused = PolicyDenied(
+            raise _paused_denial(
+                "Browser control is paused. Ask the operator to resume it beside the page."
+            )
+        if approval is not None:
+            # Browser changes are approved only in the browser's inline panel,
+            # so a Nebula approval grants nothing here, and nothing has run.
+            inline = PolicyDenied(
                 PolicyDecision(
                     effect=PolicyEffect.DENY,
-                    reason="Browser control is paused. Ask the operator to resume it beside the page.",
-                    rule="browser_companion_paused",
+                    reason="Review browser actions in the browser's inline approval panel.",
+                    rule="browser_companion_inline_approval",
                 )
             )
-            setattr(paused, "_nebula_before_execution", True)
-            raise paused
-        if approval is not None:
-            raise InvalidToolArguments(
-                "Review browser actions in the browser's inline approval panel."
-            )
+            setattr(inline, "_nebula_before_execution", True)
+            raise inline
         Draft202012Validator(self.spec.input_schema).validate(invocation.arguments)
         request = CompanionRequest.model_validate(invocation.arguments)
         if request.capture_kind == "region" and not self.image_supported:
@@ -193,49 +217,42 @@ class CompanionBroker:
             raise AmbiguousToolState(
                 "A previous browser operation will not be replayed automatically."
             )
+        proposal = request.operation in PROPOSED_OPERATIONS
+        if proposal:
+            # A change is checked against fresh page context and the operator's
+            # control before the call is marked running: a refusal here ran
+            # nothing, and says so.
+            try:
+                await self._check_proposal(request, invocation)
+            except asyncio.CancelledError:
+                await self.ledger.transition(
+                    call,
+                    ToolCallStatus.CANCELLED,
+                    error="Browser request cancelled before the change was proposed.",
+                )
+                raise
+            except Exception as exc:
+                refused = (
+                    _paused_denial(str(exc))
+                    if isinstance(exc, AssistantControlPaused)
+                    else exc
+                )
+                setattr(refused, "_nebula_before_execution", True)
+                await self.ledger.transition(
+                    call,
+                    ToolCallStatus.DENIED
+                    if isinstance(refused, PolicyDenied)
+                    else ToolCallStatus.FAILED,
+                    error=refused.decision.reason
+                    if isinstance(refused, PolicyDenied)
+                    else "Browser operation failed. Refresh page context before retrying.",
+                )
+                if refused is exc:
+                    raise
+                raise refused from exc
         running = await self.ledger.transition(call, ToolCallStatus.RUNNING)
         try:
-            if request.operation in {"click", "fill", "select", "press", "upload"}:
-                current = await self.service.request(
-                    self.session_id,
-                    CompanionRequest(operation="capture", tab_id=request.tab_id),
-                    assistant=True,
-                    chat_turn_id=invocation.chat_turn_id,
-                )
-                if request.page_revision != current["page_revision"]:
-                    raise InvalidToolArguments(
-                        "The page changed. Capture fresh context before proposing a change."
-                    )
-                element = next(
-                    (
-                        item
-                        for item in current["elements"]
-                        if item["id"] == request.element_id
-                    ),
-                    None,
-                )
-                protected_fill = bool(
-                    request.operation == "fill"
-                    and request.credential_ref
-                    and not request.text
-                    and any(
-                        item["reference"] == request.credential_ref
-                        and item["available"]
-                        for item in self.service.credential_catalog(self.session_id)
-                    )
-                )
-                if element is None or (element["sensitive"] and not protected_fill):
-                    raise InvalidToolArguments(
-                        "Select a current page control. Sensitive fields require an available browser credential_ref; ask the operator to save one beside the page."
-                    )
-                if request.credential_ref and not protected_fill:
-                    raise InvalidToolArguments(
-                        "Protected fills require an available browser credential_ref and no plain text."
-                    )
-                if request.operation == "upload" and element["type"] != "file":
-                    raise InvalidToolArguments(
-                        "Choose a file input from fresh page context."
-                    )
+            if proposal:
                 result = self.service.propose(
                     self.session_id, request, chat_turn_id=invocation.chat_turn_id
                 )
@@ -314,6 +331,14 @@ class CompanionBroker:
                 error="Browser request cancelled. An already executing action may have completed; inspect the page before retrying.",
             )
             raise
+        except AssistantControlPaused as exc:
+            # The operator paused control after the call started; Core refused
+            # before the browser acted.
+            denial = _paused_denial(str(exc))
+            await self.ledger.transition(
+                running, ToolCallStatus.DENIED, error=denial.decision.reason
+            )
+            raise denial from exc
         except Exception:
             await self.ledger.transition(
                 running,
@@ -323,6 +348,45 @@ class CompanionBroker:
             raise
         await self.ledger.transition(running, ToolCallStatus.COMPLETE, result=output)
         return self.execution_result(output, invocation)
+
+    async def _check_proposal(self, request: CompanionRequest, invocation: Any) -> None:
+        """Refuse a change the current page or the operator's control rules out."""
+
+        current = await self.service.request(
+            self.session_id,
+            CompanionRequest(operation="capture", tab_id=request.tab_id),
+            assistant=True,
+            chat_turn_id=invocation.chat_turn_id,
+        )
+        if request.page_revision != current["page_revision"]:
+            raise InvalidToolArguments(
+                "The page changed. Capture fresh context before proposing a change."
+            )
+        element = next(
+            (item for item in current["elements"] if item["id"] == request.element_id),
+            None,
+        )
+        protected_fill = bool(
+            request.operation == "fill"
+            and request.credential_ref
+            and not request.text
+            and any(
+                item["reference"] == request.credential_ref and item["available"]
+                for item in self.service.credential_catalog(self.session_id)
+            )
+        )
+        if element is None or (element["sensitive"] and not protected_fill):
+            raise InvalidToolArguments(
+                "Select a current page control. Sensitive fields require an available browser credential_ref; ask the operator to save one beside the page."
+            )
+        if request.credential_ref and not protected_fill:
+            raise InvalidToolArguments(
+                "Protected fills require an available browser credential_ref and no plain text."
+            )
+        if request.operation == "upload" and element["type"] != "file":
+            raise InvalidToolArguments("Choose a file input from fresh page context.")
+        # The operator may have paused control while the page was read.
+        self.service.require_assistant_control(self.session_id)
 
     def execution_result(
         self, output: dict[str, Any], invocation: Any

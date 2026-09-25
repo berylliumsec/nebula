@@ -1072,16 +1072,6 @@ class AutomationRuntimeManager:
                 stage="capture-cleanup",
             )
 
-    def _all_entities(self, model: type[Any]) -> list[Any]:
-        entities: list[Any] = []
-        offset = 0
-        while True:
-            page = self.store.list_entities(model, offset=offset, limit=1_000)
-            entities.extend(page)
-            if len(page) < 1_000:
-                return entities
-            offset += len(page)
-
     async def _cleanup_orphan_session(self, session: AutomationSession) -> str:
         try:
             profile = self.store.get(StoredRunnerProfile, session.runner_profile_id)
@@ -1802,12 +1792,14 @@ class AutomationRuntimeManager:
         return await self._poll(managed, process, request.max_bytes)
 
     def list_processes(self, session_id: str) -> list[CommandExecution]:
-        self.store.get(AutomationSession, session_id)
-        return [
-            item
-            for item in self._all_entities(CommandExecution)
-            if item.session_id == session_id
-        ]
+        session = self.store.get(AutomationSession, session_id)
+        # Filtered in SQL within the session's project, oldest first, so the
+        # read does not load every command Core has ever run.
+        return self.store.find_entities(
+            CommandExecution,
+            {"session_id": session_id},
+            engagement_id=session.engagement_id,
+        )
 
     async def close_session(self, session_id: str) -> AutomationSession:
         managed = self._sessions.get(session_id)

@@ -38,7 +38,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from .database import (
     ChatTurnCheckpointRow,
@@ -2175,6 +2175,51 @@ class NebulaStore:
         )
         with self.database.session() as session:
             return int(session.scalar(statement) or 0)
+
+    def unsettled_operation_events(
+        self, operation_kind: str, settled_event_type: str
+    ) -> list[OperationEvent]:
+        """Return the newest event of each unsettled ``operation_kind`` operation.
+
+        An operation is unsettled until it records a ``settled_event_type``
+        event. Startup recovery needs only these, so the query reads each
+        operation's newest sequence from the ``(operation_id, sequence)``
+        index and looks up that one row, instead of loading every event of
+        every project. Rows come back by project, then operation.
+        """
+
+        latest = (
+            select(
+                OperationEventRow.operation_id,
+                func.max(OperationEventRow.sequence).label("sequence"),
+            )
+            .group_by(OperationEventRow.operation_id)
+            .subquery()
+        )
+        settled = aliased(OperationEventRow)
+        statement = (
+            select(OperationEventRow)
+            .join(
+                latest,
+                and_(
+                    OperationEventRow.operation_id == latest.c.operation_id,
+                    OperationEventRow.sequence == latest.c.sequence,
+                ),
+            )
+            .where(
+                OperationEventRow.operation_kind == operation_kind,
+                ~exists().where(
+                    settled.operation_id == OperationEventRow.operation_id,
+                    settled.event_type == settled_event_type,
+                ),
+            )
+            .order_by(OperationEventRow.engagement_id, OperationEventRow.operation_id)
+        )
+        with self.database.session() as session:
+            return [
+                self._row_to_operation_event(row)
+                for row in session.scalars(statement).all()
+            ]
 
     def list_operation_events(
         self, engagement_id: str, *, offset: int = 0, limit: int = 1000

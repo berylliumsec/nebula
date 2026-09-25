@@ -592,6 +592,124 @@ async def test_public_ip_polls_share_one_container_read_for_a_short_window(
 
 
 @async_test
+async def test_startup_settles_only_unsettled_terminals_without_reading_history(
+    tmp_path, monkeypatch
+):
+    """Startup recovery reads the sessions it settles, not the event history.
+
+    It read every operation event of every project to find the few terminal
+    sessions that never ended, so its cost grew with history: the live
+    database holds ~391k events, almost all of them harness turn events.
+    """
+
+    from sqlalchemy import event as orm_event
+
+    from nebula.v3.database import OperationEventRow
+    from nebula.v3.domain import OperationEvent
+
+    store, engagement, _policy, _runner, _platform, service = fixture(tmp_path)
+    other = store.create(Engagement(name="Unreadable project"))
+
+    def record(operation_id, event_type, project=engagement.id, **options):
+        return store.append_operation_event(
+            operation_id,
+            "container_terminal",
+            project,
+            event_type,
+            {"status": event_type.rsplit(".", 1)[-1]},
+            **options,
+        )
+
+    # Event history recovery has no use for, in the same project.
+    with store.database.session() as session:
+        session.add_all(
+            OperationEventRow(
+                **OperationEvent(
+                    operation_id="harness-turn",
+                    operation_kind="harness_turn",
+                    engagement_id=engagement.id,
+                    sequence=sequence,
+                    event_type="harness.delta",
+                    payload={"text": "x" * 256},
+                ).model_dump(mode="python")
+            )
+            for sequence in range(1, 2_001)
+        )
+    record("interrupted", "container_terminal.pending", actor_id="operator-1")
+    record("interrupted", "container_terminal.running", actor_id="operator-2")
+    record("ended", "container_terminal.pending", actor_id="operator-1")
+    record(
+        "ended",
+        "container_terminal.terminal",
+        actor_id="operator-1",
+        idempotency_key="container-terminal:ended:terminal",
+    )
+    # A spool that failed to persist while the session ran is recovered at the
+    # next start, after the session's terminal event. The session stays ended.
+    record("ended-then-recovered", "container_terminal.pending", actor_id="operator-1")
+    record(
+        "ended-then-recovered",
+        "container_terminal.terminal",
+        actor_id="operator-1",
+        idempotency_key="container-terminal:ended-then-recovered:terminal",
+    )
+    record("ended-then-recovered", "container_terminal.command", actor_id="operator-1")
+    record("elsewhere", "container_terminal.running", project=other.id, actor_id="op")
+    with store.database.engine.begin() as connection:
+        connection.exec_driver_sql(
+            "UPDATE entities SET payload = json_set(payload, '$.revision', 0) "
+            "WHERE id = ?",
+            (other.id,),
+        )
+
+    def unbounded(*_args, **_kwargs):
+        raise AssertionError("startup recovery paged through every project event")
+
+    monkeypatch.setattr(store, "list_operation_events", unbounded)
+    loaded: list[str] = []
+
+    def count(target, _context):
+        loaded.append(target.operation_id)
+
+    orm_event.listen(OperationEventRow, "load", count)
+    try:
+        await service.startup()
+    finally:
+        orm_event.remove(OperationEventRow, "load", count)
+
+    # Only the unsettled sessions' newest events are loaded.
+    assert sorted(loaded) == ["elsewhere", "interrupted"]
+    interrupted = store.replay_operation_events("interrupted")
+    assert [item.event_type for item in interrupted] == [
+        "container_terminal.pending",
+        "container_terminal.running",
+        "container_terminal.terminal",
+    ]
+    assert interrupted[-1].payload["status"] == "interrupted"
+    assert interrupted[-1].actor_id == "operator-2"
+    assert [item.event_type for item in store.replay_operation_events("ended")] == [
+        "container_terminal.pending",
+        "container_terminal.terminal",
+    ]
+    assert [
+        item.event_type
+        for item in store.replay_operation_events("ended-then-recovered")
+    ] == [
+        "container_terminal.pending",
+        "container_terminal.terminal",
+        "container_terminal.command",
+    ]
+    # An unreadable project is skipped, as before.
+    assert [item.event_type for item in store.replay_operation_events("elsewhere")] == [
+        "container_terminal.running"
+    ]
+
+    # A second start finds nothing left to settle.
+    await service.startup()
+    assert len(store.replay_operation_events("interrupted")) == 3
+
+
+@async_test
 async def test_reviewed_terminal_uses_only_the_fixed_container_shell(tmp_path):
     store, engagement, _policy, runner, platform, service = fixture(tmp_path)
     store.append_operation_event(

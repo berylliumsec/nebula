@@ -3429,6 +3429,127 @@ def test_browser_gateway_refuses_paused_control_as_a_denial_before_execution(
     asyncio.run(scenario())
 
 
+def test_browser_gateway_refuses_a_change_paused_while_its_page_is_read(
+    tmp_path, monkeypatch
+):
+    """Control paused during the change's page check is a denial; nothing ran.
+
+    The paused check fired after the call was marked running, so the harness
+    read an execution failure with unknown side effects.
+    """
+
+    import httpx
+
+    from nebula.v3.browser_companion import BrowserCompanion
+    from nebula.v3.browser_engine import BrowserEngineRegistry
+    from nebula.v3.browser_security import BrowserSecurityService
+    from nebula.v3.domain import CompanionAction, ToolCall as PersistedToolCall
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        scope = store.create(ScopePolicy(engagement_id=engagement.id))
+        engagement = store.update(
+            Engagement,
+            engagement.id,
+            {"scope_policy_id": scope.id},
+            expected_revision=engagement.revision,
+        )
+        chat, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Attached browser",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        identity = store.create(
+            BrowserIdentity(engagement_id=engagement.id, name="Browser")
+        )
+        browser = store.create(
+            BrowserSession(
+                engagement_id=engagement.id,
+                identity_id=identity.id,
+                name="Browser",
+                metadata={
+                    "browser_companion_version": 1,
+                    "conversation_id": chat.id,
+                    "assistant_paused": False,
+                },
+            )
+        )
+        session = store.get(HarnessSession, turn.harness_session_id)
+        session = store.update(
+            HarnessSession,
+            session.id,
+            {
+                "metadata": {
+                    **session.metadata,
+                    "browser_companion_session_id": browser.id,
+                }
+            },
+        )
+        sent: list[str] = []
+
+        class Adapter:
+            async def _request(self, method, path, payload):
+                sent.append(payload["operation"])
+                if payload["operation"] == "capture":
+                    # The operator pauses control while Core reads the page.
+                    BrowserCompanion(store, BrowserEngineRegistry()).takeover(
+                        browser.id, True
+                    )
+                return httpx.Response(
+                    200,
+                    request=httpx.Request(method, "http://fixture.test" + path),
+                    json={
+                        "tabs": [
+                            {"id": "tab", "title": "Page", "url": "https://x.test/"}
+                        ]
+                    }
+                    if payload["operation"] == "tabs"
+                    else {
+                        "page_revision": "page-1",
+                        "elements": [{"id": "0", "sensitive": False}],
+                    },
+                )
+
+        async def adapter(_self):
+            return Adapter()
+
+        monkeypatch.setattr(BrowserCompanion, "adapter", adapter)
+        monkeypatch.setattr(
+            BrowserSecurityService, "_require_in_scope", lambda *_: None
+        )
+        monkeypatch.setattr(runtime, "_active_gateway_turn", lambda _: turn)
+        response = await runtime._gateway_call(
+            session,
+            "browser.companion",
+            {
+                "operation": "click",
+                "tab_id": "tab",
+                "page_revision": "page-1",
+                "element_id": "0",
+                "url": "https://x.test/",
+            },
+        )
+        assert response["isError"] is True
+        failure = response["structuredContent"]
+        assert failure["schema"] == "nebula.tool-failure/v1"
+        assert failure["category"] == "permission_denied"
+        assert failure["side_effects"] == "none"
+        assert failure["retry_safe"] is False
+        # Only the page was read; no change was proposed, and the call was
+        # refused before it was marked running.
+        assert sent == ["tabs", "capture"]
+        assert store.list_entities(CompanionAction) == []
+        [call] = store.list_entities(PersistedToolCall)
+        assert call.status == ToolCallStatus.DENIED
+        assert call.started_at is None
+
+    asyncio.run(scenario())
+
+
 def test_connection_failure_is_reported_and_releases_the_session(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)
