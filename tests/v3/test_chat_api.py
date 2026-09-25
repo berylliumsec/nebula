@@ -135,6 +135,8 @@ def test_provider_chat_keeps_running_after_the_viewer_detaches(tmp_path):
         )
         turn_id = service.start_provider_turn(prepared)
         follower = service.follow_provider_turn(turn_id)
+        assert (await anext(follower))[0] == "queued"
+        assert (await anext(follower))[0] == "admitted"
         assert (await anext(follower))[0] == "started"
         assert (await anext(follower))[0] == "delta"
         await follower.aclose()
@@ -187,6 +189,8 @@ def test_stopping_provider_chat_cancels_the_core_owned_turn(tmp_path):
         )
         turn_id = service.start_provider_turn(prepared)
         follower = service.follow_provider_turn(turn_id)
+        assert (await anext(follower))[0] == "queued"
+        assert (await anext(follower))[0] == "admitted"
         assert (await anext(follower))[0] == "started"
         assert (await anext(follower))[0] == "delta"
 
@@ -234,7 +238,13 @@ def test_completed_provider_events_wait_for_a_late_follower(tmp_path):
 
         events = [event async for event in service.follow_provider_turn(turn_id)]
 
-        assert [event for event, _ in events] == ["started", "delta", "done"]
+        assert [event for event, _ in events] == [
+            "queued",
+            "admitted",
+            "started",
+            "delta",
+            "done",
+        ]
         assert turn_id not in service._active_provider_turns
         await service.shutdown()
 
@@ -1369,6 +1379,8 @@ def test_stopping_provider_chat_ends_followers_with_a_cancelled_event(tmp_path):
         )
         turn_id = service.start_provider_turn(prepared)
         follower = service.follow_provider_turn(turn_id)
+        assert (await anext(follower))[0] == "queued"
+        assert (await anext(follower))[0] == "admitted"
         assert (await anext(follower))[0] == "started"
         assert (await anext(follower))[0] == "delta"
 
@@ -1385,7 +1397,8 @@ def test_stopping_provider_chat_ends_followers_with_a_cancelled_event(tmp_path):
             "type": "cancelled",
             "turn_id": turn_id,
             "detail": "response stopped",
-            "sequence": 3,
+            # After queued, admitted, started and delta.
+            "sequence": 5,
         }
         assert store.get(ChatTurn, turn_id).status.value == "cancelled"
         await service.shutdown()

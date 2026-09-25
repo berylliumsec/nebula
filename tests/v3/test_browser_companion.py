@@ -552,6 +552,7 @@ def test_screenshot_tool_persists_owned_image_and_replays_without_recapture(
     from nebula.v3.artifacts import ArtifactStore
     from nebula.v3.browser_companion_tools import CompanionBroker
     from nebula.v3.chat import ChatService
+    from nebula.v3.chat_turn_ledger import turn_history
     from nebula.v3.domain import ChatTurn, ToolCallOrigin, ScopePolicy
     from nebula.v3.providers import ModelRequest
     from nebula.v3.tools import ToolInvocation
@@ -626,7 +627,11 @@ def test_screenshot_tool_persists_owned_image_and_replays_without_recapture(
             model_request=ModelRequest(model="fixture", messages=[]),
             provider_profile=SimpleNamespace(capabilities=SimpleNamespace(vision=True)),
         )
-        owner = SimpleNamespace(store=store, artifact_store=artifacts)
+        owner = SimpleNamespace(
+            store=store,
+            artifact_store=artifacts,
+            _turn_history=lambda item: turn_history(store.database, item),
+        )
         call_id, parts = ChatService._browser_screenshot(owner, prepared, turn)
         assert call_id == "call-1"
         assert parts[1]["data"] == image_data

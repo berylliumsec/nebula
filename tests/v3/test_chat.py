@@ -134,6 +134,27 @@ class WaitingRecoveryProvider(FakeProvider):
         await asyncio.Event().wait()
 
 
+async def _admitted_stream(service: ChatService, prepared):
+    """Stream a prepared turn once provider admission ran, as Core's producer does.
+
+    A new durable turn is queued until the provider scheduler admits it, and
+    ``ChatService.stream`` runs only an admitted turn.
+    """
+
+    admission = None
+    turn = prepared.turn
+    if turn is not None and turn.status == ChatTurnStatus.QUEUED:
+        service.provider_scheduler.enqueue(turn)
+        admission = await service.provider_scheduler.admit(turn.id)
+        prepared.turn = service.store.get(ChatTurn, turn.id)
+    try:
+        async for item in service.stream(prepared):
+            yield item
+    finally:
+        if admission is not None and turn is not None:
+            await admission.release(turn.id)
+
+
 class CountingRecoveryProvider(FakeProvider):
     def __init__(self, provider_id: str) -> None:
         super().__init__(provider_id, local=True)
@@ -398,7 +419,7 @@ def test_confirmed_context_rejection_refreshes_compacts_and_retries_once(
     )
 
     async def collect_stream():
-        return [item async for item in service.stream(prepared)]
+        return [item async for item in _admitted_stream(service, prepared)]
 
     if reject_attempts == 2:
         with pytest.raises(ChatConfigurationError, match="compacted request context"):
@@ -1455,13 +1476,118 @@ def test_restart_projects_late_recorded_tool_result_once(
     ]
     assert recovered.next_step == 1
     assert recovered.execution_tool_calls == 1
+    # A turn from before the ledger keeps its compatibility projection too.
     assert recovered.tool_call_ids == [call.id]
     assert len(recovered.tool_history) == 1
-    assert recovered.tool_history[0]["response_group"] == "group-late"
-    assert recovered.tool_history[0]["status"] == call_status.value
-    assert json.loads(recovered.tool_history[0]["provider_result"]) == receipt
+    history = service._turn_history(recovered)
+    assert len(history) == 1
+    assert history[0]["response_group"] == "group-late"
+    assert history[0]["status"] == call_status.value
+    assert json.loads(history[0]["provider_result"]) == receipt
+    assert service._turn_tool_call_ids(recovered) == [call.id]
     assert service.pending_turn(session.id).revision == recovered.revision
     assert store.get(ToolCall, call.id).revision == call.revision + 1
+
+
+def test_restart_adopts_late_receipt_into_the_ledger_the_provider_replays(tmp_path):
+    store = NebulaStore(tmp_path / "chat-late-ledger-result.db")
+    engagement = store.create(Engagement(id="eng-ledger", name="Late result"))
+    profile = store.create(_profile(local=True))
+    session = store.create(
+        ChatSession(
+            id="session-ledger",
+            engagement_id=engagement.id,
+            title="Late result",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    turn = store.create(
+        ChatTurn(
+            id="turn-ledger",
+            engagement_id=engagement.id,
+            session_id=session.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+            tools_enabled=True,
+            queued_at=utc_now(),
+        )
+    )
+    intent = {
+        "step": 0,
+        "model_call_id": "provider-call-ledger",
+        "tool_call_id": "tool-ledger",
+        "name": "run_command",
+        "arguments": {"command": "true"},
+        "budget_class": "execution",
+    }
+    service = ChatService(store)
+    # The broker path records the running intent before the effect runs.
+    service.turn_ledger.append(
+        turn.id,
+        {**intent, "status": "running"},
+        idempotency_key="intent:0:provider-call-ledger",
+        event_type="started",
+    )
+    call = store.create(
+        ToolCall(
+            id="tool-ledger",
+            engagement_id=engagement.id,
+            run_id=turn.id,
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id=session.id,
+            chat_turn_id=turn.id,
+            tool_name="run_command",
+            arguments=intent["arguments"],
+            status=ToolCallStatus.RUNNING,
+            risk_class=RiskClass.LOCAL_READ,
+            metadata={
+                "provider_call_id": intent["model_call_id"],
+                "provider_step": 0,
+                "budget_class": "execution",
+                "provider_history_intent": intent,
+            },
+        )
+    )
+    asyncio.run(service.startup())
+    receipt = ToolResultReceipt(
+        tool_call_id=call.id,
+        tool_name=call.tool_name,
+        tool_version="test",
+        status=ToolResultStatus.COMPLETED,
+        summary="Saved after the turn was interrupted",
+    ).as_model_result()
+    store.update(
+        ToolCall,
+        call.id,
+        {
+            "status": ToolCallStatus.COMPLETE,
+            "result": receipt,
+            "completed_at": utc_now(),
+        },
+        expected_revision=call.revision,
+    )
+
+    recovered = service.pending_turn(session.id)
+    assert recovered is not None
+    assert recovered.request_snapshot["recovery"]["recorded_tool_result_ids"] == [
+        call.id
+    ]
+    (step,) = service._turn_history(recovered)
+    assert step["status"] == "complete"
+    assert step["recovered_from_recorded_result"] is True
+    assert json.loads(step["provider_result"]) == receipt
+    assert recovered.ledger_sequence >= 2
+    # The resumed model sees the call and its saved result.
+    (replayed,) = service._provider_tool_history(recovered)
+    assert replayed.call_id == "provider-call-ledger"
+    # A new ledger turn gains no compatibility projection.
+    assert recovered.tool_history == []
+    # Read repair is idempotent: a second read adds no ledger row.
+    again = service.pending_turn(session.id)
+    assert again is not None and again.revision == recovered.revision
+    assert len(service.turn_ledger._rows(turn.id)) == 2
 
 
 def test_restart_keeps_untrusted_terminal_result_for_operator_review(tmp_path):
@@ -2179,6 +2305,10 @@ def test_provider_turn_and_goal_have_one_durable_worker_owner(tmp_path):
             stream=True,
         )
     )
+    # Worker one admits the queued turn, then claims it.
+    first.provider_scheduler.enqueue(prepared.turn)
+    asyncio.run(first.provider_scheduler.admit(prepared.turn.id))
+    prepared.turn = store.get(ChatTurn, prepared.turn.id)
 
     first._claim_execution(prepared)
 
@@ -2925,7 +3055,7 @@ def test_long_durable_chat_uses_a_bounded_user_led_model_context(tmp_path, monke
     ]
 
     async def collect_stream():
-        return [item async for item in ChatService(store).stream(streamed)]
+        return [item async for item in _admitted_stream(ChatService(store), streamed)]
 
     stream_events = asyncio.run(collect_stream())
     done = next(payload for name, payload in stream_events if name == "done")
@@ -3475,7 +3605,7 @@ def test_provider_settings_change_preserves_chat_and_history(
         )
         prepared = await service.prepare_async(request)
         if stream:
-            events = [event async for event in service.stream(prepared)]
+            events = [event async for event in _admitted_stream(service, prepared)]
             assert events
         else:
             await service.complete(prepared)
@@ -3583,7 +3713,7 @@ def test_retryable_stream_error_surfaces_as_a_provider_overload(tmp_path):
         # The API labels a ProviderError retryable and attributes it to the
         # provider; a ChatError would blame chat and forbid a retry.
         with pytest.raises(ProviderOverloadedError, match="overloaded"):
-            [event async for event in service.stream(prepared)]
+            [event async for event in _admitted_stream(service, prepared)]
 
     asyncio.run(scenario())
 
@@ -3606,7 +3736,7 @@ def _plain_stream(tmp_path, provider_class, name: str):
                 stream=True,
             )
         )
-        events = [event async for event in service.stream(prepared)]
+        events = [event async for event in _admitted_stream(service, prepared)]
         return events, store.get(ChatTurn, prepared.turn.id), provider
 
     return asyncio.run(scenario())
@@ -3789,6 +3919,8 @@ def test_core_shutdown_leaves_an_inflight_provider_turn_recoverable(tmp_path):
         )
         turn_id = service.start_provider_turn(prepared)
         follower = service.follow_provider_turn(turn_id)
+        assert (await anext(follower))[0] == "queued"
+        assert (await anext(follower))[0] == "admitted"
         assert (await anext(follower))[0] == "started"
         assert (await anext(follower))[0] == "delta"
         await asyncio.wait_for(provider.started.wait(), 2)
@@ -3926,12 +4058,21 @@ def test_core_update_auto_resumes_safe_supervisor_with_saved_thinking(
             assert (
                 resumed_turn.request_snapshot["recovery"]["unknown_tool_call_ids"] == []
             )
-            assert resumed_turn.tool_history[0]["tool_call_id"] == "late-safe-tool"
+            assert (
+                service._turn_history(resumed_turn)[0]["tool_call_id"]
+                == "late-safe-tool"
+            )
         follower = service.follow_provider_turn(turn.id)
-        events = [await asyncio.wait_for(anext(follower), 2) for _ in range(3)]
-        assert [event for event, _ in events] == ["started", "reasoning_delta", "delta"]
-        assert events[1][1]["delta"] == turn.reasoning
-        assert events[2][1]["delta"] == turn.content
+        events = [await asyncio.wait_for(anext(follower), 2) for _ in range(5)]
+        assert [event for event, _ in events] == [
+            "queued",
+            "admitted",
+            "started",
+            "reasoning_delta",
+            "delta",
+        ]
+        assert events[3][1]["delta"] == turn.reasoning
+        assert events[4][1]["delta"] == turn.content
         await follower.aclose()
         await service.shutdown()
 
@@ -4119,6 +4260,78 @@ def test_core_restart_recovery_bounds_concurrent_provider_turns(tmp_path):
         await service.stop_provider_turn(resumed[0])
         await provider.wait_until_started(4)
         assert provider.active == 2
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_recovered_turns_waiting_for_recovery_capacity_hold_no_provider_slot(
+    tmp_path, monkeypatch
+):
+    """Automatic recovery never starves an operator turn of provider capacity."""
+
+    monkeypatch.setenv("NEBULA_PROVIDER_CONCURRENCY", "3")
+    monkeypatch.setenv("NEBULA_BACKGROUND_CONCURRENCY", "3")
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "recovery-capacity.db")
+        engagement = store.create(Engagement(name="Recovery capacity"))
+        profile = store.create(_profile(local=True))
+        provider = CountingRecoveryProvider(profile.id)
+        service = ChatService(store, provider_factory=lambda _: provider)
+        for index in range(4):
+            session = store.create(
+                ChatSession(
+                    engagement_id=engagement.id,
+                    title=f"Recovered conversation {index}",
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                )
+            )
+            store.create(
+                ChatTurn(
+                    engagement_id=engagement.id,
+                    session_id=session.id,
+                    provider_profile_id=profile.id,
+                    model="model-a",
+                    status=ChatTurnStatus.INTERRUPTED,
+                    request_snapshot={
+                        "model_request": ModelRequest(
+                            model="model-a",
+                            messages=[{"role": "user", "content": "Continue."}],
+                        ).model_dump(mode="json"),
+                        "context_usage": {},
+                        "recovery": {
+                            "required": True,
+                            "cause": "core_restart",
+                            "unknown_tool_call_ids": [],
+                            "unknown_hook_execution_ids": [],
+                        },
+                    },
+                )
+            )
+
+        await service.startup()
+        assert len(service.resume_turns_stopped_by_core()) == 4
+        await provider.wait_until_started(2)
+        await asyncio.sleep(0.05)
+        # Two recoveries run; the two waiting for the recovery gate hold none
+        # of the three provider slots.
+        assert service.provider_scheduler.metrics()["active"] == 2
+
+        manual = await service.prepare_async(
+            ChatCompletionRequest(
+                provider_id=profile.id,
+                engagement_id=engagement.id,
+                messages=[{"role": "user", "content": "Operator priority."}],
+                include_knowledge=False,
+                stream=True,
+            )
+        )
+        service.start_provider_turn(manual)
+        await asyncio.wait_for(provider.wait_until_started(3), 3)
+        assert provider.active == 3
+        assert service.provider_scheduler.metrics()["active"] == 3
         await service.shutdown()
 
     asyncio.run(scenario())
@@ -4346,7 +4559,8 @@ def test_persist_turn_inputs_retries_against_a_session_written_during_prepare(
         ] == ["First", "Evidence-backed answer [source-a:chunk-a].", "Second"]
         assert session.metadata["last_sequence"] == 3
         assert second.turn is not None
-        assert store.get(ChatTurn, second.turn.id).status == ChatTurnStatus.ROUTING
+        # Saved and waiting for provider admission.
+        assert store.get(ChatTurn, second.turn.id).status == ChatTurnStatus.QUEUED
         await service.shutdown()
 
     asyncio.run(scenario())

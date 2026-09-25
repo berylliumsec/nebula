@@ -398,11 +398,15 @@ class ChatTurnLedger:
             return self._resolved(row.payload, rows)
 
     def tool_call_ids(self, turn: ChatTurn) -> list[str]:
-        return [
+        ids = [
             str(entry["tool_call_id"])
             for entry in self.history(turn)
             if entry.get("tool_call_id")
         ]
+        if turn.tool_call_ids and not self.has_events(turn.id):
+            # A turn from before the ledger kept its calls in this list.
+            return list(dict.fromkeys([*turn.tool_call_ids, *ids]))
+        return ids
 
     def latest_checkpoint(self, turn_id: str) -> TurnCheckpoint | None:
         with self.database.session() as session:
