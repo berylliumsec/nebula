@@ -2645,8 +2645,12 @@ test("assistant upgrade real Core keeps queued controls reachable and durable", 
     await queue.locator("summary").click();
     await queue.getByRole("button", {name: "Remove", exact: true}).click();
     await expect(queue).toHaveCount(0);
-    const durable = await (await api.get(`chat/sessions/${chat.session_id}/queue`)).json() as {items: Array<{status: string; request: {messages: Array<{content: string}>}}>};
-    expect(durable.items).toEqual([expect.objectContaining({status: "cancelled", request: expect.objectContaining({messages: [expect.objectContaining({content: "Edited durable follow-up"})]})})]);
+    // The reload above proved the edit was durable. A removed follow-up stays
+    // as a settled record Core no longer dispatches, so it keeps its key and a
+    // digest of what was queued, not the queued request itself.
+    const durable = await (await api.get(`chat/sessions/${chat.session_id}/queue`)).json() as {items: Array<{status: string; request?: unknown; request_digest?: string}>};
+    expect(durable.items).toEqual([expect.objectContaining({status: "cancelled", request_digest: expect.stringMatching(/^[0-9a-f]{64}$/)})]);
+    expect(durable.items[0].request).toBeUndefined();
     await testInfo.attach("queue-controls-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId: chat.session_id}), contentType: "application/json"});
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });
