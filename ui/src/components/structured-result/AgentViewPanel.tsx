@@ -6,6 +6,7 @@ import type { ApiClient } from "../../api/client";
 import { projectSurface } from "../../resourceRoutes";
 import { IconAction } from "../IconAction";
 import { AgentViewBody, agentViewStatus, useAgentViewStream } from "./AgentViewBody";
+import type { StructuredResultList } from "./useStructuredResults";
 import {
   arrowDirection,
   clampPoint,
@@ -75,6 +76,8 @@ export interface AgentViewPanelProps {
   minimized: boolean;
   /** Snapshots published since the operator last looked, for the launcher. */
   unseen: number;
+  /** The page's own poll of this conversation's results, shared instead of repeated. */
+  results?: StructuredResultList;
   onMinimize: () => void;
   onRestore: () => void;
   onClose: () => void;
@@ -101,7 +104,7 @@ export function AgentViewPanel(props: AgentViewPanelProps) {
 }
 
 function FloatingAgentView({
-  api, projectId, sessionId, onMinimize, onClose, pin, rect, onRect, sheet,
+  api, projectId, sessionId, results, onMinimize, onClose, pin, rect, onRect, sheet,
 }: AgentViewPanelProps & {
   pin: readonly [string | undefined, (id: string | undefined) => void];
   rect: AgentViewRect;
@@ -111,7 +114,7 @@ function FloatingAgentView({
   const titleId = useId();
   const panel = useRef<HTMLElement>(null);
   const gesture = useRef<Gesture | undefined>(undefined);
-  const stream = useAgentViewStream(api, projectId, sessionId, pin);
+  const stream = useAgentViewStream(api, projectId, sessionId, pin, results);
 
   const place = (next: AgentViewRect, persist: boolean) => {
     const fitted = clampRect(next, currentViewport());

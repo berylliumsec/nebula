@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { sameJson, startVisiblePoll } from "../api/visiblePoll";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { navigationItemForPath } from "../navigation";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -66,30 +67,28 @@ export function TopBar({
       return;
     }
     const controller = new AbortController();
-    let timer: number | undefined;
-    const refresh = async () => {
-      try {
-        const status = await api.engagementContainerTerminalPublicIp(engagement.id, controller.signal);
-        if (!controller.signal.aborted) setPublicIp(status);
-      } catch (caught) {
-        if (!controller.signal.aborted) {
-          setPublicIp(undefined);
-          void logCaughtDiagnostic(
-            "interface.container_terminal.public_ip_load_failed",
-            "The terminal container public IP could not be refreshed.",
-            caught,
-            "container_terminal",
-          );
+    // A background tab does not read the address; it reads again on return.
+    startVisiblePoll({
+      intervalMs: 15_000,
+      signal: controller.signal,
+      read: async (signal) => {
+        try {
+          const status = await api.engagementContainerTerminalPublicIp(engagement.id, signal);
+          if (!signal.aborted) setPublicIp((current) => sameJson(current, status) ? current : status);
+        } catch (caught) {
+          if (!signal.aborted) {
+            setPublicIp(undefined);
+            void logCaughtDiagnostic(
+              "interface.container_terminal.public_ip_load_failed",
+              "The terminal container public IP could not be refreshed.",
+              caught,
+              "container_terminal",
+            );
+          }
         }
-      } finally {
-        if (!controller.signal.aborted) timer = globalThis.setTimeout(refresh, 15_000);
-      }
-    };
-    void refresh();
-    return () => {
-      controller.abort();
-      if (timer !== undefined) globalThis.clearTimeout(timer);
-    };
+      },
+    });
+    return () => controller.abort();
   }, [api, engagement, workspaceState]);
 
   const copyPublicIp = async () => {

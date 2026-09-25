@@ -18,6 +18,7 @@ import type {
   ChatSessionAssistantSettingsRequest,
   ChatStreamEvent,
   ChatTurn,
+  PendingChatTurnStatus,
   ContainerTerminalCapacity,
   ContainerTerminalCapabilities,
   ContainerTerminalPreflight,
@@ -5079,6 +5080,32 @@ export class ApiClient {
   }
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const response = await this.send(path, init);
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    return this.parseJson<T>(response, init);
+  }
+
+  /**
+   * A polled read that sends the validator it last received. Core answers
+   * 304 Not Modified, with no body, when nothing changed; that resolves to
+   * undefined so the caller keeps what it already shows.
+   */
+  async requestIfChanged<T>(
+    path: string,
+    etag: string | undefined,
+    init: RequestInit = {},
+  ): Promise<{ value: T; etag?: string } | undefined> {
+    const headers = new Headers(init.headers);
+    if (etag) headers.set("If-None-Match", etag);
+    const response = await this.send(path, { ...init, headers }, true);
+    if (response.status === 304) return undefined;
+    const value = response.status === 204 ? undefined as T : await this.parseJson<T>(response, init);
+    return { value, etag: response.headers.get("ETag") ?? undefined };
+  }
+
+  private async send(path: string, init: RequestInit, acceptNotModified = false): Promise<Response> {
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
     if (init.body && !headers.has("Content-Type")) {
@@ -5118,7 +5145,7 @@ export class ApiClient {
       throw error;
     }
 
-    if (!response.ok) {
+    if (!response.ok && !(acceptNotModified && response.status === 304)) {
       const error = await responseError(response);
       void logDiagnostic({
         level: response.status >= 500 ? "error" : "warning",
@@ -5142,10 +5169,10 @@ export class ApiClient {
       });
       throw error;
     }
+    return response;
+  }
 
-    if (response.status === 204) {
-      return undefined as T;
-    }
+  private async parseJson<T>(response: Response, init: RequestInit): Promise<T> {
     try {
       return (await response.json()) as T;
     } catch (error) {
@@ -7554,6 +7581,27 @@ export class ApiClient {
     ).then((items) => items.map(mapStructuredResultSummary));
   }
 
+  /** ``listStructuredResults`` for a poll: undefined when Core answered 304. */
+  async listStructuredResultsIfChanged(
+    projectId: string,
+    options: { stream?: string; chatSessionId?: string; limit?: number; offset?: number },
+    etag: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<{ items: StructuredResultSummary[]; etag?: string } | undefined> {
+    const query = new URLSearchParams();
+    if (options.stream) query.set("stream", options.stream);
+    if (options.chatSessionId) query.set("chat_session_id", options.chatSessionId);
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    if (options.offset !== undefined) query.set("offset", String(options.offset));
+    const suffix = query.toString();
+    const answer = await this.requestIfChanged<WireStructuredResultSummary[]>(
+      `projects/${encodeURIComponent(projectId)}/structured-results${suffix ? `?${suffix}` : ""}`,
+      etag,
+      { signal },
+    );
+    return answer && { items: answer.value.map(mapStructuredResultSummary), etag: answer.etag };
+  }
+
   getStructuredResult(projectId: string, resultId: string, signal?: AbortSignal): Promise<StructuredResultRecord> {
     return this.request<WireStructuredResult>(
       `projects/${encodeURIComponent(projectId)}/structured-results/${encodeURIComponent(resultId)}`,
@@ -8705,6 +8753,23 @@ export class ApiClient {
     ).then(items => items.map(item => ({ sessionId: item.session_id, state: item.state, turnId: item.turn_id ?? undefined })));
   }
 
+  /** ``listChatSessionActivity`` for a poll: undefined when Core answered 304. */
+  async listChatSessionActivityIfChanged(
+    engagementId: string,
+    etag: string | undefined,
+    signal?: AbortSignal,
+  ): Promise<{ items: ChatSessionActivity[]; etag?: string } | undefined> {
+    const answer = await this.requestIfChanged<Array<{ session_id: string; state: ChatSessionActivity["state"]; turn_id?: string | null }>>(
+      `chat/session-activity?engagement_id=${encodeURIComponent(engagementId)}`,
+      etag,
+      { signal },
+    );
+    return answer && {
+      items: answer.value.map(item => ({ sessionId: item.session_id, state: item.state, turnId: item.turn_id ?? undefined })),
+      etag: answer.etag,
+    };
+  }
+
   renameChatSession(
     sessionId: string,
     body: ChatSessionRenameRequest,
@@ -9587,6 +9652,20 @@ export class ApiClient {
       `chat/sessions/${encodeURIComponent(sessionId)}/pending-turn`,
       { signal },
     ).then((value) => (value ? mapChatTurn(value) : undefined));
+  }
+
+  /**
+   * Which turn blocks a conversation, without its streamed text or ledger:
+   * for polls that only wait for that turn to move on.
+   */
+  getPendingChatTurnStatus(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<PendingChatTurnStatus | undefined> {
+    return this.request<{ id: string; status: ChatTurn["status"]; revision: number } | null>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/pending-turn?view=status`,
+      { signal },
+    ).then((value) => (value ? { id: value.id, status: value.status, revision: value.revision } : undefined));
   }
 
   cancelChatTurn(turnId: string): Promise<ChatTurn> {

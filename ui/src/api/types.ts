@@ -2084,6 +2084,13 @@ export type ChatStreamEvent =
   | { type: "cancelled"; turnId?: Identifier; detail: string }
   | { type: "error"; detail: string };
 
+/** The turn that blocks a conversation, as a waiting poll reads it. */
+export interface PendingChatTurnStatus {
+  id: Identifier;
+  status: ChatTurn["status"];
+  revision: number;
+}
+
 export interface ChatTurn {
   id: Identifier;
   sessionId: Identifier;

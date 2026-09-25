@@ -434,8 +434,9 @@ async function flushFallback(): Promise<void> {
     }
     completed = true;
     setAvailability(fallback.length === 0);
-  } catch {
+  } catch (error) {
     // diagnostic-expected: sink failure is retained in the no-error-drop fallback.
+    markRejectionHandled(error);
     const restored = [...pending.slice(cursor), ...fallback];
     const retainedErrors = boundErrors(restored.filter((record) => isErrorLevel(record.level)));
     const retainedLower = restored
@@ -454,7 +455,37 @@ async function flushFallback(): Promise<void> {
   }
 }
 
+/**
+ * Rejection reasons Nebula has already handled. Something that wraps
+ * ``window.fetch`` (typically a browser extension) can branch its own promise
+ * off Nebula's request and leave that branch without a handler; the browser
+ * then reports the very error Nebula handled as an unhandled rejection.
+ */
+const handledRejections = new WeakSet<object>();
+
+/** Record that ``reason`` was handled, so a stray copy of it is not an incident. */
+export function markRejectionHandled(reason: unknown): void {
+  if (reason !== null && (typeof reason === "object" || typeof reason === "function")) {
+    handledRejections.add(reason as object);
+  }
+}
+
+// Stack frames served from an installed browser extension, not from Nebula.
+const extensionFrame = /\b(?:chrome|moz|safari-web|safari|ms-browser)-extension:\/\//i;
+
+/** How the global handler records an unhandled rejection, from its reason alone. */
+export function classifyUnhandledRejection(reason: unknown): "cancelled" | "handled" | "extension" | "failure" {
+  if (reason && typeof reason === "object" && (reason as {name?: unknown}).name === "AbortError") return "cancelled";
+  if (reason !== null && (typeof reason === "object" || typeof reason === "function") && handledRejections.has(reason as object)) {
+    return "handled";
+  }
+  const stack = reason && typeof reason === "object" ? (reason as {stack?: unknown}).stack : undefined;
+  if (typeof stack === "string" && extensionFrame.test(stack)) return "extension";
+  return "failure";
+}
+
 export async function logDiagnostic(input: DiagnosticInput): Promise<string | undefined> {
+  markRejectionHandled(input.exception);
   if (!enabled(input.level)) return undefined;
   const record = wireRecord(input);
   if (!isTauri() && !browserIngressEnabled) {
@@ -473,8 +504,9 @@ export async function logDiagnostic(input: DiagnosticInput): Promise<string | un
     setAvailability(true);
     void flushFallback();
     return errorId;
-  } catch {
+  } catch (error) {
     // diagnostic-expected: remember() preserves the record and marks health degraded.
+    markRejectionHandled(error);
     remember(record);
     return undefined;
   }
@@ -615,7 +647,8 @@ export function installGlobalDiagnosticHandlers(): void {
     });
   });
   window.addEventListener("unhandledrejection", (event) => {
-    if (event.reason && typeof event.reason === "object" && (event.reason as {name?: unknown}).name === "AbortError") {
+    const kind = classifyUnhandledRejection(event.reason);
+    if (kind === "cancelled") {
       // Navigating between conversations intentionally abandons superseded reads.
       // Do not surface those cancellations as browser errors or failure incidents.
       event.preventDefault();
@@ -627,6 +660,25 @@ export function installGlobalDiagnosticHandlers(): void {
         stage: "promise",
         retryable: false,
         safeFailureCause: "A newer interface action superseded the pending operation.",
+        exception: event.reason instanceof Error ? event.reason : undefined,
+      });
+      return;
+    }
+    if (kind === "handled" || kind === "extension") {
+      // Nebula already recorded this failure where it happened, or the promise
+      // belongs to a browser extension. Neither is an unhandled Nebula error.
+      void logDiagnostic({
+        level: "debug",
+        eventCode: kind === "handled" ? "interface.promise.duplicate_rejection" : "interface.promise.extension_rejection",
+        message: kind === "handled"
+          ? "A copy of an already handled failure reached the page without a handler."
+          : "A browser extension left a rejected promise without a handler.",
+        outcome: "failure",
+        stage: "promise",
+        retryable: false,
+        safeFailureCause: kind === "handled"
+          ? "Another script wrapped a Nebula request and did not handle its own copy of the failure."
+          : "The rejection's stack comes from a browser extension, not from Nebula.",
         exception: event.reason instanceof Error ? event.reason : undefined,
       });
       return;

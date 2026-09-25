@@ -17,6 +17,7 @@ from .domain import (
     utc_now,
 )
 from .chat_naming import substantive_prompt
+from .chat_turn_headers import session_turn_headers
 from .chat_turn_ledger import turn_history
 from .storage import ConflictError, NotFoundError
 from .tool_results import sanitize_model_history_result
@@ -54,38 +55,32 @@ def catchup_projection(store, session, cursor):
     items = []
     truncated = False
     with store.database.session() as database:
-        turns = [
-            ChatTurn.model_validate(row.payload)
-            for row in database.scalars(
-                select(EntityRow)
-                .where(
-                    EntityRow.kind == "chat_turns",
-                    EntityRow.chat_session_id == session.id,
-                )
-                .order_by(EntityRow.updated_at.desc())
-                .limit(101)
-            )
-        ]
+        # Turn headers carry the status fields this card reads; parsing whole
+        # turn payloads (tool histories, request snapshots) on every 8 s poll
+        # cost tens of milliseconds on real conversations.
+        turns = sorted(
+            session_turn_headers(database, session.id),
+            key=lambda item: item.updated_at,
+            reverse=True,
+        )[:101]
         for turn in turns[:100]:
-            message = source_message(database, session, turn)
-            entry = {
-                "id": turn.id,
-                "turn_id": turn.id,
-                "message_id": message.id if message else None,
-                "at": turn.updated_at.isoformat(),
-            }
-            if (
+            if not (
                 cursor
                 and turn.updated_at > cursor.through_at
-                and turn.status.value in {"failed", "interrupted", "cancelled"}
+                and turn.status in {"failed", "interrupted", "cancelled"}
             ):
-                items.append(
-                    {
-                        **entry,
-                        "kind": "failure",
-                        "text": f"Response {turn.status.value}: {turn.error or 'Inspect the recorded response'}",
-                    }
-                )
+                continue
+            message = source_message(database, session, turn)
+            items.append(
+                {
+                    "id": turn.id,
+                    "turn_id": turn.id,
+                    "message_id": message.id if message else None,
+                    "at": turn.updated_at.isoformat(),
+                    "kind": "failure",
+                    "text": f"Response {turn.status}: {turn.error or 'Inspect the recorded response'}",
+                }
+            )
         if cursor:
             candidates = [
                 ChatMessage.model_validate(row.payload)

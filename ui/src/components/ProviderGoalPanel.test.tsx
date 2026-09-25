@@ -3,7 +3,7 @@ import { expect, it, vi } from "vitest";
 import { ApiError, type ApiClient } from "../api/client";
 import type { ChatGoal } from "../api/types";
 import { DialogProvider } from "./DialogSystem";
-import { activeSeconds, estimateLiveTokens, ProviderGoalPanel } from "./ProviderGoalPanel";
+import { activeSeconds, estimateLiveTokens, estimateTokensFromBytes, ProviderGoalPanel, utf8Length } from "./ProviderGoalPanel";
 
 const draft: ChatGoal = {
   id: "goal", engagementId: "project", sessionId: "session",
@@ -32,6 +32,18 @@ it("shows an explicitly estimated token total while a goal turn streams", () => 
   view.rerender(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={running} onChange={vi.fn()} /></DialogProvider>);
   expect(screen.getByText("100 tokens")).not.toHaveAttribute("title");
   expect(estimateLiveTokens("streaming response")).toBeGreaterThan(0);
+});
+
+it("counts streamed goal text incrementally with the same estimate as encoding it whole", () => {
+  const chunks = ["plain ascii ", "café ", "日本語 ", "emoji 🚀 ", "\u{1F9EA}", "lone \uD800 surrogate"];
+  let bytes = 0;
+  for (const chunk of chunks) {
+    bytes += utf8Length(chunk);
+    // Each chunk's length matches what the browser would encode.
+    expect(utf8Length(chunk)).toBe(new TextEncoder().encode(chunk).length);
+  }
+  expect(estimateTokensFromBytes(bytes)).toBe(estimateLiveTokens(chunks.join("")));
+  expect(estimateTokensFromBytes(0)).toBe(0);
 });
 
 it("collapses goal controls while keeping the objective and progress visible", () => {

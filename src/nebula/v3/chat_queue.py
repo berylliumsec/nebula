@@ -4,17 +4,19 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
+from hashlib import sha256
 from uuid import uuid4
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, Response, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from .chat import ChatCompletionRequest, ChatHistoryConflict, unarchive_chat_session
 from .harnesses import HarnessSkillInvocation
+from .chat_turn_headers import latest_turn_header, turn_header
+from .conditional_reads import conditional, content_etag, revision_etag
 from .database import EntityRow
 from .domain import (
     ChatQueue,
     ChatSession,
-    ChatTurn,
     ChatBackend,
     HarnessProfile,
     ProviderProfile,
@@ -26,6 +28,81 @@ from .diagnostics import record_caught_exception, create_diagnostic_task
 
 TERMINAL = {"complete", "failed", "cancelled", "interrupted"}
 EDITABLE = {"queued", "needs_review"}
+# Follow-up item states after which Core never reads the request again.
+RETIRED_ITEM_STATUSES = {"complete", "cancelled"}
+# Settled follow-ups kept, without their request bodies, so a replayed enqueue
+# of the same idempotency key is still recognized and the transcript can link
+# a recent item to its turn. Older settled items are dropped.
+RETAINED_SETTLED_ITEMS = 20
+
+
+def _request_digest(request: object) -> str | None:
+    if request is None:
+        return None
+    encoded = json.dumps(
+        request, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return sha256(encoded.encode()).hexdigest()
+
+
+def _item_request_digest(item: dict) -> str | None:
+    return item.get("request_digest") or _request_digest(item.get("original_request"))
+
+
+def retire_settled_items(items: list[dict]) -> list[dict]:
+    """Bound a queue's history: settled items lose their bodies, then the oldest go.
+
+    A completed or cancelled follow-up is never dispatched, edited or retried
+    again; its request and original request (the whole message and selected
+    context) only kept growing the row that browsers poll every two seconds and
+    the worker reads every half second. Undispatched, sending and reviewable
+    items are always kept whole.
+    """
+
+    settled = [
+        index
+        for index, item in enumerate(items)
+        if item.get("status") in RETIRED_ITEM_STATUSES
+    ]
+    dropped = set(settled[: max(0, len(settled) - RETAINED_SETTLED_ITEMS)])
+    retained: list[dict] = []
+    for index, item in enumerate(items):
+        if index in dropped:
+            continue
+        if item.get("status") in RETIRED_ITEM_STATUSES and (
+            "request" in item or "original_request" in item
+        ):
+            digest = _item_request_digest(item)
+            item = {
+                key: value
+                for key, value in item.items()
+                if key not in {"request", "original_request"}
+            }
+            if digest:
+                item["request_digest"] = digest
+        retained.append(item)
+    return retained
+
+
+def queue_is_dormant(queue: ChatQueue) -> bool:
+    """True when ``step`` cannot act on this queue until the queue itself changes.
+
+    This mirrors ``step``: it reads other records only for a reviewed item
+    linked to a turn, a claiming or sending item, or the latest turn when the
+    next editable item is ready to dispatch. Otherwise nothing but a write to
+    the queue (which bumps its revision) can give it work.
+    """
+
+    if any(
+        item["status"] in {"claiming", "sending"}
+        or (item["status"] == "needs_review" and item.get("turn_id"))
+        for item in queue.items
+    ):
+        return False
+    if queue.paused:
+        return True
+    ready = next((item for item in queue.items if item["status"] in EDITABLE), None)
+    return ready is None or ready["status"] == "needs_review"
 
 
 def link_queue_turn(transaction, claim, turn_id, harness_turn_id=None):
@@ -96,6 +173,8 @@ class ChatQueueService:
         # row outside this set has no owner: its failure review lost a revision
         # race, or Core restarted mid-dispatch.
         self._inflight = set()
+        # Queue id -> revision at which ``step`` found nothing to act on.
+        self._dormant = {}
 
     def get(self, session_id):
         session = self.store.get(ChatSession, session_id)
@@ -116,17 +195,17 @@ class ChatQueueService:
             return False
 
     def latest_turn(self, session_id):
+        """The conversation's newest turn, as a header: the worker asks every
+        half second and needs only its identity and status."""
         with self.store.database.session() as database:
-            row = database.scalar(
-                select(EntityRow)
-                .where(
-                    EntityRow.kind == "chat_turns",
-                    EntityRow.chat_session_id == session_id,
-                )
-                .order_by(EntityRow.created_at.desc(), EntityRow.id.desc())
-                .limit(1)
-            )
-            return ChatTurn.model_validate(row.payload) if row else None
+            return latest_turn_header(database, session_id)
+
+    def turn(self, session_id, turn_id):
+        with self.store.database.session() as database:
+            header = turn_header(database, session_id, turn_id)
+        if header is None:
+            raise NotFoundError(f"chat turn not found: {turn_id}")
+        return header
 
     def write(self, session_id, body, device_id=None):
         session = self.store.get(ChatSession, session_id)
@@ -142,7 +221,8 @@ class ChatQueueService:
                 expected = (
                     body.request.model_dump(mode="json") if body.request else None
                 )
-                if previous.get("original_request") != expected:
+                # A settled item keeps only its request digest.
+                if _item_request_digest(previous) != _request_digest(expected):
                     raise ConflictError(
                         "This follow-up key was already used for different content"
                     )
@@ -235,7 +315,7 @@ class ChatQueueService:
                     items.append(item)
                 # A user explicitly enqueueing while idle authorizes moving on from a previous failure.
                 latest = self.latest_turn(session_id)
-                if latest and latest.status.value in TERMINAL:
+                if latest and latest.status in TERMINAL:
                     changes["resume_after_turn_id"] = latest.id
                 if not present or body.paused or body.imported_uncertain:
                     changes["paused"] = body.paused or body.imported_uncertain
@@ -306,7 +386,7 @@ class ChatQueueService:
             )
             items.append(retry)
             changes["paused"] = True
-        changes["items"] = items
+        changes["items"] = retire_settled_items(items)
         if present:
             return self.store.update(
                 ChatQueue, queue.id, changes, expected_revision=body.expected_revision
@@ -382,7 +462,7 @@ class ChatQueueService:
             return False
         if seen is None or current.id != seen.id:
             return True
-        return current.status.value not in TERMINAL
+        return current.status not in TERMINAL
 
     def _review_failed_dispatch(self, queue_id, item_id, exc):
         record_caught_exception(
@@ -407,7 +487,7 @@ class ChatQueueService:
         settled = {}
         for item in queue.items:
             if item["status"] == "needs_review" and item.get("turn_id"):
-                status = self.store.get(ChatTurn, item["turn_id"]).status.value
+                status = self.turn(queue.session_id, item["turn_id"]).status
                 if status in {"cancelled", "complete"}:
                     settled[item["id"]] = status
         if settled:
@@ -427,7 +507,7 @@ class ChatQueueService:
                 ChatQueue,
                 queue.id,
                 {
-                    "items": items,
+                    "items": retire_settled_items(items),
                     "paused": queue.paused or "cancelled" in settled.values(),
                 },
                 expected_revision=queue.revision,
@@ -448,34 +528,34 @@ class ChatQueueService:
                         else "Dispatch was interrupted before a response was linked. Review before retrying as a new message",
                     )
                 return
-            turn = self.store.get(ChatTurn, sending["turn_id"])
-            if turn.status.value in TERMINAL:
-                if turn.status.value not in {"complete", "cancelled"}:
+            turn = self.turn(queue.session_id, sending["turn_id"])
+            if turn.status in TERMINAL:
+                if turn.status not in {"complete", "cancelled"}:
                     self.review(
                         queue,
                         sending["id"],
-                        f"Response stopped or failed: {turn.error or turn.status.value}. Inspect its source turn before retrying as a new message",
+                        f"Response stopped or failed: {turn.error or turn.status}. Inspect its source turn before retrying as a new message",
                     )
                 else:
                     items = [dict(item) for item in queue.items]
                     next(item for item in items if item["id"] == sending["id"])[
                         "status"
-                    ] = turn.status.value
+                    ] = turn.status
                     self.store.update(
                         ChatQueue,
                         queue.id,
                         {
-                            "items": items,
-                            "paused": queue.paused or turn.status.value == "cancelled",
+                            "items": retire_settled_items(items),
+                            "paused": queue.paused or turn.status == "cancelled",
                         },
                         expected_revision=queue.revision,
                     )
-            elif turn.status.value in {"waiting_approval", "waiting_callback"}:
+            elif turn.status in {"waiting_approval", "waiting_callback"}:
                 # Pending input or a background result blocks dispatch; resolving
                 # it allows this same turn to finish.
                 return
             elif (
-                turn.backend == ChatBackend.PROVIDER
+                turn.backend == ChatBackend.PROVIDER.value
                 and self.chat.has_active_provider_turn(turn.id)
             ):
                 # Startup already reclaimed this safe turn. Keep its linked
@@ -494,11 +574,11 @@ class ChatQueueService:
         if not item or item["status"] == "needs_review":
             return
         latest = self.latest_turn(queue.session_id)
-        if latest and latest.status.value not in TERMINAL:
+        if latest and latest.status not in TERMINAL:
             return
         if (
             latest
-            and latest.status.value != "complete"
+            and latest.status != "complete"
             and queue.resume_after_turn_id != latest.id
         ):
             self.review(
@@ -620,14 +700,47 @@ class ChatQueueService:
         finally:
             self._inflight.discard(item["id"])
 
-    def queues(self):
+    def queues(self, *, skip_dormant=False):
+        """Every queue, or with ``skip_dormant`` only those ``step`` could act on.
+
+        Row versions are read without payloads; a queue last seen dormant at
+        its current revision is not parsed again until a write changes it.
+        """
         with self.store.database.session() as database:
+            versions = dict(
+                database.execute(
+                    select(EntityRow.id, EntityRow.revision).where(
+                        EntityRow.kind == "chat_queues"
+                    )
+                ).all()
+            )
+            # Forget queues that were deleted.
+            self._dormant = {
+                key: revision
+                for key, revision in self._dormant.items()
+                if key in versions
+            }
+            wanted = [
+                key
+                for key, revision in versions.items()
+                if not skip_dormant or self._dormant.get(key) != revision
+            ]
+            if not wanted:
+                return []
             return [
                 ChatQueue.model_validate(row.payload)
                 for row in database.scalars(
-                    select(EntityRow).where(EntityRow.kind == "chat_queues")
+                    select(EntityRow).where(
+                        EntityRow.kind == "chat_queues", EntityRow.id.in_(wanted)
+                    )
                 )
             ]
+
+    def _remember_dormancy(self, queue):
+        if queue_is_dormant(queue):
+            self._dormant[queue.id] = queue.revision
+        else:
+            self._dormant.pop(queue.id, None)
 
     async def startup(self):
         for queue in self.queues():
@@ -648,9 +761,10 @@ class ChatQueueService:
 
     async def run(self):
         while True:
-            for queue in self.queues():
+            for queue in self.queues(skip_dormant=True):
                 try:
                     await self.step(queue)
+                    self._remember_dormancy(queue)
                 except (
                     ConflictError,
                     NotFoundError,
@@ -677,12 +791,22 @@ def queue_router(service):
     router = APIRouter(tags=["chat"])
 
     @router.get("/chat/sessions/{session_id}/queue")
-    def get_queue(session_id: str):
+    def get_queue(session_id: str, request: Request, response: Response):
         queue = service.get(session_id)
         value = queue.model_dump(mode="json")
-        if not service.exists(session_id):
+        present = service.exists(session_id)
+        if not present:
             value["revision"] = 0
-        return value
+        # Open conversations poll this; an unchanged queue answers 304. A queue
+        # not created yet is synthesized with fresh timestamps on every read,
+        # so its validator names the absence instead of that content.
+        etag = (
+            content_etag("queue", value)
+            if present
+            else revision_etag("queue", "absent")
+        )
+        unchanged = conditional(request, response, etag)
+        return unchanged or value
 
     @router.post("/chat/sessions/{session_id}/queue")
     def write_queue(session_id: str, body: QueueWrite, request: Request):

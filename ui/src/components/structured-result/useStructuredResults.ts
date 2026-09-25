@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiClient } from "../../api/client";
 import type { StructuredResultRecord, StructuredResultSummary } from "../../api/types";
+import { sameJson, startVisiblePoll, type PollOutcome } from "../../api/visiblePoll";
 import { logCaughtDiagnostic } from "../../diagnostics";
 
 /** How often an open, following surface asks Core for newly published results. */
@@ -13,6 +14,11 @@ interface ListOptions {
   stream?: string;
   /** Keep asking for new results while this surface is open. */
   live?: boolean;
+  /**
+   * Let an unchanged list back off to this interval. Leave it unset where
+   * the operator is watching results arrive, which keeps the 4 s cadence.
+   */
+  idlePollMs?: number;
   limit?: number;
 }
 
@@ -33,52 +39,77 @@ export function useStructuredResults(
   projectId: string | undefined,
   options: ListOptions = {},
 ): StructuredResultList {
-  const { chatSessionId, stream, live = false, limit = 100 } = options;
+  const { chatSessionId, stream, live = false, idlePollMs, limit = 100 } = options;
   const [items, setItems] = useState<StructuredResultSummary[]>([]);
+  const shown = useRef<StructuredResultSummary[]>(items);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const errorShown = useRef(false);
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((value) => value + 1), []);
 
   useEffect(() => {
     if (!api || !projectId) {
-      setItems([]);
+      if (shown.current.length) {
+        shown.current = [];
+        setItems(shown.current);
+      }
       return;
     }
     const controller = new AbortController();
-    let timer: number | undefined;
     let stopped = false;
     let failures = 0;
+    let first = true;
+    // Core answers 304 while the page is unchanged; an unchanged page keeps
+    // its identity so nothing that reads it re-renders.
+    let etag: string | undefined;
 
-    const read = async (first: boolean) => {
+    const read = async (signal: AbortSignal): Promise<PollOutcome> => {
       if (first) setLoading(true);
+      let outcome: PollOutcome = "active";
       try {
-        const page = await api.listStructuredResults(projectId, { chatSessionId, stream, limit }, controller.signal);
-        if (stopped) return;
+        const answer = await api.listStructuredResultsIfChanged(projectId, { chatSessionId, stream, limit }, etag, signal);
+        if (stopped) return "stop";
         failures = 0;
-        setItems(page);
-        setError(undefined);
+        // Setting unchanged state still costs the reader a render; skip it.
+        if (errorShown.current) {
+          errorShown.current = false;
+          setError(undefined);
+        }
+        if (!answer) {
+          outcome = "idle";
+        } else {
+          etag = answer.etag;
+          const changed = !sameJson(shown.current, answer.items);
+          if (changed) {
+            shown.current = answer.items;
+            setItems(answer.items);
+          }
+          outcome = changed ? "active" : "idle";
+        }
       } catch (caught) {
-        if (controller.signal.aborted || stopped) return;
+        if (controller.signal.aborted || stopped) return "stop";
         failures += 1;
         void logCaughtDiagnostic("interface.structured_result.list_failed", "Published results could not be read.", caught, "structured_result");
+        errorShown.current = true;
         setError(caught instanceof Error ? caught.message : "Published results could not be read.");
       } finally {
-        if (!stopped) setLoading(false);
-        // A surface that keeps failing stops asking; Refresh starts it again.
-        if (!stopped && live && failures < FAILURE_LIMIT) timer = window.setTimeout(() => void read(false), POLL_MS);
+        if (!stopped && first) setLoading(false);
+        first = false;
       }
+      // A surface that keeps failing stops asking; Refresh starts it again.
+      if (!live || failures >= FAILURE_LIMIT) return "stop";
+      return outcome;
     };
 
-    void read(true);
+    startVisiblePoll({ read, intervalMs: POLL_MS, maxIntervalMs: idlePollMs, signal: controller.signal });
     return () => {
       stopped = true;
       controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [api, chatSessionId, limit, live, nonce, projectId, stream]);
+  }, [api, chatSessionId, idlePollMs, limit, live, nonce, projectId, stream]);
 
-  return { items, loading, error, refresh };
+  return useMemo(() => ({ items, loading, error, refresh }), [error, items, loading, refresh]);
 }
 
 export interface StructuredResultDetail {

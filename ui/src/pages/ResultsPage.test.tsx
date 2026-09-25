@@ -6,17 +6,21 @@ import type { StructuredResultRecord, StructuredResultSummary } from "../api/typ
 import { DialogProvider } from "../components/DialogSystem";
 import { ResultsPage } from "./ResultsPage";
 
-const { workspace } = vi.hoisted(() => ({
-  workspace: {
+const { workspace } = vi.hoisted(() => {
+  const listStructuredResults = vi.fn();
+  return { workspace: {
     api: {
-      listStructuredResults: vi.fn(),
+      listStructuredResults,
+      // Polls read conditionally; this fake always answers with a fresh page.
+      listStructuredResultsIfChanged: vi.fn(async (projectId: string, options: unknown, _etag: unknown, signal?: AbortSignal) =>
+        ({ items: await listStructuredResults(projectId, options, signal) })),
       getStructuredResult: vi.fn(),
       deleteStructuredResult: vi.fn(),
     },
     coreState: "online",
     engagement: { id: "project-1", name: "Scratch Project", status: "active" },
-  },
-}));
+  } };
+});
 
 vi.mock("../state/WorkspaceContext", () => ({ useWorkspace: () => workspace }));
 vi.mock("../state/ChromeContext", () => ({ useChrome: () => ({ toolbarHost: null, trailingToolbarHost: null }) }));

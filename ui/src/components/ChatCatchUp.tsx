@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
+import { sameJson } from "../api/visiblePoll";
 import { logCaughtDiagnostic } from "../diagnostics";
 interface CatchUpEntry {id: string; message_id?: string; turn_id?: string; text: string; kind: string}
 interface CatchUpRecord {initialized: boolean; revision: number; through_at: string; items: CatchUpEntry[]; pending: CatchUpEntry[]; truncated: boolean}
@@ -39,7 +40,7 @@ export function ChatCatchUp({api, sessionId, ready, atLatest, isShown, actionRev
         const record = await api.request<CatchUpRecord>(`${path}/catch-up?device_id=${encodeURIComponent(device)}`, {signal: controller.signal});
         if (controller.signal.aborted) return;
         if (!record || !Array.isArray(record.items) || !Array.isArray(record.pending) || typeof record.revision !== "number") throw new Error("Unsupported read-cursor response");
-        setPending(record.pending);
+        setPending(current => sameJson(current, record.pending) ? current : record.pending);
         if (cardRef.current || needsCatchup && record.initialized && record.items.length > 0) {
           cardRef.current = record; setCard(record);
         } else if (atLatestRef.current && (!record.initialized || record.items.length > 0)
