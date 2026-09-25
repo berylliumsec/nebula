@@ -61,6 +61,7 @@ export function ActivityLedger({
   emptyState,
   compact = false,
   historyPending = false,
+  progress,
 }: {
   model: ActivityLedgerViewModel;
   renderEntryDetails?: (entry: ActivityLedgerEntry) => ReactNode;
@@ -69,16 +70,25 @@ export function ActivityLedger({
   emptyState?: ReactNode;
   compact?: boolean;
   historyPending?: boolean;
+  /** The provider's visible prose while it calls tools, retained as work history. */
+  progress?: {
+    headline?: string;
+    latest?: string;
+    statusLabel?: string;
+    elapsed?: ReactNode;
+    receipt: string;
+    details: ReactNode;
+  };
 }) {
   const [expanded, setExpanded] = useState(false);
   const auditId = useId();
   const active = model.status === "active" || model.status === "queued" || model.status === "attention";
   const attentionEntries = model.entries.filter((entry) => entry.status === "attention" || (!compact && entry.status === "failed"));
   const receipt = receiptParts(model);
-  const meaningful = model.entries.some((entry) => entry.countsAsAction || entry.artifactIds.length || entry.evidenceIds.length || entry.outputs.length || Boolean(entry.sourceItem?.streams.commentary?.trim()) || ["checkpoint", "plan", "goal", "file_change"].includes(entry.kind ?? "") || entry.kind === "reasoning" || ["attention", "failed", "cancelled"].includes(entry.status));
+  const meaningful = Boolean(progress) || model.entries.some((entry) => entry.countsAsAction || entry.artifactIds.length || entry.evidenceIds.length || entry.outputs.length || Boolean(entry.sourceItem?.streams.commentary?.trim()) || ["checkpoint", "plan", "goal", "file_change"].includes(entry.kind ?? "") || entry.kind === "reasoning" || ["attention", "failed", "cancelled"].includes(entry.status));
   if (compact && model.status === "complete" && !meaningful && !historyPending && !model.artifactCount && !model.attentionCount) return null;
   return (
-    <section className={`activity-ledger ${statusClass(model.status)}${compact ? " activity-ledger-compact" : ""}`} aria-label={model.title}>
+    <section className={`activity-ledger ${statusClass(model.status)}${compact ? " activity-ledger-compact" : ""}${progress ? " has-progress" : ""}`} aria-label={model.title}>
       {!compact && <header className="activity-ledger-header">
         <span className={`activity-ledger-state ${statusClass(model.status)}`} aria-hidden="true" />
         <strong>{model.title}</strong>
@@ -86,8 +96,8 @@ export function ActivityLedger({
       </header>}
       {compact && active && <div className="activity-ledger-compact-header">
         <span className={`activity-ledger-state ${statusClass(model.status)}`} aria-hidden="true" />
-        <strong>{activityLedgerStatusLabel(model.status)}</strong>
-        {model.durationMs ? <span className="activity-ledger-compact-duration">{durationLabel(model.durationMs)}</span> : null}
+        <strong>{progress?.statusLabel ?? activityLedgerStatusLabel(model.status)}</strong>
+        {progress?.elapsed ?? (model.durationMs ? <span className="activity-ledger-compact-duration">{durationLabel(model.durationMs)}</span> : null)}
       </div>}
 
       {!compact && (active ? <div className="activity-ledger-live">
@@ -104,7 +114,8 @@ export function ActivityLedger({
         {receipt.length > 0 && <span>{receipt.join(" · ")}</span>}
       </p>)}
 
-      {compact && active && model.currentAction && <p className="activity-ledger-current activity-ledger-compact-current" aria-live="polite"><small>Now</small><span>{model.currentAction}</span></p>}
+      {compact && active && (progress?.headline || model.currentAction) && <p className="activity-ledger-current activity-ledger-compact-current" aria-live="polite"><small>Now</small><span>{progress?.headline ?? model.currentAction}</span></p>}
+      {compact && active && progress?.latest && <p className="activity-ledger-progress-preview" aria-live="polite"><small>Latest update</small><span>{progress.latest}</span></p>}
 
       {attentionEntries.length > 0 && <div className="activity-ledger-attention" aria-label="Activity requiring attention">
         {attentionEntries.map((entry) => entry.status === "failed" ? <details className="activity-ledger-failure status-failed" key={`attention:${entry.id}`}>
@@ -126,7 +137,9 @@ export function ActivityLedger({
 
       <footer className="activity-ledger-footer">
         <span>{compact
-          ? [active ? `${model.entries.length} activity step${model.entries.length === 1 ? "" : "s"}` : activityLedgerStatusLabel(model.status), ...receipt].join(" · ")
+          ? progress
+            ? [progress.receipt, ...receipt].join(" · ")
+            : [active ? `${model.entries.length} activity step${model.entries.length === 1 ? "" : "s"}` : activityLedgerStatusLabel(model.status), ...receipt].join(" · ")
           : `${model.actionCount} actions`}</span>
         <button
           type="button"
@@ -138,13 +151,14 @@ export function ActivityLedger({
             return next;
           })}
         >
-          {expanded ? "Hide activity" : historyPending ? "Inspect saved work" : "Show activity"}
+          {progress ? expanded ? "Hide work" : "View work" : expanded ? "Hide activity" : historyPending ? "Inspect saved work" : "Show activity"}
           <ChevronDown size={14} aria-hidden="true" />
         </button>
       </footer>
 
       {expanded && <div className="activity-ledger-audit" id={auditId}>
-        <header><strong>Activity</strong><small>Newest first</small></header>
+        <header><strong>{progress ? "Work" : "Activity"}</strong>{model.entries.length > 0 && <small>Newest first</small>}</header>
+        {progress && <div className="activity-ledger-progress-details">{progress.details}</div>}
         {model.entries.length > 0 ? <ol>
           {model.entries.map((entry) => {
             const details = renderEntryDetails?.(entry);
@@ -161,7 +175,7 @@ export function ActivityLedger({
               </div>
             </li>;
           })}
-        </ol> : emptyState ?? <p>No activity has been recorded yet.</p>}
+        </ol> : progress ? null : emptyState ?? <p>No activity has been recorded yet.</p>}
       </div>}
     </section>
   );

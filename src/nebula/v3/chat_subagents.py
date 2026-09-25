@@ -4215,10 +4215,9 @@ class SubagentBroker:
             resolved = [item.id for item in records]
             if self.service.wait_satisfied(resolved, mode):
                 return ToolExecutionResult(output=self.service.wait_output(resolved))
-            count = len(resolved)
             raise SubagentWaitPending(
                 {"ids": resolved, "mode": mode},
-                f"Waiting for {count} subagent{'' if count == 1 else 's'} to report.",
+                "Waiting for delegated work.",
             )
         raise refused_before_execution(
             InvalidToolArguments(f"unsupported subagent capability {name!r}")
@@ -4228,6 +4227,7 @@ class SubagentBroker:
 def _spec(name: str, description: str, properties: dict[str, Any]) -> ToolSpec:
     return ToolSpec(
         name=name,
+        display_name="Collect delegated reports" if name == "wait_subagents" else None,
         description=description,
         input_schema={
             "type": "object",

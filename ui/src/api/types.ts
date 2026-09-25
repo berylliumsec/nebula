@@ -1900,6 +1900,8 @@ export interface ChatCompletionResponse {
   providerRequestId?: string;
   citations: ChatCitation[];
   toolSuggestions?: ToolSuggestionSummary;
+  /** UTF-16 boundary between saved routing prose and the final answer. */
+  progressPrefixUtf16Length?: number;
 }
 
 export interface ContextSourceReference {

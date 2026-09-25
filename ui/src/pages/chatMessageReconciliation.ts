@@ -38,6 +38,7 @@ interface CompletedAssistantMessage {
   harnessTurnId?: string;
   toolSuggestions?: ToolSuggestionSummary;
   createdAt: string;
+  progressPrefixUtf16Length?: number;
 }
 
 /** A saved answer Core kept from a stopped or interrupted turn still reads as stopped after reload. */
@@ -106,6 +107,9 @@ export function reconcileCompletedAssistantMessage(
         : undefined),
     role: "assistant",
     content: finalAssistantContent(existing?.content ?? "", completed.content),
+    metadata: completed.progressPrefixUtf16Length !== undefined
+      ? { ...existing?.metadata, progress_prefix_utf16_length: completed.progressPrefixUtf16Length }
+      : existing?.metadata,
     reasoning: completed.reasoning || existing?.reasoning,
     citations: completed.citations,
     usage: completed.usage,

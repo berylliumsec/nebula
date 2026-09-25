@@ -144,10 +144,11 @@ import { ActivityLedger } from "../components/ActivityLedger";
 import {
   activityLedgerFromHarness,
   activityLedgerFromNative,
+  delegatedWaitSummary,
   type ActivityLedgerEntry,
   type NativeActivitySource,
 } from "../components/activityLedgerModel";
-import { sha256 } from "../components/assistantCode";
+import { parseExactFences, sha256 } from "../components/assistantCode";
 import { ExecutionHistory } from "../components/ExecutionHistory";
 import { ExecutionReviewDialog } from "../components/ExecutionReviewDialog";
 import { NewMissionButton } from "../components/MissionControls";
@@ -189,6 +190,7 @@ import {
   withoutTurnOutcome,
   type ReconciledConversationMessage,
 } from "./chatMessageReconciliation";
+import { latestProgressPreview, splitSavedProgress } from "./chatProgressContent";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { readConversationPanelOpen, writeConversationPanelOpen } from "./workbenchPreferences";
 import { ChatDraftStore, chatDraftStorageKey } from "./chatDraftStorage";
@@ -697,12 +699,26 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
   const messageActivityItems = activityItems;
   const messageToolCards = toolCards;
   const historicalTurnId = historicalHarnessTurnId(message);
+  const savedProviderContent = message.role === "assistant" && message.state === "complete"
+    ? splitSavedProgress(message.content, message.metadata)
+    : { answer: message.content, progress: undefined };
+  // A direct provider answer streams into the same field. Only a turn that has
+  // entered tool routing owns progress prose; keep ordinary answer streaming live.
+  const liveProviderProgress = message.role === "assistant" && shared.runtimeKind === "provider" && message.state === "streaming"
+    && Boolean(message.content.trim()) && (messageToolCards.length > 0 || Boolean(waitingLabel));
+  const progressContent = liveProviderProgress ? message.content : savedProviderContent.progress;
+  const displayContent = liveProviderProgress ? "" : savedProviderContent.answer;
+  const answerBlockOrdinalOffset = savedProviderContent.progress
+    ? parseExactFences(savedProviderContent.progress).blocks.length
+    : 0;
   const activityLedgerBase = messageActivityItems.length > 0
     ? activityLedgerFromHarness("Work summary", message.state, messageActivityItems)
     : messageToolCards.length > 0
       ? activityLedgerFromNative("Work summary", message.state, messageToolCards)
       : historicalTurnId
         ? activityLedgerFromHarness("Work summary", message.state, [])
+        : progressContent
+          ? activityLedgerFromHarness("Work summary", message.state, [])
         : undefined;
   const activityLedger = activityLedgerBase && message.elapsedMs !== undefined
     ? { ...activityLedgerBase, durationMs: message.elapsedMs }
@@ -720,10 +736,10 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
     <div className="chat-message-body">
       <header>{message.role === "assistant" && <><strong>{shared.assistantSource}</strong>{shared.runtimeConfiguration && <span>{shared.runtimeConfiguration}</span>}</>}{agentMessage && <><strong>Message from {agentMessageSender}</strong><span>main agent</span></>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
       {message.role === "assistant" && message.toolSuggestions && <ToolSuggestionChip summary={message.toolSuggestions} />}
-      {message.role === "assistant" && <HarnessThinking items={messageActivityItems} />}
-      {message.role === "assistant" && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming" && Boolean(message.reasoning)} />}
-      {message.content && (message.role === "assistant" || agentMessage
-        ? <AssistantMarkdown content={message.content} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} />
+      {message.role === "assistant" && !progressContent && <HarnessThinking items={messageActivityItems} />}
+      {message.role === "assistant" && !progressContent && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming" && Boolean(message.reasoning)} />}
+      {displayContent && (message.role === "assistant" || agentMessage
+        ? <AssistantMarkdown content={displayContent} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} blockOrdinalOffset={answerBlockOrdinalOffset} />
         : editing
           ? <form className="chat-message-edit" onSubmit={event => {event.preventDefault(); void actions.resendEditedMessage();}}>
             <textarea
@@ -748,7 +764,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
               <button className="button primary" type="submit" disabled={editing.busy || !editing.text.trim()}>{editing.busy ? <><LoaderCircle className="spin" size={13} /> Resending</> : "Resend"}</button>
             </div>
           </form>
-          : <p>{message.content}</p>)}
+          : <p>{displayContent}</p>)}
       {message.id && subagentResult && <ChatSubagentResultCard
         subagent={subagentResult}
         onOpenConversation={id => void actions.selectSession(id)}
@@ -758,6 +774,20 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       {historicalState === "failed" && historicalError && <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Saved work details could not be loaded; the answer remains available." compact /><button className="button quiet" type="button" onClick={() => void actions.loadHistoricalHarnessActivity(message)}>Retry work details</button></div>}
       {message.role === "assistant" && activityLedger && <ActivityLedger
         compact
+        progress={progressContent ? {
+          headline: message.state === "streaming" ? waitingLabel ?? activityLedger.currentAction ?? "Working on your request" : undefined,
+          latest: message.state === "streaming" ? latestProgressPreview(progressContent) : undefined,
+          statusLabel: message.state === "streaming" && waitingLabel ? "Waiting" : undefined,
+          elapsed: message.state === "streaming" ? <LiveTurnElapsed startedAt={message.createdAt} /> : undefined,
+          receipt: message.reasoning ? "Updates and thinking saved" : "Updates saved",
+          details: <>
+            <section className="activity-ledger-progress-text" aria-label="Progress updates">
+              <h4>Progress updates</h4>
+              <AssistantMarkdown content={progressContent} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} />
+            </section>
+            {message.reasoning && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming"} />}
+          </>,
+        } : undefined}
         historyPending={Boolean(historicalTurnId && historicalState !== "loaded" && !messageActivityItems.length && !messageToolCards.length)}
         model={activityLedger}
         onExpandedChange={historicalTurnId ? (expanded) => {
@@ -794,7 +824,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       {shared.runtimeKind === "harness" && ["error", "cancelled"].includes(message.state) && message.harnessTurnId && <button className="button quiet" type="button" disabled={shared.harnessControlBusy} onClick={() => void actions.retryHarnessMessage(message)}>Retry as linked turn</button>}
       {shared.api && shared.sessionId && message.durable && message.role === "assistant" && <ChatEvidence key={message.id} api={shared.api} sessionId={shared.sessionId} messageId={message.id} onResults={actions.openResultsDrawer} />}
       {message.citations.map((citation) => <Link className="citation-chip" to={`/knowledge?source=${encodeURIComponent(citation.sourceId)}`} title={citation.excerpt} key={`${citation.sourceId}-${citation.chunkId}`}><Braces size={13} /> {citation.name}{citation.page ? ` · p. ${citation.page}` : ""}</Link>)}
-      {message.role === "assistant" && ["streaming", "waiting_approval"].includes(message.state) && <LiveTurnElapsed startedAt={message.createdAt} />}
+      {message.role === "assistant" && ["streaming", "waiting_approval"].includes(message.state) && !progressContent && <LiveTurnElapsed startedAt={message.createdAt} />}
       {(() => {
         const tokens = message.usage && message.usage.totalTokens > 0 ? message.usage : undefined;
         if (!tokens && message.elapsedMs === undefined) return null;
@@ -3217,6 +3247,10 @@ export function SessionsPage() {
             approval: approval ?? { id: pendingTurn.approvalId },
           });
         } else if (pendingTurn.status === "waiting_callback") {
+          const restoredWaitSummary = pendingTurn.waitSummary
+            ?? (pendingTurn.waitKind === "subagents" ? "Waiting for delegated work."
+              : pendingTurn.waitKind === "reply" ? "Waiting for the delegating assistant to reply."
+                : "Waiting for the command to POST results.");
           setWaitingCallback({
             turnId: pendingTurn.id,
             assistantId,
@@ -3225,10 +3259,9 @@ export function SessionsPage() {
             toolCallId: pendingTurn.toolCallIds[0] ?? "",
             // A subagent wait saved its own status line; only a command
             // callback falls back to the command's.
-            summary: pendingTurn.waitSummary
-              ?? (pendingTurn.waitKind === "subagents" ? "Waiting for subagents to report."
-                : pendingTurn.waitKind === "reply" ? "Waiting for the delegating assistant to reply."
-                  : "Waiting for the command to POST results."),
+            summary: pendingTurn.waitKind === "subagents"
+              ? delegatedWaitSummary(restoredWaitSummary)
+              : restoredWaitSummary,
             kind: pendingTurn.waitKind,
           });
         } else {
@@ -3526,7 +3559,10 @@ export function SessionsPage() {
 
   const copyMessage = async (message: ConversationMessage) => {
     try {
-      await copySelectionText(message.content);
+      const visibleContent = message.role === "assistant" && message.state === "complete"
+        ? splitSavedProgress(message.content, message.metadata).answer
+        : message.content;
+      await copySelectionText(visibleContent);
       const label = message.role === "assistant" ? "Assistant response" : message.role === "system" ? "Agent message" : "Operator message";
       setMessageActionStatus(`${label} copied exactly.`);
     } catch (error) {
@@ -3536,7 +3572,10 @@ export function SessionsPage() {
   };
 
   const quoteMessage = (message: ConversationMessage) => {
-    const quoted = message.content.split("\n").map((line) => `> ${line}`).join("\n");
+    const visibleContent = message.role === "assistant" && message.state === "complete"
+      ? splitSavedProgress(message.content, message.metadata).answer
+      : message.content;
+    const quoted = visibleContent.split("\n").map((line) => `> ${line}`).join("\n");
     setDraft((current) => current ? `${current}\n\n${quoted}\n\n` : `${quoted}\n\n`);
     setMessageActionStatus("Quoted message added to the editable composer draft.");
     globalThis.requestAnimationFrame?.(() => {
@@ -3802,7 +3841,7 @@ export function SessionsPage() {
         resultsUrl: streamEvent.resultsUrl,
         processId: streamEvent.processId,
         toolCallId: streamEvent.toolCallId,
-        summary: streamEvent.summary,
+        summary: streamEvent.waitKind === "subagents" ? delegatedWaitSummary(streamEvent.summary) : streamEvent.summary,
         kind: streamEvent.waitKind,
       });
       setSending(false);
@@ -3892,6 +3931,7 @@ export function SessionsPage() {
         harnessTurnId: streamEvent.harnessTurnId,
         toolSuggestions: streamEvent.toolSuggestions,
         createdAt: new Date().toISOString(),
+        progressPrefixUtf16Length: streamEvent.progressPrefixUtf16Length,
       }));
     }
     if (streamEvent.type === "cancelled") {
@@ -5376,7 +5416,9 @@ export function SessionsPage() {
               {stateSyncError && <div className="chat-recovery-notice" role="status"><p>{stateSyncError}</p><button className="icon-button subtle" type="button" aria-label="Retry response status" title="Retry response status" onClick={refreshSessionState}><RefreshCw size={16} aria-hidden="true" /></button></div>}
               {api && sessionId && <ChatCatchUp key={`catch-up:${sessionId}`} api={api} sessionId={sessionId} pendingActions={authoritativeState?.pending} ready={!loadingHistory} atLatest={!hasNewerMessages} isShown={(messageId) => messages.some((message) => message.id === messageId)} actionRevision={`${pendingResponse?.assistantId ?? ""}:${harnessInteractions.map(item => `${item.id}:${item.status}`).join(",")}`} onTurn={id => updateSearchParams(next => {next.set("turn", id); next.set("drawer", "context");})} onMessage={openDrawerMessage} onPending={() => void reviewPendingActions()} />}
               {runtimeKind === "provider" && hookExecutions.length > 0 && <details className="chat-action-status" data-guide="hook-outcomes" open={Boolean(interruptedRecovery)}><summary>Lifecycle hooks · {hookExecutions.filter(item => item.status === "complete" || item.status === "reconciled").length}/{hookExecutions.length} completed</summary><div role="list" aria-label="Lifecycle hook outcomes">{hookExecutions.map(execution => { const hookName = nativeHooks.find(hook => hook.id === execution.hookId)?.manifest.name ?? execution.hookId; return <div role="listitem" key={execution.id}><strong>{hookName}</strong><small>{execution.eventName.replaceAll(".", " ")} · {execution.status.replaceAll("_", " ")}{execution.sideEffects !== "none" ? ` · ${execution.sideEffects} effects` : ""}</small>{execution.error && <span role="alert">{execution.error}</span>}{execution.status === "interrupted" && execution.lateOutcomeStatus && <small>Later process exit: {execution.lateOutcomeStatus}{execution.lateOutcomeExitCode !== undefined ? ` (code ${execution.lateOutcomeExitCode})` : ""}. {execution.lateOutcomeStatus === "complete" ? "Checking the saved result." : "Effects may be partial; verify before continuing."}</small>}{execution.reconciliation && typeof execution.reconciliation.detail === "string" && <small>{execution.reconciliation.detail}</small>}</div>; })}</div></details>}
-              {waitingCallback && <CallbackWaitingStatus summary={waitingCallback.summary} resultsUrl={waitingCallback.resultsUrl} kind={waitingCallback.kind} />}
+              {waitingCallback && ((waitingCallback.kind !== "subagents" && waitingCallback.kind !== "reply")
+                || !messages.some(message => message.id === waitingCallback.assistantId && message.content.trim()))
+                && <CallbackWaitingStatus summary={waitingCallback.summary} resultsUrl={waitingCallback.resultsUrl} kind={waitingCallback.kind} />}
               {interruptedRecovery && <div className="chat-action-status" role="status">
                 <span>{interruptedRecovery.turn.recoverable
                   ? "Core is recovering this response automatically. Recorded receipts will be adopted; uncertain effects will not be replayed."

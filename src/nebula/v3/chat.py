@@ -654,6 +654,9 @@ class ChatCompletionResponse(NebulaModel):
     provider_request_id: str | None = None
     citations: list[ChatCitation] = Field(default_factory=list)
     tool_suggestions: dict[str, Any] | None = None
+    # UTF-16 code units before the separator that precedes the final answer.
+    # Browsers use this boundary to present routing prose as work history.
+    progress_prefix_utf16_length: int | None = Field(default=None, ge=0)
 
 
 @dataclass(frozen=True)
@@ -9429,7 +9432,7 @@ class ChatService:
                     "wait_kind": "reply" if wait.get("reply_to") else "subagents",
                     "subagent_ids": [str(item) for item in wait.get("ids") or []],
                     "summary": entry.get("result_summary")
-                    or "Waiting for subagents to report.",
+                    or "Waiting for delegated work.",
                 },
             )
             return
@@ -12474,6 +12477,7 @@ class ChatService:
         self, prepared: PreparedChat, response: ModelResponse
     ) -> ChatCompletionResponse:
         content = _operator_answer_text(response.text)
+        progress_prefix_utf16_length: int | None = None
         reasoning = response.reasoning.strip()
         if not content:
             if _is_provider_control_frame(response.text):
@@ -12508,6 +12512,9 @@ class ChatService:
         if turn_reasoning:
             reasoning = turn_reasoning
         if prepared.turn is not None and prepared.turn.content:
+            progress_prefix_utf16_length = (
+                len(prepared.turn.content.encode("utf-16-le", "surrogatepass")) // 2
+            )
             content = (prepared.turn.content + "\n\n" + content)[:200_000]
         return ChatCompletionResponse(
             turn_id=prepared.turn.id if prepared.turn is not None else None,
@@ -12541,6 +12548,7 @@ class ChatService:
                 if prepared.turn is not None
                 else None
             ),
+            progress_prefix_utf16_length=progress_prefix_utf16_length,
         )
 
     def _persist_turn_inputs(self, prepared: PreparedChat) -> None:
@@ -12859,6 +12867,13 @@ class ChatService:
                     **(
                         {
                             "chat_turn_id": prepared.turn.id,
+                            **(
+                                {
+                                    "progress_prefix_utf16_length": completion.progress_prefix_utf16_length
+                                }
+                                if completion.progress_prefix_utf16_length is not None
+                                else {}
+                            ),
                             "tool_call_ids": self._turn_tool_call_ids(prepared.turn),
                             "tool_results": [
                                 {

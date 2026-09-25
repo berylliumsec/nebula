@@ -1248,6 +1248,7 @@ interface WireChatCompletion extends JsonObject {
   provider_request_id?: string | null;
   citations?: WireChatCitation[];
   tool_suggestions?: JsonObject | null;
+  progress_prefix_utf16_length?: number | null;
 }
 
 interface WireContextSourceReference extends JsonObject {
@@ -2886,6 +2887,7 @@ function mapChatCompletion(value: WireChatCompletion): ChatCompletionResponse {
     providerRequestId: value.provider_request_id ?? undefined,
     citations: (value.citations ?? []).map(mapChatCitation),
     toolSuggestions: mapToolSuggestions(value.tool_suggestions),
+    progressPrefixUtf16Length: value.progress_prefix_utf16_length ?? undefined,
   };
 }
 

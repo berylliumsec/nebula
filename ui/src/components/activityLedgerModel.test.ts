@@ -156,6 +156,24 @@ describe("activity ledger presentation model", () => {
     expect(model.entries[0].label).toBe("Search evidence");
   });
 
+  it("names an older saved subagent wait as delegated work", () => {
+    const model = activityLedgerFromNative("Work summary", "streaming", [{
+      assistantId: "assistant-1",
+      toolCallId: "wait-1",
+      capability: "wait_subagents",
+      displayName: "Wait for subagents",
+      status: "waiting_callback",
+      summary: "Waiting for 2 subagents to report.",
+      evidenceIds: [],
+      artifacts: [],
+    }]);
+    expect(model.entries[0]).toMatchObject({
+      label: "Collect delegated reports",
+      phase: "delegation",
+      summary: "Waiting for delegated work.",
+    });
+  });
+
   it("names a running SSH call and prioritizes it over an earlier failure", () => {
     const model = activityLedgerFromNative("Work summary", "streaming", [
       { assistantId: "assistant-1", toolCallId: "failed-load", capability: "tool_catalog.load", status: "failed", summary: "Invalid input.", evidenceIds: [], artifacts: [] },

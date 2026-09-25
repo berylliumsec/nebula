@@ -200,6 +200,7 @@ function firstSentence(value: string | undefined): string | undefined {
 }
 
 function meaningfulLabel(title: string | undefined, summary: string | undefined, phase: ActivityLedgerPhaseKey): string {
+  if (title === "wait_subagents" || title === "subagent.wait") return "Collect delegated reports";
   const sshHost = sshToolHost(title);
   if (sshHost) return `Command on ${sshHost}`;
   // An MCP tool keeps its exact upstream name, which is what the server's own
@@ -257,6 +258,7 @@ export function harnessLedgerEntries(items: HarnessActivityItem[]): ActivityLedg
 }
 
 function nativeToolLabel(item: NativeActivitySource): string {
+  if (item.capability === "wait_subagents") return "Collect delegated reports";
   if (item.capability === "web.search") return "Web search";
   const displayName = item.displayName?.trim();
   if (sshToolHost(item.capability) || !displayName || displayName.toLowerCase() === "command runtime") {
@@ -265,29 +267,41 @@ function nativeToolLabel(item: NativeActivitySource): string {
   return displayName;
 }
 
+/** Keep older saved provider waits readable without changing their receipts. */
+export function delegatedWaitSummary(summary: string): string {
+  return /^Waiting for (?:\d+ )?subagents? to report\.?$/.test(summary.trim())
+    ? "Waiting for delegated work."
+    : summary;
+}
+
 export function nativeLedgerEntries(items: NativeActivitySource[]): ActivityLedgerEntry[] {
-  return items.map((item, index) => ({
-    id: `native:${item.toolCallId}`,
-    source: "native" as const,
-    // Research reads next to harness web search, which already files here.
-    phase: item.capability === "web.search" ? "research" : "execution",
-    status: normalizeActivityStatus(item.status),
-    statusLabel: sourceStatusLabel(item.status),
-    label: nativeToolLabel(item),
-    summary: item.summary,
-    brief: firstSentence(item.summary),
-    sequence: index,
-    kind: "tool",
-    countsAsAction: true,
-    artifactIds: [...new Set([
-      ...item.artifacts.map((artifact) => artifact.artifactId),
-      ...(item.resultArtifactId ? [item.resultArtifactId] : []),
-    ])],
-    evidenceIds: item.evidenceIds,
-    outputs: [],
-    payload: item.receipt ?? {},
-    sourceTool: item,
-  }));
+  return items.map((item, index) => {
+    const summary = item.capability === "wait_subagents" && item.summary
+      ? delegatedWaitSummary(item.summary)
+      : item.summary;
+    return {
+      id: `native:${item.toolCallId}`,
+      source: "native" as const,
+      // Research reads next to harness web search, which already files here.
+      phase: item.capability === "web.search" ? "research" : item.capability === "wait_subagents" ? "delegation" : "execution",
+      status: normalizeActivityStatus(item.status),
+      statusLabel: sourceStatusLabel(item.status),
+      label: nativeToolLabel(item),
+      summary,
+      brief: firstSentence(summary),
+      sequence: index,
+      kind: "tool",
+      countsAsAction: true,
+      artifactIds: [...new Set([
+        ...item.artifacts.map((artifact) => artifact.artifactId),
+        ...(item.resultArtifactId ? [item.resultArtifactId] : []),
+      ])],
+      evidenceIds: item.evidenceIds,
+      outputs: [],
+      payload: item.receipt ?? {},
+      sourceTool: item,
+    };
+  });
 }
 
 function missionHarnessFields(event: RunEvent): Record<string, unknown> {

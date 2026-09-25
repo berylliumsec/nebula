@@ -33,6 +33,36 @@ function model(overrides: Partial<ActivityLedgerViewModel> = {}): ActivityLedger
 }
 
 describe("ActivityLedger", () => {
+  it("shows the newest update and keeps exact prior prose under View work", async () => {
+    const user = userEvent.setup();
+    render(<ActivityLedger compact model={model({ entries: [], currentAction: undefined, actionCount: 0, phases: [] })} progress={{
+      headline: "Waiting for delegated work",
+      latest: "Recording the decision and dispatching work.",
+      statusLabel: "Waiting",
+      receipt: "Updates and thinking saved",
+      details: <><p>First update from the provider.</p><p>Recording the decision and dispatching work.</p></>,
+    }} />);
+    const ledger = screen.getByRole("region", { name: "Work summary" });
+    expect(within(ledger).getByText("Waiting for delegated work")).toBeVisible();
+    expect(within(ledger).getByText("Recording the decision and dispatching work.")).toBeVisible();
+    expect(within(ledger).queryByText("First update from the provider.")).toBeNull();
+    expect(within(ledger).getByText("Updates and thinking saved")).toBeVisible();
+    await user.click(within(ledger).getByRole("button", { name: "View work" }));
+    expect(within(ledger).getByText("First update from the provider.")).toBeVisible();
+    expect(within(ledger).getByRole("button", { name: "Hide work" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("keeps the progress receipt to one action count", () => {
+    render(<ActivityLedger compact model={model()} progress={{
+      latest: "Collecting reports.",
+      receipt: "Updates saved",
+      details: <p>Collecting reports.</p>,
+    }} />);
+    const ledger = screen.getByRole("region", { name: "Work summary" });
+    expect(within(ledger).getByText("Updates saved · 2 actions")).toBeVisible();
+    expect(within(ledger).queryByText(/activity step/)).toBeNull();
+  });
+
   it("shows current work and phases while keeping audit detail collapsed", async () => {
     const user = userEvent.setup();
     render(<ActivityLedger model={model()} />);

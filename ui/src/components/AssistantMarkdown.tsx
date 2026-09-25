@@ -29,6 +29,8 @@ interface AssistantMarkdownProps {
   runnableLanguages: ReadonlySet<ExecutionLanguage>;
   onRun: (candidate: FencedRunCandidate) => void;
   onRunInTerminal?: (candidate: FencedRunCandidate) => void;
+  /** Fences before a separately displayed final answer still count in Core's saved message. */
+  blockOrdinalOffset?: number;
 }
 
 function safeUrl(value: string): string {
@@ -76,12 +78,14 @@ function FencedCode({
   messageId,
   onRun,
   onRunInTerminal,
+  blockOrdinalOffset = 0,
 }: {
   block: ExactFence;
   canRun: boolean;
   messageId?: string;
   onRun: (candidate: FencedRunCandidate) => void;
   onRunInTerminal?: (candidate: FencedRunCandidate) => void;
+  blockOrdinalOffset?: number;
 }) {
   const codeRef = useRef<HTMLElement>(null);
   const selectionRef = useRef<{ start: number; end: number } | undefined>(undefined);
@@ -132,7 +136,7 @@ function FencedCode({
       origin: {
         kind: "assistant_message",
         messageId,
-        blockOrdinal: block.ordinal,
+        blockOrdinal: block.ordinal + blockOrdinalOffset,
         blockSha256,
         selectionStartByte: selected.selectionStartByte,
         selectionEndByte: selected.selectionEndByte,
@@ -186,6 +190,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
   runnableLanguages,
   onRun,
   onRunInTerminal,
+  blockOrdinalOffset = 0,
 }: AssistantMarkdownProps) {
   const parsed = useMemo(() => parseExactFences(content), [content]);
   const renderable = parsed.unmatchedStart === undefined ? content : content.slice(0, parsed.unmatchedStart);
@@ -211,6 +216,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
             canRun={Boolean(durable && messageId && block.canonicalLanguage && runnableLanguages.has(block.canonicalLanguage))}
             onRun={onRun}
             onRunInTerminal={onRunInTerminal}
+            blockOrdinalOffset={blockOrdinalOffset}
           />
         );
       }

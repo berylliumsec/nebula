@@ -1,43 +1,35 @@
 {
-  "change_digest": "97c13c62eb43ff3d4e3690d3f9f8e4cdacdb08b056aa42e0b00779569e8a25c6",
-  "reviewed_by": "Codex focused review for conversation cleanup in parent and subagent chats",
-  "reason": "The changed journey is a cleaner transcript for parent and child conversations: current work is compact, saved commentary is behind activity, and a child approval remains actionable in its parent. Component cases cover active and completed work, commentary-only history, approvals, failures, and result cards. The selected mocked browser cases cover the transcript and parent approval path on desktop and mobile. Saved thinking is checked after reload across the 320, 390, and 430 px Chromium and WebKit profiles. Two real-Core cases cover durable child selection after refresh and restart recovery.",
-  "exclusions": "No full-suite approval was given. Python and native code are unchanged. Unrelated browser areas are excluded. The mobile profiles are emulated; a physical device and a live external provider are unavailable for this branch test. The real-Core browser cases use a local fixture or model stub, not an external account.",
-  "expected_tests": {
-    "python": 0,
-    "frontend": 27,
-    "native": 0,
-    "playwright": 40
-  },
+  "change_digest": "02220265e57f8ffd03f800ad0e0ba4cbbbec6384759687f0faabb1750c23093e",
+  "reviewed_by": "Codex focused review for provider progress in parent and subagent conversations",
+  "reason": "The changed journey shows one latest provider routing update while tool work runs and keeps exact earlier prose and thinking behind View work. A duplicate subagent wait strip is removed when this card already carries the wait, while the command callback strip and its URL remain. Operator wording now says Waiting for delegated work and Collect delegated reports; internal capability names and older durable receipts are preserved. Core saves an explicit UTF-16 boundary so completed parent and subagent answers remain clean after reload, without affecting direct answer streaming. Four Python cases cover the saved stream, metadata, and delegated wait contract. The selected component files cover splitting, reconciliation, disclosure, activity labels, callback controls, and existing states. The selected mocked browser cases cover waiting, callback resume, parent and child completion, reload, quotation, desktop and 320/390/430 px mobile layouts. The real-Core local delegation case covers the saved boundary, callback wait, resumed answer, reload, and production LAN origin on desktop and mobile Chromium/WebKit.",
+  "exclusions": "No full-suite approval was given. Native code and unrelated operator journeys are unchanged. The mobile profiles are browser emulations, not physical devices. The real-Core browser cases use a local model stub rather than an external provider account. No origin-sensitive browser API changes were made; the real-Core journey still runs at a non-loopback LAN origin.",
+  "expected_tests": {"python": 4, "frontend": 46, "native": 0, "playwright": 27},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [],
+  "python": [
+    "tests/v3/test_chat_leftovers.py::test_routing_commentary_stops_at_an_unreadable_frame_beside_a_real_call",
+    "tests/v3/test_chat_subagents.py::test_wait_resumes_parent_with_report_and_posts_result"
+  ],
   "frontend": [
     "ui/src/components/ActivityLedger.test.tsx",
-    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx"
+    "ui/src/components/activityLedgerModel.test.ts",
+    "ui/src/components/CallbackWaitingStatus.test.tsx",
+    "ui/src/pages/chatMessageReconciliation.test.ts",
+    "ui/src/pages/chatProgressContent.test.ts"
   ],
   "native": [],
   "playwright": [
-    "entry:activity-ledger/desktop",
-    "entry:activity-ledger/mobile-chromium-small",
-    "entry:activity-ledger/mobile-webkit",
-    "entry:chat-subagents/desktop",
-    "entry:chat-subagents/compact",
-    "entry:chat-subagents/mobile-chromium-small",
-    "entry:chat-subagents/mobile-chromium",
-    "entry:chat-subagents/mobile-chromium-wide",
-    "entry:chat-subagents/mobile-webkit-small",
-    "entry:chat-subagents/mobile-webkit",
-    "entry:chat-subagents/mobile-webkit-wide",
-    "entry:thinking-retention/model-desktop",
-    "entry:thinking-retention/model-compact",
-    "entry:thinking-retention/model-chromium-320",
-    "entry:thinking-retention/model-chromium-390",
-    "entry:thinking-retention/model-chromium-430",
-    "entry:thinking-retention/model-webkit-320",
-    "entry:thinking-retention/model-webkit-390",
-    "entry:thinking-retention/model-webkit-430",
-    "entry:chat-subagents-core/real-core"
+    "entry:conversation-progress/desktop",
+    "entry:conversation-progress/compact",
+    "entry:conversation-progress/mobile-chromium-small",
+    "entry:conversation-progress/mobile-chromium-ledger-390",
+    "entry:conversation-progress/mobile-chromium-wide",
+    "entry:conversation-progress/mobile-webkit-small",
+    "entry:conversation-progress/mobile-webkit",
+    "entry:conversation-progress/mobile-webkit-wide",
+    "entry:conversation-progress/assistant-real-desktop",
+    "entry:conversation-progress/assistant-real-chromium-390",
+    "entry:conversation-progress/assistant-real-webkit-390"
   ]
 }
