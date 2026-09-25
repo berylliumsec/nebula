@@ -1,10 +1,10 @@
 {
-  "change_digest": "160f211f4f0d560101fc1f738436af05d21783f77527abf69fd672fc5bf777d8",
-  "reviewed_by": "Claude focused review for storage-waste",
-  "reason": "Removes write amplification and retention leaks found during the lifecycle batch. (1) MIS-7/MIS-9: automation_runtime reuses the captured stream artifact as the redacted reference when redaction changes no bytes (a differing redacted copy is still written); ToolOutputService search skips a redacted twin of a stream it already searches; StoreToolEvidenceRecorder stops writing empty stdout/stderr placeholders for tools that produced no process output, and skips an MCP structured_content block that a text block already serializes. Receipt artifact, Evidence and ToolCall.result are kept. (2) delete_chat_session and delete_archived_engagement remove chat_turn_step_events and chat_turn_checkpoints of the deleted turns. (3) Grok ACP notifications Nebula ignores are counted on the terminal event instead of stored as notice rows; unhandled requests keep their notice. (4) Mission harness activity_events filters the run ledger to the turn's harness rows in SQL. Selected: the new regression file; the automation runtime/broker, callback webhook, storage, Grok ACP, harness command/activity/adapter, MCP probe, web search, structured results, SSH, browser companion and tool-failure suites (recorder and receipt consumers); the conversation/project deletion suites (archived project, temporary chat, guarded delete, chat API, subagent lifecycle); chat catch-up and the chat tool loop (harness activity and command receipts); missions; and test_harnesses.py and test_tool_catalog.py (gateway MCP receipts, activity replay, mission harness turns, catalog MCP calls).",
-  "exclusions": "Full suites are not approved and are excluded. test_api.py (the harness activity endpoint) is excluded: the endpoint delegates to activity_events, which the selection covers directly. No UI, Playwright, native Rust/Tauri or migration changes: no schema change, old rows keep validating, and existing redacted twins stay readable by id.",
+  "change_digest": "a09a3f7c8f0cc20236690a5cc8c74ad9f24ff85ae7ab5e44cde11df9e5065621",
+  "reviewed_by": "Claude focused review for lifecycle-docs",
+  "reason": "Documentation only. P20 updates docs/design/execution-recovery-lifecycle.md (provider admission queue, resume paths, interrupted-turn exits, state machines for tool calls, subagent rounds, goals, callback leases, harness turns and Mission runs, defect closure D16-D52), docs/design/native-subagents.md, docs/quality/callback-lifecycle-reconciliation.md, docs/NEBULA3.md (subagent tool list), docs/design/openrouter-native-harness.md and docs/design/openrouter-native-harness-handoff.md (superseded restart/delegation notes). No source, test, UI, native or workflow file changes, so no test at any layer exercises the diff.",
+  "exclusions": "Every layer is empty because the diff touches only Markdown under docs/: no Python, frontend, native or Playwright test reads or renders these files except tests/v3/test_operator_help.py, which asserts two unchanged strings in docs/NEBULA3.md (run locally as a sanity check, 2 passed; not selected). Full suites are not approved and are excluded. The mermaid diagrams were parsed and rendered with mermaid 11 in headless Chromium outside CI.",
   "expected_tests": {
-    "python": 679,
+    "python": 0,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -12,34 +12,9 @@
   "python_versions": [
     "3.12"
   ],
-  "python_browser": true,
+  "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_storage_waste.py",
-    "tests/v3/test_automation_runtime.py",
-    "tests/v3/test_process_results_webhook.py",
-    "tests/v3/test_storage.py",
-    "tests/v3/test_grok_acp_compliance.py",
-    "tests/v3/test_harness_commands.py",
-    "tests/v3/test_harness_activity_cost.py",
-    "tests/v3/test_harness_adapters.py",
-    "tests/v3/test_mcp_probe.py",
-    "tests/v3/test_web_search.py",
-    "tests/v3/test_structured_results.py",
-    "tests/v3/test_ssh_environments.py",
-    "tests/v3/test_browser_companion.py",
-    "tests/v3/test_tool_failures.py",
-    "tests/v3/test_archived_project_deletion.py",
-    "tests/v3/test_temporary_chat.py",
-    "tests/v3/test_guarded_delete.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_chat_subagent_lifecycle.py",
-    "tests/v3/test_chat_catchup.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_missions.py",
-    "tests/v3/test_harnesses.py",
-    "tests/v3/test_tool_catalog.py"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": []

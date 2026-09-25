@@ -32,8 +32,12 @@ Static mockups; names, steps and token counts are illustrative.
   `max_active_subagents` then refuses a start at that many and the model is
   told the limit. Retried steps reuse the same child (idempotency key).
 - `wait_subagents` (mode `all` or `any`) pauses the parent turn in
-  `waiting_callback`. When the wait is satisfied, Core resumes it and the tool
-  result carries each child's final answer as its report. Without ids and
+  `waiting_callback` and frees its provider slot. When the wait is satisfied,
+  Core resumes it through the provider queue; the turn keeps
+  `waiting_callback` through admission, so the wait step itself returns and its
+  tool result carries each child's final answer as its report. A wait satisfied
+  while the parent is still settling resumes it once the settle has freed its
+  slot. Without ids and
   with nothing running it waits on the finished children whose reports the
   parent has not received. The resume check matches the subagent and
   agent-message tools by a contract version (`subagents-v1`,
@@ -45,9 +49,12 @@ Static mockups; names, steps and token counts are illustrative.
   so later turns remember it. If the parent's goal is running and no children
   remain, Core continues the goal once with the operator's current turn
   settings, as every Core-started goal turn does: model, reasoning level,
-  tools, MCP servers, SSH hosts, hooks, subagents and agent messaging. Losing
-  that start to an operator message is not a failure and leaves the goal
-  running.
+  tools, MCP servers, SSH hosts, hooks, subagents and agent messaging. A
+  failed, stopped or interrupted report, or a child's message, continues it
+  at once. Losing that start to an operator message is not a failure and
+  leaves the goal running. A running goal with no claimed or pending turn and
+  no running subagent is continued (after a completed turn) or paused with the
+  reason by Core's 15 s recovery pass.
 - Reasoning level: `start_subagent` and `subagent.start` take an optional
   `reasoning_effort` (`none` to `xhigh`). Unset, a provider parent's child
   uses the conversation's current level (`metadata.reasoning_effort`, which
@@ -66,12 +73,20 @@ Static mockups; names, steps and token counts are illustrative.
   idle, or the parent's response ends without acting), it is stopped and its
   report names the approval it was waiting for.
 - A parent response that fails or is stopped stops the children it started,
-  and each report says why. A completed parent keeps them (they report into
-  the conversation), and so does a failed answer the operator can still
+  and each report says why. That includes a parent whose satisfied wait could
+  not resume (it fails and its goal pauses with the cause), an interrupted
+  parent Core settles because it will never resume it (its goal was
+  cancelled, completed or blocked, or its time budget is spent), and a harness
+  turn that is stopped or fails. A completed parent keeps them (they report
+  into the conversation), and so does a failed answer the operator can still
   retry; a parked or restart-interrupted parent is not ended. Stopping a
   subagent closes the parent messages it never read, so no new round starts
-  from them, and when Stop returns none of its turns runs. Restart marks
-  running children `interrupted` without resuming anything. Deleting a parent
+  from them; a round Core started in the meantime is stopped too, so when Stop
+  returns none of its turns runs, and a round that had already finished keeps
+  its report. After a restart, a child whose turn Core recovers stays
+  `running` (the list API shows `recovering`) and resumes on its own; a child
+  parked on an approval or a question keeps waiting; any other running child
+  is marked `interrupted` and reported to its parent. Deleting a parent
   conversation removes its finished subagent conversations and is refused while
   a subagent is running. Editing a message in place stops the subagents its
   retracted replies started; their reports and messages are not posted into
@@ -136,7 +151,10 @@ Parent and child exchange durable `ChatSubagentMessage` records
 
 Every way a subagent ends reaches the parent model with the cause:
 
-- A start failure is the `start_subagent` tool error, with the exception type.
+- A start failure is the `start_subagent` tool failure
+  (`nebula.tool-failure/v1`, see `docs/TOOL_FAILURE_CONTRACT.md`): its
+  category and next action, not Core's error text. The operator's
+  running-at-once limit reaches the model through its instructions.
 - A finished, failed, stopped or interrupted round is a report carrying
   `error`, `last_step`, `tool_failures` (failed or denied steps with their
   error, last eight) and `undelivered_messages` (parent messages it never
@@ -144,7 +162,8 @@ Every way a subagent ends reaches the parent model with the cause:
 - Core's own failures fail the subagent instead of leaving it running: a
   settle that raises marks it `failed` with "Nebula could not record this
   subagent's result (…)"; a waiting turn (parent or child) that cannot resume
-  fails visibly and its reports still post; a report that cannot be posted
+  fails visibly and its reports still post (a failed parent also stops its
+  children and pauses its goal); a report that cannot be posted
   stays unreceived (`reported_at` unset) and reaches the parent before its
   next step or in its next harness prompt; a goal that cannot continue is
   paused with the cause.
@@ -158,7 +177,9 @@ API: `GET /chat/sessions/{id}/subagents`,
 Composer strip `ChatSubagentRail`, docked `ChatSubagentPane` (sheet at ≤1100 px
 and inside Terminal/Browser side panels), inline `ChatSubagentResultCard`, and a
 "Subagents" toggle in Assistant settings. The list endpoint is polled every 2 s
-while any subagent is active, and while a response that may delegate runs. It
+while any subagent is active (`running`, `waiting_approval` or `recovering`),
+and while a response that may delegate runs, backing off to 4 s until a first
+child appears; a hidden page is not polled. It
 reads a finished child's step count and last steps from the end of its ledger,
 once per process, and loads neither its turn nor its history.
 

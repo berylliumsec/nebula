@@ -228,6 +228,10 @@ limits, active elapsed time, explicit Block with a reason, and Complete with a
 required summary and structured operator-confirmed evidence. Autonomous continuation,
 actual child delegation, full budget reservation/reconciliation at every provider
 boundary, richer session details and real-Core browser acceptance remain open.
+Since superseded: a running goal continues after every completed turn, restart
+recovery resumes a goal's interrupted turn automatically, and delegation shipped
+as native subagents; see `execution-recovery-lifecycle.md` and
+`native-subagents.md`.
 
 | Journey step | Observable invariant | State authority | Test layer |
 | --- | --- | --- | --- |
@@ -493,7 +497,9 @@ Resume until the operator records a completed or failed outcome with a note. Tha
 reconciliation is retained as unverified evidence and the tool is not replayed.
 Workbench Chat restores the interrupted state and exposes the reconcile-then-resume
 path. Fault injection at every request/tool/receipt boundary and production real-Core
-browser acceptance remain open, so G7 is not complete.
+browser acceptance remain open, so G7 is not complete. Since superseded
+(2026-09-22): restart recovery is automatic, without a reconcile-then-resume
+step; see `execution-recovery-lifecycle.md`.
 - [ ] **G8:** Adapt existing delegation infrastructure to bounded workspace tasks.
   Children inherit or narrow the parent's permissions and consume its shared budget.
   Expose child status and stop controls in existing session details. Parent pause or
@@ -517,6 +523,9 @@ turn may pause as `WAITING_CALLBACK` until the child completes or the operator
 opens it. Approvals stay on the parent conversation. The UI is provider-neutral:
 Assistant settings “Allow subagents”, a compact transcript count, activity-ledger
 rows, and session-details Open/Stop — no OpenRouter-specific chrome.
+Shipped differently: each child is its own conversation with a `ChatSubagent`
+record, not a child goal, and its approvals stay on the child turn; see
+`native-subagents.md`.
 - [ ] **G9:** Reuse existing hook facilities where applicable; add explicit,
   operator-configured lifecycle hooks with versioned events, timeouts and visible
   outcomes. Approval decisions cannot be bypassed by hooks. Unknown hook side
@@ -653,7 +662,7 @@ Codex or Claude. Browser/computer-control expansion is outside this scope.
 | Start goal/use skill | Explicit goal start; skill provenance; no authority expansion | Core goal/plan and workspace skill snapshot; runtime + browser |
 | Stream/approve/interrupt | Ordered output; durable decisions; visible stop acknowledgment | Core event/decision/tool ledger; runtime + real-Core |
 | Close browser/reconnect | Started work continues while Core runs; reconnect does not duplicate it | Core execution ownership; real-Core lifecycle |
-| Restart | Recover saved state paused; Resume required; uncertain effects reconciled | Durable receipts and ownership; restart fault injection |
+| Restart | Core resumes interrupted work automatically; uncertain effects become explicit unknowns and are never replayed (`execution-recovery-lifecycle.md`) | Durable receipts and ownership; restart fault injection |
 | Delegate/compact | Shared budgets and inherited permissions; important context retained | Core state; runtime tests |
 | Fork/restore | Explicit lineage; user edits never overwritten silently | Core lineage and workspace snapshot; conflict + browser tests |
 | Fail/retry/revoke | Safe recovery in place; stale credentials/selections cannot start work | Core/vault; contract + browser tests |
@@ -661,7 +670,8 @@ Codex or Claude. Browser/computer-control expansion is outside this scope.
 Core owns durable state; URL owns session identity. Component state owns only
 transient presentation and unsent input. Keep one project folder and freeze session
 permissions. Distinguish estimated cost from settled usage; do not claim strict cost
-limits without reliable accounting. After a Core restart, require explicit Resume.
+limits without reliable accounting. After a Core restart, Core recovers started
+work automatically; it never requires a Resume click.
 
 ## Verification and approval
 
