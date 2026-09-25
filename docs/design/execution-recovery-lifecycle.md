@@ -89,6 +89,7 @@ stateDiagram-v2
     [*] --> Queued: turn persisted
     Queued --> Routing: admitted
     Queued --> Cancelled: operator stop
+    Queued --> Failed: admission or execution claim failed
     Routing --> WaitingApproval: approval required
     Routing --> WaitingCallback: background command, subagent wait or child question
     Routing --> Finalizing: tools settled
@@ -119,7 +120,11 @@ keeps the state it parked in; `_stream_tool_turn` reads that state to choose the
 resume action. A turn is never admitted once cancelled. It frees its slot when
 provider work ends, before it settles, so a settle that resumes the same turn
 (a satisfied wait, or a child question closed while the parent is idle) is
-queued and admitted again.
+queued and admitted again. Nothing admits a turn again once its admission or
+execution claim failed, so it fails with the reason and a resend hint, and its
+row closes; a restart-recovery resume instead returns to `interrupted` with its
+automatic retry pending, and the next recovery pass retries it. A turn another
+runtime or worker owns, or one that already ended, is left as it is.
 
 | Resume path | Queued in | After admission |
 | --- | --- | --- |
@@ -151,7 +156,7 @@ rows.
 | Condition | Exit |
 | --- | --- |
 | Recovery required, caused by a Core stop or restart, not yet attempted | Core adopts late receipts, materializes unknowns, records `auto_resume_attempted_at`, resumes a paused goal with budget left, and starts the turn. `/state` reports `recovering`. |
-| The automatic start fails | The turn stays interrupted with `automatic_retry_pending`; the next pass retries; the goal pauses with the reason. |
+| The automatic start, or its admission, fails | The turn stays interrupted with `automatic_retry_pending`; the next pass retries; the goal pauses with the reason. |
 | Its goal is cancelled, completed or blocked, or its time budget is spent | Core cancels the turn with that reason, stops its subagents and posts the reports they held. |
 | Automatic resume already attempted, or the interruption was not Core's | `/state` reports `needs_stop`; Stop is the exit. |
 | Operator Stop, at any point | `cancel_turn` cancels the turn, its pending approval and open calls; background commands holding its callback lease are terminated; its subagents stop; held reports post; its goal pauses. |
