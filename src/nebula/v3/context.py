@@ -44,11 +44,20 @@ from .providers import (
 from .storage import ConflictError, NebulaStore, NotFoundError
 
 DEFAULT_CONTEXT_WINDOW = 8_192
-# Output allowance when the model's own output limit is unknown.
+# Output allowance when neither the model's window nor its output limit is known.
 DEFAULT_MAX_OUTPUT_TOKENS = 2_048
-# When the model's output limit is known, use that limit by default. Unknown
-# models retain the conservative fallback until a catalog or operator supplies
-# a bound. A configured output limit remains an explicit cap.
+# Otherwise a reply may use at most a quarter of the window by default, and at
+# least 8,192 tokens so a reasoning model keeps room to think on a smaller
+# window, though that floor never takes more than half of one. A published
+# output limit below that share is the default instead. Many endpoints publish
+# about 90% of the window as their output limit, which is a provider default
+# rather than a real limit: it sized replies so that one turn left a tenth of
+# the window for input, and compaction ran early. The share keeps such figures
+# from binding the default, while they still cap an explicit request. The
+# profile's own maximum and a request's maximum are explicit and not held to
+# the share.
+DEFAULT_OUTPUT_WINDOW_DIVISOR = 4
+DEFAULT_OUTPUT_FLOOR_TOKENS = 8_192
 CONTEXT_TARGET_FRACTION = 0.75
 COMPACTOR_INPUT_FRACTION = 0.60
 COMPACTOR_OUTPUT_FRACTION = 0.05
@@ -162,6 +171,19 @@ def _positive_option(value: Any, fallback: int) -> int:
     return fallback
 
 
+def _default_output_share(context_window: int) -> int:
+    """The largest default reply for a window whose size is known.
+
+    A quarter of the window, or 8,192 tokens when that is more, but never more
+    than half the window.
+    """
+
+    return max(
+        context_window // DEFAULT_OUTPUT_WINDOW_DIVISOR,
+        min(DEFAULT_OUTPUT_FLOOR_TOKENS, context_window // 2),
+    )
+
+
 def known_model_limits(model: str | None) -> tuple[int, int | None] | None:
     """Published (context_window, max_output_tokens) for a well-known hosted model.
 
@@ -236,6 +258,8 @@ def resolve_context_limits(
     route_limits_verified = model is not None and descriptor_routes_verified(
         descriptor, model
     )
+    # False where the window is only the flat fallback floor.
+    window_known = True
     route_context_window = 0
     route_input_limit = 0
     route_output_limit = 0
@@ -308,6 +332,7 @@ def resolve_context_limits(
         if not primary_window:
             # `max_output_tokens` is that same route's completion limit, so it
             # needs no floor of its own once the route's window is known.
+            window_known = False
             if model_output:
                 model_output = min(model_output, DEFAULT_MAX_OUTPUT_TOKENS)
             if configured_output:
@@ -326,23 +351,29 @@ def resolve_context_limits(
         context_window = DEFAULT_CONTEXT_WINDOW
         source = "fallback"
         estimated = True
+        window_known = False
     if model_output >= context_window:
         # A published output limit at or above the window never binds: output
         # stays below the window anyway. It is no separate output limit (the
         # rule scripts/refresh_known_model_limits.py applies to catalog data,
-        # and what an endpoint without max_completion_tokens reports), so it
-        # must not size the default to the whole window and leave no input.
+        # and what an endpoint without max_completion_tokens reports), so the
+        # window alone sizes the default rather than leaving it no input.
         model_output = 0
     output_caps = [max(1, context_window - 1)]
     if model_output:
         output_caps.append(model_output)
     if configured_output:
+        # The operator's own maximum sizes every reply, held only to the
+        # window and to a limit the model publishes.
         output_caps.append(configured_output)
-    default_output = (
-        min(*output_caps)
-        if model_output or configured_output
-        else min(DEFAULT_MAX_OUTPUT_TOKENS, *output_caps)
-    )
+        default_output = min(*output_caps)
+    elif model_output or window_known:
+        # A published limit above the share (including the ~90%-of-window
+        # figure endpoints publish when they have no separate limit) stays a
+        # cap on explicit requests but does not size the default.
+        default_output = min(_default_output_share(context_window), *output_caps)
+    else:
+        default_output = min(DEFAULT_MAX_OUTPUT_TOKENS, *output_caps)
     output = min(requested_output_tokens or default_output, *output_caps)
     input_capacity = context_window - output
     if input_limit:

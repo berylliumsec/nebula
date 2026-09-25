@@ -272,7 +272,11 @@ Sources: docs/NEBULA3.md#context-compaction, src/nebula/v3/context.py, src/nebul
 Nebula compacts analyst chat and mission dependency context when estimated input
 approaches 75 percent of the configured model capacity. Provider options may declare
 `context_window` and `max_output_tokens`; without them Core conservatively assumes
-an 8,192-token window and a 2,048-token output allowance. Compaction uses the
+an 8,192-token window and a 2,048-token output allowance. Once the window is known,
+a reply may use up to a quarter of it by default (at least 8,192 tokens, never more
+than half), or the model's published output limit when that is smaller; the rest
+is the input capacity. A declared `max_output_tokens` sizes every reply instead.
+Compaction uses the
 session's selected provider and model and can add latency, usage, and cost.
 
 Compaction fails closed: a required summary that cannot be validated produces a
