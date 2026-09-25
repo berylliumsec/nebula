@@ -26,11 +26,14 @@ from nebula.v3.tool_results import ToolResultReceipt, ToolResultStatus
 from nebula.v3.tool_failures import FAILURE_SCHEMA, tool_failure
 from nebula.v3.tools import (
     AnalysisTool,
+    BudgetExhausted,
+    CapacityReached,
     InvalidToolArguments,
     StoreToolLedger,
     ToolBroker,
     ToolExecutionResult,
     ToolInvocation,
+    ToolNotPermitted,
     ToolRegistry,
     ToolSpec,
 )
@@ -537,3 +540,95 @@ def test_gateway_preserves_mcp_schema_and_name_on_denial():
     assert failure["category"] == "permission_denied"
     assert failure["side_effects"] == "none"
     assert "private path" not in json.dumps(failure)
+
+
+def _start_spec() -> ToolSpec:
+    return ToolSpec(
+        name="start_subagent",
+        description="Delegate a task.",
+        input_schema={
+            "type": "object",
+            "properties": {"task": {"type": "string"}},
+            "required": ["task"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object", "additionalProperties": True},
+        risk_class=RiskClass.LOCAL_READ,
+    )
+
+
+# Whatever phase a caller reports, a limit refusal happened before the call
+# ran: that is what makes a capacity refusal safe to retry after waiting.
+@pytest.mark.parametrize("phase", ["before_execution", "after_execution"])
+def test_capacity_refusal_says_wait_then_retry_with_core_numbers(phase):
+    refusal = CapacityReached(
+        "the operator allows 1 running at once and 1 already are",
+        resource="running_subagents",
+        maximum=1,
+        current=1,
+    )
+    failure = tool_failure(_start_spec(), {"task": "Two."}, refusal, phase=phase)
+
+    assert failure["category"] == "capacity_reached"
+    assert failure["side_effects"] == "none"
+    assert failure["retry_safe"] is True
+    assert failure["next_action"] == (
+        "Wait for running work to finish, then retry this call."
+    )
+    assert failure["invalid_input"] is None
+    assert failure["limit"] == {
+        "resource": "running_subagents",
+        "maximum": 1,
+        "current": 1,
+    }
+    # The limit travels as Core's numbers, never as the refusal's text.
+    assert "operator allows" not in json.dumps(failure)
+
+
+def test_exhausted_budget_is_not_retried():
+    refusal = BudgetExhausted(
+        "the goal's token budget is used up",
+        resource="goal_tokens",
+        maximum=20_000,
+        current=20_150,
+    )
+    failure = tool_failure(
+        _start_spec(), {"task": "More."}, refusal, phase="after_execution"
+    )
+
+    assert failure["category"] == "budget_exhausted"
+    assert failure["side_effects"] == "none"
+    assert failure["retry_safe"] is False
+    assert failure["next_action"].startswith("Do not retry this call")
+    assert failure["limit"] == {
+        "resource": "goal_tokens",
+        "maximum": 20_000,
+        "current": 20_150,
+    }
+    assert "goal's token budget" not in json.dumps(failure)
+
+
+def test_rule_refusal_is_not_permitted_and_other_failures_carry_no_limit():
+    denied = tool_failure(
+        _start_spec(),
+        {"task": "Nested."},
+        ToolNotPermitted(
+            "subagents cannot start their own subagents", rule="subagents.depth"
+        ),
+        phase="before_execution",
+    )
+    assert denied["category"] == "permission_denied"
+    assert denied["side_effects"] == "none"
+    assert denied["retry_safe"] is False
+    assert "do not repeat" in denied["next_action"]
+    assert "limit" not in denied
+    assert "own subagents" not in json.dumps(denied)
+
+    invalid = tool_failure(
+        _start_spec(),
+        {"task": " "},
+        InvalidToolArguments("task must describe the delegated work"),
+        phase="before_execution",
+    )
+    assert invalid["category"] == "invalid_arguments"
+    assert "limit" not in invalid

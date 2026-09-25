@@ -29,8 +29,11 @@ Static mockups; names, steps and token counts are illustrative.
   sent its message). It returns immediately, so children run in parallel
   despite one tool call per routing step. There is no limit on how many run
   unless the operator sets "Running at once" (1-100) in Assistant settings;
-  `max_active_subagents` then refuses a start at that many and the model is
-  told the limit. Retried steps reuse the same child (idempotency key).
+  `max_active_subagents` then refuses a start at that many as
+  `capacity_reached` (wait for one to finish, then retry; the limit and the
+  running count travel as `limit`), and the instructions state it too. A goal
+  whose token budget is used up refuses a start as `budget_exhausted`.
+  Retried steps reuse the same child (idempotency key).
 - `wait_subagents` (mode `all` or `any`) pauses the parent turn in
   `waiting_callback` and frees its provider slot. When the wait is satisfied,
   Core resumes it through the provider queue; the turn keeps
@@ -153,8 +156,12 @@ Every way a subagent ends reaches the parent model with the cause:
 
 - A start failure is the `start_subagent` tool failure
   (`nebula.tool-failure/v1`, see `docs/TOOL_FAILURE_CONTRACT.md`): its
-  category and next action, not Core's error text. The operator's
-  running-at-once limit reaches the model through its instructions.
+  category and next action, not Core's error text, on provider and harness
+  parents alike. The running-at-once limit is `capacity_reached` with the
+  limit as Core's numbers; an exhausted goal budget is `budget_exhausted`;
+  a rule (turned off, depth, no provider model) is `permission_denied`; a
+  bad argument is `invalid_arguments`; a start Core could not complete is
+  `execution_failed`.
 - A finished, failed, stopped or interrupted round is a report carrying
   `error`, `last_step`, `tool_failures` (failed or denied steps with their
   error, last eight) and `undelivered_messages` (parent messages it never

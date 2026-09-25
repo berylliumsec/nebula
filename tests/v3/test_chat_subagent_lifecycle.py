@@ -20,6 +20,7 @@ import nebula.v3.chat_goals as chat_goals_module
 from nebula.v3.api import create_app
 from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
+from nebula.v3.chat_subagents import SubagentNotStarted
 from nebula.v3.domain import (
     Approval,
     ApprovalStatus,
@@ -42,7 +43,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.providers import ModelRequest, ModelResponse, ModelUsage, ToolCall
 from nebula.v3.storage import NebulaStore
-from nebula.v3.tools import InvalidToolArguments, ToolCallOrigin, ToolInvocation
+from nebula.v3.tools import ToolCallOrigin, ToolInvocation
 from tests.v3.test_chat_subagents import (
     RoutedProvider,
     _call,
@@ -628,7 +629,7 @@ def test_subagent_gets_only_the_ssh_hosts_its_parent_was_given(
             workspace=tmp_path,
             idempotency_key="start-1",
         )
-        with pytest.raises(InvalidToolArguments):
+        with pytest.raises(SubagentNotStarted):
             await chat.subagents.start(
                 invocation, task="Check the hosts.", name=None, context=None
             )
@@ -644,7 +645,7 @@ def test_subagent_gets_only_the_ssh_hosts_its_parent_was_given(
             finished_at=datetime.now(timezone.utc),
             child_status=ChatTurnStatus.COMPLETE,
         )
-        with pytest.raises(InvalidToolArguments):
+        with pytest.raises(SubagentNotStarted):
             await chat.subagents.send_to_child(
                 parent_session.id,
                 record.id,

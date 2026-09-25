@@ -639,6 +639,18 @@ def test_discovery_limit_is_refused_without_changing_the_tools_array(tmp_path):
     refused = json.loads(history[-1]["provider_result"])
     assert refused["schema"] == "nebula.tool-failure/v1"
     assert refused["tool"] == CATALOG_SEARCH
+    # The allowance lasts the turn: nothing ran, and waiting does not free it,
+    # so the model is told not to retry and gets Core's numbers.
+    assert refused["category"] == "budget_exhausted"
+    assert refused["side_effects"] == "none"
+    assert refused["retry_safe"] is False
+    assert refused["invalid_input"] is None
+    assert refused["limit"] == {
+        "resource": "catalog_discovery_calls_per_turn",
+        "maximum": MAX_CATALOG_CALLS_PER_TURN,
+        "current": MAX_CATALOG_CALLS_PER_TURN,
+    }
+    assert "search limit" not in history[-1]["provider_result"]
     assert len(history) == MAX_CATALOG_CALLS_PER_TURN + 1
     assert all(item["status"] == "complete" for item in history[:-1])
 

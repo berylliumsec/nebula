@@ -177,6 +177,7 @@ from .tool_markup import partial_tag_start as tool_frame_partial_start
 from .tools import (
     RETRIEVAL_TOOL_NAMES,
     ApprovalRequired,
+    BudgetExhausted,
     InvalidToolArguments,
     ParallelismPolicy,
     PolicyDenied,
@@ -6621,22 +6622,27 @@ class ChatService:
                     provider_history_intent=_history_intent(entry, intent_event),
                 )
                 try:
-                    if (
-                        call.name in CATALOG_DISCOVERY_NAMES
-                        and discovery_calls(
+                    searched = (
+                        discovery_calls(
                             item
                             for item in self._turn_history(turn)
                             # The ledger already holds this call's running
                             # intent; count only the calls before it.
                             if item.get("step") != step
                         )
-                        >= MAX_CATALOG_CALLS_PER_TURN
-                    ):
+                        if call.name in CATALOG_DISCOVERY_NAMES
+                        else 0
+                    )
+                    if searched >= MAX_CATALOG_CALLS_PER_TURN:
                         # Refused rather than removed from the function list,
-                        # which would change the cached request prefix.
-                        raise InvalidToolArguments(
+                        # which would change the cached request prefix. The
+                        # allowance lasts the turn, so waiting cannot free it.
+                        raise BudgetExhausted(
                             "the catalog search limit for this turn is reached; "
-                            "use a tool already loaded or answer directly"
+                            "use a tool already loaded or answer directly",
+                            resource="catalog_discovery_calls_per_turn",
+                            maximum=MAX_CATALOG_CALLS_PER_TURN,
+                            current=searched,
                         )
                     result = await components.broker.execute(
                         invocation, components.scope

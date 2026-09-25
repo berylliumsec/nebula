@@ -169,9 +169,12 @@ from .tools import (
     PolicyDenied,
     StoreToolEvidenceRecorder,
     StoreToolLedger,
+    ToolBrokerError,
     ToolExecutionResult,
     ToolInvocation,
+    ToolNotPermitted,
     ToolSpec,
+    refused_before_execution,
 )
 
 if TYPE_CHECKING:
@@ -13326,7 +13329,13 @@ class HarnessRuntimeService:
         name: str,
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
-        """Run a provider-subagent tool for the active harness chat turn."""
+        """Run a provider-subagent tool for the active harness chat turn.
+
+        A refusal is raised to ``_gateway_call``, which classifies it by type
+        as the provider-chat path does: the operator's running-at-once limit
+        is a capacity refusal, a rule is not permitted, a bad argument is
+        invalid input.
+        """
 
         service = self.provider_subagents
         if (
@@ -13336,8 +13345,9 @@ class HarnessRuntimeService:
             or not turn.chat_turn_id
             or not isinstance(turn.metadata.get("provider_subagent"), dict)
         ):
-            return self._gateway_denial(
-                "Provider subagents are turned off for this conversation."
+            raise ToolNotPermitted(
+                "Provider subagents are turned off for this conversation.",
+                rule="subagents.turned_off",
             )
         parent_session_id = turn.chat_session_id
         call = ToolCall(
@@ -13361,9 +13371,11 @@ class HarnessRuntimeService:
             _, schema = _gateway_subagent_tools(kind)[name]
             if not Draft7Validator(schema).is_valid(arguments):
                 accepted = ", ".join(schema.get("properties", {}))
-                raise InvalidToolArguments(
-                    f"Invalid arguments for {name}. Accepted: {accepted}. "
-                    "Correct the arguments and retry."
+                raise refused_before_execution(
+                    InvalidToolArguments(
+                        f"Invalid arguments for {name}. Accepted: {accepted}. "
+                        "Correct the arguments and retry."
+                    )
                 )
             if name == "subagent.start":
                 invocation = ToolInvocation(
@@ -13447,10 +13459,7 @@ class HarnessRuntimeService:
                 # A harness receives subagent news only through these results,
                 # a steer or its next prompt, so each result carries it.
                 result = service.with_harness_updates(parent_session_id, result)
-        except (
-            InvalidToolArguments,
-            ChatError,
-        ) as exc:  # diagnostic-expected: return typed gateway denial
+        except (ToolBrokerError, ChatError) as exc:
             record_caught_exception(
                 "harnesses",
                 "harnesses.gateway.subagent_refused",
@@ -13460,7 +13469,7 @@ class HarnessRuntimeService:
                 metadata={"tool_name": name},
             )
             self._finish_gateway_call(call.id, error=exc)
-            return self._gateway_denial(str(exc))
+            raise
         except Exception as exc:
             self._finish_gateway_call(call.id, error=exc)
             raise
@@ -13479,7 +13488,10 @@ class HarnessRuntimeService:
         name: str,
         arguments: dict[str, Any],
     ) -> dict[str, Any]:
-        """Run a project-scoped peer-agent tool for a harness chat."""
+        """Run a project-scoped peer-agent tool for a harness chat.
+
+        Refusals are raised to ``_gateway_call`` and classified by type.
+        """
 
         service = self.agent_messages
         if (
@@ -13489,16 +13501,19 @@ class HarnessRuntimeService:
             or not turn.chat_turn_id
             or turn.metadata.get("allow_agent_messaging") is not True
         ):
-            return self._gateway_denial(
-                "Agent messaging is turned off for this conversation."
+            raise ToolNotPermitted(
+                "Agent messaging is turned off for this conversation.",
+                rule="agent_messages.turned_off",
             )
         description, schema = _GATEWAY_AGENT_MESSAGE_SCHEMAS[name]
         del description
         if not Draft7Validator(schema).is_valid(arguments):
             accepted = ", ".join(schema.get("properties", {}))
-            return self._gateway_denial(
-                f"Invalid arguments for {name}. Accepted: {accepted}. "
-                "Correct the arguments and retry."
+            raise refused_before_execution(
+                InvalidToolArguments(
+                    f"Invalid arguments for {name}. Accepted: {accepted}. "
+                    "Correct the arguments and retry."
+                )
             )
         call = ToolCall(
             id=str(uuid4()),
@@ -13547,12 +13562,17 @@ class HarnessRuntimeService:
                     str(arguments.get("session_id") or ""),
                     str(arguments.get("message") or ""),
                 )
-        except (
-            InvalidToolArguments,
-            ChatError,
-        ) as exc:  # diagnostic-expected: return typed gateway denial
+        except (ToolBrokerError, ChatError) as exc:
+            record_caught_exception(
+                "harnesses",
+                "harnesses.gateway.agent_message_refused",
+                "A harness agent-messaging call was refused.",
+                exc,
+                stage="gateway",
+                metadata={"tool_name": name},
+            )
             self._finish_gateway_call(call.id, error=exc)
-            return self._gateway_denial(str(exc))
+            raise
         except Exception as exc:
             self._finish_gateway_call(call.id, error=exc)
             raise

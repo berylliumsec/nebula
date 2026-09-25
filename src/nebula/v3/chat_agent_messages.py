@@ -42,7 +42,14 @@ from .domain import (
 )
 from .runtime_platform import RuntimeToolComponents
 from .storage import ConflictError, NotFoundError
-from .tools import InvalidToolArguments, ToolExecutionResult, ToolInvocation, ToolSpec
+from .tools import (
+    InvalidToolArguments,
+    ToolExecutionResult,
+    ToolInvocation,
+    ToolNotPermitted,
+    ToolSpec,
+    refused_before_execution,
+)
 
 if TYPE_CHECKING:
     from .storage import NebulaStore
@@ -103,14 +110,21 @@ class AgentMessageService:
 
     def _invoking_session(self, invocation: ToolInvocation) -> ChatSession:
         if not invocation.chat_session_id:
-            raise InvalidToolArguments("agent messaging requires a chat session")
+            raise ToolNotPermitted(
+                "agent messaging requires a chat session",
+                rule="agent_messages.chat_session",
+            )
         session = self.store.get(ChatSession, invocation.chat_session_id)
         if not self._addressable(session):
-            raise InvalidToolArguments(
-                "agent messaging is turned off for this conversation"
+            raise ToolNotPermitted(
+                "agent messaging is turned off for this conversation",
+                rule="agent_messages.turned_off",
             )
         if session.engagement_id != invocation.engagement_id:
-            raise InvalidToolArguments("agent messaging is limited to this project")
+            raise ToolNotPermitted(
+                "agent messaging is limited to this project",
+                rule="agent_messages.project",
+            )
         return session
 
     def peers(self, session: ChatSession) -> list[dict[str, Any]]:
@@ -378,20 +392,29 @@ class AgentMessageService:
     ) -> dict[str, Any]:
         sender = self._invoking_session(invocation)
         content = content.strip()
+        # Refused before anything is stored, so these had no effect.
         if not content:
-            raise InvalidToolArguments("message must say something")
+            raise refused_before_execution(
+                InvalidToolArguments("message must say something")
+            )
         if len(content) > 20_000:
-            raise InvalidToolArguments("message must be at most 20000 characters")
+            raise refused_before_execution(
+                InvalidToolArguments("message must be at most 20000 characters")
+            )
         try:
             recipient = self.store.get(ChatSession, recipient_session_id)
         except NotFoundError as exc:
-            raise InvalidToolArguments("unknown peer agent session_id") from exc
+            raise refused_before_execution(
+                InvalidToolArguments("unknown peer agent session_id")
+            ) from exc
         if (
             recipient.engagement_id != sender.engagement_id
             or recipient.id == sender.id
             or not self._addressable(recipient)
         ):
-            raise InvalidToolArguments("unknown peer agent session_id")
+            raise refused_before_execution(
+                InvalidToolArguments("unknown peer agent session_id")
+            )
 
         key = (
             invocation.idempotency_key
@@ -430,7 +453,9 @@ class AgentMessageService:
             ):
                 # Recheck after the initial lookup so an archive/disable racing
                 # this send wins through the session revision below.
-                raise InvalidToolArguments("unknown peer agent session_id")
+                raise refused_before_execution(
+                    InvalidToolArguments("unknown peer agent session_id")
+                )
             stored = self.store.list_session_entities(ChatMessage, recipient.id)
             recorded = current.metadata.get("last_sequence")
             sequence = (
@@ -528,8 +553,10 @@ class AgentMessageBroker:
                     str(invocation.arguments.get("message") or ""),
                 )
             )
-        raise InvalidToolArguments(
-            f"unsupported agent messaging capability {invocation.tool_name!r}"
+        raise refused_before_execution(
+            InvalidToolArguments(
+                f"unsupported agent messaging capability {invocation.tool_name!r}"
+            )
         )
 
 

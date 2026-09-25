@@ -626,12 +626,20 @@ def test_operator_subagent_limit_is_reported_to_the_model(tmp_path: Path) -> Non
 
     statuses = [entry["status"] for entry in _history(store, parent)]
     assert statuses == ["complete", "complete", "failed"]
-    # A tool failure carries no exception text (docs/TOOL_FAILURE_CONTRACT.md);
-    # the limit itself reaches the model in its instructions, asserted below.
+    # A tool failure carries no exception text (docs/TOOL_FAILURE_CONTRACT.md):
+    # a capacity refusal carries the limit as Core's numbers, and the
+    # instructions state it too, asserted below.
     refused = json.loads(_history(store, parent)[-1]["provider_result"])
     assert refused["schema"] == "nebula.tool-failure/v1"
     assert refused["tool"] == "start_subagent"
-    assert refused["category"] == "invalid_arguments"
+    assert refused["category"] == "capacity_reached"
+    assert refused["side_effects"] == "none"
+    assert refused["retry_safe"] is True
+    assert refused["limit"] == {
+        "resource": "running_subagents",
+        "maximum": 2,
+        "current": 2,
+    }
     assert len(store.list_entities(ChatSubagent)) == 2
     assert parent.request_snapshot["max_active_subagents"] == 2
     assert "at most 2 running at once" in (
@@ -1220,9 +1228,11 @@ def test_subagent_start_failure_leaves_no_child_conversation_or_duplicate_report
         assert step["name"] == "start_subagent"
         assert step["status"] == "failed"
         # The model gets the failure contract's envelope, never the exception.
+        # Core could not start it: no argument to correct.
         failure = json.loads(step["provider_result"])
         assert failure["schema"] == "nebula.tool-failure/v1"
         assert failure["tool"] == "start_subagent"
+        assert failure["category"] == "execution_failed"
         assert "child provider offline" not in json.dumps(step)
         # No phantom child conversation, no failed record to re-report.
         assert store.list_entities(ChatSubagent) == []
