@@ -1207,6 +1207,17 @@ def test_callback_key_recorded_before_it_left_the_receipt_is_never_read_back(
         (read,) = ledger.history(turn)
         assert legacy_key not in json.dumps(read)
         assert json.loads(read["provider_result"])["results_url"] == results_url
+    # The folded history is cached per turn and extended with new rows only;
+    # neither the cached fold nor an extended one brings the key back.
+    in_ledger = turns["turn-in-ledger"]
+    assert legacy_key not in json.dumps(ledger.history(in_ledger))
+    ledger.append(
+        in_ledger.id,
+        {**entry, "step": 1, "model_call_id": "call-2", "status": "complete"},
+    )
+    extended = ledger.history(in_ledger)
+    assert [item["step"] for item in extended] == [0, 1]
+    assert legacy_key not in json.dumps(extended)
     tail = ledger.tail("turn-in-ledger", 5)
     event = ledger.event("turn-in-ledger", "legacy-waiting")
     assert tail is not None and event is not None
