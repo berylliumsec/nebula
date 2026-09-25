@@ -1345,3 +1345,236 @@ def test_companion_refusals_before_execution_report_no_side_effects(
     assert replayed.output["category"] == category
     # Nothing reached the browser.
     assert broker.service.actions(browser.id) == []
+
+
+def _provider_chat_with_companion(tmp_path, arguments, *, answer):
+    """A provider chat whose one tool call reaches a real CompanionBroker."""
+
+    import dataclasses
+
+    from nebula.v3.browser_companion_tools import CompanionBroker
+    from nebula.v3.domain import BrowserIdentity as Identity, BrowserSession as Browser
+    from nebula.v3.providers import ToolCall
+    from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
+
+    store, service, prepared, provider = _prepared(
+        tmp_path,
+        [
+            _response(
+                calls=[
+                    ToolCall(id="call-1", name="browser.companion", arguments=arguments)
+                ]
+            ),
+            _response(text=answer),
+        ],
+        RecordingBroker(),
+    )
+    identity = store.create(Identity(engagement_id="project", name="Browser"))
+    browser = store.create(
+        Browser(
+            engagement_id="project",
+            identity_id=identity.id,
+            name="Browser",
+            metadata={
+                "browser_companion_version": 1,
+                "assistant_paused": False,
+                "conversation_id": "session",
+            },
+        )
+    )
+    broker = CompanionBroker(store, browser.id)
+    prepared.tool_components = dataclasses.replace(
+        prepared.tool_components,
+        broker=broker,
+        specs={broker.spec.name: broker.spec},
+    )
+    return store, service, prepared, provider, broker, browser
+
+
+def _refused_before_execution(store, turn_id, provider, status="denied"):
+    import json
+
+    from nebula.v3.domain import ChatTurn, ChatTurnStatus
+
+    turn = store.get(ChatTurn, turn_id)
+    assert turn.status == ChatTurnStatus.COMPLETE
+    [entry] = turn.tool_history
+    assert entry["name"] == "browser.companion" and entry["status"] == status
+    failure = json.loads(entry["provider_result"])
+    # The #520 contract: the operator's rule refused the call, nothing ran,
+    # and the call is not to be repeated as it was.
+    assert failure["schema"] == "nebula.tool-failure/v1"
+    assert failure["category"] == "permission_denied"
+    assert failure["side_effects"] == "none"
+    assert failure["invalid_input"] is None
+    assert failure["retry_safe"] is False
+    [replayed] = provider.requests[-1].tool_results
+    assert replayed.is_error is True
+    assert replayed.output["category"] == "permission_denied"
+    assert replayed.output["side_effects"] == "none"
+
+
+def test_a_nebula_approval_handed_to_the_browser_is_refused_before_execution(
+    tmp_path,
+):
+    """Browser changes are approved in the inline panel, not by a Nebula approval.
+
+    The refusal read as invalid input with unknown side effects, although the
+    browser received nothing.
+    """
+
+    import dataclasses
+
+    from nebula.v3.domain import (
+        Approval,
+        ApprovalStatus,
+        ChatTurn,
+        ChatTurnStatus,
+        RiskClass,
+        ToolCall as PersistedToolCall,
+        utc_now,
+    )
+    from nebula.v3.tools import ApprovalRequired
+
+    arguments = {"operation": "tabs", "url": "https://example.test/"}
+    store, service, prepared, provider, broker, browser = _provider_chat_with_companion(
+        tmp_path, arguments, answer="Browser actions are approved beside the page."
+    )
+    approval = store.create(
+        Approval(
+            id="approval-1",
+            engagement_id="project",
+            run_id="turn",
+            risk_class=RiskClass.PASSIVE,
+            exact_request={"tool_name": "browser.companion", "arguments": arguments},
+            policy_rationale="the operator approves this browser call",
+            requested_by="chat-assistant",
+        )
+    )
+
+    class ApprovalFirst:
+        """Pauses for a Nebula approval, then hands it to the browser broker."""
+
+        async def execute(self, invocation, scope, *, approval=None):
+            if approval is None:
+                raise ApprovalRequired(store.get(Approval, "approval-1"))
+            return await broker.execute(invocation, scope, approval=approval)
+
+    prepared.tool_components = dataclasses.replace(
+        prepared.tool_components, broker=ApprovalFirst()
+    )
+
+    async def scenario():
+        turn_id = service.start_provider_turn(prepared)
+        first = [event async for event, _ in service.follow_provider_turn(turn_id)]
+        assert first[-1] == "approval_required"
+        paused = store.get(ChatTurn, turn_id)
+        assert paused.status == ChatTurnStatus.WAITING_APPROVAL
+        store.update(
+            Approval,
+            approval.id,
+            {
+                "status": ApprovalStatus.APPROVED,
+                "decided_by": "operator",
+                "decided_at": utc_now(),
+            },
+            expected_revision=approval.revision,
+        )
+        prepared.turn = paused
+        prepared.execution_claim_id = None
+        service.start_provider_turn(prepared)
+        resumed = [event async for event, _ in service.follow_provider_turn(turn_id)]
+        assert resumed[-1] == "done"
+        await service.shutdown()
+        return turn_id
+
+    turn_id = asyncio.run(scenario())
+
+    _refused_before_execution(store, turn_id, provider)
+    # Nothing reached the browser or its ledger.
+    assert broker.service.actions(browser.id) == []
+    assert store.list_entities(PersistedToolCall) == []
+
+
+@pytest.mark.parametrize(
+    ("arguments", "pause_on"),
+    [
+        # A change: the operator pauses while Core reads the page to check it.
+        (
+            {
+                "operation": "click",
+                "tab_id": "tab",
+                "page_revision": "page-1",
+                "element_id": "0",
+                "url": "https://example.test/",
+            },
+            "capture",
+        ),
+        # A read: the operator pauses while Core checks the tab.
+        (
+            {"operation": "scroll", "tab_id": "tab", "url": "https://example.test/"},
+            "tabs",
+        ),
+    ],
+)
+def test_control_paused_mid_request_is_refused_before_the_browser_acts(
+    tmp_path, monkeypatch, arguments, pause_on
+):
+    """Pausing control while a call is checked refuses it, and says nothing ran.
+
+    The refusal fired after the call was marked running, as an execution
+    failure with unknown side effects.
+    """
+
+    import httpx
+
+    from nebula.v3.domain import ToolCall as PersistedToolCall, ToolCallStatus
+
+    store, service, prepared, provider, broker, browser = _provider_chat_with_companion(
+        tmp_path, arguments, answer="The operator paused browser control."
+    )
+    sent: list[str] = []
+
+    class Adapter:
+        async def _request(self, method, path, payload):
+            sent.append(payload["operation"])
+            if payload["operation"] == pause_on:
+                broker.service.takeover(browser.id, True)
+            return httpx.Response(
+                200,
+                request=httpx.Request(method, "http://fixture.test" + path),
+                json={
+                    "tabs": [
+                        {"id": "tab", "title": "Page", "url": "https://example.test/"}
+                    ]
+                }
+                if payload["operation"] == "tabs"
+                else {
+                    "page_revision": "page-1",
+                    "elements": [{"id": "0", "sensitive": False, "type": "button"}],
+                    "text": "Page",
+                },
+            )
+
+    async def adapter():
+        return Adapter()
+
+    monkeypatch.setattr(broker.service, "adapter", adapter)
+    monkeypatch.setattr(broker.service.security, "_scope", lambda _: None)
+    monkeypatch.setattr(
+        broker.service.security, "_require_in_scope", lambda *args: None
+    )
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == "The operator paused browser control."
+    _refused_before_execution(store, "turn", provider)
+    # Only reads reached the browser, no change was proposed, and the ledger
+    # records a denial.
+    assert arguments["operation"] not in sent
+    assert broker.service.actions(browser.id) == []
+    [call] = store.list_entities(PersistedToolCall)
+    assert call.status == ToolCallStatus.DENIED
+    if arguments["operation"] == "click":
+        # The check ran before the call was marked running.
+        assert call.started_at is None

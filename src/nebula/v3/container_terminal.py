@@ -32,7 +32,6 @@ from .domain import (
     Engagement,
     ExecutionLimitsSnapshot,
     NebulaModel,
-    OperationEvent,
     RunnerIsolation,
     RunnerRuntime,
     VpnProfile,
@@ -483,7 +482,7 @@ class ContainerTerminalService:
                 )
         if self.tool_platform is not None:
             await self.tool_platform.cleanup_operator_terminals()
-        self._recover_interrupted_events()
+        await asyncio.to_thread(self._recover_interrupted_events)
 
     def bind_execution_service(self, service: ExecutionService) -> None:
         if service.store is not self.store:
@@ -2140,40 +2139,35 @@ class ContainerTerminalService:
         )
 
     def _recover_interrupted_events(self) -> None:
-        # Runs at startup: an unreadable project is skipped, not fatal.
-        for engagement in self.store.iter_readable_entities(Engagement):
-            event_offset = 0
-            latest: dict[str, OperationEvent] = {}
-            while True:
-                events = self.store.list_operation_events(
-                    engagement.id, offset=event_offset, limit=10_000
-                )
-                for event in events:
-                    if event.operation_kind == "container_terminal":
-                        previous = latest.get(event.operation_id)
-                        if previous is None or event.sequence > previous.sequence:
-                            latest[event.operation_id] = event
-                if len(events) < 10_000:
-                    break
-                event_offset += len(events)
-            for operation_id, value in latest.items():
-                event = value
-                if event.event_type == "container_terminal.terminal":
-                    continue
-                self.store.append_operation_event(
-                    operation_id,
-                    "container_terminal",
-                    engagement.id,
-                    "container_terminal.terminal",
-                    {
-                        "status": "interrupted",
-                        "exit_code": None,
-                        "error_code": "interrupted",
-                        "detail": "Core restarted before the terminal session ended",
-                    },
-                    actor_id=event.actor_id,
-                    idempotency_key=(f"container-terminal:{operation_id}:terminal"),
-                )
+        # Runs at startup, so it reads only the sessions that never recorded a
+        # terminal event, not the project's whole event history. An unreadable
+        # project is skipped, not fatal.
+        unsettled = self.store.unsettled_operation_events(
+            "container_terminal", "container_terminal.terminal"
+        )
+        if not unsettled:
+            return
+        readable = {
+            engagement.id
+            for engagement in self.store.iter_readable_entities(Engagement)
+        }
+        for event in unsettled:
+            if event.engagement_id not in readable:
+                continue
+            self.store.append_operation_event(
+                event.operation_id,
+                "container_terminal",
+                event.engagement_id,
+                "container_terminal.terminal",
+                {
+                    "status": "interrupted",
+                    "exit_code": None,
+                    "error_code": "interrupted",
+                    "detail": "Core restarted before the terminal session ended",
+                },
+                actor_id=event.actor_id,
+                idempotency_key=(f"container-terminal:{event.operation_id}:terminal"),
+            )
 
     def _event(
         self,

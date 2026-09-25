@@ -98,6 +98,8 @@ class Case:
     # A scan reports each row it skips; a record read by id fails only the
     # recovery of the item that needed it.
     scanned: bool = True
+    # State outside the entity table that makes startup read the records.
+    seed: Callable[[NebulaStore], None] = lambda _store: None
 
 
 def _chat(session_id: str, **changes) -> ChatSession:
@@ -128,6 +130,26 @@ def _status(model, entity_id: str, expected) -> Callable[[NebulaStore], None]:
         assert store.get(model, entity_id).status == expected
 
     return check
+
+
+def _interrupted_terminals(store: NebulaStore) -> None:
+    for project in ("project", "unreadable"):
+        store.append_operation_event(
+            f"terminal-{project}",
+            "container_terminal",
+            project,
+            "container_terminal.running",
+            {"status": "running"},
+            actor_id="operator",
+        )
+
+
+def _terminal_settled(store: NebulaStore) -> None:
+    [*_, settled] = store.replay_operation_events("terminal-project")
+    assert settled.event_type == "container_terminal.terminal"
+    assert settled.payload["status"] == "interrupted"
+    [left] = store.replay_operation_events("terminal-unreadable")
+    assert left.event_type == "container_terminal.running"
 
 
 def _automation_session(session_id: str) -> AutomationSession:
@@ -407,8 +429,12 @@ CASES: dict[str, Case] = {
     "runner_profiles": Case(
         lambda: [_runner("readable"), _runner("unreadable")], ["unreadable"]
     ),
+    # Terminal recovery reads projects only to settle interrupted sessions.
     "engagements": Case(
-        lambda: [Engagement(id="unreadable", name="Broken")], ["unreadable"]
+        lambda: [Engagement(id="unreadable", name="Broken")],
+        ["unreadable"],
+        _terminal_settled,
+        seed=_interrupted_terminals,
     ),
     "operator_executions": Case(
         lambda: [_operator_execution("readable"), _operator_execution("unreadable")],
@@ -632,6 +658,7 @@ def test_core_starts_and_recovers_beside_an_unreadable_record(
         store.create(_chat(session_id))
     for record in case.records():
         store.create(record)
+    case.seed(store)
     for entity_id in case.unreadable:
         _make_unreadable(store, entity_id)
 

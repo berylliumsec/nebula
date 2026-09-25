@@ -69,6 +69,10 @@ class CompanionFileCreate(NebulaModel):
     content_base64: SecretStr = Field(max_length=5592408)
 
 
+class AssistantControlPaused(ValueError):
+    """The operator paused assistant control; nothing was sent to the browser."""
+
+
 # A ``running`` action older than its approval window plus this grace lost the
 # decider that would have finished it (Core restart or interrupted turn).
 STALE_RUNNING_ACTION_GRACE = timedelta(
@@ -557,7 +561,9 @@ class BrowserCompanion:
             if assistant and self.session(session_id).metadata.get(
                 "assistant_paused", True
             ):
-                raise ValueError("Assistant control was paused before execution.")
+                raise AssistantControlPaused(
+                    "Assistant control was paused before execution."
+                )
             if not self.turn_active(chat_turn_id):
                 raise ValueError(
                     "The originating Assistant turn ended; request a fresh action."
@@ -694,11 +700,9 @@ class BrowserCompanion:
         operator_requested: bool = False,
         chat_turn_id: str | None = None,
     ) -> CompanionAction:
+        if not operator_requested:
+            self.require_assistant_control(session_id)
         session = self.session(session_id)
-        if session.metadata.get("assistant_paused", True) and not operator_requested:
-            raise ValueError(
-                "Browser control is paused. Resume assistant control in the browser."
-            )
         if not request.page_revision:
             raise ValueError("Capture the current page before proposing an action.")
         if request.operation == "upload":
@@ -712,6 +716,14 @@ class BrowserCompanion:
                 chat_turn_id=chat_turn_id,
             )
         )
+
+    def require_assistant_control(self, session_id: str) -> None:
+        """Refuse an assistant proposal while the operator holds control."""
+
+        if self.session(session_id).metadata.get("assistant_paused", True):
+            raise AssistantControlPaused(
+                "Browser control is paused. Resume assistant control in the browser."
+            )
 
     def takeover(self, session_id: str, paused: bool) -> None:
         session = self.session(session_id)

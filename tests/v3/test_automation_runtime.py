@@ -54,7 +54,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
-from nebula.v3.storage import NebulaStore
+from nebula.v3.storage import NebulaStore, NotFoundError
 from nebula.v3.tool_results import (
     ToolOutputAccessError,
     ToolOutputQueryError,
@@ -547,6 +547,95 @@ def test_startup_removes_exact_orphan_runtime_and_gateway_names(tmp_path, monkey
         assert execution.status == CommandExecutionStatus.INTERRUPTED
 
     asyncio.run(scenario())
+
+
+def test_session_processes_load_only_that_sessions_records_oldest_first(tmp_path):
+    """Listing one session's processes reads only that session's records.
+
+    It paged through every CommandExecution Core holds (~12.7k on the live
+    database) and filtered them in Python on each request.
+    """
+
+    from datetime import timedelta
+
+    from sqlalchemy import event as orm_event
+
+    from nebula.v3.database import EntityRow
+    from nebula.v3.domain import utc_now
+
+    manager, store, _artifacts, engagement, _sessions = runtime(tmp_path)
+    policy = manager.project_policy(engagement.id)
+
+    def session(owner_id: str) -> AutomationSession:
+        return store.create(
+            AutomationSession(
+                engagement_id=engagement.id,
+                owner_kind="api",
+                owner_id=owner_id,
+                runtime_image=IMAGE,
+                runtime_digest="sha256:" + "a" * 64,
+                runner_profile_id="runner",
+                runner_profile_revision=1,
+                policy_id=policy.id,
+                policy_revision=policy.revision,
+                status=AutomationSessionStatus.READY,
+            )
+        )
+
+    listed = session("listed")
+    busy = session("busy")
+    started = utc_now()
+
+    def execution(owner: AutomationSession, process_id: str, index: int):
+        at = started + timedelta(seconds=index)
+        return CommandExecution(
+            id=manager._execution_id(process_id),
+            engagement_id=owner.engagement_id,
+            session_id=owner.id,
+            process_id=process_id,
+            command="true",
+            command_sha256="0" * 64,
+            runtime_digest="sha256:" + "a" * 64,
+            policy_revision=policy.revision,
+            created_at=at,
+            updated_at=at,
+        )
+
+    with store.transaction() as transaction:
+        transaction.add_all(
+            [
+                # Oldest first by creation, not by process id.
+                execution(listed, "listed-c", 0),
+                *(execution(busy, f"busy-{index}", index) for index in range(1, 1_201)),
+                execution(listed, "listed-a", 1_201),
+                execution(listed, "listed-b", 1_202),
+            ]
+        )
+    loaded: list[str] = []
+
+    def count(target, _context):
+        if target.kind == CommandExecution.entity_kind:
+            loaded.append(target.id)
+
+    orm_event.listen(EntityRow, "load", count)
+    try:
+        processes = manager.list_processes(listed.id)
+    finally:
+        orm_event.remove(EntityRow, "load", count)
+
+    assert [item.process_id for item in processes] == [
+        "listed-c",
+        "listed-a",
+        "listed-b",
+    ]
+    assert all(isinstance(item, CommandExecution) for item in processes)
+    assert len(loaded) == 3
+    assert [item.process_id for item in manager.list_processes(busy.id)][:2] == [
+        "busy-1",
+        "busy-2",
+    ]
+    with pytest.raises(NotFoundError):
+        manager.list_processes("missing-session")
 
 
 def test_historical_process_io_preserves_agent_ownership(tmp_path):
