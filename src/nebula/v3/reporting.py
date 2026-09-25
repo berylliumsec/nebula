@@ -129,12 +129,17 @@ class ReportRenderService:
         self._shutting_down = False
 
     async def startup(self) -> None:
-        for render in self._all_renders():
-            if render.status not in {
-                ReportRenderStatus.QUEUED,
-                ReportRenderStatus.RENDERING,
-            }:
-                continue
+        # Only readable records: one unreadable row must not keep Core from
+        # starting and settling the others.
+        for render in self.store.iter_readable_entities(
+            ReportRender,
+            {
+                "status": [
+                    ReportRenderStatus.QUEUED.value,
+                    ReportRenderStatus.RENDERING.value,
+                ]
+            },
+        ):
             updated = self.store.update(
                 ReportRender,
                 render.id,

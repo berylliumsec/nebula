@@ -1262,3 +1262,86 @@ def test_detached_browser_is_an_unavailable_resource_to_a_provider_chat(tmp_path
     # Nothing reached the browser or its ledger.
     assert broker.service.actions(browser.id) == []
     assert store.list_entities(PersistedToolCall) == []
+
+
+@pytest.mark.parametrize(
+    ("browser_project", "paused", "category", "status"),
+    [
+        # The operator paused assistant control beside the page: a denial to
+        # ask about, not an argument to correct.
+        ("project", True, "permission_denied", "denied"),
+        # A broker for another project's browser: unavailable to this call,
+        # described as a missing resource is.
+        ("other-project", False, "unavailable_resource", "failed"),
+    ],
+)
+def test_companion_refusals_before_execution_report_no_side_effects(
+    tmp_path, browser_project, paused, category, status
+):
+    """Nothing runs for these refusals, so the #520 envelope says so."""
+
+    import dataclasses
+    import json
+
+    from nebula.v3.browser_companion_tools import CompanionBroker
+    from nebula.v3.domain import (
+        BrowserIdentity as Identity,
+        BrowserSession as Browser,
+        ChatTurn,
+        ChatTurnStatus,
+    )
+    from nebula.v3.providers import ToolCall
+    from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
+
+    arguments = {"operation": "tabs", "url": "https://example.test/"}
+    store, service, prepared, provider = _prepared(
+        tmp_path,
+        [
+            _response(
+                calls=[
+                    ToolCall(id="call-1", name="browser.companion", arguments=arguments)
+                ]
+            ),
+            _response(text="The browser is not available."),
+        ],
+        RecordingBroker(),
+    )
+    if browser_project != "project":
+        store.create(Engagement(id=browser_project, name="Other project"))
+    identity = store.create(Identity(engagement_id=browser_project, name="Browser"))
+    browser = store.create(
+        Browser(
+            engagement_id=browser_project,
+            identity_id=identity.id,
+            name="Browser",
+            metadata={
+                "browser_companion_version": 1,
+                "assistant_paused": paused,
+                "conversation_id": "session",
+            },
+        )
+    )
+    broker = CompanionBroker(store, browser.id)
+    prepared.tool_components = dataclasses.replace(
+        prepared.tool_components,
+        broker=broker,
+        specs={broker.spec.name: broker.spec},
+    )
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == "The browser is not available."
+    turn = store.get(ChatTurn, "turn")
+    assert turn.status == ChatTurnStatus.COMPLETE
+    [entry] = turn.tool_history
+    assert entry["name"] == "browser.companion" and entry["status"] == status
+    failure = json.loads(entry["provider_result"])
+    assert failure["schema"] == "nebula.tool-failure/v1"
+    assert failure["category"] == category
+    assert failure["side_effects"] == "none"
+    assert failure["invalid_input"] is None
+    [replayed] = provider.requests[1].tool_results
+    assert replayed.is_error is True
+    assert replayed.output["category"] == category
+    # Nothing reached the browser.
+    assert broker.service.actions(browser.id) == []

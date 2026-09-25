@@ -7,7 +7,16 @@ from .diagnostics import record_caught_exception
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator, Mapping, Sequence, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+    TypeVar,
+    cast,
+)
 from uuid import uuid4
 
 if TYPE_CHECKING:
@@ -16,6 +25,7 @@ if TYPE_CHECKING:
 from pydantic import ValidationError
 from sqlalchemy import (
     ColumnElement,
+    Select,
     String,
     and_,
     delete,
@@ -222,6 +232,25 @@ def _row_to_entity(row: EntityRow, expected: type[EntityT] | None = None) -> Ent
             stage="storage",
         )
         raise CorruptRecordError(f"record {row.id} failed validation") from exc
+
+
+def readable_entities(rows: Iterable[EntityRow], model: type[EntityT]) -> list[EntityT]:
+    """``rows`` as ``model`` records, skipping and recording each that fails validation."""
+
+    readable: list[EntityT] = []
+    for row in rows:
+        try:
+            readable.append(_row_to_entity(row, model))
+        except CorruptRecordError as exc:
+            record_caught_exception(
+                "storage",
+                "storage.scan.skipped_unreadable_record",
+                "A reference scan skipped a stored record that failed validation.",
+                exc,
+                stage="storage",
+                metadata={"kind": row.kind, "entity_id": row.id},
+            )
+    return readable
 
 
 class StoreTransaction:
@@ -493,6 +522,7 @@ class NebulaStore:
         statuses: Sequence[str] | None = None,
         newest_first: bool = False,
         limit: int | None = None,
+        readable_only: bool = False,
     ) -> list[EntityT]:
         """Return one conversation's records of ``model``, oldest first, filtered in SQL.
 
@@ -501,6 +531,8 @@ class NebulaStore:
         seeing newer conversations once Core holds that many records of the
         kind. Per-conversation lookups must filter in the database instead.
         ``newest_first`` with ``limit`` reads only the latest records.
+        ``readable_only`` skips and records rows that fail validation, as
+        ``iter_readable_entities`` does, for recovery passes.
         """
 
         if limit is not None and limit < 1:
@@ -517,6 +549,8 @@ class NebulaStore:
         if limit is not None:
             statement = statement.limit(limit)
         with self.database.session() as session:
+            if readable_only:
+                return readable_entities(session.scalars(statement), model)
             return [
                 model.model_validate(row.payload) for row in session.scalars(statement)
             ]
@@ -927,6 +961,66 @@ class NebulaStore:
         with self.database.session() as session:
             return [_row_to_entity(row, model) for row in session.scalars(statement)]
 
+    @staticmethod
+    def _entity_statement(
+        model: type[Entity],
+        filters: Mapping[str, PayloadFilterValue],
+        *,
+        engagement_id: str | None = None,
+        automation_run_id: str | None = None,
+        automation_session_id: str | None = None,
+        automation_status: str | Sequence[str] | None = None,
+        session_id: str | None = None,
+    ) -> Select[tuple[EntityRow]] | None:
+        """The ``find_entities`` query, or None when a filter accepts no value."""
+
+        statement = select(EntityRow).where(EntityRow.kind == model.entity_kind)
+        if engagement_id is not None:
+            statement = statement.where(EntityRow.engagement_id == engagement_id)
+        if automation_run_id is not None:
+            statement = statement.where(
+                EntityRow.automation_run_id == automation_run_id
+            )
+        if automation_session_id is not None:
+            statement = statement.where(
+                EntityRow.automation_session_id == automation_session_id
+            )
+        if isinstance(automation_status, str):
+            statement = statement.where(
+                EntityRow.automation_status == automation_status
+            )
+        elif automation_status is not None:
+            statuses = list(automation_status)
+            if not statuses:
+                return None
+            statement = statement.where(EntityRow.automation_status.in_(statuses))
+        if session_id is not None:
+            if model.entity_kind not in _CHAT_SESSION_ID_ENTITY_KINDS:
+                raise ValueError(f"{model.entity_kind} has no conversation lookup")
+            statement = statement.where(EntityRow.chat_session_id == session_id)
+        for field, value in filters.items():
+            column: Any = EntityRow.payload
+            for part in field.split("."):
+                column = column[part]
+            if isinstance(value, bool):
+                raise TypeError(f"boolean payload filters are not supported: {field}")
+            column = column.as_string()
+            if isinstance(value, int):
+                # Compare the text form. Casting the field to an integer would
+                # make PostgreSQL fail the query on any non-numeric value.
+                statement = statement.where(column.cast(String) == str(value))
+                continue
+            if value is None:
+                statement = statement.where(column.is_(None))
+            elif isinstance(value, str):
+                statement = statement.where(column == value)
+            else:
+                accepted = list(value)
+                if not accepted:
+                    return None
+                statement = statement.where(column.in_(accepted))
+        return statement
+
     def find_entities(
         self,
         model: type[EntityT],
@@ -961,51 +1055,17 @@ class NebulaStore:
             raise ValueError("offset cannot be negative")
         if limit is not None and limit < 1:
             raise ValueError("limit must be at least 1")
-        statement = select(EntityRow).where(EntityRow.kind == model.entity_kind)
-        if engagement_id is not None:
-            statement = statement.where(EntityRow.engagement_id == engagement_id)
-        if automation_run_id is not None:
-            statement = statement.where(
-                EntityRow.automation_run_id == automation_run_id
-            )
-        if automation_session_id is not None:
-            statement = statement.where(
-                EntityRow.automation_session_id == automation_session_id
-            )
-        if isinstance(automation_status, str):
-            statement = statement.where(
-                EntityRow.automation_status == automation_status
-            )
-        elif automation_status is not None:
-            statuses = list(automation_status)
-            if not statuses:
-                return []
-            statement = statement.where(EntityRow.automation_status.in_(statuses))
-        if session_id is not None:
-            if model.entity_kind not in _CHAT_SESSION_ID_ENTITY_KINDS:
-                raise ValueError(f"{model.entity_kind} has no conversation lookup")
-            statement = statement.where(EntityRow.chat_session_id == session_id)
-        for field, value in filters.items():
-            column: Any = EntityRow.payload
-            for part in field.split("."):
-                column = column[part]
-            if isinstance(value, bool):
-                raise TypeError(f"boolean payload filters are not supported: {field}")
-            column = column.as_string()
-            if isinstance(value, int):
-                # Compare the text form. Casting the field to an integer would
-                # make PostgreSQL fail the query on any non-numeric value.
-                statement = statement.where(column.cast(String) == str(value))
-                continue
-            if value is None:
-                statement = statement.where(column.is_(None))
-            elif isinstance(value, str):
-                statement = statement.where(column == value)
-            else:
-                accepted = list(value)
-                if not accepted:
-                    return []
-                statement = statement.where(column.in_(accepted))
+        statement = self._entity_statement(
+            model,
+            filters,
+            engagement_id=engagement_id,
+            automation_run_id=automation_run_id,
+            automation_session_id=automation_session_id,
+            automation_status=automation_status,
+            session_id=session_id,
+        )
+        if statement is None:
+            return []
         statement = statement.order_by(*_entity_order(newest_first)).offset(offset)
         if limit is not None:
             statement = statement.limit(limit)
@@ -1044,48 +1104,59 @@ class NebulaStore:
         return rows
 
     def iter_readable_entities(
-        self, model: type[EntityT], *, page_size: int = 1000
+        self,
+        model: type[EntityT],
+        filters: Mapping[str, PayloadFilterValue] | None = None,
+        *,
+        engagement_id: str | None = None,
+        session_id: str | None = None,
+        page_size: int = 1000,
     ) -> Iterator[EntityT]:
-        """Yield every ``model`` record oldest first, skipping rows that no longer validate.
+        """Yield the ``model`` records matching ``filters`` oldest first, skipping unreadable rows.
 
-        ``list_entities`` raises ``CorruptRecordError`` for a whole page as soon
-        as one row fails validation, so a reference scan over every kind turned
-        into a failure of the operation that ran it once any record anywhere was
-        unreadable. Scans only need the readable rows; each skipped row is
-        recorded so the corruption stays visible.
+        ``list_entities`` and ``find_entities`` raise ``CorruptRecordError``
+        for a whole page as soon as one row fails validation. A reference scan,
+        or a startup or recovery pass over every in-flight record, then failed
+        the operation that ran it once any record anywhere was unreadable:
+        one bad row kept Core from starting. Scans only need the readable rows;
+        each skipped row is recorded with its kind and id so the corruption
+        stays visible. ``filters`` and the keyword filters mean what they mean
+        for ``find_entities``.
+
+        The matching ids are read first and their records a page at a time, so
+        a caller that moves records out of ``filters`` while it iterates, as a
+        recovery pass does, still reaches every record that matched.
         """
 
         if not 1 <= page_size <= 1000:
             raise ValueError("page_size must be between 1 and 1000")
-        offset = 0
-        while True:
-            statement = (
-                select(EntityRow)
-                .where(EntityRow.kind == model.entity_kind)
-                .order_by(EntityRow.created_at, EntityRow.id)
-                .offset(offset)
-                .limit(page_size)
+        statement = self._entity_statement(
+            model, filters or {}, engagement_id=engagement_id, session_id=session_id
+        )
+        if statement is None:
+            return
+        with self.database.session() as session:
+            ids = list(
+                session.scalars(
+                    statement.with_only_columns(EntityRow.id).order_by(
+                        *_entity_order(False)
+                    )
+                )
             )
-            readable: list[EntityT] = []
-            scanned = 0
+        for start in range(0, len(ids), page_size):
+            page = ids[start : start + page_size]
             with self.database.session() as session:
-                for row in session.scalars(statement):
-                    scanned += 1
-                    try:
-                        readable.append(_row_to_entity(row, model))
-                    except CorruptRecordError as exc:
-                        record_caught_exception(
-                            "storage",
-                            "storage.scan.skipped_unreadable_record",
-                            "A reference scan skipped a stored record that failed validation.",
-                            exc,
-                            stage="storage",
-                            metadata={"kind": row.kind, "entity_id": row.id},
-                        )
+                rows = {
+                    row.id: row
+                    for row in session.scalars(statement.where(EntityRow.id.in_(page)))
+                }
+                # A row deleted, or no longer matching, since the ids were
+                # read is left out.
+                readable = readable_entities(
+                    (rows[entity_id] for entity_id in page if entity_id in rows),
+                    model,
+                )
             yield from readable
-            if scanned < page_size:
-                return
-            offset += scanned
 
     def count(
         self,

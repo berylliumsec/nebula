@@ -758,3 +758,86 @@ def test_finding_patch_starts_from_the_projected_relation_arrays(api):
     stored = store.get(Finding, finding["id"])
     assert stored.revision == 2
     assert stored.evidence_ids == [evidence.id]
+
+
+def _grant(granted_by: str) -> dict:
+    return {
+        "risk_classes": ["active_scan"],
+        "targets": ["127.0.0.1/32"],
+        "expires_at": "2099-01-01T00:00:00Z",
+        "granted_by": granted_by,
+    }
+
+
+def test_generic_scope_writes_attribute_grants_to_the_writing_operator(api):
+    """A client cannot name someone else as the operator who granted authority."""
+
+    client, store = api
+    operator = client.post(
+        "/api/v1/operator-profiles",
+        headers=_auth(),
+        json={"display_name": "Jordan"},
+    ).json()
+    engagement = store.create(Engagement(name="Grants"))
+
+    created = client.post(
+        "/api/v1/scope-policies",
+        headers=_auth(),
+        json={"engagement_id": engagement.id, "grants": [_grant("someone-else")]},
+    )
+    assert created.status_code == 201, created.text
+    scope_id = created.json()["id"]
+    assert [grant.granted_by for grant in store.get(ScopePolicy, scope_id).grants] == [
+        operator["id"]
+    ]
+
+    current = store.get(ScopePolicy, scope_id).model_dump(mode="json")
+    replaced = client.put(
+        f"/api/v1/scope-policies/{scope_id}",
+        headers=_auth(),
+        json={**current, "grants": [_grant("forged"), _grant("forged-too")]},
+    )
+    assert replaced.status_code == 200, replaced.text
+    assert [grant.granted_by for grant in store.get(ScopePolicy, scope_id).grants] == [
+        operator["id"],
+        operator["id"],
+    ]
+
+    patched = client.patch(
+        f"/api/v1/scope-policies/{scope_id}",
+        headers=_auth(),
+        json={"changes": {"grants": [_grant("forged")]}},
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["grants"][0]["granted_by"] == operator["id"]
+    assert [grant.granted_by for grant in store.get(ScopePolicy, scope_id).grants] == [
+        operator["id"]
+    ]
+
+
+def test_generic_scope_patch_without_grants_keeps_their_attribution(api):
+    """The packaged browser smoke test widens a new project's scope this way."""
+
+    client, store = api
+    project = client.post(
+        "/api/v1/engagements", headers=_auth(), json={"name": "Packaged browser"}
+    ).json()
+    scope_id = project["scope_policy_id"]
+    scope = store.get(ScopePolicy, scope_id)
+    store.update(
+        ScopePolicy,
+        scope_id,
+        {"grants": [_grant("earlier-operator")]},
+        expected_revision=scope.revision,
+    )
+
+    response = client.patch(
+        f"/api/v1/scope-policies/{scope_id}",
+        headers=_auth(),
+        json={"changes": {"allowed_cidrs": ["127.0.0.1/32"]}},
+    )
+
+    assert response.status_code == 200, response.text
+    updated = store.get(ScopePolicy, scope_id)
+    assert updated.allowed_cidrs == ["127.0.0.1/32"]
+    assert [grant.granted_by for grant in updated.grants] == ["earlier-operator"]

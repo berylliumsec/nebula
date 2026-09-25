@@ -36,7 +36,7 @@ from pypdf import PdfReader
 from .artifacts import ArtifactIntegrityError, ArtifactStore
 from .domain import Artifact, Engagement, KnowledgeSource, LibraryItem, utc_now
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
-from .storage import EntityT, NebulaStore
+from .storage import NebulaStore
 
 MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 MAX_EXTRACTED_CHARACTERS = 4 * 1024 * 1024
@@ -995,8 +995,10 @@ def migrate_inline_knowledge_indexes(
     neither stays ``ready`` yet unretrievable.
     """
 
+    # Runs as Core starts: an unreadable record is skipped and recorded
+    # rather than keeping Core from starting.
     migrated = 0
-    for source in _all_entities(store, KnowledgeSource):
+    for source in store.iter_readable_entities(KnowledgeSource):
         chunks = _inline_chunks(source.status, source.metadata)
         if chunks is None:
             continue
@@ -1011,7 +1013,7 @@ def migrate_inline_knowledge_indexes(
             expected_revision=source.revision,
         )
         migrated += 1
-    for item in _all_entities(store, LibraryItem):
+    for item in store.iter_readable_entities(LibraryItem):
         chunks = _inline_chunks(item.status, item.metadata)
         if chunks is None:
             continue
@@ -1027,18 +1029,6 @@ def migrate_inline_knowledge_indexes(
         )
         migrated += 1
     return migrated
-
-
-def _all_entities(store: NebulaStore, model: type[EntityT]) -> list[EntityT]:
-    entities: list[EntityT] = []
-    offset = 0
-    while True:
-        page = store.list_entities(model, offset=offset, limit=1_000)
-        entities.extend(page)
-        if len(page) < 1_000:
-            break
-        offset += len(page)
-    return entities
 
 
 def _inline_chunks(

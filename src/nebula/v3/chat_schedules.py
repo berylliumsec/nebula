@@ -225,17 +225,14 @@ class ChatScheduleService:
         )
 
     def due(self) -> list[ChatSchedule]:
+        # Read every scheduler tick: an unreadable schedule is skipped and
+        # recorded instead of stopping every other schedule from firing.
         now = utc_now()
-        items: list[ChatSchedule] = []
-        offset = 0
-        while page := self.store.list_entities(
-            ChatSchedule, offset=offset, limit=1_000
-        ):
-            items.extend(
-                item for item in page if item.enabled and item.next_run_at <= now
-            )
-            offset += len(page)
-        return items
+        return [
+            item
+            for item in self.store.iter_readable_entities(ChatSchedule)
+            if item.enabled and item.next_run_at <= now
+        ]
 
     def skip(self, schedule: ChatSchedule, reason: str) -> ChatSchedule:
         return self.store.update(

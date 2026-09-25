@@ -147,7 +147,7 @@ from .browser_companion_tools import companion_components, companion_spec
 from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
 from .providers import REASONING_EFFORTS
 from .redaction import redact_text, sanitize_display_text
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, CorruptRecordError, NebulaStore, NotFoundError
 from .mcp import (
     GATEWAY_TOOL_TIMEOUT_SECONDS,
     MAX_MCP_MESSAGE_BYTES,
@@ -1218,6 +1218,18 @@ def _activity_event_from_ledger(
     if not durable.event_type.startswith("harness."):
         return None
     payload = durable.payload if isinstance(durable.payload, dict) else {}
+    if durable.event_type == "harness.steered":
+        # Steering a Mission run is recorded as the operator's own run event,
+        # not as an activity payload, and "steered" is no activity type.
+        # Replay it as the guidance notice a steered chat turn records.
+        payload = {
+            "type": "notice",
+            "origin": HarnessTurnOrigin.MISSION.value,
+            "harness_turn_id": payload.get("harness_turn_id"),
+            "title": "Operator guidance",
+            "summary": "The operator added guidance to the active harness turn.",
+            "payload": {"text": payload.get("text"), "actor_id": durable.actor_id},
+        }
     fields = HarnessEvent.model_fields
     values = {key: value for key, value in payload.items() if key in fields}
     values.update(
@@ -8148,10 +8160,11 @@ class HarnessRuntimeService:
         for approval in pending_deliveries(self.store):
             try:
                 turn = approval_harness_turn(self.store, approval)
-            except (NotFoundError, ConflictError):
+            except (NotFoundError, ConflictError, CorruptRecordError):
                 # diagnostic-expected: retained decisions may outlive deleted
-                # request records. Retire only this delivery, never infer a new
-                # owner or prevent unrelated sessions from starting.
+                # or unreadable request records. Retire only this delivery,
+                # never infer a new owner or prevent unrelated sessions from
+                # starting.
                 self._fail_unbound_approval(approval)
                 continue
             if turn is not None:
@@ -8160,7 +8173,9 @@ class HarnessRuntimeService:
                 self._fail_unbound_approval(approval)
         # Filtered in SQL rather than read from the oldest 1,000 turns: a Core
         # with more harness turns than that must still settle its newest ones.
-        for turn in self.store.find_entities(
+        # Unreadable records are skipped and each turn settles alone, so one
+        # bad row never keeps Core from starting.
+        for turn in self.store.iter_readable_entities(
             HarnessTurn,
             {
                 "status": [
@@ -8170,59 +8185,17 @@ class HarnessRuntimeService:
                 ]
             },
         ):
-            if turn.status == HarnessTurnStatus.QUEUED:
-                # A queued chat or analysis turn's producer died with the
-                # previous process, before or while it connected; nothing will
-                # ever start it. Queued mission stages belong to their run's
-                # recovery below.
-                if turn.origin != HarnessTurnOrigin.MISSION:
-                    self._settle_orphaned_queued_turn(
-                        turn,
-                        "Nebula Core restarted before the harness turn started.",
-                        reason="core_restart",
-                    )
-                continue
-            interrupted_turn = self.store.update(
-                HarnessTurn,
-                turn.id,
-                {
-                    "status": HarnessTurnStatus.INTERRUPTED,
-                    "completed_at": utc_now(),
-                    "error": "Nebula Core restarted while the harness outcome was uncertain",
-                },
-                expected_revision=turn.revision,
-            )
-            self._interrupt_owner(turn)
-            session = self.store.get(HarnessSession, turn.harness_session_id)
-            if session.status not in {
-                HarnessSessionStatus.CLOSED,
-                HarnessSessionStatus.FAILED,
-            }:
-                session = self.store.update(
-                    HarnessSession,
-                    session.id,
-                    {
-                        "status": HarnessSessionStatus.INTERRUPTED,
-                        "last_activity_at": utc_now(),
-                    },
-                    expected_revision=session.revision,
+            try:
+                self._settle_turn_after_restart(turn)
+            except Exception as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.restart_recovery.turn_failed",
+                    "A harness turn the previous Core was running could not be settled at startup.",
+                    exc,
+                    stage="startup-recovery",
                 )
-            self._persist_activity(
-                interrupted_turn,
-                session,
-                HarnessEvent(
-                    type="turn_status",
-                    origin=turn.origin,
-                    harness_profile_id=session.harness_profile_id,
-                    harness_session_id=session.id,
-                    harness_turn_id=turn.id,
-                    model=session.model,
-                    item_status="interrupted",
-                    summary="Nebula Core restarted while the harness outcome was uncertain.",
-                    payload={"phase": "interrupted", "reason": "core_restart"},
-                ),
-            )
-        for run in self.store.find_entities(
+        for run in self.store.iter_readable_entities(
             AgentRun,
             {"backend": RunBackend.HARNESS.value, "status": RunStatus.QUEUED.value},
         ):
@@ -8230,7 +8203,7 @@ class HarnessRuntimeService:
             if not isinstance(scheduled_for, str):
                 continue
             turns = sorted(
-                self.store.find_entities(
+                self.store.iter_readable_entities(
                     HarnessTurn,
                     {"run_id": run.id, "status": HarnessTurnStatus.QUEUED.value},
                     engagement_id=run.engagement_id,
@@ -8238,7 +8211,16 @@ class HarnessRuntimeService:
                 key=lambda item: int(item.metadata.get("mission_stage_index", 0)),
             )
             if not turns:
-                self._interrupt_owner_for_missing_schedule(run)
+                try:
+                    self._interrupt_owner_for_missing_schedule(run)
+                except Exception as exc:
+                    record_caught_exception(
+                        "harnesses",
+                        "harnesses.restart_recovery.schedule_failed",
+                        "A scheduled harness Mission could not be settled at startup.",
+                        exc,
+                        stage="startup-recovery",
+                    )
                 continue
             task = create_diagnostic_task(
                 self._scheduled_mission_execute(
@@ -8252,7 +8234,7 @@ class HarnessRuntimeService:
                 name=f"scheduled-harness-mission-{run.id}",
             )
             self._scheduled_mission_tasks[run.id] = task
-        for interaction in self.store.find_entities(
+        for interaction in self.store.iter_readable_entities(
             HarnessInteraction, {"status": HarnessInteractionStatus.PENDING.value}
         ):
             self.store.update(
@@ -8268,6 +8250,62 @@ class HarnessRuntimeService:
                 },
                 expected_revision=interaction.revision,
             )
+
+    def _settle_turn_after_restart(self, turn: HarnessTurn) -> None:
+        """Settle one harness turn whose producer died with the previous Core."""
+
+        if turn.status == HarnessTurnStatus.QUEUED:
+            # A queued chat or analysis turn's producer died with the
+            # previous process, before or while it connected; nothing will
+            # ever start it. Queued mission stages belong to their run's
+            # recovery below.
+            if turn.origin != HarnessTurnOrigin.MISSION:
+                self._settle_orphaned_queued_turn(
+                    turn,
+                    "Nebula Core restarted before the harness turn started.",
+                    reason="core_restart",
+                )
+            return
+        interrupted_turn = self.store.update(
+            HarnessTurn,
+            turn.id,
+            {
+                "status": HarnessTurnStatus.INTERRUPTED,
+                "completed_at": utc_now(),
+                "error": "Nebula Core restarted while the harness outcome was uncertain",
+            },
+            expected_revision=turn.revision,
+        )
+        self._interrupt_owner(turn)
+        session = self.store.get(HarnessSession, turn.harness_session_id)
+        if session.status not in {
+            HarnessSessionStatus.CLOSED,
+            HarnessSessionStatus.FAILED,
+        }:
+            session = self.store.update(
+                HarnessSession,
+                session.id,
+                {
+                    "status": HarnessSessionStatus.INTERRUPTED,
+                    "last_activity_at": utc_now(),
+                },
+                expected_revision=session.revision,
+            )
+        self._persist_activity(
+            interrupted_turn,
+            session,
+            HarnessEvent(
+                type="turn_status",
+                origin=turn.origin,
+                harness_profile_id=session.harness_profile_id,
+                harness_session_id=session.id,
+                harness_turn_id=turn.id,
+                model=session.model,
+                item_status="interrupted",
+                summary="Nebula Core restarted while the harness outcome was uncertain.",
+                payload={"phase": "interrupted", "reason": "core_restart"},
+            ),
+        )
 
     def _settle_orphaned_queued_turn(
         self, turn: HarnessTurn, error: str, *, reason: str

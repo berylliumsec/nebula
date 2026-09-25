@@ -12262,6 +12262,7 @@ def create_app(
             read_only=resource in READ_ONLY_RESOURCES,
             append_only=resource in APPEND_ONLY_RESOURCES,
             delete_archived_project=delete_archived_project,
+            actor_id=active_operator_id,
         )
     _assert_unique_api_operations(app)
 
@@ -12985,8 +12986,30 @@ def _register_crud_routes(
     append_only: bool = False,
     after_create: Callable[[Entity], Any] | None = None,
     delete_archived_project: Callable[[Engagement], Any] | None = None,
+    actor_id: Callable[[], str],
 ) -> None:
-    """Register typed routes while preserving concrete OpenAPI schemas."""
+    """Register typed routes while preserving concrete OpenAPI schemas.
+
+    ``actor_id`` names the operator a write is attributed to, as the
+    dedicated routes attribute theirs.
+    """
+
+    def attribute_scope_grants(entity: Any) -> Any:
+        # A grant records who authorized it. These routes take the client's
+        # whole record, so Core attributes each grant written through them to
+        # the operator writing it, as the project scope route does, instead of
+        # accepting whoever the client names.
+        if not isinstance(entity, ScopePolicy):
+            return entity
+        operator_id = actor_id()
+        return entity.model_copy(
+            update={
+                "grants": [
+                    grant.model_copy(update={"granted_by": operator_id})
+                    for grant in entity.grants
+                ]
+            }
+        )
 
     def enforce_harness_command_boundary(entity: Any) -> Any:
         if not isinstance(entity, HarnessProfile):
@@ -13025,6 +13048,7 @@ def _register_crud_routes(
                     }
                 )
             entity = enforce_harness_command_boundary(entity)
+            entity = attribute_scope_grants(entity)
             if isinstance(entity, Engagement) and entity.workspace_path:
                 entity = entity.model_copy(
                     update={
@@ -13193,6 +13217,7 @@ def _register_crud_routes(
             ):
                 entity = _invalidate_harness_home_verification(current, entity)
             entity = enforce_harness_command_boundary(entity)
+            entity = attribute_scope_grants(entity)
             expected_revision = current.revision if if_match is None else if_match
             if isinstance(current, LEGACY_RELATION_MODELS):
                 return relation_service.replace_legacy_entity(
@@ -13230,6 +13255,12 @@ def _register_crud_routes(
             candidate = model.model_validate(payload)
             candidate = enforce_harness_command_boundary(candidate)
             changes = dict(patch.changes)
+            if isinstance(candidate, ScopePolicy) and "grants" in changes:
+                # A patch that leaves the grants alone keeps who granted them.
+                candidate = attribute_scope_grants(candidate)
+                changes["grants"] = [
+                    grant.model_dump(mode="python") for grant in candidate.grants
+                ]
             if (
                 isinstance(current, Engagement)
                 and isinstance(candidate, Engagement)

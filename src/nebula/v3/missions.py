@@ -221,68 +221,76 @@ class MissionService:
             self._discard_finished_tasks()
             owned_run_ids = set(self._tasks)
 
-        offset = 0
         stalled_series: list[AgentRun] = []
         recoveries: list[AgentRun] = []
-        while True:
-            page = self.store.list_entities(AgentRun, offset=offset, limit=1_000)
-            for run in page:
-                if run.backend != RunBackend.NATIVE:
-                    continue
-                if (
-                    run.metadata.get("origin") == "api"
-                    and run.status == RunStatus.COMPLETE
-                    and run.metadata.get("recurrence_error")
-                ):
-                    stalled_series.append(run)
-                    continue
-                scheduled_for = run.metadata.get("scheduled_for")
-                if (
-                    run.metadata.get("origin") == "api"
-                    and run.status == RunStatus.QUEUED
-                    and isinstance(scheduled_for, str)
-                ):
-                    try:
-                        profile = self.store.get(
-                            ProviderProfile, run.supervisor_provider_id or ""
-                        )
-                        provider = self.provider_factory(profile)
-                        task = create_diagnostic_task(
-                            self._scheduled_execute(
-                                run.id, provider, datetime.fromisoformat(scheduled_for)
-                            ),
-                            feature="missions",
-                            event_code="missions.scheduled",
-                            failure_message="A scheduled Mission failed before start.",
-                            name=f"nebula-scheduled-mission-{run.id}",
-                        )
-                        self._scheduled_tasks[run.id] = task
-                        continue
-                    except Exception as exc:
-                        # diagnostic-expected: the durable run is finalized with the safe failure.
-                        self._finalize_failed(
-                            run.id,
-                            f"scheduled mission could not be restored: {self._safe_error(exc)}",
-                        )
-                        continue
-                if (
-                    run.id in owned_run_ids
-                    or (
-                        run.status in _TERMINAL_RUN_STATUSES
-                        and run.status != RunStatus.INTERRUPTED
+        # Only readable runs: one unreadable row must not keep Core from
+        # starting and recovering the others.
+        for run in self.store.iter_readable_entities(AgentRun):
+            if run.backend != RunBackend.NATIVE:
+                continue
+            if (
+                run.metadata.get("origin") == "api"
+                and run.status == RunStatus.COMPLETE
+                and run.metadata.get("recurrence_error")
+            ):
+                stalled_series.append(run)
+                continue
+            scheduled_for = run.metadata.get("scheduled_for")
+            if (
+                run.metadata.get("origin") == "api"
+                and run.status == RunStatus.QUEUED
+                and isinstance(scheduled_for, str)
+            ):
+                try:
+                    profile = self.store.get(
+                        ProviderProfile, run.supervisor_provider_id or ""
                     )
-                    or run.metadata.get("origin") != "api"
-                ):
+                    provider = self.provider_factory(profile)
+                    task = create_diagnostic_task(
+                        self._scheduled_execute(
+                            run.id, provider, datetime.fromisoformat(scheduled_for)
+                        ),
+                        feature="missions",
+                        event_code="missions.scheduled",
+                        failure_message="A scheduled Mission failed before start.",
+                        name=f"nebula-scheduled-mission-{run.id}",
+                    )
+                    self._scheduled_tasks[run.id] = task
                     continue
+                except Exception as exc:
+                    # diagnostic-expected: the durable run is finalized with the safe failure.
+                    self._finalize_failed(
+                        run.id,
+                        f"scheduled mission could not be restored: {self._safe_error(exc)}",
+                    )
+                    continue
+            if (
+                run.id in owned_run_ids
+                or (
+                    run.status in _TERMINAL_RUN_STATUSES
+                    and run.status != RunStatus.INTERRUPTED
+                )
+                or run.metadata.get("origin") != "api"
+            ):
+                continue
+            try:
                 reconciled = self._reconcile_interrupted_run(run.id)
-                # A run the operator had asked to stop is finalized as
-                # cancelled by reconciliation; only a still-active run needs a
-                # recovery worker.
-                if reconciled.status not in _TERMINAL_RUN_STATUSES:
-                    recoveries.append(reconciled)
-            if len(page) < 1_000:
-                break
-            offset += len(page)
+            except Exception as exc:
+                # One run whose records cannot be read must not keep Core from
+                # starting or the other runs from recovering.
+                record_caught_exception(
+                    "missions",
+                    "missions.restart_recovery.reconcile_failed",
+                    "An interrupted Mission could not be reconciled at startup.",
+                    exc,
+                    stage="startup-recovery",
+                )
+                continue
+            # A run the operator had asked to stop is finalized as
+            # cancelled by reconciliation; only a still-active run needs a
+            # recovery worker.
+            if reconciled.status not in _TERMINAL_RUN_STATUSES:
+                recoveries.append(reconciled)
         for run in recoveries:
             try:
                 profile = self.store.get(
@@ -1213,15 +1221,13 @@ class MissionService:
         ]
 
     def _all_runs(self) -> Iterator[AgentRun]:
-        """Every run, one bounded page at a time (no 1,000-row horizon)."""
+        """Every readable run, one bounded page at a time (no 1,000-row horizon).
 
-        offset = 0
-        while True:
-            page = self.store.list_entities(AgentRun, offset=offset, limit=1_000)
-            yield from page
-            if len(page) < 1_000:
-                return
-            offset += len(page)
+        Read at startup and when a series schedules its next occurrence; an
+        unreadable run is skipped and recorded instead of stopping either.
+        """
+
+        yield from self.store.iter_readable_entities(AgentRun)
 
     def _record_capacity_deferral(self, run_id: str) -> None:
         latest = self.store.get(AgentRun, run_id)

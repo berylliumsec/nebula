@@ -3877,84 +3877,116 @@ class SubagentService:
         # Settlement, delivery, and goal charging are separate durable writes.
         # Re-run them for terminal children so a crash between those writes is
         # repaired without duplicating a message or usage debit.
-        offset = 0
-        while page := self.store.list_entities(
-            ChatSubagent, offset=offset, limit=1_000
+        # Only readable records, and each fails alone: one bad row must not
+        # keep Core from starting or the other rounds from settling.
+        for record in self.store.iter_readable_entities(
+            ChatSubagent,
+            {"status": [status.value for status in CHAT_SUBAGENT_TERMINAL_STATUSES]},
         ):
-            offset += len(page)
-            for record in page:
-                if record.status not in CHAT_SUBAGENT_TERMINAL_STATUSES:
-                    continue
-                turn = self._child_turn(record)
-                if (
-                    record.status == ChatSubagentStatus.INTERRUPTED
-                    and turn is not None
-                    and restart_recovery_pending(turn)
-                ):
-                    try:
-                        self._restore_restart_record(record, turn)
-                    except ConflictError:  # diagnostic-expected: recovery rereads a concurrent old-worker write
-                        pass
-                    continue
-                if turn is not None and turn.id == record.pending_goal_charge_turn_id:
-                    self._charge_parent_goal(record, turn)
-                await self._deliver(record)
+            try:
+                await self._repair_settled_after_restart(record)
+            except Exception as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.subagent.restart_repair_failed",
+                    "A finished subagent could not be reconciled after Core restarted.",
+                    exc,
+                    stage="startup-recovery",
+                )
 
-        for record in self.store.find_entities(
+        for record in self.store.iter_readable_entities(
             ChatSubagent, {"status": ChatSubagentStatus.RUNNING.value}
         ):
-            turn = self._child_turn(record)
-            if turn is not None and turn.status == ChatTurnStatus.WAITING_APPROVAL:
-                continue
-            if turn is not None and turn.status == ChatTurnStatus.WAITING_CALLBACK:
-                # A question outlives the restart; its parent may not have.
-                await self._child_paused(record, turn)
-                continue
-            if turn is not None and self.chat.has_active_provider_turn(turn.id):
-                # The startup recovery pass already reclaimed this child.
-                continue
-            if preserve_graceful and turn is not None and safely_stopped_by_core(turn):
-                # Keep the parent wait and the child record intact until the
-                # post-startup recovery pass has had a chance to reclaim it.
-                continue
-            if (
-                turn is not None
-                and turn.status in _TERMINAL_TURN_STATUS
-                and turn.status != ChatTurnStatus.INTERRUPTED
-            ):
-                await self._child_settled(record, turn)
-                continue
-            if (
-                turn is not None
-                and turn.status == ChatTurnStatus.INTERRUPTED
-                and turn.request_snapshot.get("recovery", {}).get("required") is True
-            ):
-                # The child remains a live round. Its own interrupted-response
-                # card owns recovery; reporting a terminal interruption to the
-                # parent here would contradict that resumable turn.
-                self._notify()
-                continue
-            self._close_child_messages(
-                record, "Core restarted before the subagent read it."
-            )
-            self.store.update(
-                ChatSubagent,
-                record.id,
-                {
-                    "status": ChatSubagentStatus.INTERRUPTED,
-                    "finished_at": utc_now(),
-                    "usage": _add_usage(record.usage, turn.usage)
-                    if turn is not None
-                    else record.usage,
-                    "error": "Core restarted while this subagent was running.",
-                },
-                expected_revision=record.revision,
-            )
+            try:
+                await self._reconcile_running_after_restart(
+                    record, preserve_graceful=preserve_graceful
+                )
+            except Exception as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.subagent.restart_reconcile_failed",
+                    "A running subagent could not be reconciled after Core restarted.",
+                    exc,
+                    stage="startup-recovery",
+                )
+
+    async def _repair_settled_after_restart(self, record: ChatSubagent) -> None:
+        """Re-run one finished child's settlement, delivery and goal charge."""
+
+        turn = self._child_turn(record)
+        if (
+            record.status == ChatSubagentStatus.INTERRUPTED
+            and turn is not None
+            and restart_recovery_pending(turn)
+        ):
+            try:
+                self._restore_restart_record(record, turn)
+            except (
+                ConflictError
+            ):  # diagnostic-expected: recovery rereads a concurrent old-worker write
+                pass
+            return
+        if turn is not None and turn.id == record.pending_goal_charge_turn_id:
+            self._charge_parent_goal(record, turn)
+        await self._deliver(record)
+
+    async def _reconcile_running_after_restart(
+        self, record: ChatSubagent, *, preserve_graceful: bool
+    ) -> None:
+        """Settle one child the previous Core left running, or leave it to its recovery."""
+
+        turn = self._child_turn(record)
+        if turn is not None and turn.status == ChatTurnStatus.WAITING_APPROVAL:
+            return
+        if turn is not None and turn.status == ChatTurnStatus.WAITING_CALLBACK:
+            # A question outlives the restart; its parent may not have.
+            await self._child_paused(record, turn)
+            return
+        if turn is not None and self.chat.has_active_provider_turn(turn.id):
+            # The startup recovery pass already reclaimed this child.
+            return
+        if preserve_graceful and turn is not None and safely_stopped_by_core(turn):
+            # Keep the parent wait and the child record intact until the
+            # post-startup recovery pass has had a chance to reclaim it.
+            return
+        if (
+            turn is not None
+            and turn.status in _TERMINAL_TURN_STATUS
+            and turn.status != ChatTurnStatus.INTERRUPTED
+        ):
+            await self._child_settled(record, turn)
+            return
+        if (
+            turn is not None
+            and turn.status == ChatTurnStatus.INTERRUPTED
+            and turn.request_snapshot.get("recovery", {}).get("required") is True
+        ):
+            # The child remains a live round. Its own interrupted-response
+            # card owns recovery; reporting a terminal interruption to the
+            # parent here would contradict that resumable turn.
             self._notify()
-            # A parent parked in wait_subagents survives the restart, so deliver
-            # the interruption the same way a settled child is: resume a waiting
-            # parent, or post the report once the parent is idle.
-            await self._deliver(self.get(record.id))
+            return
+        self._close_child_messages(
+            record, "Core restarted before the subagent read it."
+        )
+        self.store.update(
+            ChatSubagent,
+            record.id,
+            {
+                "status": ChatSubagentStatus.INTERRUPTED,
+                "finished_at": utc_now(),
+                "usage": _add_usage(record.usage, turn.usage)
+                if turn is not None
+                else record.usage,
+                "error": "Core restarted while this subagent was running.",
+            },
+            expected_revision=record.revision,
+        )
+        self._notify()
+        # A parent parked in wait_subagents survives the restart, so deliver
+        # the interruption the same way a settled child is: resume a waiting
+        # parent, or post the report once the parent is idle.
+        await self._deliver(self.get(record.id))
 
 
 class SubagentBroker:

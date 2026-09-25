@@ -530,7 +530,8 @@ class RuntimePlatform:
         )
 
     async def cleanup_operator_terminals(self) -> None:
-        profiles = self.store.list_entities(StoredRunnerProfile, limit=1_000)
+        # Runs at startup: an unreadable profile is skipped, not fatal.
+        profiles = self.store.iter_readable_entities(StoredRunnerProfile)
         seen: set[tuple[str, str | None, str, str, str | None]] = set()
         runners: list[ContainerSandboxRunner] = []
         for profile in profiles:

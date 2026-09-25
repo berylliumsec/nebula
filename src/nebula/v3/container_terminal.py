@@ -2140,47 +2140,40 @@ class ContainerTerminalService:
         )
 
     def _recover_interrupted_events(self) -> None:
-        offset = 0
-        while True:
-            engagements = self.store.list_entities(
-                Engagement, offset=offset, limit=1_000
-            )
-            for engagement in engagements:
-                event_offset = 0
-                latest: dict[str, OperationEvent] = {}
-                while True:
-                    events = self.store.list_operation_events(
-                        engagement.id, offset=event_offset, limit=10_000
-                    )
-                    for event in events:
-                        if event.operation_kind == "container_terminal":
-                            previous = latest.get(event.operation_id)
-                            if previous is None or event.sequence > previous.sequence:
-                                latest[event.operation_id] = event
-                    if len(events) < 10_000:
-                        break
-                    event_offset += len(events)
-                for operation_id, value in latest.items():
-                    event = value
-                    if event.event_type == "container_terminal.terminal":
-                        continue
-                    self.store.append_operation_event(
-                        operation_id,
-                        "container_terminal",
-                        engagement.id,
-                        "container_terminal.terminal",
-                        {
-                            "status": "interrupted",
-                            "exit_code": None,
-                            "error_code": "interrupted",
-                            "detail": "Core restarted before the terminal session ended",
-                        },
-                        actor_id=event.actor_id,
-                        idempotency_key=(f"container-terminal:{operation_id}:terminal"),
-                    )
-            if len(engagements) < 1_000:
-                return
-            offset += len(engagements)
+        # Runs at startup: an unreadable project is skipped, not fatal.
+        for engagement in self.store.iter_readable_entities(Engagement):
+            event_offset = 0
+            latest: dict[str, OperationEvent] = {}
+            while True:
+                events = self.store.list_operation_events(
+                    engagement.id, offset=event_offset, limit=10_000
+                )
+                for event in events:
+                    if event.operation_kind == "container_terminal":
+                        previous = latest.get(event.operation_id)
+                        if previous is None or event.sequence > previous.sequence:
+                            latest[event.operation_id] = event
+                if len(events) < 10_000:
+                    break
+                event_offset += len(events)
+            for operation_id, value in latest.items():
+                event = value
+                if event.event_type == "container_terminal.terminal":
+                    continue
+                self.store.append_operation_event(
+                    operation_id,
+                    "container_terminal",
+                    engagement.id,
+                    "container_terminal.terminal",
+                    {
+                        "status": "interrupted",
+                        "exit_code": None,
+                        "error_code": "interrupted",
+                        "detail": "Core restarted before the terminal session ended",
+                    },
+                    actor_id=event.actor_id,
+                    idempotency_key=(f"container-terminal:{operation_id}:terminal"),
+                )
 
     def _event(
         self,

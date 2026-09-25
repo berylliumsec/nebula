@@ -23,7 +23,7 @@ from .domain import (
     PairedDeviceSession,
     utc_now,
 )
-from .storage import ConflictError, NotFoundError
+from .storage import ConflictError, NotFoundError, readable_entities
 from .diagnostics import record_caught_exception, create_diagnostic_task
 
 TERMINAL = {"complete", "failed", "cancelled", "interrupted"}
@@ -727,14 +727,16 @@ class ChatQueueService:
             ]
             if not wanted:
                 return []
-            return [
-                ChatQueue.model_validate(row.payload)
-                for row in database.scalars(
+            # An unreadable queue is skipped and recorded; it must not stop
+            # Core starting or every other conversation's follow-ups.
+            return readable_entities(
+                database.scalars(
                     select(EntityRow).where(
                         EntityRow.kind == "chat_queues", EntityRow.id.in_(wanted)
                     )
-                )
-            ]
+                ),
+                ChatQueue,
+            )
 
     def _remember_dormancy(self, queue):
         if queue_is_dormant(queue):
@@ -751,6 +753,15 @@ class ChatQueueService:
                 NotFoundError,
             ):  # diagnostic-expected: concurrent queue changes will be reread by the worker
                 continue
+            except Exception as exc:
+                # The worker retries this queue; the others still recover.
+                record_caught_exception(
+                    "chat",
+                    "chat.queue.restart_recovery_failed",
+                    "A conversation's follow-ups could not be recovered at startup; the worker retries.",
+                    exc,
+                    stage="queue",
+                )
         self.task = create_diagnostic_task(
             self.run(),
             feature="chat",

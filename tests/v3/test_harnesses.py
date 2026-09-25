@@ -71,6 +71,7 @@ from nebula.v3.domain import (
     McpServerProfile,
     McpToolSnapshot,
     McpTransport,
+    RunBackend,
     RunBudget,
     RunStatus,
     RiskClass,
@@ -3363,6 +3364,71 @@ def test_browser_gateway_rechecks_conversation_binding_before_execution(
     asyncio.run(scenario())
 
 
+def test_browser_gateway_refuses_paused_control_as_a_denial_before_execution(
+    tmp_path, monkeypatch
+):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        scope = store.create(ScopePolicy(engagement_id=engagement.id))
+        engagement = store.update(
+            Engagement,
+            engagement.id,
+            {"scope_policy_id": scope.id},
+            expected_revision=engagement.revision,
+        )
+        chat, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Attached browser",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+        )
+        identity = store.create(
+            BrowserIdentity(engagement_id=engagement.id, name="Browser")
+        )
+        browser = store.create(
+            BrowserSession(
+                engagement_id=engagement.id,
+                identity_id=identity.id,
+                name="Browser",
+                metadata={
+                    "browser_companion_version": 1,
+                    "conversation_id": chat.id,
+                    "assistant_paused": True,
+                },
+            )
+        )
+        session = store.get(HarnessSession, turn.harness_session_id)
+        session = store.update(
+            HarnessSession,
+            session.id,
+            {
+                "metadata": {
+                    **session.metadata,
+                    "browser_companion_session_id": browser.id,
+                }
+            },
+        )
+        monkeypatch.setattr(runtime, "_active_gateway_turn", lambda _: turn)
+        response = await runtime._gateway_call(
+            session,
+            "browser.companion",
+            {"operation": "tabs", "url": "https://example.test/"},
+        )
+        # The operator withheld control and nothing ran (#520 failure
+        # contract): a denial to ask about, not an argument to correct.
+        assert response["isError"] is True
+        failure = response["structuredContent"]
+        assert failure["schema"] == "nebula.tool-failure/v1"
+        assert failure["category"] == "permission_denied"
+        assert failure["side_effects"] == "none"
+        assert failure["retry_safe"] is False
+
+    asyncio.run(scenario())
+
+
 def test_connection_failure_is_reported_and_releases_the_session(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)
@@ -4963,6 +5029,89 @@ def test_naming_analysis_skips_the_gateway_and_command_runtime(tmp_path):
         # The analysis session was closed and left no gateway behind.
         assert runtime._gateways == {}
         await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_steered_mission_turn_replays_the_guidance_with_its_activity(tmp_path):
+    """Steering a Mission run left a row its turn's activity could not replay."""
+
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        session = store.create(
+            HarnessSession(
+                engagement_id=engagement.id,
+                harness_profile_id=profile.id,
+                model="test-model",
+            )
+        )
+        run = store.create(
+            AgentRun(
+                engagement_id=engagement.id,
+                objective="Map the lab",
+                backend=RunBackend.HARNESS,
+                harness_profile_id=profile.id,
+                harness_session_id=session.id,
+                status=RunStatus.RUNNING,
+            )
+        )
+        turn = store.create(
+            HarnessTurn(
+                engagement_id=engagement.id,
+                harness_session_id=session.id,
+                origin=HarnessTurnOrigin.MISSION,
+                run_id=run.id,
+                prompt="Map the lab",
+                status=HarnessTurnStatus.RUNNING,
+            )
+        )
+        runtime._persist_activity(
+            turn,
+            session,
+            HarnessEvent(type="message_delta", item_id="answer", delta="Scanning"),
+        )
+        steered: list[str] = []
+
+        class Connection:
+            async def steer(self, text: str) -> None:
+                steered.append(text)
+
+        runtime._active[session.id] = SimpleNamespace(
+            connection=Connection(), turn_id=turn.id
+        )
+        try:
+            await runtime.steer(run.id, "Focus on port 443.", actor_id="operator-1")
+        finally:
+            runtime._active.pop(session.id)
+        runtime._persist_activity(
+            turn,
+            session,
+            HarnessEvent(type="message_delta", item_id="answer", delta=" 443"),
+        )
+
+        events = runtime.activity_events(turn.id).events
+        assert steered == ["Focus on port 443."]
+        assert [event.type for event in events] == [
+            "message_delta",
+            "notice",
+            "message_delta",
+        ]
+        guidance = events[1]
+        assert guidance.title == "Operator guidance"
+        assert guidance.harness_turn_id == turn.id
+        assert guidance.payload == {
+            "text": "Focus on port 443.",
+            "actor_id": "operator-1",
+        }
+        # The run ledger keeps the operator-attributed steering record.
+        [recorded] = [
+            event
+            for event in store.replay_events(run.id)
+            if event.event_type == "harness.steered"
+        ]
+        assert recorded.actor_id == "operator-1"
+        # Folding the turn's state reads the same rows.
+        runtime._turn_activity_state(turn)
 
     asyncio.run(scenario())
 

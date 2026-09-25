@@ -1829,71 +1829,105 @@ class ChatService:
             ChatTurnStatus.FINALIZING,
         }
         # Filtered in SQL: only the turns a previous worker was driving, and
-        # only their own calls and hooks, are read and validated.
+        # only their own calls and hooks, are read and validated. Unreadable
+        # records are skipped and each turn settles alone, so one bad row
+        # never keeps Core from starting.
         turns = [
             item
-            for item in self.store.find_entities(
+            for item in self.store.iter_readable_entities(
                 ChatTurn, {"status": [status.value for status in active_statuses]}
             )
             if item.backend == ChatBackend.PROVIDER
         ]
         for turn in turns:
-            for _ in range(3):
-                latest = self.store.get(ChatTurn, turn.id)
-                if latest.status not in active_statuses:
+            try:
+                for _ in range(3):
+                    latest = self.store.get(ChatTurn, turn.id)
+                    if latest.status not in active_statuses:
+                        break
+                    try:
+                        self._interrupt_orphaned_turn(
+                            latest,
+                            list(
+                                self.store.iter_readable_entities(
+                                    ToolCall, {"chat_turn_id": latest.id}
+                                )
+                            ),
+                            self.list_turn_hook_executions(
+                                latest.id, readable_only=True
+                            ),
+                            cause="Core restarted",
+                        )
+                    except (
+                        ConflictError
+                    ):  # diagnostic-expected: optimistic recovery retry
+                        # A prior worker can finish a ledger or turn write during
+                        # this scan. Reclassify its latest state before retrying.
+                        continue
                     break
-                try:
-                    self._interrupt_orphaned_turn(
-                        latest,
-                        self.store.find_entities(ToolCall, {"chat_turn_id": latest.id}),
-                        self.list_turn_hook_executions(latest.id),
-                        cause="Core restarted",
+                else:
+                    raise ChatHistoryConflict(
+                        "provider turn changed repeatedly during restart recovery"
                     )
-                except ConflictError:  # diagnostic-expected: optimistic recovery retry
-                    # A prior worker can finish a ledger or turn write during
-                    # this scan. Reclassify its latest state before retrying.
-                    continue
-                break
-            else:
-                raise ChatHistoryConflict(
-                    "provider turn changed repeatedly during restart recovery"
+            except Exception as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.restart_recovery.turn_failed",
+                    "A provider turn the previous Core was running could not be settled at startup.",
+                    exc,
+                    stage="startup-recovery",
                 )
-        for goal in self.store.find_entities(
+        for goal in self.store.iter_readable_entities(
             ChatGoal, {"status": ChatGoalStatus.RUNNING.value}
         ):
-            pending = self.pending_turn(goal.session_id)
-            interrupted_recovery = (
-                pending
-                if pending is not None
-                and pending.status == ChatTurnStatus.INTERRUPTED
-                and pending.request_snapshot.get("recovery", {}).get("required")
-                else None
-            )
-            if goal.execution_claim_id is not None or interrupted_recovery is not None:
-                paused_at = utc_now()
-                self.store.update(
-                    ChatGoal,
-                    goal.id,
-                    {
-                        "status": ChatGoalStatus.PAUSED,
-                        "paused_at": paused_at,
-                        "active_since": None,
-                        "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
-                        "blocked_reason": (
-                            interrupted_recovery.error
-                            if interrupted_recovery is not None
-                            else "Core restarted while this goal had an active worker. "
-                            "Review its latest turn before resuming."
-                        ),
-                        "execution_owner_id": None,
-                        "execution_claim_id": None,
-                        "execution_claimed_at": None,
-                    },
-                    expected_revision=goal.revision,
+            try:
+                self._pause_goal_orphaned_by_restart(goal)
+            except Exception as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.restart_recovery.goal_failed",
+                    "A running goal could not be reconciled at startup.",
+                    exc,
+                    stage="startup-recovery",
                 )
         await self.subagents.reconcile_after_restart(preserve_graceful=True)
         self._restore_queued_turns()
         self.reconcile_waiting_callbacks()
+
+    def _pause_goal_orphaned_by_restart(self, goal: ChatGoal) -> None:
+        """Pause a running goal whose worker or turn the previous Core held."""
+
+        pending = self.pending_turn(goal.session_id)
+        interrupted_recovery = (
+            pending
+            if pending is not None
+            and pending.status == ChatTurnStatus.INTERRUPTED
+            and pending.request_snapshot.get("recovery", {}).get("required")
+            else None
+        )
+        if goal.execution_claim_id is None and interrupted_recovery is None:
+            return
+        paused_at = utc_now()
+        self.store.update(
+            ChatGoal,
+            goal.id,
+            {
+                "status": ChatGoalStatus.PAUSED,
+                "paused_at": paused_at,
+                "active_since": None,
+                "elapsed_seconds": goal.active_elapsed_seconds(paused_at),
+                "blocked_reason": (
+                    interrupted_recovery.error
+                    if interrupted_recovery is not None
+                    else "Core restarted while this goal had an active worker. "
+                    "Review its latest turn before resuming."
+                ),
+                "execution_owner_id": None,
+                "execution_claim_id": None,
+                "execution_claimed_at": None,
+            },
+            expected_revision=goal.revision,
+        )
 
     def _restore_queued_turns(self) -> None:
         """Start again what the previous Core accepted but never admitted.
@@ -1952,22 +1986,32 @@ class ChatService:
             candidates = self._callback_wait_candidates()
         resumed: list[str] = []
         for waiting_turn, pending_entry, execution in candidates:
-            latest = self.store.get(ChatTurn, waiting_turn.id)
-            if latest.revision != waiting_turn.revision:
-                # The turn moved since it was read; the next pass rereads it.
-                continue
-            if execution is None:
-                self.store.update(
-                    ChatTurn,
-                    latest.id,
-                    {
-                        "status": ChatTurnStatus.INTERRUPTED,
-                        "error": (
-                            "The background process record is no longer available. "
-                            "Review the command outcome before resuming."
-                        ),
-                    },
-                    expected_revision=latest.revision,
+            try:
+                latest = self.store.get(ChatTurn, waiting_turn.id)
+                if latest.revision != waiting_turn.revision:
+                    # The turn moved since it was read; the next pass rereads it.
+                    continue
+                if execution is None:
+                    self.store.update(
+                        ChatTurn,
+                        latest.id,
+                        {
+                            "status": ChatTurnStatus.INTERRUPTED,
+                            "error": (
+                                "The background process record is no longer available. "
+                                "Review the command outcome before resuming."
+                            ),
+                        },
+                        expected_revision=latest.revision,
+                    )
+                    continue
+            except Exception as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.callback.reconcile_failed",
+                    "A completed callback wait could not resume; the next reconciliation pass will retry.",
+                    exc,
+                    stage="callback-recovery",
                 )
                 continue
             if self.has_active_provider_turn(waiting_turn.id):
@@ -2002,25 +2046,35 @@ class ChatService:
         from .automation_runtime import AutomationRuntimeManager
 
         found: list[_CallbackWait] = []
-        for turn in self.store.find_entities(
+        for turn in self.store.iter_readable_entities(
             ChatTurn, {"status": ChatTurnStatus.WAITING_CALLBACK.value}
         ):
             if turn.backend != ChatBackend.PROVIDER:
                 continue
-            history = self._turn_history(turn)
-            pending_entry = history[-1] if history else {}
-            process_id = pending_entry.get("process_id")
-            if not isinstance(process_id, str) or not process_id:
-                continue
             try:
-                execution = self.store.get(
-                    CommandExecution,
-                    AutomationRuntimeManager._execution_id(process_id),
+                history = self._turn_history(turn)
+                pending_entry = history[-1] if history else {}
+                process_id = pending_entry.get("process_id")
+                if not isinstance(process_id, str) or not process_id:
+                    continue
+                try:
+                    execution = self.store.get(
+                        CommandExecution,
+                        AutomationRuntimeManager._execution_id(process_id),
+                    )
+                except NotFoundError:  # diagnostic-expected: missing process becomes actionable interruption
+                    found.append((turn, pending_entry, None))
+                    continue
+            except Exception as exc:
+                # One wait whose ledger or process record cannot be read must
+                # not stop the others from being reconciled.
+                record_caught_exception(
+                    "chat",
+                    "chat.callback.candidate_unreadable",
+                    "A callback wait could not be read for reconciliation; the next pass retries.",
+                    exc,
+                    stage="callback-recovery",
                 )
-            except (
-                NotFoundError
-            ):  # diagnostic-expected: missing process becomes actionable interruption
-                found.append((turn, pending_entry, None))
                 continue
             if not execution.metadata.get(
                 "results_received"
@@ -2037,10 +2091,8 @@ class ChatService:
         closable callback step is not reread until it changes.
         """
 
-        from .automation_runtime import AutomationRuntimeManager
-
         by_turn: dict[str, set[str]] = {}
-        for call in self.store.find_entities(
+        for call in self.store.iter_readable_entities(
             ToolCall,
             {
                 "status": ToolCallStatus.RUNNING.value,
@@ -2051,70 +2103,90 @@ class ChatService:
                 by_turn.setdefault(call.chat_turn_id, set()).add(call.id)
         for turn_id, call_ids in by_turn.items():
             try:
-                turn = self.store.get(ChatTurn, turn_id)
-            except (
-                NotFoundError
-            ):  # diagnostic-expected: the turn was deleted with its conversation
+                self._reconcile_settled_callback_turn(turn_id, call_ids)
+            except Exception as exc:
+                # One turn whose records cannot be read must not stop the
+                # others' calls from closing.
+                record_caught_exception(
+                    "chat",
+                    "chat.callback.settled_scan_failed",
+                    "A settled turn's callback calls could not be reconciled; the next pass retries.",
+                    exc,
+                    stage="callback-recovery",
+                )
+
+    def _reconcile_settled_callback_turn(
+        self, turn_id: str, call_ids: set[str]
+    ) -> None:
+        """Close one turn's running callback calls whose producer has settled."""
+
+        from .automation_runtime import AutomationRuntimeManager
+
+        try:
+            turn = self.store.get(ChatTurn, turn_id)
+        except (
+            NotFoundError
+        ):  # diagnostic-expected: the turn was deleted with its conversation
+            return
+        if (
+            turn.status
+            in {
+                ChatTurnStatus.QUEUED,
+                ChatTurnStatus.ROUTING,
+                ChatTurnStatus.FINALIZING,
+            }
+            or self._settled_callback_scans.get(turn.id) == turn.revision
+        ):
+            # An actively driven turn owns its in-flight calls.
+            return
+        history = self._turn_history(turn)
+        open_steps = False
+        for index, item in enumerate(history):
+            if (
+                item.get("tool_call_id") not in call_ids
+                or item.get("status") != "waiting_callback"
+                or item.get("subagent_wait")
+            ):
                 continue
             if (
-                turn.status
-                in {
-                    ChatTurnStatus.QUEUED,
-                    ChatTurnStatus.ROUTING,
-                    ChatTurnStatus.FINALIZING,
-                }
-                or self._settled_callback_scans.get(turn.id) == turn.revision
+                turn.status == ChatTurnStatus.WAITING_CALLBACK
+                and index == len(history) - 1
             ):
-                # An actively driven turn owns its in-flight calls.
+                # The live wait; reconcile_waiting_callbacks resumes it.
+                open_steps = True
                 continue
-            history = self._turn_history(turn)
-            open_steps = False
-            for index, item in enumerate(history):
-                if (
-                    item.get("tool_call_id") not in call_ids
-                    or item.get("status") != "waiting_callback"
-                    or item.get("subagent_wait")
-                ):
-                    continue
-                if (
-                    turn.status == ChatTurnStatus.WAITING_CALLBACK
-                    and index == len(history) - 1
-                ):
-                    # The live wait; reconcile_waiting_callbacks resumes it.
-                    open_steps = True
-                    continue
-                process_id = item.get("process_id")
-                if not isinstance(process_id, str) or not process_id:
-                    continue
-                try:
-                    execution = self.store.get(
-                        CommandExecution,
-                        AutomationRuntimeManager._execution_id(process_id),
-                    )
-                except (
-                    NotFoundError
-                ):  # diagnostic-expected: old callback record has no producer ledger
-                    continue
-                callback_received = bool(execution.metadata.get("results_received"))
-                if not callback_received and not self._callback_producer_terminal(
-                    execution
-                ):
-                    open_steps = True
-                    continue
-                self._finalize_callback_tool_call(
-                    item,
-                    execution,
-                    callback_received=callback_received,
+            process_id = item.get("process_id")
+            if not isinstance(process_id, str) or not process_id:
+                continue
+            try:
+                execution = self.store.get(
+                    CommandExecution,
+                    AutomationRuntimeManager._execution_id(process_id),
                 )
-            if not open_steps:
-                self._settled_callback_scans[turn.id] = turn.revision
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: old callback record has no producer ledger
+                continue
+            callback_received = bool(execution.metadata.get("results_received"))
+            if not callback_received and not self._callback_producer_terminal(
+                execution
+            ):
+                open_steps = True
+                continue
+            self._finalize_callback_tool_call(
+                item,
+                execution,
+                callback_received=callback_received,
+            )
+        if not open_steps:
+            self._settled_callback_scans[turn.id] = turn.revision
 
     def _stopped_turn_candidates(self) -> list[ChatTurn]:
         """Interrupted provider turns that still own automatic recovery."""
 
         return [
             turn
-            for turn in self.store.find_entities(
+            for turn in self.store.iter_readable_entities(
                 ChatTurn, {"status": ChatTurnStatus.INTERRUPTED.value}
             )
             if turn.backend == ChatBackend.PROVIDER and self._turn_is_pending(turn)
@@ -2131,143 +2203,161 @@ class ChatService:
         ``candidates`` are turns ``_stopped_turn_candidates`` already found.
         """
 
-        from .chat_goals import ChatGoalService, GoalWrite
+        from .chat_goals import ChatGoalService
 
         resumed: list[str] = []
         goals = ChatGoalService(self.store)
         stopped = self._stopped_turn_candidates() if candidates is None else candidates
         for saved in stopped:
-            if (
-                saved.backend != ChatBackend.PROVIDER
-                or saved.status != ChatTurnStatus.INTERRUPTED
-            ):
-                continue
-            recovery_subagent: ChatSubagent | None = None
-            if saved.request_snapshot.get("subagent_child"):
-                records = self.store.find_entities(
-                    ChatSubagent, {"child_session_id": saved.session_id}
-                )
-                recovery_subagent = next(
-                    (
-                        record
-                        for record in records
-                        if record.child_turn_id == saved.id
-                        and record.status
-                        in {
-                            ChatSubagentStatus.RUNNING,
-                            ChatSubagentStatus.INTERRUPTED,
-                        }
-                    ),
-                    None,
-                )
-                if recovery_subagent is None:
-                    continue
-            pending = self.pending_turn(saved.session_id)
-            if pending is None or pending.id != saved.id:
-                continue
-            # A result may have reached the ledger after shutdown parked
-            # this turn. Adopt it first, then turn any remaining uncertainty
-            # into provider-visible history without replaying the effect.
-            pending = self._auto_reconcile_restart_uncertainty(pending.id)
-            if not recoverable_after_core_restart(pending):
-                continue
-            recovery = pending.request_snapshot["recovery"]
-            goal = self.store.get(ChatGoal, saved.goal_id) if saved.goal_id else None
-            if goal is not None and (
-                goal.status != ChatGoalStatus.PAUSED
-                or (
-                    goal.time_budget_seconds is not None
-                    and goal.elapsed_seconds >= goal.time_budget_seconds
-                )
-            ):
-                reason = _unresumed_goal_turn_reason(goal)
-                if reason is not None:
-                    # No later pass resumes it either, and the operator
-                    # cannot resume the goal past it: settle the turn so
-                    # the conversation takes the next message.
-                    self._settle_unresumed_turn(pending.id, reason)
-                continue
-            latest = self.store.update(
-                ChatTurn,
-                pending.id,
-                {
-                    "request_snapshot": {
-                        **pending.request_snapshot,
-                        "recovery": {
-                            **recovery,
-                            "auto_resume_attempted_at": utc_now().isoformat(),
-                        },
-                    }
-                },
-                expected_revision=pending.revision,
-            )
             try:
-                prepared = self.prepare_resume(latest.id)
-                if recovery_subagent is not None:
-                    if prepared.turn is None:
-                        raise ChatHistoryConflict(
-                            "subagent restart recovery lost its child turn"
-                        )
-                    self.subagents.fence_restart_resume(
-                        recovery_subagent.id, prepared.turn
-                    )
-                if goal is not None:
-                    goals.write(
-                        saved.session_id,
-                        GoalWrite(expected_revision=goal.revision, action="resume"),
-                        allow_pending_recovery=True,
-                    )
-                self.start_provider_turn(prepared, automatic_recovery=True)
-                resumed.append(saved.id)
+                if self._resume_stopped_turn(saved, goals):
+                    resumed.append(saved.id)
             except Exception as exc:
+                # One turn whose records cannot be read or written must not
+                # keep the others from resuming, or Core from starting.
                 record_caught_exception(
                     "chat",
-                    "chat.core_shutdown_auto_resume_failed",
-                    "A safely interrupted conversation could not resume after Core restarted.",
+                    "chat.restart_recovery.resume_failed",
+                    "An interrupted conversation could not be reconciled after Core restarted; the next pass retries.",
                     exc,
                     stage="startup-recovery",
                 )
-                current = self.store.get(ChatTurn, saved.id)
-                if (
-                    current.status
-                    in (
-                        ChatTurnStatus.INTERRUPTED,
-                        ChatTurnStatus.ROUTING,
-                    )
-                    and current.execution_claim_id is None
-                ):
-                    current_recovery = current.request_snapshot.get("recovery")
-                    retry_recovery = (
-                        {
-                            **current_recovery,
-                            "auto_resume_attempted_at": None,
-                            "automatic_retry_pending": True,
-                        }
-                        if isinstance(current_recovery, dict)
-                        else current_recovery
-                    )
-                    self.store.update(
-                        ChatTurn,
-                        current.id,
-                        {
-                            "status": ChatTurnStatus.INTERRUPTED,
-                            "error": (
-                                "Automatic recovery could not start; Core will retry "
-                                "on the next recovery pass."
-                            ),
-                            "request_snapshot": {
-                                **current.request_snapshot,
-                                "recovery": retry_recovery,
-                            },
-                        },
-                        expected_revision=current.revision,
-                    )
-                if goal is not None:
-                    self._pause_running_session_goal(
-                        saved.session_id,
-                        "Automatic recovery is waiting for the next Core recovery pass.",
-                    )
         return resumed
+
+    def _resume_stopped_turn(self, saved: ChatTurn, goals: ChatGoalService) -> bool:
+        """Reconcile and resume one turn the previous Core stopped; True if it resumed."""
+
+        from .chat_goals import GoalWrite
+
+        if (
+            saved.backend != ChatBackend.PROVIDER
+            or saved.status != ChatTurnStatus.INTERRUPTED
+        ):
+            return False
+        recovery_subagent: ChatSubagent | None = None
+        if saved.request_snapshot.get("subagent_child"):
+            records = self.store.find_entities(
+                ChatSubagent, {"child_session_id": saved.session_id}
+            )
+            recovery_subagent = next(
+                (
+                    record
+                    for record in records
+                    if record.child_turn_id == saved.id
+                    and record.status
+                    in {
+                        ChatSubagentStatus.RUNNING,
+                        ChatSubagentStatus.INTERRUPTED,
+                    }
+                ),
+                None,
+            )
+            if recovery_subagent is None:
+                return False
+        pending = self.pending_turn(saved.session_id)
+        if pending is None or pending.id != saved.id:
+            return False
+        # A result may have reached the ledger after shutdown parked
+        # this turn. Adopt it first, then turn any remaining uncertainty
+        # into provider-visible history without replaying the effect.
+        pending = self._auto_reconcile_restart_uncertainty(pending.id)
+        if not recoverable_after_core_restart(pending):
+            return False
+        recovery = pending.request_snapshot["recovery"]
+        goal = self.store.get(ChatGoal, saved.goal_id) if saved.goal_id else None
+        if goal is not None and (
+            goal.status != ChatGoalStatus.PAUSED
+            or (
+                goal.time_budget_seconds is not None
+                and goal.elapsed_seconds >= goal.time_budget_seconds
+            )
+        ):
+            reason = _unresumed_goal_turn_reason(goal)
+            if reason is not None:
+                # No later pass resumes it either, and the operator
+                # cannot resume the goal past it: settle the turn so
+                # the conversation takes the next message.
+                self._settle_unresumed_turn(pending.id, reason)
+            return False
+        latest = self.store.update(
+            ChatTurn,
+            pending.id,
+            {
+                "request_snapshot": {
+                    **pending.request_snapshot,
+                    "recovery": {
+                        **recovery,
+                        "auto_resume_attempted_at": utc_now().isoformat(),
+                    },
+                }
+            },
+            expected_revision=pending.revision,
+        )
+        try:
+            prepared = self.prepare_resume(latest.id)
+            if recovery_subagent is not None:
+                if prepared.turn is None:
+                    raise ChatHistoryConflict(
+                        "subagent restart recovery lost its child turn"
+                    )
+                self.subagents.fence_restart_resume(recovery_subagent.id, prepared.turn)
+            if goal is not None:
+                goals.write(
+                    saved.session_id,
+                    GoalWrite(expected_revision=goal.revision, action="resume"),
+                    allow_pending_recovery=True,
+                )
+            self.start_provider_turn(prepared, automatic_recovery=True)
+            return True
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.core_shutdown_auto_resume_failed",
+                "A safely interrupted conversation could not resume after Core restarted.",
+                exc,
+                stage="startup-recovery",
+            )
+            current = self.store.get(ChatTurn, saved.id)
+            if (
+                current.status
+                in (
+                    ChatTurnStatus.INTERRUPTED,
+                    ChatTurnStatus.ROUTING,
+                )
+                and current.execution_claim_id is None
+            ):
+                current_recovery = current.request_snapshot.get("recovery")
+                retry_recovery = (
+                    {
+                        **current_recovery,
+                        "auto_resume_attempted_at": None,
+                        "automatic_retry_pending": True,
+                    }
+                    if isinstance(current_recovery, dict)
+                    else current_recovery
+                )
+                self.store.update(
+                    ChatTurn,
+                    current.id,
+                    {
+                        "status": ChatTurnStatus.INTERRUPTED,
+                        "error": (
+                            "Automatic recovery could not start; Core will retry "
+                            "on the next recovery pass."
+                        ),
+                        "request_snapshot": {
+                            **current.request_snapshot,
+                            "recovery": retry_recovery,
+                        },
+                    },
+                    expected_revision=current.revision,
+                )
+            if goal is not None:
+                self._pause_running_session_goal(
+                    saved.session_id,
+                    "Automatic recovery is waiting for the next Core recovery pass.",
+                )
+        return False
 
     def _replayable_intent(
         self, turn_id: str, intent: Mapping[str, Any]
@@ -3284,7 +3374,7 @@ class ChatService:
 
         cutoff = utc_now() - _STALE_APPROVED_CALL_AGE
         settled: list[str] = []
-        for call in self.store.find_entities(
+        for call in self.store.iter_readable_entities(
             ToolCall,
             {
                 "status": ToolCallStatus.APPROVED.value,
@@ -3293,7 +3383,19 @@ class ChatService:
         ):
             if call.updated_at > cutoff:
                 continue
-            owners = self._approved_call_owner_states(call)
+            try:
+                owners = self._approved_call_owner_states(call)
+            except Exception as exc:
+                # An owner record that cannot be read leaves only this call
+                # approved; the others still settle.
+                record_caught_exception(
+                    "chat",
+                    "chat.approved_call.owner_unreadable",
+                    "An approved tool call's owner could not be read; the next pass retries.",
+                    exc,
+                    stage="tool-call-recovery",
+                )
+                continue
             if not owners or any(state == "live" for state in owners.values()):
                 continue
             try:
@@ -3420,7 +3522,7 @@ class ChatService:
 
         goals = ChatGoalService(self.store)
         found: list[tuple[ChatGoal, ChatTurn | None]] = []
-        for goal in self.store.find_entities(
+        for goal in self.store.iter_readable_entities(
             ChatGoal, {"status": ChatGoalStatus.RUNNING.value}
         ):
             if goal.execution_claim_id is not None:
@@ -9834,14 +9936,20 @@ class ChatService:
             },
         )
 
-    def list_turn_hook_executions(self, turn_id: str) -> list[NativeHookExecution]:
-        """Return every durable hook attempt for a turn from its chat projection."""
+    def list_turn_hook_executions(
+        self, turn_id: str, *, readable_only: bool = False
+    ) -> list[NativeHookExecution]:
+        """Return every durable hook attempt for a turn from its chat projection.
+
+        ``readable_only`` skips attempts whose record no longer validates, for
+        recovery passes that must not stop at one bad row.
+        """
 
         turn = self.store.get(ChatTurn, turn_id)
         executions = [
             item
             for item in self.store.list_session_entities(
-                NativeHookExecution, turn.session_id
+                NativeHookExecution, turn.session_id, readable_only=readable_only
             )
             if item.chat_turn_id == turn.id
         ]
