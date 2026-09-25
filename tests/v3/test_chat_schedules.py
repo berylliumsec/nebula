@@ -413,12 +413,14 @@ def test_naive_next_run_at_is_rejected(tmp_path):
     store.create(Engagement(id="project", name="Project"))
     schedule = _scheduled_session(store)
     client = TestClient(create_app(store, auth_token="test-token"))
+    # Only the schedule service writes run times: no API route accepts one
+    # from a client, so a naive value cannot reach the scheduler's tick.
     patched = client.patch(
         f"/api/v1/chat-schedules/{schedule.id}",
         headers={"Authorization": "Bearer test-token"},
         json={"changes": {"next_run_at": "2026-09-21T09:00:00"}},
     )
-    assert patched.status_code == 422, patched.text
+    assert patched.status_code == 404, patched.text
     assert store.get(ChatSchedule, schedule.id).next_run_at == schedule.next_run_at
 
 

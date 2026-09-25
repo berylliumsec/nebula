@@ -532,6 +532,13 @@ from .workspace import (
     WorkspaceUploadResult,
 )
 
+# Every entity kind is classified exactly once, which
+# tests/v3/test_generic_crud_exposure.py enforces: GENERIC_CRUD_RESOURCES may be
+# written through the generic /api/v1/<kind> routes, READ_ONLY_RESOURCES are
+# only listed and read there, and CUSTOM_RESOURCES have no generic routes
+# because dedicated endpoints own them. A kind in none of the sets gets no
+# generic routes at all, so a new kind cannot silently gain a write path around
+# its service.
 READ_ONLY_RESOURCES = {
     "agent_attempts",
     "approvals",
@@ -539,9 +546,7 @@ READ_ONLY_RESOURCES = {
     "automation_sessions",
     "chat_messages",
     "chat_sessions",
-    "chat_turns",
     "command_executions",
-    "chat_turns",
     "evidence",
     "knowledge",
     "generated_drafts",
@@ -595,6 +600,71 @@ CUSTOM_RESOURCES = {
     "browser_assessment_steps",
     "browser_issue_candidates",
     "browser_validation_grants",
+    # Lifecycle, ledger, evidence and credential kinds. A generic write would
+    # skip the owning state machine (goals, subagents, schedules, harness
+    # questions, scope imports, handoffs), forge an audit receipt (goal usage
+    # charges, hook executions, workspace provenance, checkpoints) or mint and
+    # restore authority (paired-device sessions, browser leases, commands and
+    # proxy rules) that only the dedicated routes grant.
+    "chat_goals",
+    "chat_goal_usage_charges",
+    "chat_subagents",
+    "chat_schedules",
+    "native_checkpoints",
+    "native_hook_executions",
+    "workspace_provenance_observations",
+    "paired_device_sessions",
+    "handoff_envelopes",
+    "harness_interactions",
+    "browser_automation_leases",
+    "browser_commands",
+    "browser_proxy_rules",
+    "scope_imports",
+}
+# Kinds whose generic create/replace/patch/delete routes are the intended
+# write path, with the reason. Operator-owned records only: anything a Core
+# service advances, charges or attests belongs in CUSTOM_RESOURCES.
+GENERIC_CRUD_RESOURCES: dict[str, str] = {
+    "engagements": (
+        "Projects are operator records; the UI creates, edits and deletes them "
+        "here, with dependent and archived-project deletion guards."
+    ),
+    "scope_policies": (
+        "Project scope is operator configuration; browser leases re-check its "
+        "revision before acting, so an edit here still revokes stale ones."
+    ),
+    "assets": "Operator-curated project inventory the UI lists and creates.",
+    "services": "Operator-curated project inventory.",
+    "identities": "Operator-curated project inventory.",
+    "software_components": "Operator-curated project inventory.",
+    "observations": (
+        "Operator notes the UI edits here; deletion is refused while a report "
+        "includes them."
+    ),
+    "findings": "Operator findings the UI creates and edits here.",
+    "advisories": "Advisory records the operator curates; no Core service writes them.",
+    "correlations": "Analyst-reviewed advisory matches; no Core service writes them.",
+    "remediations": "Operator remediation notes.",
+    "providers": (
+        "Provider profiles the UI edits here; writes reset capability verification."
+    ),
+    "harnesses": (
+        "Harness profiles the UI edits here; writes clamp native command access "
+        "and reset home verification."
+    ),
+    "mcp_servers": "MCP server profiles the UI edits here.",
+    "reports": (
+        "Report drafts the UI edits here; finalization and deleting a signed "
+        "report are refused, so sign-off stays on its dedicated route."
+    ),
+    "browser_login_flows": (
+        "Operator-authored login workflows; Core only lists them and no "
+        "dedicated writer exists."
+    ),
+    "browser_recipes": (
+        "Operator-authored assessment recipes; Core only lists them and no "
+        "dedicated writer exists."
+    ),
 }
 
 API_PREFIX = "/api/v1"
@@ -12064,6 +12134,13 @@ def create_app(
 
     for resource, model in ENTITY_MODEL_BY_KIND.items():
         if resource in CUSTOM_RESOURCES or resource.startswith("application_model_"):
+            continue
+        if (
+            resource not in GENERIC_CRUD_RESOURCES
+            and resource not in READ_ONLY_RESOURCES
+        ):
+            # Unclassified kinds get no generic routes; the classification
+            # test names the kind so its owner decides.
             continue
         _register_crud_routes(
             app,

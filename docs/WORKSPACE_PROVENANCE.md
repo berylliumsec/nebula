@@ -26,6 +26,8 @@ hooks remain compatible because both fields are additive.
 The authoritative observation is stored in Nebula Core's existing database as
 a `workspace_provenance_observations` entity. Nebula does not create a metadata
 file inside the workspace and does not require a repository-specific directory.
+Only Core's hook runtime writes observations: the API exposes no route that
+creates, edits or deletes one, so a client cannot forge or rewrite a receipt.
 
 For Git workspaces, Core asks Git for its dirty-path list and fingerprints only
 those paths. It does not walk the workspace. Non-Git workspaces and dirty sets
