@@ -1,13 +1,13 @@
 {
-  "change_digest": "f4615d79138c39b1eb59e9e7ea8a036c10d1b2f8329821be436008ff5d53cab9",
-  "reviewed_by": "Claude focused review for output-budget-default",
-  "reason": "resolve_context_limits (src/nebula/v3/context.py) now defaults a turn's output to min(published limit, max(25% of the window, min(8,192, half the window))) instead of the model's published maximum (#521); a published limit at or above the window or none at all uses the share, only an unknown window keeps 2,048, and profile/request maxima stay explicit. Python selects the output-budget and context-limit contracts (test_model_output_budget, test_context), the built-in help file that now describes the rule (test_operator_help), and every test file that configures a model window or descriptors and reaches the resolver through chat preparation, compaction, context status routes, the capability probe, final-answer retries, subagent delivery, goals, harness outcomes, missions/orchestration and the CLI mission path (test_api, test_chat_api, test_chat_goals, test_chat_leftovers, test_chat, test_chat_stream_follow, test_codex_turn_outcomes, test_history_content_fidelity, test_inference_timeouts_probe_budget, test_turn_outcome_history, test_turn_prompt_cache, test_subagent_delivery, test_synthesis_tool_declarations, test_in_turn_context_pruning, test_missions, test_orchestration, test_chat_tool_loop). Frontend: SettingsPage.test.tsx pins the provider dialog's Maximum output tokens help copy, which now states the new default. Playwright runs the stabilization area (it holds the shared-dialog contract test that opens Add model provider) on desktop Chromium, mobile Chromium 320 and mobile WebKit.",
-  "exclusions": "Full suites are not approved and are excluded. Provider adapters (providers.py), model catalog parsing, known_model_limits.py and scripts/refresh_known_model_limits.py are unchanged: the published figures stay raw and the rule is applied once in the resolver, so adapter, catalog and route-parsing tests (test_providers, test_openai_compatible_parameters, test_deepseek_glm_compat, test_reasoning_controls, test_native_adapter_*) are not selected. No native, harness-runtime or SessionsPage change, so native tests and the assistant/SessionsPage Playwright entries are not selected. The UI change is one help sentence inside the existing provider dialog; the desktop-interface and mobile-layout areas the impact rules map SettingsPage.tsx to are whole-spec runs and are replaced by the stabilization entries that open that dialog. The context.py -> core-api (whole real-core.spec.ts) mapping is likewise not selected; the real-Core OpenRouter journey was run by hand against a scratch Core.",
+  "change_digest": "1a74d33cc718e409db73c2d903f8c5b3c6366759114984bf997e5a5a60939c3d",
+  "reviewed_by": "Claude focused review for capacity-refusals",
+  "reason": "Adds capacity_reached (wait for running work, then retry; retry_safe true) and budget_exhausted (do not retry) to the nebula.tool-failure/v1 contract, with Core's limit numbers in a new limit field, and makes every subagent, agent-messaging and catalog-limit refusal raise a typed exception that tool_failure classifies the same way on the provider-chat path (chat.py tool loop via SubagentBroker/AgentMessageBroker) and the harness gateway (_gateway_subagent / _gateway_agent_message now raise to _gateway_call instead of returning a denial). Selected: test_tool_failures.py (envelope unit tests for the new categories and the limit field), the new test_subagent_refusal_categories.py (both paths: provider wait-then-retry at the running limit, goal budget, invalid input, rules; harness wait-then-retry, invalid input, rules, agent messaging), test_chat_subagents.py and test_harness_provider_subagents.py (the operator-limit tests now pin category and limit; start failure is execution_failed), test_chat_agent_messages.py (ToolNotPermitted), test_tool_catalog.py (catalog limit is budget_exhausted), test_chat_subagent_lifecycle.py and test_subagent_delivery.py (subagent start/round/message paths whose refusal types changed), and the one test_turn_write_amplification.py node that expected the start failure type.",
+  "exclusions": "Full suites are not approved and are excluded. No UI, native Rust/Tauri or Playwright code changed and the UI does not read failure categories, so frontend, native and playwright are empty. tests/v3/test_harnesses.py is not selected: _gateway_call and every other gateway tool are unchanged; only the subagent and agent-message handlers now raise their refusals to it, covered by test_harness_provider_subagents.py, test_chat_agent_messages.py and test_subagent_refusal_categories.py. Mission tooling (agent_tooling.py), test_turn_prompt_cache.py and the browser/process envelope tests are unaffected: tool_failure output for errors other than the new limit types is byte-identical. tests/v3/test_chat_api.py is not selected: the subagent routes are unchanged.",
   "expected_tests": {
-    "python": 459,
-    "frontend": 7,
+    "python": 151,
+    "frontend": 0,
     "native": 0,
-    "playwright": 108
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -15,34 +15,17 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_model_output_budget.py",
-    "tests/v3/test_context.py",
-    "tests/v3/test_operator_help.py",
-    "tests/v3/test_api.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_chat_leftovers.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_stream_follow.py",
-    "tests/v3/test_codex_turn_outcomes.py",
-    "tests/v3/test_history_content_fidelity.py",
-    "tests/v3/test_inference_timeouts_probe_budget.py",
-    "tests/v3/test_turn_outcome_history.py",
-    "tests/v3/test_turn_prompt_cache.py",
+    "tests/v3/test_tool_failures.py",
+    "tests/v3/test_subagent_refusal_categories.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_harness_provider_subagents.py",
+    "tests/v3/test_chat_agent_messages.py",
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_chat_subagent_lifecycle.py",
     "tests/v3/test_subagent_delivery.py",
-    "tests/v3/test_synthesis_tool_declarations.py",
-    "tests/v3/test_in_turn_context_pruning.py",
-    "tests/v3/test_missions.py",
-    "tests/v3/test_orchestration.py",
-    "tests/v3/test_chat_tool_loop.py"
+    "tests/v3/test_turn_write_amplification.py::test_subagent_gets_the_ssh_hosts_of_a_parent_whose_snapshot_is_split"
   ],
-  "frontend": [
-    "ui/src/pages/SettingsPage.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:stabilization/desktop",
-    "entry:stabilization/mobile-chromium-small",
-    "entry:stabilization/mobile-webkit"
-  ]
+  "playwright": []
 }
