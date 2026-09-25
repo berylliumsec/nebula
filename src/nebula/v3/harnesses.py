@@ -5954,6 +5954,26 @@ _ACP_TRUNCATED_STOP_NOTES = {
 }
 _ACP_PERMISSION_CANCELLED = {"outcome": {"outcome": "cancelled"}}
 _JSONRPC_METHOD_NOT_FOUND = -32601
+# Distinct ignored notification names one turn counts; the rest share "other".
+_MAX_IGNORED_NOTIFICATION_NAMES = 32
+
+
+def _count_ignored_notification(counts: dict[str, int], name: str) -> None:
+    """Count one vendor notification Nebula neither renders nor acts on.
+
+    Grok sends 18 to 30 of these per turn (queue, MCP start-up, model and
+    session lists, response bookkeeping). Stored as activity rows they were
+    about half of a turn's ledger, and the conversation hides them anyway.
+    """
+
+    key = (name or "unknown")[:100]
+    if key not in counts and len(counts) >= _MAX_IGNORED_NOTIFICATION_NAMES:
+        key = "other"
+    counts[key] = counts.get(key, 0) + 1
+
+
+def _ignored_notifications_payload(counts: dict[str, int]) -> dict[str, Any]:
+    return {"ignored_notifications": dict(sorted(counts.items()))} if counts else {}
 
 
 @dataclass
@@ -6549,6 +6569,9 @@ class GrokAcpConnection(HarnessConnection):
         thinking_id: str | None = None
         event_task: asyncio.Task | None = None
         tool_calls: dict[str, dict[str, Any]] = {}
+        # Notifications Nebula does not use, counted by method or update kind
+        # and recorded once on the turn's terminal event instead of as rows.
+        ignored: dict[str, int] = {}
         yield HarnessEvent(
             type="started",
             vendor=HarnessKind.GROK_ACP,
@@ -6588,13 +6611,17 @@ class GrokAcpConnection(HarnessConnection):
                     "_x.ai/session/update",
                     "_x.ai/session_notification",
                 }:
-                    if "id" in raw:
-                        # JSON-RPC requires an answer; unanswered, Grok waits forever.
-                        await self.rpc.respond_error(
-                            raw["id"],
-                            _JSONRPC_METHOD_NOT_FOUND,
-                            f"Nebula does not support {method[:200] or 'this method'}",
-                        )
+                    if "id" not in raw:
+                        # Grok's own bookkeeping (queue, MCP start-up, model
+                        # lists): nothing Nebula renders or acts on.
+                        _count_ignored_notification(ignored, method)
+                        continue
+                    # JSON-RPC requires an answer; unanswered, Grok waits forever.
+                    await self.rpc.respond_error(
+                        raw["id"],
+                        _JSONRPC_METHOD_NOT_FOUND,
+                        f"Nebula does not support {method[:200] or 'this method'}",
+                    )
                     yield HarnessEvent(
                         type="notice",
                         vendor=HarnessKind.GROK_ACP,
@@ -6774,14 +6801,7 @@ class GrokAcpConnection(HarnessConnection):
                         payload={"session_cost": cost} if cost else {},
                     )
                 else:
-                    yield HarnessEvent(
-                        type="notice",
-                        vendor=HarnessKind.GROK_ACP,
-                        item_id=item_id,
-                        title="Grok ACP activity",
-                        summary=f"Unhandled Grok session update: {kind or 'unknown'}",
-                        payload=_bounded(update, limit=8_000),
-                    )
+                    _count_ignored_notification(ignored, kind)
             result = await request
             if thinking_id:
                 yield HarnessEvent(
@@ -6821,7 +6841,8 @@ class GrokAcpConnection(HarnessConnection):
                     reason_code="refused",
                     retryable=False,
                     # The closest diagnostic family: the request was rejected.
-                    payload={"stop_reason": stop_reason, "code": "invalid_input"},
+                    payload={"stop_reason": stop_reason, "code": "invalid_input"}
+                    | _ignored_notifications_payload(ignored),
                 )
                 return
             commentary, answer_parts = _acp_closing_messages(pending_messages)
@@ -6848,7 +6869,10 @@ class GrokAcpConnection(HarnessConnection):
                 )
             if stop_reason in {"cancelled", "canceled"}:
                 yield HarnessEvent(
-                    type="interrupted", vendor=HarnessKind.GROK_ACP, message=stop_reason
+                    type="interrupted",
+                    vendor=HarnessKind.GROK_ACP,
+                    message=stop_reason,
+                    payload=_ignored_notifications_payload(ignored),
                 )
                 return
             answer = "".join(message_parts) or (
@@ -6870,7 +6894,8 @@ class GrokAcpConnection(HarnessConnection):
                 external_session_id=self.external_session_id,
                 message=answer,
                 payload={"stop_reason": stop_reason}
-                | ({"truncated": True} if truncation_note else {}),
+                | ({"truncated": True} if truncation_note else {})
+                | _ignored_notifications_payload(ignored),
             )
         finally:
             self.active = False
@@ -15797,8 +15822,14 @@ class HarnessRuntimeService:
         else:
             if not turn.run_id:
                 raise HarnessStateError("mission harness turn has no run ledger")
+            # The run ledger interleaves every turn of the run with the
+            # mission's own events; only this turn's harness rows replay it.
             durable_events = self.store.replay_events(
-                turn.run_id, after_sequence=after_sequence, limit=10_000
+                turn.run_id,
+                after_sequence=after_sequence,
+                limit=limit,
+                event_type_prefix="harness.",
+                payload_values={"harness_turn_id": (turn.id,)},
             )
         events: list[HarnessEvent] = []
         next_sequence = after_sequence

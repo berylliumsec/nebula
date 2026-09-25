@@ -2411,6 +2411,11 @@ class AutomationRuntimeManager:
             metadata={**metadata, "kind": kind, "searchable": not binary},
         )
         raw = self.store.create(raw)
+        if not binary and hashlib.sha256(visible).hexdigest() == raw.sha256:
+            # Redaction found nothing to remove (almost every stream, and every
+            # empty one): the captured bytes already are the redacted text, so
+            # the redacted reference names them rather than a second row.
+            return raw, raw
         redacted = self.artifact_store.put_bytes(
             visible,
             engagement_id=engagement_id,
