@@ -2574,6 +2574,15 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .chat-settings-popover > .chat-context-bar { min-height: 0; }
 .activity-ledger-compact { margin-block: 8px; border: 0; background: transparent; }
 .activity-ledger-compact .activity-ledger-footer { min-height: 44px; margin: 0; }
+.chat-message .activity-ledger-compact:is(.status-active, .status-queued, .status-attention) { margin-block: 12px; border: 1px solid var(--border-soft); border-radius: var(--radius-panel); background: var(--surface-muted); }
+.activity-ledger-compact-header { display: flex; align-items: center; gap: 8px; padding: 14px 16px 2px; color: var(--muted-strong); font-size: var(--type-meta); }
+.activity-ledger-compact-header > strong { color: var(--text-strong); font-weight: var(--weight-medium); }
+.activity-ledger-compact-duration { color: var(--muted); font-variant-numeric: tabular-nums; }
+.chat-message .activity-ledger-compact-current { display: block; padding: 8px 16px 14px; border-radius: 0; background: transparent; }
+.activity-ledger-compact-current small { display: none; }
+.activity-ledger-compact-current span { color: var(--text-strong); font-size: var(--type-reading); font-weight: var(--weight-semibold); line-height: 1.4; }
+.chat-message .activity-ledger-compact .activity-ledger-footer { padding-inline: 16px 8px; }
+.activity-ledger-compact .activity-ledger-footer > button { min-height: 44px; padding-inline: 10px; }
 .assistant-starters { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
 
 .assistant-search { position: relative; flex: 0 0 auto; padding: 8px 12px; border-bottom: 1px solid var(--border-soft); }

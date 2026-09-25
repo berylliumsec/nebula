@@ -1,34 +1,43 @@
 {
-  "change_digest": "219f163000248b15b9f9265b2a66e42c0a0be3667613c99522b2886df601e44f",
-  "reviewed_by": "Codex focused review for live provider tool activity",
-  "reason": "A provider chat must show which tool is running and let the operator expand each call independently, including after reload. The selected API test covers durable ledger names, statuses, and inputs. Ledger component tests cover current-action priority and independent disclosure. Mocked browser journeys cover live streaming and pending-turn UI reload; the production real-Core LAN journey covers the persisted workflow in the desktop and mobile browser matrix.",
-  "exclusions": "No full suite approval was given. Native tests and unrelated provider or harness journeys are unchanged. Browser tests use a seeded pending tool ledger instead of executing an external SSH command. Mobile profiles are emulated; no physical device is available. Tool inputs remain behind explicit per-call disclosure.",
+  "change_digest": "97c13c62eb43ff3d4e3690d3f9f8e4cdacdb08b056aa42e0b00779569e8a25c6",
+  "reviewed_by": "Codex focused review for conversation cleanup in parent and subagent chats",
+  "reason": "The changed journey is a cleaner transcript for parent and child conversations: current work is compact, saved commentary is behind activity, and a child approval remains actionable in its parent. Component cases cover active and completed work, commentary-only history, approvals, failures, and result cards. The selected mocked browser cases cover the transcript and parent approval path on desktop and mobile. Saved thinking is checked after reload across the 320, 390, and 430 px Chromium and WebKit profiles. Two real-Core cases cover durable child selection after refresh and restart recovery.",
+  "exclusions": "No full-suite approval was given. Python and native code are unchanged. Unrelated browser areas are excluded. The mobile profiles are emulated; a physical device and a live external provider are unavailable for this branch test. The real-Core browser cases use a local fixture or model stub, not an external account.",
   "expected_tests": {
-    "python": 1,
-    "frontend": 25,
+    "python": 0,
+    "frontend": 27,
     "native": 0,
-    "playwright": 10
+    "playwright": 40
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_chat_api.py::test_pending_callback_turn_returns_saved_thinking_and_partial_answer"
-  ],
+  "python": [],
   "frontend": [
     "ui/src/components/ActivityLedger.test.tsx",
-    "ui/src/components/activityLedgerModel.test.ts"
+    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:live-tool-activity/desktop",
-    "entry:live-tool-activity/assistant-real-desktop",
-    "entry:live-tool-activity/assistant-real-compact",
-    "entry:live-tool-activity/assistant-real-chromium-320",
-    "entry:live-tool-activity/assistant-real-chromium-390",
-    "entry:live-tool-activity/assistant-real-chromium-430",
-    "entry:live-tool-activity/assistant-real-webkit-320",
-    "entry:live-tool-activity/assistant-real-webkit-390",
-    "entry:live-tool-activity/assistant-real-webkit-430"
+    "entry:activity-ledger/desktop",
+    "entry:activity-ledger/mobile-chromium-small",
+    "entry:activity-ledger/mobile-webkit",
+    "entry:chat-subagents/desktop",
+    "entry:chat-subagents/compact",
+    "entry:chat-subagents/mobile-chromium-small",
+    "entry:chat-subagents/mobile-chromium",
+    "entry:chat-subagents/mobile-chromium-wide",
+    "entry:chat-subagents/mobile-webkit-small",
+    "entry:chat-subagents/mobile-webkit",
+    "entry:chat-subagents/mobile-webkit-wide",
+    "entry:thinking-retention/model-desktop",
+    "entry:thinking-retention/model-compact",
+    "entry:thinking-retention/model-chromium-320",
+    "entry:thinking-retention/model-chromium-390",
+    "entry:thinking-retention/model-chromium-430",
+    "entry:thinking-retention/model-webkit-320",
+    "entry:thinking-retention/model-webkit-390",
+    "entry:thinking-retention/model-webkit-430",
+    "entry:chat-subagents-core/real-core"
   ]
 }

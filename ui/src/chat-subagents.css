@@ -16,11 +16,24 @@
 [data-tone="waiting_approval"] .chat-subagent-dot, .chat-subagent-dot[data-tone="waiting_approval"] { background: var(--status-warning); }
 [data-tone="recovering"] .chat-subagent-dot, .chat-subagent-dot[data-tone="recovering"] { background: var(--status-warning); }
 
+/* The parent owns a child's pending decision, so the request stays in the transcript. */
+.chat-subagent-attention { display: grid; width: 100%; max-width: var(--chat-reading-track); grid-template-columns: 18px minmax(0, 1fr) auto; align-items: start; gap: 12px; margin: 12px auto 24px; padding: 14px 16px; border: 1px solid color-mix(in srgb, var(--status-warning) 38%, var(--border-soft)); border-radius: var(--radius-panel); background: color-mix(in srgb, var(--status-warning) 8%, var(--surface-muted)); }
+.chat-subagent-attention > svg { margin-top: 2px; color: var(--status-warning); }
+.chat-subagent-attention > div { display: grid; min-width: 0; gap: 4px; }
+.chat-subagent-attention strong { color: var(--text-strong); font-size: var(--type-reading); }
+.chat-subagent-attention p { margin: 0; color: var(--text); font-size: var(--type-secondary); overflow-wrap: anywhere; }
+.chat-subagent-attention small { color: var(--muted); font-size: var(--type-meta); overflow-wrap: anywhere; }
+.chat-subagent-attention .button { min-height: 44px; }
+@media (max-width: 760px) {
+  .chat-subagent-attention { grid-template-columns: 18px minmax(0, 1fr); }
+  .chat-subagent-attention .button { grid-column: 2; justify-self: start; }
+}
+
 /* Pane: one card per child, expanded while it needs something. */
 .chat-subagent-pane { display: grid; gap: 10px; min-width: 0; }
-.chat-subagent-pane > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.chat-subagent-pane > header > div { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.chat-subagent-pane > header strong { font-size: 12px; }
+.chat-subagent-pane-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.chat-subagent-pane-header > div { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.chat-subagent-pane-header strong { font-size: 12px; }
 .chat-subagent-total { min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--surface-raised); color: var(--muted); font-size: 11px; text-align: center; }
 .chat-subagent-slots { display: grid; gap: 4px; margin: 0; color: var(--muted); font-size: 11px; }
 .chat-subagent-slot-bar { display: block; height: 3px; border-radius: 999px; background: var(--surface-raised); overflow: hidden; }

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ActivityLedger } from "./ActivityLedger";
 import type { ActivityLedgerViewModel } from "./activityLedgerModel";
+import type { HarnessActivityItem } from "../pages/harnessActivity";
 
 function model(overrides: Partial<ActivityLedgerViewModel> = {}): ActivityLedgerViewModel {
   return {
@@ -134,6 +135,36 @@ it("keeps saved thinking discoverable even when a completed turn used no tools",
   await user.click(screen.getByRole("button", { name: "Show activity" }));
   await user.click(screen.getByText("Thinking"));
   expect(screen.getByText("Saved thinking episode")).toBeVisible();
+});
+
+it("keeps commentary-only completed work behind one disclosure", async () => {
+  const commentary = { streams: { commentary: "The full saved update." } } as unknown as HarnessActivityItem;
+  render(<ActivityLedger
+    compact
+    model={model({
+      status: "complete",
+      currentAction: undefined,
+      actionCount: 0,
+      entries: [{ ...model().entries[0], kind: "reasoning", status: "complete", countsAsAction: false, label: "Review sources", sourceItem: commentary }],
+    })}
+    renderEntryDetails={() => <p>The full saved update.</p>}
+  />);
+  const ledger = screen.getByRole("region", { name: "Work summary" });
+  expect(ledger).toHaveTextContent("1 update");
+  expect(ledger).not.toHaveTextContent("thinking episode");
+  expect(within(ledger).queryByText("The full saved update.")).toBeNull();
+  await userEvent.click(within(ledger).getByRole("button", { name: "Show activity" }));
+  await userEvent.click(within(ledger).getByText("Review sources"));
+  expect(within(ledger).getByText("The full saved update.")).toBeVisible();
+});
+
+it("shows one compact running state and a step count", () => {
+  render(<ActivityLedger compact model={model({ durationMs: 74_000 })} />);
+  const ledger = screen.getByRole("region", { name: "Work summary" });
+  expect(within(ledger).getByText("Running", { selector: ".activity-ledger-compact-header strong" })).toBeVisible();
+  expect(within(ledger).getByText("1m 14s")).toBeVisible();
+  expect(within(ledger).getByText("Saving verified findings.")).toBeVisible();
+  expect(ledger).toHaveTextContent("1 activity step");
 });
 
 it("keeps assistant technical failures opt-in while exposing requests for attention", async () => {

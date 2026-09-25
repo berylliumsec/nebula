@@ -28,7 +28,7 @@ import { EnvironmentTargetPicker, environmentIdsForTarget, type EnvironmentTarge
 import { sshApprovalTarget, type SshApprovalTarget } from "../sshTools";
 import { ChatResults } from "../components/ChatResults";
 import { AgentViewPanel, useStructuredResults, useUnseenCount } from "../components/structured-result";
-import { ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
+import { ChatSubagentAttention, ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
 import { useChatNavigation } from "./useChatNavigation";
 import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionList";
 import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
@@ -160,7 +160,6 @@ import { copySelectionText, createHashedSelectionAttachment } from "../component
 import { WorkspacePanel } from "../components/WorkspacePanel";
 import { HarnessSkillAutocomplete, findHarnessSkillToken, type HarnessSkillTokenRange } from "../components/HarnessSkillAutocomplete";
 import { HarnessThinking, ThinkingDisclosure } from "../components/HarnessThinking";
-import { HarnessMarkdown } from "../components/HarnessMarkdown";
 import { HarnessCommandHints, isHarnessCommand } from "../components/HarnessCommandHints";
 import { HarnessStatusRail } from "../components/HarnessStatusRail";
 import { WorkbenchBrowser } from "../components/WorkbenchBrowser";
@@ -432,7 +431,9 @@ function AssistantLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) 
   }
   if (!item) return null;
   return <div className="activity-ledger-entry-body">
-    <HarnessReasoningDetails item={item} />
+    {item.streams.commentary
+      ? <div className="assistant-commentary" aria-label="Assistant commentary"><HarnessReasoningDetails item={item} /></div>
+      : <HarnessReasoningDetails item={item} />}
     {item.kind === "plan" && Array.isArray(item.payload.plan) && <ol className="harness-plan">{item.payload.plan.map((step, index) => {
       if (typeof step === "string") return <li key={index}>{step}</li>;
       if (!step || typeof step !== "object") return null;
@@ -694,18 +695,18 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
     ? message.metadata.sender_title
     : "Peer agent";
   const messageActivityItems = activityItems;
-  const commentaryItems = messageActivityItems
-    .map((item) => ({ key: item.key, text: item.streams.commentary?.trim() }))
-    .filter((item): item is { key: string; text: string } => Boolean(item.text));
   const messageToolCards = toolCards;
   const historicalTurnId = historicalHarnessTurnId(message);
-  const activityLedger = messageActivityItems.length > 0
+  const activityLedgerBase = messageActivityItems.length > 0
     ? activityLedgerFromHarness("Work summary", message.state, messageActivityItems)
     : messageToolCards.length > 0
       ? activityLedgerFromNative("Work summary", message.state, messageToolCards)
       : historicalTurnId
         ? activityLedgerFromHarness("Work summary", message.state, [])
         : undefined;
+  const activityLedger = activityLedgerBase && message.elapsedMs !== undefined
+    ? { ...activityLedgerBase, durationMs: message.elapsedMs }
+    : activityLedgerBase;
   return (
   <article
     className={`chat-message ${message.role === "user" ? "operator" : agentMessage ? "agent-message" : "assistant"}${editing ? " editing" : ""}${pendingReplacement ? " pending-replacement" : ""}`}
@@ -719,9 +720,6 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
     <div className="chat-message-body">
       <header>{message.role === "assistant" && <><strong>{shared.assistantSource}</strong>{shared.runtimeConfiguration && <span>{shared.runtimeConfiguration}</span>}</>}{agentMessage && <><strong>Message from {agentMessageSender}</strong><span>main agent</span></>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
       {message.role === "assistant" && message.toolSuggestions && <ToolSuggestionChip summary={message.toolSuggestions} />}
-      {commentaryItems.length > 0 && <div className={`assistant-commentary${message.state === "streaming" ? " live" : ""}`} aria-label="Assistant commentary" aria-live="polite">
-        {commentaryItems.map((item) => <HarnessMarkdown content={item.text} key={item.key} />)}
-      </div>}
       {message.role === "assistant" && <HarnessThinking items={messageActivityItems} />}
       {message.role === "assistant" && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming" && Boolean(message.reasoning)} />}
       {message.content && (message.role === "assistant" || agentMessage
@@ -1201,6 +1199,7 @@ export function SessionsPage() {
     enabled: Boolean(sessionId),
     live: sending && allowSubagents,
   });
+  const pendingSubagentApproval = subagentState.subagents.some((item) => item.status === "waiting_approval");
   const subagentResultsByMessage = useMemo(
     () => new Map(
       subagentState.subagents
@@ -5358,6 +5357,10 @@ export function SessionsPage() {
                     focusPendingAction={approvalHere || interactions.length ? focusPendingAction : undefined}
                   />;
                 }}</ThreadPrimitive.Messages> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Ask a question or bring something you want to work on.</p><div className="assistant-starters">{["Ask about this project", "Review a document"].map((label) => <button className="button quiet" type="button" disabled={!runtimeReady} key={label} onClick={() => { updateComposerDraft(label === "Review a document" ? "Please review the document I attach. " : "Help me understand this project. "); composerRef.current?.focus(); }}>{label}</button>)}{imageInputEnabled && <button className="button quiet" type="button" onClick={() => imageInputRef.current?.click()}>Attach images</button>}</div></div>}
+                    {pendingSubagentApproval && <ChatSubagentAttention
+                      subagents={subagentState.subagents}
+                      onReview={() => updateSearchParams(next => next.set("drawer", "subagents"))}
+                    />}
                     {messages.length > 0 && hasNewerMessages && <ThreadPrimitive.ScrollToBottom className="chat-scroll-to-bottom" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => { chatFollowBottomRef.current = true; }}>
                       <ChevronDown size={16} aria-hidden="true" />
                     </ThreadPrimitive.ScrollToBottom>}
@@ -5396,7 +5399,7 @@ export function SessionsPage() {
               <form className="chat-composer" onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
               <div className="chat-composer-context" role="region" aria-label="Composer context and activity" tabIndex={0}>
               {runtimeKind === "provider" && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <ProviderGoalPanel api={api} sessionId={sessionId || undefined} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} settingsBusy={assistantSettingsBusy} onCreate={createGoalConversation} onChange={setProviderGoal} onWorkDispatched={async () => { if (sessionId) await selectSession(sessionId, false); }} />}</>}
-              {sessionId && <ChatSubagentRail
+              {sessionId && !pendingSubagentApproval && <ChatSubagentRail
                 subagents={subagentState.subagents}
                 open={sessionInspectorOpen && drawerTab === "subagents"}
                 onToggle={() => updateSearchParams(next => {

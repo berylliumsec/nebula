@@ -8,19 +8,22 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
     await page.goto(`/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Thinking test");
     await page.getByRole("button", { name: "Pair device", exact: true }).click();
-    await expect(page.getByRole("button", { name: /Nebula Core (ready|degraded)/ })).toBeVisible({ timeout: 20000 });
+    await expect(page.locator(".pairing-gate")).toHaveCount(0, {timeout: 20_000});
     await page.goto(`/projects/thinking-project/workbench?view=chat&session=${vendor}-chat`);
     const openThinking = async () => {
       await expect(page.getByText("Saved final response for " + vendor)).toBeVisible();
       if (vendor === "grok_acp") {
-        await expect(page.getByText("Recorded work before the operator stopped.", {exact: true})).toBeVisible();
+        await expect(page.getByText("A public progress update.", {exact: true})).toHaveCount(0);
+        await expect(page.getByText("Recorded work before the operator stopped.", {exact: true})).toHaveCount(0);
         await expect(page.getByText("Stopped", {exact: true})).toBeVisible();
         await expect(page.getByText("A partial answer retained after stopping.", {exact: true})).toBeVisible();
         await expect(page.getByText("Reference: pending local diagnostic")).toHaveCount(0);
         const transcript = await page.locator(".chat-message").allTextContents();
-        expect(transcript.findIndex(text => text.includes("Recorded work before"))).toBeLessThan(transcript.findIndex(text => text.includes("My next message")));
+        expect(transcript.findIndex(text => text.includes("A partial answer retained"))).toBeLessThan(transcript.findIndex(text => text.includes("My next message")));
       }
-      await page.getByRole("button", { name: "Show activity", exact: true }).first().click();
+      const showActivity = page.getByRole("button", { name: "Show activity", exact: true }).first();
+      if (info.project.use.hasTouch) await showActivity.tap();
+      else await showActivity.click();
       const rows = page.locator(".activity-ledger-audit li").filter({ has: page.locator(".harness-reasoning-summary") });
       await expect(rows).toHaveCount(vendor === "grok_acp" ? 6 : 4);
       for (const marker of ["First thinking episode from ", "Second thinking episode from "]) {
@@ -52,6 +55,13 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
         const commentary = rows.filter({has: page.getByText("A public progress update.", {exact: true})});
         await commentary.locator(".activity-ledger-entry-content > details > summary").click();
         await expect(commentary.locator(".harness-reasoning-summary")).toBeVisible();
+        const stopped = page.locator(".chat-message.assistant").filter({hasText: "A partial answer retained after stopping."});
+        const showStoppedActivity = stopped.getByRole("button", {name: "Show activity"});
+        if (info.project.use.hasTouch) await showStoppedActivity.tap();
+        else await showStoppedActivity.click();
+        const recorded = stopped.locator(".activity-ledger-audit li").filter({hasText: "Recorded work before the operator stopped."});
+        await recorded.locator("summary").click();
+        await expect(recorded.getByRole("paragraph").filter({hasText: "Recorded work before the operator stopped."})).toBeVisible();
       }
       return rows;
     };
