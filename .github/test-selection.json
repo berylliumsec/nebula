@@ -23,13 +23,13 @@
   ],
   "native": [],
   "playwright": [
-    "provider-request-breakdown-core/assistant-real-desktop",
-    "provider-request-breakdown-core/assistant-real-compact",
-    "provider-request-breakdown-core/assistant-real-chromium-320",
-    "provider-request-breakdown-core/assistant-real-chromium-390",
-    "provider-request-breakdown-core/assistant-real-chromium-430",
-    "provider-request-breakdown-core/assistant-real-webkit-320",
-    "provider-request-breakdown-core/assistant-real-webkit-390",
-    "provider-request-breakdown-core/assistant-real-webkit-430"
+    "entry:provider-request-breakdown-core/assistant-real-desktop",
+    "entry:provider-request-breakdown-core/assistant-real-compact",
+    "entry:provider-request-breakdown-core/assistant-real-chromium-320",
+    "entry:provider-request-breakdown-core/assistant-real-chromium-390",
+    "entry:provider-request-breakdown-core/assistant-real-chromium-430",
+    "entry:provider-request-breakdown-core/assistant-real-webkit-320",
+    "entry:provider-request-breakdown-core/assistant-real-webkit-390",
+    "entry:provider-request-breakdown-core/assistant-real-webkit-430"
   ]
 }
