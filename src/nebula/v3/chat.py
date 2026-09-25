@@ -328,6 +328,33 @@ class ChatPrivacyError(ChatError):
     """The selected provider would cross a declared local-only boundary."""
 
 
+class ChatToolResultConsentRequired(ChatPrivacyError):
+    """A cloud turn carries tools and the operator has not allowed sharing.
+
+    Core refuses before accepting the turn, so a client can ask the operator
+    and send the same request again with consent. The code lets it tell this
+    refusal from the ones no answer can resolve.
+    """
+
+    code = "tool_result_consent_required"
+
+    def __init__(self, families: Sequence[str], provider_name: str) -> None:
+        super().__init__(
+            "cloud command-result transfer requires explicit confirmation for this turn"
+        )
+        self.families = tuple(families)
+        self._nebula_diagnostic_operator_detail = (
+            f"This turn uses {_spoken_list(self.families)}, whose tool inputs "
+            f"and results would go to {provider_name}."
+        )
+
+
+def _spoken_list(items: Sequence[str]) -> str:
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + f" and {items[-1]}"
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -4698,18 +4725,25 @@ class ChatService:
         # A project can opt into the local search runtime alone, with no MCP
         # server, SSH environment or command runtime selected.
         web_search_selected = self._web_search_selected(engagement_id)
-        tools_enabled = (
-            request.tools_enabled
-            or bool(mcp_profiles)
-            or bool(ssh_environments)
-            or web_search_selected
-            or bool(browser_session_id)
-            or model_context
-            or skill_resources_selected
-            or subagents_enabled
-            or child_messaging
-            or agent_messaging_enabled
-        )
+        # Each family sends tool inputs and results to the model; the names
+        # tell the operator what a refused cloud turn was about to share.
+        tool_families = [
+            name
+            for name, selected in (
+                ("the command runtime", request.tools_enabled),
+                ("MCP servers", bool(mcp_profiles)),
+                ("SSH hosts", bool(ssh_environments)),
+                ("web search", web_search_selected),
+                ("browser control", bool(browser_session_id)),
+                ("project model context", model_context),
+                ("skill resources", skill_resources_selected),
+                ("subagents", subagents_enabled),
+                ("messages to the parent agent", child_messaging),
+                ("agent messaging", agent_messaging_enabled),
+            )
+            if selected
+        ]
+        tools_enabled = bool(tool_families)
         if tools_enabled:
             if engagement_id is None:
                 raise ChatConfigurationError(
@@ -4736,10 +4770,7 @@ class ChatService:
                         "provider profile does not permit command-result transfer"
                     )
                 if not allow_cloud_tool_results:
-                    raise ChatPrivacyError(
-                        "cloud command-result transfer requires explicit confirmation "
-                        "for this turn"
-                    )
+                    raise ChatToolResultConsentRequired(tool_families, profile.name)
             # Selected servers go out in full on every request; every other
             # usable server joins the on-demand catalog for the ranker. The
             # catalog never turns tools on by itself, so a plain chat stays
@@ -12922,5 +12953,6 @@ __all__ = [
     "ChatRequestMessage",
     "ChatResponseMessage",
     "ChatService",
+    "ChatToolResultConsentRequired",
     "PreparedChat",
 ]

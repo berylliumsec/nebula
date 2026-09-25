@@ -4,7 +4,13 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from nebula.v3.artifacts import ArtifactStore
-from nebula.v3.chat import ChatCompletionRequest, ChatService
+import pytest
+
+from nebula.v3.chat import (
+    ChatCompletionRequest,
+    ChatService,
+    ChatToolResultConsentRequired,
+)
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.chat_turn_ledger import turn_history
 from nebula.v3.domain import (
@@ -407,6 +413,69 @@ def test_subagent_tools_require_opt_in(tmp_path: Path) -> None:
             "stop_subagent",
         }
         assert opted_in.turn.request_snapshot["allow_subagents"] is True
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_cloud_subagent_turn_asks_for_tool_result_consent_before_acceptance(
+    tmp_path: Path,
+) -> None:
+    """Subagent tools send their results to the model, so a cloud turn asks.
+
+    The composer used to leave Subagents out of its consent decision; Core then
+    refused the send. The refusal is typed and comes before acceptance, so the
+    client can ask the operator and send the same request again.
+    """
+
+    async def scenario() -> None:
+        provider = RoutedProvider([_response(text="plain")], [])
+        provider.config = provider.config.model_copy(update={"local": False})
+        store = NebulaStore(tmp_path / "cloud-subagents.db")
+        project = store.create(Engagement(id="project", name="Subagents"))
+        store.create(
+            ProviderProfile(
+                id="provider",
+                name="Cloud provider",
+                provider_type="custom",
+                endpoint="https://provider.invalid/v1",
+                is_local=False,
+                model_allowlist=["model-a"],
+                capabilities={"streaming": True, "tool_calling": True},
+                capability_verifications={
+                    "model-a": ProviderCapabilityVerification(
+                        model="model-a", status=ProviderVerificationStatus.VERIFIED
+                    )
+                },
+                privacy={"permits_sensitive_data": True},
+            )
+        )
+        chat = ChatService(store, provider_factory=lambda _: provider)
+
+        with pytest.raises(ChatToolResultConsentRequired) as refused:
+            await chat.prepare_async(
+                _request(project, content="Split the work.", allow_subagents=True)
+            )
+        assert refused.value.code == "tool_result_consent_required"
+        assert refused.value.families == ("subagents",)
+        assert "Cloud provider" in refused.value._nebula_diagnostic_operator_detail
+        assert store.list_entities(ChatSession, include_temporary=True) == []
+        assert store.list_entities(ChatTurn) == []
+
+        prepared = await chat.prepare_async(
+            _request(
+                project,
+                content="Split the work.",
+                allow_subagents=True,
+                allow_cloud_tool_results=True,
+            )
+        )
+        assert prepared.tools_enabled is True
+        assert prepared.tool_components is not None
+        assert "start_subagent" in prepared.tool_components.specs
+        # Without Subagents the same cloud chat carries no tools and needs no consent.
+        plain = await chat.prepare_async(_request(project, content="Just answer."))
+        assert plain.tools_enabled is False
         await chat.shutdown()
 
     asyncio.run(scenario())

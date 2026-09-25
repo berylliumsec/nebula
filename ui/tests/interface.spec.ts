@@ -11086,6 +11086,121 @@ reloadTest("stabilization an operator allows delegation and acts on a waiting su
   expect(accessibility.violations).toEqual([]);
 });
 
+const consentProvider = {
+  ...entity,
+  id: "provider-cloud",
+  name: "OpenRouter",
+  provider_type: "openrouter",
+  endpoint: "https://openrouter.ai/api/v1",
+  enabled: true,
+  is_local: false,
+  secret_ref: "env:OPEN_ROUTER_API_KEY",
+  model_allowlist: ["deepseek/deepseek-v4.1-flash"],
+  capabilities: { streaming: true, tool_calling: true },
+  capability_verifications: {
+    "deepseek/deepseek-v4.1-flash": { model: "deepseek/deepseek-v4.1-flash", status: "verified", checked_at: "2026-09-25T10:00:00Z", contract_version: "required-tool-v1" },
+  },
+  privacy: { local_only: false, permits_sensitive_data: true },
+  metadata: { default_model: "deepseek/deepseek-v4.1-flash" },
+};
+
+/** A cloud provider conversation with Subagents on, in a project with no command runtime. */
+async function installCloudSubagentChat(page: Page, options: { credential?: Record<string, unknown> } = {}) {
+  const sent: Array<Record<string, unknown>> = [];
+  const session = { ...entity, id: "consent-chat", engagement_id: "scratch-project", title: "Split the review", backend: "provider", provider_profile_id: consentProvider.id, model: "deepseek/deepseek-v4.1-flash", metadata: { allow_subagents: true } };
+  await page.route("**/api/v1/**", async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") {
+      await route.fulfill({ json: [consentProvider] });
+    } else if (path.endsWith(`/providers/${consentProvider.id}/health`)) {
+      await route.fulfill({ json: { provider_id: consentProvider.id, healthy: true, models: consentProvider.model_allowlist } });
+    } else if (path.endsWith("/automation/runtime")) {
+      await route.fulfill({ json: { configured: false, ready: false, detail: "This project has no command runtime." } });
+    } else if (path.endsWith(`/credentials/${encodeURIComponent(consentProvider.secret_ref)}/status`)) {
+      await route.fulfill({ json: options.credential ?? { reference: consentProvider.secret_ref, persistence: "environment", available: true, state: "available" } });
+    } else if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      await route.fulfill({ json: [session] });
+    } else if (path.endsWith("/chat/sessions/consent-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/consent-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else if (path.endsWith("/chat/completions") && request.method() === "POST") {
+      sent.push(request.postDataJSON());
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body: [
+          `data: ${JSON.stringify({ type: "started", provider_id: consentProvider.id, model: "deepseek/deepseek-v4.1-flash", session_id: "consent-chat", turn_id: "consent-turn" })}`,
+          `data: ${JSON.stringify({ type: "delta", provider_id: consentProvider.id, model: "deepseek/deepseek-v4.1-flash", delta: "Delegated to two subagents." })}`,
+          `data: ${JSON.stringify({ type: "done", provider_id: consentProvider.id, model: "deepseek/deepseek-v4.1-flash", session_id: "consent-chat", turn_id: "consent-turn", message: { id: "consent-answer", role: "assistant", content: "Delegated to two subagents." }, usage: { input_tokens: 4, output_tokens: 5, total_tokens: 9 }, finish_reason: "stop", citations: [] })}`,
+          "data: [DONE]",
+          "",
+        ].join("\n\n"),
+      });
+    } else await route.fallback();
+  });
+  return sent;
+}
+
+reloadTest("stabilization a Subagents chat on a cloud provider asks before sharing tool results", async ({ page }, testInfo) => {
+  const sent = await installCloudSubagentChat(page);
+  await page.goto("/?view=chat&session=consent-chat");
+  const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+  await expect(composer).toBeEditable();
+  await composer.fill("Split the review across subagents.");
+  const sendButton = page.getByRole("button", { name: "Send message", exact: true });
+  await sendButton.click();
+
+  // Subagent tools send their results to the provider, so the turn asks
+  // first even though the project has no command runtime.
+  const dialog = page.getByRole("dialog", { name: "Share redacted tool results?" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("OpenRouter");
+  if (testInfo.project.use.hasTouch) {
+    for (const name of ["Cancel", "Allow this turn"]) {
+      expectTouchTarget((await dialog.getByRole("button", { name, exact: true }).boundingBox())?.height, name);
+    }
+  }
+  expect((await new AxeBuilder({ page }).include(".confirmation-dialog").analyze()).violations).toEqual([]);
+
+  // Declining sends nothing, says why in place, and keeps the words.
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  const notice = page.locator(".chat-recovery-notice [role='alert']");
+  await expect(notice).toContainText("Not sent; your message is kept. Subagents would share tool results with OpenRouter. Send again to allow sharing, or turn it off.");
+  await expect(composer).toHaveValue("Split the review across subagents.");
+  expect(sent).toHaveLength(0);
+  expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+
+  // Allowing sends the same turn once, with Subagents and consent.
+  await sendButton.click();
+  await dialog.getByRole("button", { name: "Allow this turn", exact: true }).click();
+  await expect(page.locator(".chat-message.assistant").last()).toContainText("Delegated to two subagents.");
+  expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatchObject({ allow_subagents: true, allow_cloud_tool_results: true, tools_enabled: false });
+  await expect(notice).toHaveCount(0);
+});
+
+reloadTest("stabilization a chat send names an unknown provider credential state and keeps the message", async ({ page }) => {
+  const sent = await installCloudSubagentChat(page, {
+    credential: { reference: consentProvider.secret_ref, persistence: "environment", available: false, state: "rotating" },
+  });
+  await page.goto("/?view=chat&session=consent-chat");
+  const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+  await expect(composer).toBeEditable();
+  await composer.fill("Split the review across subagents.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+
+  const notice = page.locator(".chat-recovery-notice [role='alert']");
+  await expect(notice).toContainText('Not sent; your message is kept. Nebula Core reported an unknown credential state "rotating". Check this provider in Settings, then send again.');
+  // The whole explanation fits the notice; nothing is cut off with an ellipsis.
+  await expect(notice.locator("strong")).not.toContainText("…");
+  await expect(composer).toHaveValue("Split the review across subagents.");
+  await expect(page.getByRole("dialog", { name: "Share redacted tool results?" })).toHaveCount(0);
+  expect(sent).toHaveLength(0);
+  expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+});
+
 reloadTest("stabilization a harness chat delegates to a chosen provider model", async ({ page }) => {
   let savedSession = { ...entity, id: "harness-subagent-chat", engagement_id: "scratch-project", title: "Assess staging API auth", backend: "harness", harness_profile_id: "harness-codex-subagents", harness_session_id: "harness-subagent-session", model: "gpt-5.6", metadata: {} as Record<string, unknown> };
   const codex = {
