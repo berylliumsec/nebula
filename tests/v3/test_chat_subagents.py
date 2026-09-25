@@ -504,12 +504,21 @@ def test_wait_resumes_parent_with_report_and_posts_result(tmp_path: Path) -> Non
         prepared = await chat.prepare_async(
             _request(project, content="Split the work.", allow_subagents=True)
         )
+        assert prepared.tool_components is not None
+        assert (
+            prepared.tool_components.specs["wait_subagents"].display_name
+            == "Collect delegated reports"
+        )
         parent_turn_id = chat.start_provider_turn(prepared)
         events = await _drain(chat, parent_turn_id)
         assert "callback_required" in events
         paused = store.get(ChatTurn, parent_turn_id)
         assert paused.status == ChatTurnStatus.WAITING_CALLBACK
         assert _history(store, paused)[-1]["subagent_wait"]["mode"] == "all"
+        assert (
+            _history(store, paused)[-1]["result_summary"]
+            == "Waiting for delegated work."
+        )
 
         provider.child_gate.set()
         await _until(

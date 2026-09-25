@@ -24,11 +24,11 @@ describe("CallbackWaitingStatus", () => {
     expect(screen.getByText("Copied")).toBeInTheDocument();
   });
 
-  it("labels a subagent wait as one, without callback copy", () => {
-    render(<CallbackWaitingStatus summary="Waiting for 2 subagents to report." kind="subagents" />);
+  it("labels delegated work without callback copy", () => {
+    render(<CallbackWaitingStatus summary="Waiting for delegated work." kind="subagents" />);
 
-    const status = screen.getByRole("status", { name: "Waiting for subagents" });
-    expect(status).toHaveTextContent("Waiting for 2 subagents to report.");
+    const status = screen.getByRole("status", { name: "Waiting for delegated work" });
+    expect(status).toHaveTextContent("Waiting for delegated work.");
     expect(screen.queryByText("Callback ready")).toBeNull();
     expect(screen.queryByRole("status", { name: "Waiting for command results" })).toBeNull();
   });

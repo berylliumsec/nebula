@@ -5151,7 +5151,7 @@ async function startDelegatingModelStub(options: { childDelayMs: number }) {
     if (tools.some(tool => tool.function?.name === "start_subagent")) {
       response.end(JSON.stringify({
         id: "chatcmpl-delegate-tools", object: "chat.completion", created: 1, model: "security-model",
-        choices: [{ index: 0, message: { role: "assistant", content: null, tool_calls: [
+        choices: [{ index: 0, message: { role: "assistant", content: "I am delegating the banner check.", tool_calls: [
           { id: "call-start-child", type: "function", function: { name: "start_subagent", arguments: JSON.stringify({ task: "CHILD_TASK: confirm the login banner is present.", name: "Banner check" }) } },
           { id: "call-wait-child", type: "function", function: { name: "wait_subagents", arguments: "{}" } },
         ] }, finish_reason: "tool_calls" }],
@@ -5390,30 +5390,46 @@ test("assistant upgrade real Core keeps a subagent wait attached and follows the
     await page.getByRole("button", { name: "Send message", exact: true }).click();
 
     // The supervisor parks on the wait: a named pause, not a lost stream.
-    const waiting = page.getByRole("status", { name: "Waiting for subagents" });
-    await expect(waiting).toContainText("Waiting for 1 subagent to report.", { timeout: 30_000 });
+    const waiting = page.locator(".chat-message.assistant").last().getByRole("region", { name: "Work summary" });
+    await expect(waiting).toContainText("Waiting for delegated work.", { timeout: 30_000 });
+    await expect(page.getByRole("status", { name: "Waiting for subagents" })).toHaveCount(0);
     await expect(page.getByText("Callback ready")).toHaveCount(0);
     await expect.poll(() => modelStub.requests.some(body => JSON.stringify(body.messages ?? "").includes("CHILD_TASK") && !JSON.stringify(body.messages ?? "").includes("\"tool\"")), { timeout: 20_000 }).toBe(true);
     await expectNoChatStreamFailure(page);
-    await expect(page.locator(".chat-message.assistant").last()).toContainText("Waiting for 1 subagent to report.");
+    const waitingReply = page.locator(".chat-message.assistant").last();
+    await expect(waitingReply).toContainText("Waiting for delegated work.");
+    const waitingWork = waitingReply.getByRole("region", { name: "Work summary" });
+    await expect(waitingWork.locator(".activity-ledger-progress-preview")).toContainText("I am delegating the banner check.");
+    await expect(waitingReply.locator(".chat-message-body > .assistant-markdown")).toHaveCount(0);
+    await page.screenshot({ path: testInfo.outputPath("provider-wait-compact.png") });
 
     // The report resumes the supervisor in a new runtime; the viewer follows
     // it. Core then posts the subagent's report card after the answer.
     const answer = page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY: the subagent confirmed the banner." });
     await expect(answer).toHaveCount(1, { timeout: 60_000 });
-    await expect(waiting).toHaveCount(0);
-    await expect(page.getByText("Waiting for 1 subagent to report.")).toHaveCount(0);
+    await expect(page.getByRole("status", { name: "Waiting for subagents" })).toHaveCount(0);
+    await expect(page.getByText("Waiting for delegated work.")).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 20_000 });
     await expectNoChatStreamFailure(page);
     expect(followRequests.every(entry => entry.startsWith("200 "))).toBe(true);
-    const saved = (await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{ role: string; content: string }>)
+    const saved = (await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{ role: string; content: string; metadata: Record<string, unknown> }>)
       .filter(message => message.role === "assistant" && message.content.includes("PARENT_SUMMARY"));
     expect(saved).toHaveLength(1);
+    expect(saved[0].metadata.progress_prefix_utf16_length).toBe("I am delegating the banner check.".length);
+    const completedReply = page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY" });
+    await expect(completedReply.locator(".chat-message-body > .assistant-markdown")).toContainText("PARENT_SUMMARY: the subagent confirmed the banner.");
+    await expect(completedReply.locator(".chat-message-body > .assistant-markdown")).not.toContainText("I am delegating the banner check.");
+    await completedReply.getByRole("region", { name: "Work summary" }).getByRole("button", { name: "View work" }).click();
+    await expect(completedReply.getByRole("region", { name: "Progress updates" })).toContainText("I am delegating the banner check.");
     await expect(page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY" })).toHaveCount(1);
     expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
     expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
     await page.reload();
     await expect(page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY" })).toHaveCount(1, { timeout: 20_000 });
+    const reloadedReply = page.locator(".chat-message.assistant").filter({ hasText: "PARENT_SUMMARY" });
+    await expect(reloadedReply.locator(".chat-message-body > .assistant-markdown")).not.toContainText("I am delegating the banner check.");
+    await reloadedReply.getByRole("region", { name: "Work summary" }).getByRole("button", { name: "View work" }).click();
+    await expect(reloadedReply.getByRole("region", { name: "Progress updates" })).toContainText("I am delegating the banner check.");
     await testInfo.attach("subagent-wait-followed", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, followRequests }), contentType: "application/json" });
     await page.screenshot({ path: testInfo.outputPath("subagent-wait-followed.png") });
   } finally {

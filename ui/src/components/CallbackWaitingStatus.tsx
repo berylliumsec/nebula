@@ -11,7 +11,7 @@ type CallbackWaitingStatusProps = {
 
 const WAIT_LABELS: Record<ChatWaitKind, string> = {
   process: "Waiting for command results",
-  subagents: "Waiting for subagents",
+  subagents: "Waiting for delegated work",
   reply: "Waiting for the delegating assistant",
 };
 

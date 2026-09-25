@@ -45,6 +45,17 @@ describe("reconcileCompletedAssistantMessage", () => {
     const result = reconcileCompletedAssistantMessage([user, durable], completion);
     expect(result.filter((message) => message.id === "assistant-final")).toHaveLength(1);
   });
+
+  it("keeps the saved progress boundary when the streamed turn completes", () => {
+    const progress = "Checking 🔎 sources.";
+    const result = reconcileCompletedAssistantMessage([user, { ...temporary, content: progress }], {
+      ...completion,
+      content: `${progress}\n\nFinal answer.`,
+      progressPrefixUtf16Length: progress.length,
+    });
+    expect(result[1].metadata?.progress_prefix_utf16_length).toBe(progress.length);
+    expect(result[1].content).toBe(`${progress}\n\nFinal answer.`);
+  });
 });
 
 

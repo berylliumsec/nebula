@@ -74,7 +74,7 @@ from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
 
 # --- Routing commentary before an unreadable tool frame ----------------------
 
-COMMENTARY = "I'll read the value first."
+COMMENTARY = "I'll read the value first. 🔎"
 UNREADABLE_FRAMES = pytest.mark.parametrize(
     "frame",
     [
@@ -135,10 +135,14 @@ def test_routing_commentary_stops_at_an_unreadable_frame_beside_a_real_call(
         for item in service.session_messages("session")
         if item.role == ChatRole.ASSISTANT
     ]
-    # Prose beside a call is visible answer text, separate from reasoning
-    # (#521): the commentary before the frame is the model's and stays.
+    # Prose beside a call stays in the saved response, with an exact boundary
+    # so the UI can put it in work history instead of the final answer.
     for content in (shown, stored.content):
         assert content == f"{COMMENTARY}\n\nThe safe tool returned a."
+    [completed] = [payload for name, payload in events if name == "done"]
+    prefix_length = len(COMMENTARY.encode("utf-16-le")) // 2
+    assert completed["progress_prefix_utf16_length"] == prefix_length
+    assert stored.metadata["progress_prefix_utf16_length"] == prefix_length
     for reasoning in (thought, turn.reasoning, stored.reasoning):
         assert reasoning == "The operator wants the value."
     # The frame is protocol Core could not read, never operator text.

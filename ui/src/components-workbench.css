@@ -2581,6 +2581,14 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .chat-message .activity-ledger-compact-current { display: block; padding: 8px 16px 14px; border-radius: 0; background: transparent; }
 .activity-ledger-compact-current small { display: none; }
 .activity-ledger-compact-current span { color: var(--text-strong); font-size: var(--type-reading); font-weight: var(--weight-semibold); line-height: 1.4; }
+.chat-message .activity-ledger-compact.has-progress .activity-ledger-compact-current { padding-bottom: 4px; }
+.activity-ledger-progress-preview { display: grid; min-width: 0; gap: 3px; margin: 0; padding: 4px 16px 14px; }
+.activity-ledger-progress-preview small { color: var(--muted); font-size: var(--type-meta); }
+.activity-ledger-progress-preview span { display: -webkit-box; min-width: 0; overflow: hidden; color: var(--muted-strong); font-size: var(--type-control); line-height: var(--leading-ui); overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.activity-ledger-progress-details { min-width: 0; padding-bottom: 12px; overflow-wrap: anywhere; }
+.activity-ledger-progress-text h4 { margin: 0 0 8px; color: var(--muted-strong); font-size: var(--type-secondary); font-weight: var(--weight-medium); }
+.activity-ledger-progress-text .assistant-markdown { color: var(--muted-strong); }
+.activity-ledger-progress-text .assistant-markdown p { font-size: var(--type-control); line-height: var(--leading-body); }
 .chat-message .activity-ledger-compact .activity-ledger-footer { padding-inline: 16px 8px; }
 .activity-ledger-compact .activity-ledger-footer > button { min-height: 44px; padding-inline: 10px; }
 .assistant-starters { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }

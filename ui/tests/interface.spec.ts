@@ -1482,6 +1482,7 @@ async function expectNoStreamFailure(page: Page) {
 reloadTest("automation callback subagent wait keeps the assistant reply and follows the resumed turn", async ({ page }, testInfo) => {
   const sessionId = "follow-wait";
   const summary = "Waiting for 2 subagents to report.";
+  const displaySummary = "Waiting for delegated work.";
   let phase: "idle" | "waiting" | "resumed" | "done" = "idle";
   let pendingReads = 0;
   const followRequests: string[] = [];
@@ -1543,7 +1544,9 @@ reloadTest("automation callback subagent wait keeps the assistant reply and foll
   await page.getByRole("button", { name: "Send message", exact: true }).click();
 
   const status = page.getByRole("status", { name: "Waiting for subagents" });
-  await expect(status).toContainText(summary);
+  const work = page.locator(".chat-message.assistant").last().getByRole("region", { name: "Work summary" });
+  await expect(work).toContainText(displaySummary);
+  await expect(status).toHaveCount(0);
   await expect(page.getByText("Callback ready")).toHaveCount(0);
   const reply = page.locator(".chat-message.assistant").last();
   await expect(reply).toContainText("I delegated two checks.");
@@ -1552,11 +1555,14 @@ reloadTest("automation callback subagent wait keeps the assistant reply and foll
   expect(followRequests).toEqual([]);
   await expect(page.getByText("Connection lost. Reconnecting to the existing turn…")).toHaveCount(0);
   await expectNoStreamFailure(page);
-  expect((await new AxeBuilder({ page }).include(".callback-waiting-status").analyze()).violations).toEqual([]);
+  expect((await new AxeBuilder({ page }).include(".activity-ledger").analyze()).violations).toEqual([]);
+  await work.getByRole("button", { name: "View work" }).click();
+  await expect(work).toContainText("Collect delegated reports");
 
   // After a reload the saved wait still reads as a subagent wait.
   await page.reload();
-  await expect(page.getByRole("status", { name: "Waiting for subagents" })).toContainText(summary);
+  await expect(work).toContainText(displaySummary);
+  await expect(status).toHaveCount(0);
   await expect(page.getByText("Callback ready")).toHaveCount(0);
   await expect(page.getByText("Waiting for command results")).toHaveCount(0);
   await expect(reply).toContainText("I delegated two checks.");
@@ -5363,7 +5369,7 @@ reloadTest("assistant upgrade provider queue position survives refresh and queue
   expect((await new AxeBuilder({page}).include(".chat-thread").analyze()).violations).toEqual([]);
 });
 
-reloadTest("assistant upgrade restores paused provider supervisor thinking and partial text after refresh", async ({ page }) => {
+reloadTest("assistant upgrade restores paused provider supervisor thinking and partial text after refresh", async ({ page }, testInfo) => {
   await installTruthfulCore(page);
   await page.context().route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -5402,7 +5408,7 @@ reloadTest("assistant upgrade restores paused provider supervisor thinking and p
         started_at: entity.created_at,
         status: "waiting_callback",
         tool_call_ids: ["command-call"],
-        content: "I have dispatched the command.",
+        content: "I checked admission state.\n\nI have dispatched the command.",
         reasoning: "Check the returned evidence before continuing.",
       } });
       return;
@@ -5412,18 +5418,29 @@ reloadTest("assistant upgrade restores paused provider supervisor thinking and p
 
   await openWorkspace(page, "/?view=chat&session=paused-supervisor", "Workbench");
   const reply = page.locator(".chat-message.assistant").last();
-  const thinking = reply.getByLabel("Thinking");
-  await expect(reply).toContainText("I have dispatched the command.");
-  await expect(thinking).toBeVisible();
-  await expect(thinking).not.toHaveAttribute("open");
+  const work = reply.getByRole("region", { name: "Work summary" });
+  await expect(work.locator(".activity-ledger-progress-preview")).toContainText("I have dispatched the command.", { timeout: 20_000 });
+  await expect(work.getByText("I checked admission state.")).toBeHidden();
+  await expect(reply.getByLabel("Thinking")).toBeHidden();
+  const viewWork = work.getByRole("button", { name: "View work" });
+  const target = await viewWork.boundingBox();
+  expectTouchTarget(target?.height, "View work target height");
+  expect(await page.locator("body").evaluate(body => body.scrollWidth <= body.clientWidth + 1)).toBe(true);
+  expect((await new AxeBuilder({ page }).include(".activity-ledger").analyze()).violations).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("provider-progress-compact.png") });
+  await viewWork.click();
+  await expect(work.getByText("I checked admission state.")).toBeVisible();
+  const thinking = work.getByLabel("Thinking");
   await thinking.locator("summary").click();
   await expect(thinking).toContainText("Check the returned evidence before continuing.");
 
   await page.reload();
-  await expect(reply).toContainText("I have dispatched the command.");
-  await expect(reply.getByLabel("Thinking")).toBeVisible();
-  await reply.getByLabel("Thinking").locator("summary").click();
-  await expect(reply.getByLabel("Thinking")).toContainText("Check the returned evidence before continuing.");
+  await expect(work.locator(".activity-ledger-progress-preview")).toContainText("I have dispatched the command.", { timeout: 20_000 });
+  await expect(work.getByText("I checked admission state.")).toBeHidden();
+  await work.getByRole("button", { name: "View work" }).click();
+  await expect(work.getByText("I checked admission state.")).toBeVisible();
+  await work.getByLabel("Thinking").locator("summary").click();
+  await expect(work.getByLabel("Thinking")).toContainText("Check the returned evidence before continuing.");
 
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
@@ -5431,6 +5448,48 @@ reloadTest("assistant upgrade restores paused provider supervisor thinking and p
   await expect(runtime).toBeEnabled();
   await runtime.selectOption("harness");
   await expect(page.getByRole("combobox", { name: "Chat harness", exact: true })).toBeEnabled();
+});
+
+reloadTest("assistant upgrade keeps parent and subagent final answers clear of saved routing updates", async ({ page }) => {
+  const sessions = [
+    { id: "progress-parent", title: "Parent investigation", answer: "Parent conclusion: the evidence is ready." },
+    { id: "progress-child", title: "Subagent investigation", answer: "Child conclusion: the banner is present." },
+  ];
+  const progress = "I am checking the evidence.\n\nI have dispatched the remaining work.";
+  await installTruthfulCore(page);
+  await page.context().route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) return route.fulfill({ json: sessions.map((session, index) => ({
+      ...entity, id: session.id, engagement_id: "scratch-project", title: session.title, backend: "provider",
+      provider_profile_id: "provider-thinking", model: "deepseek/deepseek-v4.1-flash",
+      parent_session_id: index ? "progress-parent" : null,
+      metadata: index ? { subagent_id: "progress-subagent" } : {},
+    })) });
+    const session = sessions.find(item => path.endsWith(`/chat/sessions/${item.id}/messages`));
+    if (session) return route.fulfill({ json: [
+      { ...entity, id: `${session.id}-prompt`, engagement_id: "scratch-project", session_id: session.id, sequence: 1, role: "user", content: "Review the evidence.", citations: [], metadata: {} },
+      { ...entity, id: `${session.id}-answer`, engagement_id: "scratch-project", session_id: session.id, sequence: 2, role: "assistant", content: `${progress}\n\n${session.answer}`, reasoning: "The evidence supports this conclusion.", citations: [], metadata: { progress_prefix_utf16_length: progress.length } },
+    ] });
+    if (sessions.some(item => path.endsWith(`/chat/sessions/${item.id}/pending-turn`))) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+
+  for (const session of sessions) {
+    await openWorkspace(page, `/?view=chat&session=${session.id}`, "Workbench");
+    const reply = page.locator(".chat-message.assistant").last();
+    await expect(reply.locator(".chat-message-body > .assistant-markdown")).toContainText(session.answer, { timeout: 20_000 });
+    await expect(reply.locator(".chat-message-body > .assistant-markdown")).not.toContainText("I am checking the evidence.");
+    const work = reply.getByRole("region", { name: "Work summary" });
+    await expect(work.getByText("I am checking the evidence.")).toBeHidden();
+    await work.getByRole("button", { name: "View work" }).click();
+    await expect(work.getByRole("region", { name: "Progress updates" })).toContainText(progress);
+    await expect(reply.getByLabel("Thinking")).toBeVisible();
+    await reply.getByRole("button", { name: "Quote in composer" }).click();
+    await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toHaveValue(`> ${session.answer}\n\n`);
+    await page.reload();
+    await expect(reply.locator(".chat-message-body > .assistant-markdown")).toContainText(session.answer, { timeout: 20_000 });
+    await expect(work.getByText("I am checking the evidence.")).toBeHidden();
+  }
 });
 
 reloadTest("assistant upgrade shows each saved running tool and its input on demand", async ({ page }) => {
