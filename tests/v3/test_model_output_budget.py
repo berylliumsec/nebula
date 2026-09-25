@@ -1,11 +1,20 @@
 """Default output budget sized from the selected model (HIST-1, HIST-13).
 
 The chat UI never sends a maximum output, so the default is what every turn
-gets. Reasoning models spend their thinking tokens from that same allowance,
-so a flat 2,048 cut them off mid-thought. A known model output limit now sizes
-the default instead: since #521 it is the model's published maximum. A
-published limit at or above the window is no separate output limit, so the
-2,048 fallback applies rather than an output that leaves no room for input.
+gets, and the window minus that default is the input capacity compaction
+works against. Reasoning models spend their thinking tokens from the same
+allowance, so a flat 2,048 cut them off mid-thought.
+
+#521 made the default the model's published output maximum. Many OpenRouter
+endpoints publish about 90% of the window there (the figure they report when
+they have no separate limit), so a turn left a tenth of the window for input
+and compaction ran early. The operator decided (2026-09-25) to cap the
+default at a quarter of the window: min(published limit, max(25% of the
+window, 8,192)), the 8,192 floor never taking more than half the window. A
+published limit at or above the window (#578) or a window without a
+published limit is no separate output limit, so the window alone sizes the
+default. Only an unknown window keeps the 2,048 fallback. A profile's
+maximum and a request's maximum are explicit and not held to the share.
 """
 
 import asyncio
@@ -83,33 +92,44 @@ def _local(*descriptors: dict[str, object], **options: int) -> ProviderProfile:
 
 
 @pytest.mark.parametrize(
-    ("provider_type", "model", "window", "published_output"),
+    ("provider_type", "model", "window", "expected"),
     [
-        ("openai_compatible", "glm-4.6", 202_752, 131_072),
-        ("openai", "gpt-5.2", 400_000, 128_000),
-        ("anthropic", "claude-opus-4-5", 200_000, 64_000),
+        # Published limits above a quarter of the window: the quarter binds.
+        ("openai_compatible", "glm-4.6", 202_752, 50_688),
+        ("openai", "gpt-5.2", 400_000, 100_000),
+        ("anthropic", "claude-opus-4-5", 200_000, 50_000),
+        # Published limits below it are still the default.
+        ("anthropic", "claude-opus-5", 1_000_000, 128_000),
+        ("openai", "gpt-4o-mini", 128_000, 16_384),
     ],
 )
-def test_known_model_default_output_is_its_published_maximum(
-    provider_type: str, model: str, window: int, published_output: int
+def test_known_model_default_output_is_held_to_a_quarter_of_the_window(
+    provider_type: str, model: str, window: int, expected: int
 ):
     limits = resolve_context_limits(_hosted(provider_type), model=model)
 
     assert limits.source == "known_model"
     assert limits.context_window == window
-    assert limits.max_output_tokens == published_output
-    assert limits.input_capacity == window - published_output
+    assert limits.max_output_tokens == expected
+    assert limits.input_capacity == window - expected
 
 
 @pytest.mark.parametrize(
-    ("model", "window", "published_output"),
+    ("model", "window", "published_output", "expected"),
     [
-        ("deepseek/deepseek-v4.1-flash", 163_840, 65_536),
-        ("z-ai/glm-5.3-flash", 202_752, 131_072),
+        # The operator's main models: 65,536 and 131,072 left 98,304 and
+        # 71,680 tokens of input.
+        ("deepseek/deepseek-v4.1-flash", 163_840, 65_536, 40_960),
+        ("z-ai/glm-5.3-flash", 202_752, 131_072, 50_688),
+        # About 90% of the window, OpenRouter's figure for an endpoint with
+        # no separate limit: 117,964 left 13,108 tokens of input.
+        ("z-ai/glm-4.7-flash", 131_072, 117_964, 32_768),
+        ("moonshotai/kimi-k2.6", 262_144, 235_929, 65_536),
+        ("deepseek/deepseek-chat-v3-0324", 163_840, 147_456, 40_960),
     ],
 )
-def test_openrouter_catalog_models_default_to_their_published_output(
-    model: str, window: int, published_output: int
+def test_openrouter_catalog_models_default_to_a_quarter_of_the_window(
+    model: str, window: int, published_output: int, expected: int
 ):
     profile = _hosted(
         "openrouter",
@@ -126,23 +146,38 @@ def test_openrouter_catalog_models_default_to_their_published_output(
     limits = resolve_context_limits(profile, model=model, required_parameters={"tools"})
 
     assert limits.context_window == window
-    assert limits.max_output_tokens == published_output
+    assert limits.max_output_tokens == expected
+    assert limits.input_capacity == window - expected
+    # The published figure still caps a request that asks for more.
+    assert (
+        resolve_context_limits(
+            profile,
+            model=model,
+            requested_output_tokens=window,
+            required_parameters={"tools"},
+        ).max_output_tokens
+        == published_output
+    )
 
 
 @pytest.mark.parametrize(
     ("window", "published_output", "expected"),
     [
-        # The model's own limit is the default.
+        # A limit within a quarter of the window is the default.
         (131_072, 32_768, 32_768),
         (100_000, 8_000, 8_000),
-        # A limit at or above the window is no separate output limit: the
-        # fallback applies instead of an output that leaves no input.
-        (32_768, 32_768, 2_048),
-        (16_384, 16_384, 2_048),
-        (16_384, 20_000, 2_048),
+        # Above it, the quarter (at least 8,192, at most half the window).
+        (131_072, 65_536, 32_768),
+        (16_384, 12_000, 8_192),
+        (8_192, 7_372, 4_096),
+        # A limit at or above the window is no separate output limit, so the
+        # window alone sizes the default instead of leaving no input.
+        (32_768, 32_768, 8_192),
+        (16_384, 16_384, 8_192),
+        (16_384, 20_000, 8_192),
     ],
 )
-def test_default_output_is_the_published_limit_when_it_fits_the_window(
+def test_default_output_is_the_published_limit_within_the_window_share(
     window: int, published_output: int, expected: int
 ):
     profile = _local(
@@ -160,7 +195,7 @@ def test_default_output_is_the_published_limit_when_it_fits_the_window(
     assert limits.target_input_tokens == (window - expected) * 3 // 4
 
 
-def test_unknown_output_keeps_the_2048_fallback_while_known_output_grows():
+def test_unknown_window_keeps_the_2048_fallback_while_known_windows_size_it():
     known = resolve_context_limits(
         _local(
             {"id": "model-a", "context_window": 65_536, "max_output_tokens": 16_384}
@@ -171,18 +206,24 @@ def test_unknown_output_keeps_the_2048_fallback_while_known_output_grows():
 
     # No limits at all: the 8,192-token fallback window.
     assert resolve_context_limits(_local(), model="model-a").max_output_tokens == 2_048
-    # A known window without a published output limit.
+    # A known window without a published output limit: the window alone
+    # bounds the reply, so it sizes the default as a limit at the window does.
     window_only = resolve_context_limits(
         _local({"id": "model-a", "context_window": 131_072}), model="model-a"
     )
     assert window_only.context_window == 131_072
-    assert window_only.max_output_tokens == 2_048
+    assert window_only.max_output_tokens == 32_768
     assert (
         resolve_context_limits(
             _hosted("openai_compatible"), model="grok-4"
         ).max_output_tokens
-        == 2_048
+        == 64_000
     )
+    configured_window = resolve_context_limits(
+        _local(context_window=32_768), model="model-a"
+    )
+    assert configured_window.source == "configured"
+    assert configured_window.max_output_tokens == 8_192
     # OpenRouter without a primary route keeps its safe 8,192 fallback window.
     unrouted = resolve_context_limits(
         _hosted(
@@ -199,12 +240,13 @@ def test_unknown_output_keeps_the_2048_fallback_while_known_output_grows():
     )
     assert unrouted.context_window == 8_192
     assert unrouted.max_output_tokens == 2_048
-    # Small windows never drop below the allowance they had before.
+    # A small window keeps half of itself for input.
     tiny = resolve_context_limits(
         _local({"id": "model-a", "context_window": 4_000, "max_output_tokens": 4_000}),
         model="model-a",
     )
-    assert tiny.max_output_tokens == 2_048
+    assert tiny.max_output_tokens == 2_000
+    assert tiny.input_capacity == 2_000
 
 
 def test_verified_route_output_limit_bounds_the_default():
@@ -262,6 +304,29 @@ def test_explicit_operator_and_request_maxima_still_win():
         model="model-a",
     )
     assert lowered.max_output_tokens == 1_000
+    # It is not held to the quarter-window share either, only to a limit the
+    # model publishes and to the window.
+    raised = resolve_context_limits(
+        _local(
+            {"id": "model-a", "context_window": 131_072, "max_output_tokens": 117_964},
+            max_output_tokens=100_000,
+        ),
+        model="model-a",
+    )
+    assert raised.max_output_tokens == 100_000
+    assert raised.input_capacity == 31_072
+    above_published = resolve_context_limits(
+        _local(
+            {"id": "model-a", "context_window": 131_072, "max_output_tokens": 65_536},
+            max_output_tokens=100_000,
+        ),
+        model="model-a",
+    )
+    assert above_published.max_output_tokens == 65_536
+    above_window = resolve_context_limits(
+        _local(context_window=32_768, max_output_tokens=40_000), model="model-a"
+    )
+    assert above_window.max_output_tokens == 32_767
 
     profile = _hosted("openai_compatible")
     assert (
@@ -271,6 +336,13 @@ def test_explicit_operator_and_request_maxima_still_win():
         == 1_000
     )
     # A request may ask for more than the default, up to the model limit.
+    assert resolve_context_limits(profile, model="glm-4.6").max_output_tokens == 50_688
+    assert (
+        resolve_context_limits(
+            profile, model="glm-4.6", requested_output_tokens=100_000
+        ).max_output_tokens
+        == 100_000
+    )
     assert (
         resolve_context_limits(
             profile, model="glm-4.6", requested_output_tokens=200_000
@@ -339,12 +411,45 @@ def test_prepared_chat_request_sends_the_model_output_default(tmp_path, monkeypa
     assert answered[-1].max_output_tokens == 32_768
 
 
+def test_chat_turn_leaves_three_quarters_of_the_window_for_input(tmp_path, monkeypatch):
+    # 117,964 of 131,072 is what OpenRouter publishes for endpoints without a
+    # separate limit. As the default it left 13,108 tokens of input, so
+    # compaction started after a few turns.
+    _, engagement, profile, provider, service = _chat_service(
+        tmp_path, monkeypatch, window=131_072, output=117_964
+    )
+
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            provider_id=profile.id,
+            engagement_id=engagement.id,
+            messages=[{"role": "user", "content": "Walk me through the findings."}],
+            include_knowledge=False,
+            stream=True,
+        )
+    )
+
+    assert prepared.model_request.max_output_tokens == 32_768
+    limits = json.loads(prepared.model_request.metadata["resolved_context_limits"])
+    assert limits["max_output_tokens"] == 32_768
+    assert limits["input_capacity"] == 98_304
+    assert limits["target_input_tokens"] == 73_728
+    asyncio.run(service.complete(prepared))
+    answered = [
+        request
+        for request in provider.requests
+        if not request.metadata.get("operation")
+    ]
+    assert answered[-1].max_output_tokens == 32_768
+
+
 def test_published_output_at_the_window_still_leaves_room_to_chat(
     tmp_path, monkeypatch
 ):
     # vLLM serves one combined max_model_len, so a descriptor can publish the
     # window as its output limit. That default once left one input token and
-    # every message was refused as too large for the window.
+    # every message was refused as too large for the window. The window now
+    # sizes it: a quarter, at least 8,192.
     _, engagement, profile, provider, service = _chat_service(
         tmp_path, monkeypatch, window=32_768, output=32_768
     )
@@ -359,21 +464,22 @@ def test_published_output_at_the_window_still_leaves_room_to_chat(
         )
     )
 
-    assert prepared.model_request.max_output_tokens == 2_048
+    assert prepared.model_request.max_output_tokens == 8_192
     limits = json.loads(prepared.model_request.metadata["resolved_context_limits"])
-    assert limits["input_capacity"] == 32_768 - 2_048
+    assert limits["input_capacity"] == 32_768 - 8_192
     asyncio.run(service.complete(prepared))
     answered = [
         request
         for request in provider.requests
         if not request.metadata.get("operation")
     ]
-    assert answered[-1].max_output_tokens == 2_048
+    assert answered[-1].max_output_tokens == 8_192
 
 
 def test_verified_routes_without_a_published_output_keep_input_room():
     # OpenRouter endpoints that publish no max_completion_tokens are stored
-    # with their window as the output limit.
+    # with their window as the output limit: no separate limit, so the
+    # window's share is the default.
     profile = _hosted(
         "openrouter",
         model_descriptors=[
@@ -400,8 +506,8 @@ def test_verified_routes_without_a_published_output_keep_input_room():
     )
 
     assert limits.route_limits_verified is True
-    assert limits.max_output_tokens == 2_048
-    assert limits.input_capacity == 131_072 - 2_048
+    assert limits.max_output_tokens == 32_768
+    assert limits.input_capacity == 131_072 - 32_768
 
 
 def test_history_past_the_smaller_input_capacity_compacts_instead_of_failing(

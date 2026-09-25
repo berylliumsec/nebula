@@ -283,10 +283,33 @@ Analyst chats and model-facing mission dependency context are compacted
 automatically when the estimated input approaches 75 percent of the configured
 model capacity. Provider profiles may declare `context_window` and
 `max_output_tokens` in their options; Core conservatively assumes an 8,192-token
-window and a 2,048-token output allowance when no limits are configured. When
-the model's catalog or known limits publish an output limit, that limit is the
-default output allowance. A published output limit at or above the window is
-not a separate limit, so the 2,048-token allowance applies instead.
+window and a 2,048-token output allowance when no limits are configured.
+
+Once the window is known (from the model catalog, verified OpenRouter routes,
+Nebula's known model limits or the profile), a reply may use up to a quarter
+of it by default: at least 8,192 tokens, but never more than half the window.
+A published output limit below that share is the default instead. The rest of
+the window is the input capacity that compaction works against. A published
+limit at or above the window, or no published limit, is not a separate limit,
+so the share applies. So it does to the roughly 90%-of-window figure many
+OpenRouter endpoints publish when they have no separate limit. As the default,
+that figure left a tenth of the window for input and compaction ran after a
+few turns. For example, `deepseek/deepseek-v4.1-flash` on a 163,840-token route
+that publishes 65,536 now defaults to 40,960 output tokens, which leaves 122,880
+for input. A published limit still caps a request that asks for more. The
+profile's `max_output_tokens` is the operator's own figure. It sizes every
+reply, held only to the window and to a limit the model publishes, and is
+never cut to the share.
+
+Reasoning models spend their thinking from the same allowance on most routes.
+OpenRouter derives an effort's reasoning budget from it, and Claude models
+before 4.6 get a thinking budget that is a share of it. When a turn still ends
+at the limit, or with thoughts but no answer, Nebula asks once more for the
+answer alone with twice the room (at least 4,096 tokens), up to the model's
+published limit and what the window leaves. An explicit maximum on the
+profile or the request is kept for that retry. The capability probe keeps its
+own 2,048-token allowance. To give a thinking model, or a reply longer than
+the default, more room on every turn, set the profile's maximum output.
 
 Compaction uses the conversation or mission's selected provider and model, so it
 can add model latency, token usage, and cost. Workbench and Activity show the

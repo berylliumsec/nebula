@@ -157,10 +157,11 @@ describe("settings page dialogs", () => {
     const field = within(dialog).getByLabelText("Maximum output tokens");
 
     // A blank field no longer means a flat 2,048: Core sizes each reply from
-    // the model's own limit (resolve_context_limits).
+    // the model's own limit, held to a quarter of the window
+    // (resolve_context_limits).
     expect(field).toHaveAttribute("placeholder", "Sized from the model");
     expect(field).toHaveAccessibleDescription(
-      "Leave blank to size each reply from the model: its published output limit, up to 32,000 tokens and a quarter of the context window, or 2,048 when the limit is unknown. A value here caps every reply.",
+      "Leave blank to size each reply from the model: its published output limit, up to a quarter of the context window (at least 8,192 tokens), or 2,048 when the window is unknown. A value here caps every reply.",
     );
   });
 
