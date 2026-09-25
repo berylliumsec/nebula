@@ -1,13 +1,13 @@
 {
-  "change_digest": "8488382997f04c8728391790f385bcd4fc44fd573cb7d592f9125bd948fba19a",
-  "reviewed_by": "Claude focused review for ui-leftovers",
-  "reason": "P17 finishes four chat-workspace leftovers. (1) streamChat maps Core's queued/admitted frames so the live queue position renders through the existing waiting row; the first queued frame is held 400 ms so a turn a free slot admits at once never shows a position. (2) ContainerTerminalPanel reads terminal audit health through startVisiblePoll only while the terminal is shown. (3) GET /chat/sessions/{id}/subagents answers 304 on a content ETag and the subagent rail sends If-None-Match. (4) Red tests on main: operator rows keep their floating time/actions unclipped by content-visibility and a short bubble keeps its actions in one row (durable-conversation-core desktop/compact); the queued-message and in-place editors opt out of the selected-text toolbar that covered Save on WebKit 390; App.test mocks the credential check #548 added; the two full-App vitest cases get CI's 15 s budget; icons keep a memoized markup object so a parent re-render no longer rewrites their SVG (the transcript-churn assertion in App.test's draft test failed 7/10 on main because of it), and that test now waits for the Archived group to open. Python covers the new 304 route contract and the existing subagent route tests. Frontend covers the stream mapping and hold, the conditional client and hook, the terminal poll, the queue editor, selection actions, and the App/SessionsPage files touched. Playwright runs entry:assistant on desktop, mobile Chromium and mobile WebKit (SessionsPage changed; new queue-position, operator-actions and terminal-audit idle assertions), the chat-stream-follow mocked and real-Core areas (new mocked and real-Core queue journeys), chat-subagents mocked and real-Core, durable-conversation-core on all four real-Core projects, and the compact-terminal and terminal-assistant areas for ContainerTerminalPanel.",
-  "exclusions": "Full suites are not approved and are excluded. Harness, mission, provider adapters, native Rust/Tauri and backend lifecycle code are unchanged and not selected. tests/v3/test_chat_subagents.py is not selected: ChatSubagents.view() and the service are unchanged; only the route wraps the same listing in a conditional read, covered by tests/v3/test_chat_polling_cost.py and tests/v3/test_chat_api.py. The icon factory change leaves rendered DOM identical (only redundant innerHTML writes stop), so no visual-baseline areas outside the chat workspace are selected; ui/src/icons/icons.test.tsx pins the behaviour.",
+  "change_digest": "2111139d67c8cbba69d4eb257028c44df9716f8e17cb1484051829ef754613e1",
+  "reviewed_by": "Claude focused review for grant-attribution",
+  "reason": "Saving a project's scope keeps who granted each unchanged grant. PUT /engagements/{id}/scope and the generic scope-policies create/replace/patch routes now share _attribute_scope_grants: a saved grant whose authority (MissionGrant.authority(): risk classes, tool names and targets as sets, plus expiry) matches an unclaimed stored grant keeps the stored granted_by and granted_at (the client's echoed attribution only breaks ties between stored grants of equal authority); new or changed grants are credited to the active operator at save time, and an already-expired new or changed grant is refused. tests/v3/test_api_crud_validation.py holds the three new regression tests (dedicated route unchanged/changed/new/forged, expired refusal, generic replace and patch with the equal-authority tiebreak) beside #581's forgery and smoke-patch tests. tests/v3/test_domain.py covers the MissionGrant model the authority key was added to. tests/v3/test_web_search.py, test_tool_catalog.py and test_tool_suggestions.py save scope fields through the dedicated route whose payload assembly was restructured. tests/v3/test_generic_crud_exposure.py covers the generic CRUD route surface whose ScopePolicy hook changed.",
+  "exclusions": "Full suites are not approved and are excluded. No UI, native or Playwright change: the UI only echoes grants it read (EngagementPolicySettings and WorkbenchBrowser send scope.grants with expectedRevision) and displays no grant attribution, so frontend, native and playwright are empty. Browser automation's grant coverage check reads only risk classes, targets and expiry, which this change never alters. Python 3.12 only: no version-specific code.",
   "expected_tests": {
-    "python": 39,
-    "frontend": 211,
+    "python": 189,
+    "frontend": 0,
     "native": 0,
-    "playwright": 336
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -15,37 +15,14 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_polling_cost.py",
-    "tests/v3/test_chat_api.py"
+    "tests/v3/test_api_crud_validation.py",
+    "tests/v3/test_domain.py",
+    "tests/v3/test_web_search.py",
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_tool_suggestions.py",
+    "tests/v3/test_generic_crud_exposure.py"
   ],
-  "frontend": [
-    "ui/src/api/chatStreamFollow.test.ts",
-    "ui/src/api/client.test.ts",
-    "ui/src/api/visiblePoll.test.ts",
-    "ui/src/components/chat-subagents/useChatSubagents.test.tsx",
-    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx",
-    "ui/src/components/ContainerTerminalPanel.test.tsx",
-    "ui/src/components/TerminalCommandHistoryPanel.test.tsx",
-    "ui/src/components/ChatQueuePanel.test.tsx",
-    "ui/src/components/selection/selectionActions.test.tsx",
-    "ui/src/App.test.tsx",
-    "ui/src/pages/chatDraftNavigation.test.tsx",
-    "ui/src/pages/chatStreamLifecycle.test.ts",
-    "ui/src/pages/providerTurnFollow.test.ts",
-    "ui/src/pages/useChatQueue.test.tsx",
-    "ui/src/icons/icons.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit",
-    "area:chat-stream-follow",
-    "area:chat-stream-follow-core",
-    "area:chat-subagents",
-    "area:chat-subagents-core",
-    "area:durable-conversation-core",
-    "area:compact-terminal",
-    "area:terminal-assistant"
-  ]
+  "playwright": []
 }

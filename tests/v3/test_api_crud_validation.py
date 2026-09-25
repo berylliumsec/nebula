@@ -841,3 +841,192 @@ def test_generic_scope_patch_without_grants_keeps_their_attribution(api):
     updated = store.get(ScopePolicy, scope_id)
     assert updated.allowed_cidrs == ["127.0.0.1/32"]
     assert [grant.granted_by for grant in updated.grants] == ["earlier-operator"]
+
+
+def _operator(client: TestClient, name: str) -> str:
+    created = client.post(
+        "/api/v1/operator-profiles", headers=_auth(), json={"display_name": name}
+    )
+    assert created.status_code == 201, created.text
+    return created.json()["id"]
+
+
+def _activate(client: TestClient, operator_id: str) -> None:
+    activated = client.post(
+        f"/api/v1/operator-profiles/{operator_id}/activate", headers=_auth(), json={}
+    )
+    assert activated.status_code == 200, activated.text
+
+
+def _scope_grant(
+    *,
+    risk_classes: list[str],
+    targets: list[str],
+    expires_at: str = "2099-01-01T00:00:00Z",
+    granted_by: str = "forged-operator",
+    **extra: object,
+) -> dict:
+    return {
+        "risk_classes": risk_classes,
+        "targets": targets,
+        "expires_at": expires_at,
+        "granted_by": granted_by,
+        **extra,
+    }
+
+
+def _attribution(store: NebulaStore, scope_id: str) -> list[tuple[str, object]]:
+    return [
+        (grant.granted_by, grant.granted_at)
+        for grant in store.get(ScopePolicy, scope_id).grants
+    ]
+
+
+def test_project_scope_save_keeps_unchanged_grants_and_credits_the_saver(api):
+    """Saving a project's scope re-credits only the grants the saver changed."""
+
+    client, store = api
+    alice = _operator(client, "Alice")
+    project = client.post(
+        "/api/v1/engagements", headers=_auth(), json={"name": "Shared scope"}
+    ).json()
+    url = f"/api/v1/engagements/{project['id']}/scope"
+    scan = _scope_grant(
+        risk_classes=["active_scan", "passive"],
+        targets=["10.0.0.0/24", "example.com"],
+    )
+    browse = _scope_grant(risk_classes=["passive"], targets=["app.example.com"])
+    granted = client.put(url, headers=_auth(), json={"grants": [scan, browse]})
+    assert granted.status_code == 200, granted.text
+    scope_id = granted.json()["id"]
+    alice_grants = store.get(ScopePolicy, scope_id).grants
+    assert [grant.granted_by for grant in alice_grants] == [alice, alice]
+
+    bob = _operator(client, "Bob")
+    _activate(client, bob)
+    # The settings page echoes each grant it read. Bob widens the domains,
+    # renews one grant and adds another; the first grant comes back with its
+    # lists reordered and a client that names someone else as its granter.
+    current = client.get(url, headers=_auth()).json()
+    echoed_scan, echoed_browse = current["grants"]
+    unchanged = {
+        **echoed_scan,
+        "risk_classes": list(reversed(echoed_scan["risk_classes"])),
+        "targets": list(reversed(echoed_scan["targets"])),
+        "granted_by": "mallory",
+        "granted_at": "2000-01-01T00:00:00Z",
+    }
+    renewed = {**echoed_browse, "expires_at": "2100-01-01T00:00:00Z"}
+    added = _scope_grant(
+        risk_classes=["active_scan"],
+        targets=["10.0.1.0/24"],
+        granted_by=alice,
+        granted_at="2000-01-01T00:00:00Z",
+    )
+    saved = client.put(
+        url,
+        headers=_auth(),
+        json={
+            "allowed_domains": ["example.com"],
+            "grants": [unchanged, renewed, added],
+            "expected_revision": current["revision"],
+        },
+    )
+
+    assert saved.status_code == 200, saved.text
+    attribution = _attribution(store, scope_id)
+    assert attribution[0] == (alice, alice_grants[0].granted_at)
+    assert [granted_by for granted_by, _ in attribution[1:]] == [bob, bob]
+    for _, granted_at in attribution[1:]:
+        assert granted_at > alice_grants[1].granted_at
+    assert saved.json()["grants"] == client.get(url, headers=_auth()).json()["grants"]
+    assert store.get(ScopePolicy, scope_id).allowed_domains == ["example.com"]
+
+
+def test_project_scope_refuses_a_new_grant_that_has_already_expired(api):
+    """Core stamps a new grant with the save time, so it must expire later."""
+
+    client, store = api
+    _operator(client, "Alice")
+    project = client.post(
+        "/api/v1/engagements", headers=_auth(), json={"name": "Expired grant"}
+    ).json()
+    url = f"/api/v1/engagements/{project['id']}/scope"
+
+    refused = client.put(
+        url,
+        headers=_auth(),
+        json={
+            "grants": [
+                _scope_grant(
+                    risk_classes=["active_scan"],
+                    targets=["10.0.0.0/24"],
+                    granted_at="2000-01-01T00:00:00Z",
+                    expires_at="2001-01-01T00:00:00Z",
+                )
+            ]
+        },
+    )
+
+    assert refused.status_code == 422, refused.text
+    assert "grant 1 expired" in refused.json()["detail"]
+    assert store.get(ScopePolicy, project["scope_policy_id"]).grants == []
+
+
+def test_generic_scope_saves_keep_unchanged_grants_and_credit_the_saver(api):
+    """Replace and patch follow the project scope route's attribution rule."""
+
+    client, store = api
+    alice = _operator(client, "Alice")
+    project = client.post(
+        "/api/v1/engagements", headers=_auth(), json={"name": "Generic scope"}
+    ).json()
+    scope_id = project["scope_policy_id"]
+    url = f"/api/v1/scope-policies/{scope_id}"
+    scan = _scope_grant(risk_classes=["active_scan"], targets=["10.0.0.0/24"])
+    granted = client.patch(url, headers=_auth(), json={"changes": {"grants": [scan]}})
+    assert granted.status_code == 200, granted.text
+    [alice_grant] = store.get(ScopePolicy, scope_id).grants
+    assert alice_grant.granted_by == alice
+
+    bob = _operator(client, "Bob")
+    _activate(client, bob)
+    current = client.get(url, headers=_auth()).json()
+    echoed = {**current["grants"][0], "granted_by": "mallory"}
+    narrowed = {**current["grants"][0], "targets": ["10.0.0.0/25"]}
+    replaced = client.put(
+        url,
+        headers=_auth(),
+        # The same grant saved twice is the stored grant plus a new one.
+        json={**current, "grants": [echoed, dict(scan), narrowed]},
+    )
+    assert replaced.status_code == 200, replaced.text
+    attribution = _attribution(store, scope_id)
+    assert attribution[0] == (alice, alice_grant.granted_at)
+    assert [granted_by for granted_by, _ in attribution[1:]] == [bob, bob]
+    bob_duplicate_at = attribution[1][1]
+    assert bob_duplicate_at > alice_grant.granted_at
+
+    carol = _operator(client, "Carol")
+    _activate(client, carol)
+    current = client.get(url, headers=_auth()).json()
+    # Grants carry no id: of two stored grants that authorize the same thing,
+    # the one whose attribution the client echoed is the one saved again.
+    patched = client.patch(
+        url,
+        headers=_auth(),
+        json={
+            "changes": {
+                "grants": [
+                    current["grants"][1],
+                    _scope_grant(risk_classes=["passive"], targets=["example.com"]),
+                ]
+            },
+            "expected_revision": current["revision"],
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    attribution = _attribution(store, scope_id)
+    assert attribution[0] == (bob, bob_duplicate_at)
+    assert attribution[1][0] == carol
+    assert [grant["granted_by"] for grant in patched.json()["grants"]] == [bob, carol]

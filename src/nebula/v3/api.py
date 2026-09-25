@@ -7333,7 +7333,7 @@ def create_app(
     ) -> ScopePolicy:
         engagement = store.get(Engagement, engagement_id)
         operator_id = active_operator_id()
-        payload = request.model_dump(exclude={"expected_revision"})
+        payload = request.model_dump(exclude={"expected_revision", "grants"})
         for optional in (
             "tool_suggestions",
             "on_demand_tools",
@@ -7343,10 +7343,16 @@ def create_app(
         ):
             if payload[optional] is None:
                 del payload[optional]
-        payload["grants"] = [
-            grant.model_copy(update={"granted_by": operator_id})
-            for grant in request.grants
-        ]
+
+        def attributed(stored: list[MissionGrant]) -> dict[str, Any]:
+            # Grants saved unchanged keep who granted them; new or changed
+            # grants are credited to this operator, never to whoever the
+            # client names.
+            return {
+                **payload,
+                "grants": _attribute_scope_grants(request.grants, stored, operator_id),
+            }
+
         if engagement.scope_policy_id:
             current = store.get(ScopePolicy, engagement.scope_policy_id)
             if current.engagement_id != engagement.id:
@@ -7354,7 +7360,7 @@ def create_app(
             updated = store.update(
                 ScopePolicy,
                 current.id,
-                payload,
+                attributed(current.grants),
                 expected_revision=request.expected_revision or current.revision,
             )
             browser_automation.invalidate_scope_revision(
@@ -7366,7 +7372,7 @@ def create_app(
         candidate = ScopePolicy(
             id=scope_id,
             engagement_id=engagement.id,
-            **payload,
+            **attributed([]),
         )
         try:
             scope = store.create(candidate)
@@ -7384,7 +7390,7 @@ def create_app(
             scope = store.update(
                 ScopePolicy,
                 scope.id,
-                payload,
+                attributed(scope.grants),
                 expected_revision=request.expected_revision or scope.revision,
             )
         store.update(
@@ -12930,6 +12936,58 @@ def _invalidate_harness_home_verification(
     return candidate.model_copy(update={"capabilities": type(candidate.capabilities)()})
 
 
+def _attribute_scope_grants(
+    saved: list[MissionGrant], stored: list[MissionGrant], operator_id: str
+) -> list[MissionGrant]:
+    """Credit each grant in a saved scope to the operator who authorized it.
+
+    A saved grant with the same authority as a stored grant that no earlier
+    saved grant claimed is that grant saved again, and keeps the stored
+    ``granted_by`` and ``granted_at``. Grants carry no id, so among stored
+    grants of equal authority the one whose attribution the client echoed is
+    claimed first; the echo only chooses between stored attributions. Any
+    other grant is new or changed, and is credited to ``operator_id`` at the
+    save time. What the client names as granter or grant time is never kept.
+    """
+
+    now = utc_now()
+    unclaimed = list(stored)
+    attributed: list[MissionGrant] = []
+    for position, grant in enumerate(saved, start=1):
+        matches = [
+            index
+            for index, existing in enumerate(unclaimed)
+            if existing.authority() == grant.authority()
+        ]
+        echoed = [
+            index
+            for index in matches
+            if unclaimed[index].granted_by == grant.granted_by
+            and unclaimed[index].granted_at == grant.granted_at
+        ]
+        if matches:
+            existing = unclaimed.pop((echoed or matches)[0])
+            attributed.append(
+                grant.model_copy(
+                    update={
+                        "granted_by": existing.granted_by,
+                        "granted_at": existing.granted_at,
+                    }
+                )
+            )
+            continue
+        if grant.expires_at <= now:
+            raise ValueError(
+                f"grant {position} expired at {grant.expires_at.isoformat()}; "
+                "a new or changed grant must expire after it is saved. "
+                "Set a later expiry or remove the grant."
+            )
+        attributed.append(
+            grant.model_copy(update={"granted_by": operator_id, "granted_at": now})
+        )
+    return attributed
+
+
 def _invalidate_provider_verification(
     current: ProviderProfile,
     candidate: ProviderProfile,
@@ -12999,20 +13057,18 @@ def _register_crud_routes(
     dedicated routes attribute theirs.
     """
 
-    def attribute_scope_grants(entity: Any) -> Any:
+    def attribute_scope_grants(entity: Any, current: Any = None) -> Any:
         # A grant records who authorized it. These routes take the client's
-        # whole record, so Core attributes each grant written through them to
-        # the operator writing it, as the project scope route does, instead of
-        # accepting whoever the client names.
+        # whole record, so, as the project scope route does, Core keeps the
+        # stored attribution of each grant saved unchanged and credits new or
+        # changed grants to the operator writing them, instead of accepting
+        # whoever the client names.
         if not isinstance(entity, ScopePolicy):
             return entity
-        operator_id = actor_id()
+        stored = current.grants if isinstance(current, ScopePolicy) else []
         return entity.model_copy(
             update={
-                "grants": [
-                    grant.model_copy(update={"granted_by": operator_id})
-                    for grant in entity.grants
-                ]
+                "grants": _attribute_scope_grants(entity.grants, stored, actor_id())
             }
         )
 
@@ -13222,7 +13278,7 @@ def _register_crud_routes(
             ):
                 entity = _invalidate_harness_home_verification(current, entity)
             entity = enforce_harness_command_boundary(entity)
-            entity = attribute_scope_grants(entity)
+            entity = attribute_scope_grants(entity, current)
             expected_revision = current.revision if if_match is None else if_match
             if isinstance(current, LEGACY_RELATION_MODELS):
                 return relation_service.replace_legacy_entity(
@@ -13262,7 +13318,7 @@ def _register_crud_routes(
             changes = dict(patch.changes)
             if isinstance(candidate, ScopePolicy) and "grants" in changes:
                 # A patch that leaves the grants alone keeps who granted them.
-                candidate = attribute_scope_grants(candidate)
+                candidate = attribute_scope_grants(candidate, current)
                 changes["grants"] = [
                     grant.model_dump(mode="python") for grant in candidate.grants
                 ]

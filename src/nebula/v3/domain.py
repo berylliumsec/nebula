@@ -708,6 +708,21 @@ class MissionGrant(NebulaModel):
             raise ValueError("expires_at must be later than granted_at")
         return self
 
+    def authority(
+        self,
+    ) -> tuple[frozenset[RiskClass], frozenset[str], frozenset[str], datetime]:
+        """What this grant permits, apart from who granted it and when.
+
+        Order and repeats within each list permit nothing different.
+        """
+
+        return (
+            frozenset(self.risk_classes),
+            frozenset(self.tool_names),
+            frozenset(self.targets),
+            self.expires_at,
+        )
+
 
 class ScopePolicy(Entity):
     entity_kind: ClassVar[str] = "scope_policies"
