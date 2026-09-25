@@ -316,6 +316,9 @@ textarea { border-radius: var(--radius-control); }
 .chat-scroll { padding: 30px max(24px, calc((100% - var(--chat-reading-track)) / 2)); }
 .chat-message { width: 100%; max-width: var(--chat-reading-track); margin-inline: auto; margin-bottom: 28px; grid-template-columns: minmax(0, 1fr); }
 .chat-message.render-contained { content-visibility: auto; contain-intrinsic-size: auto var(--chat-message-intrinsic-size, 240px); }
+/* content-visibility clips a row's paint to its own box. An operator row
+   floats its time and actions outside the bubble, so it stays unclipped. */
+.chat-message.operator.render-contained { content-visibility: visible; }
 .chat-message:has(.assistant-code-block, .tool-call, pre, table) { max-width: 100%; }
 .chat-message.assistant,
 .chat-message.operator { border-color: transparent; background: transparent; }
@@ -334,7 +337,8 @@ textarea { border-radius: var(--radius-control); }
    it hugs its text; touch keeps them in flow with 44px targets. */
 @media (hover: hover) and (pointer: fine) {
   .chat-message.operator header { top: 50%; right: 100%; margin: 0 10px 0 0; transform: translateY(-50%); }
-  .chat-message.operator .chat-message-actions { position: absolute; top: 100%; right: 0; margin-top: 4px; }
+  /* One row below the bubble even when a short message is narrower than it. */
+  .chat-message.operator .chat-message-actions { position: absolute; top: 100%; right: 0; width: max-content; margin-top: 4px; }
 }
 .chat-message.operator:hover header,
 .chat-message.operator:focus-within header { opacity: 1; }

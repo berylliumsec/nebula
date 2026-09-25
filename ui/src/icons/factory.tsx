@@ -1,4 +1,4 @@
-import { forwardRef, useId, type ForwardRefExoticComponent, type RefAttributes, type SVGProps } from "react";
+import { forwardRef, useId, useMemo, type ForwardRefExoticComponent, type RefAttributes, type SVGProps } from "react";
 
 export type IconWeight = "regular" | "light";
 export type LucideProps = Omit<SVGProps<SVGSVGElement>, "ref"> & {
@@ -25,6 +25,9 @@ export function createIcon(name: string, regular: string, light: string): Lucide
     const numericSize = typeof size === "number" ? size : Number.parseFloat(size);
     const selectedWeight = weight ?? (strokeWidth !== undefined ? (Number(strokeWidth) <= 1.5 ? "light" : "regular") : (numericSize >= 24 ? "light" : "regular"));
     const body = (selectedWeight === "light" ? light : regular).replaceAll("__NEBULA_ICON_ID__", `nebula-${instanceId}-`);
+    // React rewrites innerHTML whenever this object changes, so a fresh one per
+    // render would rebuild every icon's paths each time its parent renders.
+    const markup = useMemo(() => ({ __html: body }), [body]);
     return <svg
       ref={ref}
       xmlns="http://www.w3.org/2000/svg"
@@ -38,7 +41,7 @@ export function createIcon(name: string, regular: string, light: string): Lucide
       data-icon-family="phosphor"
       data-icon-weight={selectedWeight}
       {...props}
-    ><g dangerouslySetInnerHTML={{ __html: body }} />{children}</svg>;
+    ><g dangerouslySetInnerHTML={markup} />{children}</svg>;
   });
   Icon.displayName = name;
   return Icon;

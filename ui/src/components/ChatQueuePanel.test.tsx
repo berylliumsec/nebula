@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import { ChatQueuePanel } from "./ChatQueuePanel";
+import { SelectionActionsProvider } from "./selection";
 import type { useChatQueue } from "../pages/useChatQueue";
 
 function controller(status = "queued", error?: string, turnId?: string) {
@@ -32,4 +33,21 @@ it("removes a dispatched follow-up from the visible queue once Core links its tu
 
   rerender(<ChatQueuePanel queue={controller("needs_review", undefined, "turn-one")} onRefreshConversation={vi.fn()} />);
   expect(screen.getByRole("region", {name: "Core follow-up queue"})).toHaveTextContent("Needs attention");
+});
+it("keeps selected-text actions off the queued-message editor and its Save control", () => {
+  const queue = controller();
+  const view = render(<SelectionActionsProvider onAsk={vi.fn()}><ChatQueuePanel queue={queue} onRefreshConversation={vi.fn()} /></SelectionActionsProvider>);
+  const details = view.container.querySelector("details")!;
+  details.open = true;
+  fireEvent(details, new Event("toggle"));
+  fireEvent.click(screen.getByRole("button", { name: "Edit queued message 1" }));
+  // Replacing the text starts by selecting all of it, as a phone's Select All does.
+  const editor = screen.getByRole("textbox", { name: "Edit queued text" }) as HTMLTextAreaElement;
+  editor.setSelectionRange(0, editor.value.length);
+  fireEvent.select(editor);
+  fireEvent.change(editor, { target: { value: "Edited queued first task" } });
+
+  expect(screen.queryByRole("toolbar", { name: "Selected text actions" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Save queued edit" }));
+  expect(queue.mutate).toHaveBeenCalledWith(expect.objectContaining({ action: "edit", item_id: "one" }));
 });

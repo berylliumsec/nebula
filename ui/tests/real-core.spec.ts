@@ -37,7 +37,7 @@ function coreConnected(page: Page) {
   return coreShell(page, /^Nebula Core (ready|degraded)/);
 }
 
-async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string } = {}): Promise<RealCore> {
+async function startRealCore(options: { bindHost?: string; browserHost?: string; dataDir?: string; token?: string; env?: Record<string, string> } = {}): Promise<RealCore> {
   const repository = path.resolve(import.meta.dirname, "../..");
   const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
   // Match the production-test override used by the shared real-Core harness.
@@ -77,6 +77,7 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
       cwd: repository,
       env: {
         ...process.env,
+        ...options.env,
         PYTHONUNBUFFERED: "1",
         ...(embedded ? {NEBULA_V3_UI_DIR: ""} : {}),
         PYTHONPATH: [path.join(repository, "src"), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
@@ -4030,6 +4031,13 @@ reliabilityTest("stabilization real Core repairs and completes a stranded restar
       const payload = await response.json() as {subagents: Array<{status: string; result: string; result_message_id: string | null}>};
       return payload.subagents[0];
     }, {timeout: 20_000}).toMatchObject({status: "completed", result: "Recovered child report."});
+    // The subagent rail polls conditionally: an unchanged list answers 304 with no body.
+    const listed = await core.api.get(`chat/sessions/${parent.session_id}/subagents`);
+    const etag = listed.headers()["etag"];
+    expect(etag).toMatch(/^"subagents-[0-9a-f]{32}"$/);
+    const unchanged = await core.api.get(`chat/sessions/${parent.session_id}/subagents`, {headers: {"If-None-Match": etag}});
+    expect(unchanged.status()).toBe(304);
+    expect(await unchanged.body()).toHaveLength(0);
 
     const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Restart recovery acceptance"}})).json();
     await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
@@ -5098,6 +5106,98 @@ test("assistant upgrade real Core follows goal turns Core starts while the viewe
     await expect(page.locator(".chat-message.assistant")).toHaveCount(saved.length, { timeout: 20_000 });
     await testInfo.attach("core-started-goal-turns", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, goalAnswers: goalAnswers.length }), contentType: "application/json" });
     await page.screenshot({ path: testInfo.outputPath("core-started-goal-turns.png") });
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
+
+test("assistant upgrade real Core shows the live queue position while provider capacity is full", async ({ page }, testInfo) => {
+  test.setTimeout(150_000);
+  // One provider slot, so a second turn waits in Core's capacity queue.
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4(), env: { NEBULA_PROVIDER_CONCURRENCY: "1", NEBULA_BACKGROUND_CONCURRENCY: "1" } });
+  const modelStub = await startLocalModelStub({ streamDelayMs: 5_000 });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const providerResponse = await api.post("providers", { data: {
+      name: "Queued capacity model", provider_type: "vllm", endpoint: `${modelStub.origin}/v1`, enabled: true, is_local: true,
+      model_allowlist: ["security-model"], privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+    const open = async (content: string) => {
+      const response = await api.post("chat/completions", { data: {
+        backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projectId,
+        messages: [{ role: "user", content }], include_knowledge: false, stream: false,
+      } });
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as { session_id: string }).session_id;
+    };
+    const sessionId = await open("Open the queued conversation");
+    const otherSessionId = await open("Open another device's conversation");
+
+    // Every text the waiting row shows, in order, including brief ones.
+    await page.addInitScript(() => {
+      const seen: string[] = [];
+      (globalThis as unknown as { waitingTexts: string[] }).waitingTexts = seen;
+      new MutationObserver(() => {
+        for (const row of document.querySelectorAll(".chat-thinking")) {
+          const text = row.textContent?.trim() ?? "";
+          if (text && seen.at(-1) !== text) seen.push(text);
+        }
+      }).observe(document, { subtree: true, childList: true, characterData: true });
+    });
+    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
+    await pairRealCoreBrowser(page, core, "Queued capacity viewer");
+    await page.goto(`${core.origin}/?view=chat&session=${sessionId}`);
+    await expect(page.getByText("Real Core retained the exact research context.", { exact: true })).toBeVisible({ timeout: 20_000 });
+    const waitingTexts = () => page.evaluate(() => [...(globalThis as unknown as { waitingTexts: string[] }).waitingTexts]);
+    const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+    const answers = page.locator(".chat-message.assistant").filter({ hasText: "finished after the viewer detached." });
+
+    // With a free slot the turn starts at once.
+    await composer.fill("Answer while Core is free.");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await expect(answers).toHaveCount(1, { timeout: 30_000 });
+    await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 20_000 });
+    const freeTexts = await waitingTexts();
+    // Core queues even this turn, for a moment; that moment is never named.
+    expect(freeTexts.filter((text) => text.includes("Core capacity")), JSON.stringify(freeTexts)).toEqual([]);
+
+    // Another device's streaming turn takes the only slot.
+    const streamed = modelStub.requests.filter((request) => request.stream === true).length;
+    const blocker = api.post("chat/completions", { data: {
+      backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projectId, session_id: otherSessionId,
+      messages: [{ role: "user", content: "Hold the provider slot" }], include_knowledge: false, stream: true,
+    } });
+    await expect.poll(() => modelStub.requests.filter((request) => request.stream === true).length, { timeout: 20_000 }).toBeGreaterThan(streamed);
+    await composer.fill("Run this once Core has capacity.");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    const waiting = page.locator(".chat-message.assistant").last().locator(".chat-thinking");
+    await expect(waiting).toHaveText("Waiting for Core capacity · position 1", { timeout: 10_000 });
+    await testInfo.attach("queued-waiting", { body: await page.screenshot(), contentType: "image/png" });
+    expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+    // Admission follows the other turn's end; the answer then streams in place.
+    expect((await blocker).ok()).toBe(true);
+    await expect(answers).toHaveCount(2, { timeout: 30_000 });
+    await expect(page.getByText(/Waiting for Core capacity/)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 20_000 });
+    await expectNoChatStreamFailure(page);
+    const queuedTexts = (await waitingTexts()).slice(freeTexts.length);
+    await testInfo.attach("queue-position-real-core", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, freeTexts, queuedTexts }, null, 2), contentType: "application/json" });
+    console.log("queue waiting texts", JSON.stringify({ freeTexts, queuedTexts }));
+    expect(queuedTexts).toContain("Waiting for Core capacity · position 1");
+    expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
+    await page.reload();
+    await expect(answers).toHaveCount(2, { timeout: 20_000 });
   } finally {
     await api.dispose();
     await stopLocalModelStub(modelStub);

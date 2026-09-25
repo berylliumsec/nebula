@@ -4292,12 +4292,12 @@ test("assistant upgrade idle conversation pauses its polls in a hidden tab and k
     execution: "complete", busy: false, detail: "Response complete.", connection: "unknown", connection_scope: "harness_transport",
     actions: ["check_status"], pending: [], decisions: [],
   };
-  const polled = /\/chat\/sessions\/[^/]+\/(state|queue|catch-up|goal|subagents|pending-turn)$|\/structured-results$|\/chat\/session-activity$|\/container-terminal\/public-ip$|\/health$/;
+  const polled = /\/chat\/sessions\/[^/]+\/(state|queue|catch-up|goal|subagents|pending-turn)$|\/structured-results$|\/chat\/session-activity$|\/container-terminal\/public-ip$|\/health$|\/terminal\/commands\/(status)$/;
   const requests: string[] = [];
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
     const match = path.match(polled);
-    if (match) requests.push(match[1] ?? path.split("/").pop()!);
+    if (match) requests.push(match[2] ? "terminal-audit" : match[1] ?? path.split("/").pop()!);
   });
   await installRenderCounter(page);
   await page.clock.install();
@@ -4380,6 +4380,9 @@ test("assistant upgrade idle conversation pauses its polls in a hidden tab and k
   expect(report.visiblePerMinute.state ?? 0).toBeLessThanOrEqual(11);
   expect(report.visiblePerMinute.queue ?? 0).toBeLessThanOrEqual(7);
   expect(report.visiblePerMinute["structured-results"] ?? 0).toBeLessThanOrEqual(5);
+  // The terminal stays mounted behind the chat for its shells, but its audit
+  // health is read only while it is shown.
+  expect(report.visiblePerMinute["terminal-audit"] ?? 0).toBe(0);
   // A hidden tab asks for nothing, and reads everything again as soon as it is visible.
   expect(hidden).toEqual([]);
   expect(report.onReturn.state).toBeGreaterThanOrEqual(1);
@@ -4461,6 +4464,189 @@ test("assistant upgrade streaming turn re-renders only its own transcript row", 
   // Forty streamed chunks leave earlier messages alone: they re-render only
   // when the response starts and ends (Send and edit controls change then).
   expect(report.maxRendersOfAnEarlierRow).toBeLessThanOrEqual(3);
+});
+
+test("assistant upgrade shows Core's live queue position until the turn is admitted", async ({ page }) => {
+  const sessionId = "queue-position-chat";
+  const provider = {
+    ...entity, id: "queue-provider", name: "Queue provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["queue-model"], capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "queue-model" },
+  };
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({ json: [provider] });
+    if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["queue-model"] } });
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      return route.fulfill({ json: [{
+        ...entity, id: sessionId, engagement_id: "scratch-project", title: "Busy Core",
+        backend: "provider", provider_profile_id: provider.id, model: "queue-model", metadata: {},
+      }] });
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) {
+      return route.fulfill({ json: [{
+        ...entity, id: "earlier-question", engagement_id: "scratch-project", session_id: sessionId, sequence: 1,
+        role: "user", content: "Earlier question.", citations: [], metadata: {},
+      }] });
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+  // Core queues every turn. The first is admitted at once, as with a free
+  // slot; Core holds the second, and the test releases each of its frames.
+  await page.addInitScript((session) => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    const steps: Array<() => void> = [];
+    const shown: string[] = [];
+    const scope = globalThis as unknown as { releaseQueueFrame: () => void; waitingTexts: string[] };
+    scope.releaseQueueFrame = () => steps.shift()?.();
+    scope.waitingTexts = shown;
+    new MutationObserver(() => {
+      for (const row of document.querySelectorAll(".chat-thinking")) {
+        const text = row.textContent?.trim() ?? "";
+        if (text && shown.at(-1) !== text) shown.push(text);
+      }
+    }).observe(document, { subtree: true, childList: true, characterData: true });
+    let turns = 0;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      let sequence = 0;
+      const turnId = `queued-turn-${++turns}`;
+      const frame = (event: Record<string, unknown>) => encoder.encode(`data: ${JSON.stringify({ ...event, sequence: ++sequence, epoch: "runtime-a" })}\n\n`);
+      const released = () => new Promise<void>((resolve) => steps.push(resolve));
+      const queued = (position: number) => frame({ type: "queued", turn_id: turnId, queued_at: new Date().toISOString(), queue_position: position, capacity_lane: "direct", detail: "Waiting for Core capacity" });
+      const base = { provider_id: "queue-provider", model: "queue-model", turn_id: turnId };
+      if (turns === 1) {
+        const immediate = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            controller.enqueue(queued(1));
+            await new Promise((resolve) => setTimeout(resolve, 60));
+            controller.enqueue(frame({ type: "admitted", turn_id: turnId, admitted_at: new Date().toISOString(), capacity_lane: "direct" }));
+            controller.enqueue(frame({ type: "started", ...base, session_id: session }));
+            await new Promise((resolve) => setTimeout(resolve, 60));
+            controller.enqueue(frame({ type: "delta", ...base, delta: "Answered at once." }));
+            controller.enqueue(frame({ type: "done", ...base, session_id: session, backend: "provider", message: { role: "assistant", content: "Answered at once." }, usage: { input_tokens: 3, output_tokens: 3, total_tokens: 6 }, finish_reason: "stop", citations: [] }));
+            controller.close();
+          },
+        });
+        return new Response(immediate, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          controller.enqueue(queued(3));
+          await released();
+          controller.enqueue(queued(2));
+          await released();
+          controller.enqueue(queued(1));
+          await released();
+          controller.enqueue(frame({ type: "admitted", turn_id: turnId, admitted_at: new Date().toISOString(), capacity_lane: "direct" }));
+          controller.enqueue(frame({ type: "started", ...base, session_id: session }));
+          await released();
+          controller.enqueue(frame({ type: "delta", ...base, delta: "Answered once Core had capacity." }));
+          controller.enqueue(frame({ type: "done", ...base, session_id: session, backend: "provider", message: { role: "assistant", content: "Answered once Core had capacity." }, usage: { input_tokens: 3, output_tokens: 5, total_tokens: 8 }, finish_reason: "stop", citations: [] }));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  }, sessionId);
+
+  await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
+  await expect(page.getByText("Earlier question.", { exact: true })).toBeVisible();
+  const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+  const waitingTexts = () => page.evaluate(() => [...(globalThis as unknown as { waitingTexts: string[] }).waitingTexts]);
+  // A turn Core admits at once never flashes a queue position.
+  await composer.fill("Answer this now.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.locator(".chat-message.assistant").last()).toContainText("Answered at once.");
+  await expect(page.getByRole("button", { name: "Stop response", exact: true })).toHaveCount(0);
+  const immediateTexts = await waitingTexts();
+  expect(immediateTexts.filter((text) => text.includes("Core capacity")), JSON.stringify(immediateTexts)).toEqual([]);
+
+  await composer.fill("Run this when Core is free.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  const reply = page.locator(".chat-message.assistant").last();
+  const status = reply.locator(".chat-thinking");
+  const release = () => page.evaluate(() => (globalThis as unknown as { releaseQueueFrame: () => void }).releaseQueueFrame());
+  // Each position Core reports replaces the last one in place.
+  await expect(status).toHaveText("Waiting for Core capacity · position 3");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  expect((await new AxeBuilder({ page }).include(".chat-thread").analyze()).violations).toEqual([]);
+  await release();
+  await expect(status).toHaveText("Waiting for Core capacity · position 2");
+  await release();
+  await expect(status).toHaveText("Waiting for Core capacity · position 1");
+  // Admission ends the wait: the turn now waits on the provider.
+  await release();
+  await expect(status).toHaveText("Waiting for provider");
+  await expect(page.getByRole("button", { name: "Stop response", exact: true })).toBeVisible();
+  await release();
+  await expect(reply).toContainText("Answered once Core had capacity.");
+  await expect(page.getByText(/Waiting for Core capacity/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Stop response", exact: true })).toHaveCount(0);
+});
+
+test("assistant upgrade keeps a short operator message's actions on top and clickable", async ({ page }, testInfo) => {
+  const sessionId = "short-operator-chat";
+  const forked: unknown[] = [];
+  const provider = {
+    ...entity, id: "actions-provider", name: "Actions provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["actions-model"], capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "actions-model" },
+  };
+  const session = (id: string, title: string, parent?: string) => ({
+    ...entity, id, engagement_id: "scratch-project", title, backend: "provider", provider_profile_id: provider.id, model: "actions-model", metadata: {},
+    ...(parent ? { parent_session_id: parent, forked_from_message_id: "hello-message" } : {}),
+  });
+  const hello = { ...entity, id: "hello-message", engagement_id: "scratch-project", session_id: sessionId, sequence: 1, role: "user", content: "Hello", citations: [], metadata: {} };
+  const answer = {
+    ...entity, id: "hello-answer", engagement_id: "scratch-project", session_id: sessionId, sequence: 2, role: "assistant",
+    content: "Real Core retained the exact research context. The reply is long enough to sit directly below the operator's short greeting.", citations: [], metadata: {},
+  };
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({ json: [provider] });
+    if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["actions-model"] } });
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: [session(sessionId, "Short greeting"), ...(forked.length ? [session("forked-chat", "Forked greeting", sessionId)] : [])] });
+    if (path.endsWith(`/chat/sessions/${sessionId}/fork`) && request.method() === "POST") {
+      forked.push(request.postDataJSON());
+      return route.fulfill({ json: session("forked-chat", "Forked greeting", sessionId) });
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) return route.fulfill({ json: [hello, answer] });
+    if (path.endsWith("/chat/sessions/forked-chat/messages")) return route.fulfill({ json: [{ ...hello, id: "forked-hello", session_id: "forked-chat" }] });
+    if (path.endsWith("/pending-turn")) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
+  const operator = page.locator(".chat-message.operator");
+  await expect(operator).toContainText("Hello");
+  await expect(page.locator(".chat-message.assistant")).toContainText("exact research context");
+  // Rows the transcript has measured get content-visibility containment. Which
+  // rows are measured depends on when they mounted, so contain both here.
+  await page.locator(".chat-message").evaluateAll((rows) => rows.forEach((row) => row.classList.add("render-contained")));
+  await operator.locator(".chat-message-body > p").hover();
+  const actions = operator.locator(".chat-message-actions > button");
+  await expect(actions).toHaveCount(5);
+  await expect(operator.locator(".chat-message-actions")).toHaveCSS("opacity", "1");
+  // Every action is the element under its own center: nothing clips or covers it.
+  const reach = await actions.evaluateAll((buttons) => buttons.map((button) => {
+    const box = button.getBoundingClientRect();
+    const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+    return { label: button.getAttribute("aria-label"), top: Math.round(box.top), reachable: Boolean(hit && button.contains(hit)), hit: hit ? `${hit.tagName.toLowerCase()}.${[...hit.classList].join(".")}` : "none" };
+  }));
+  expect(reach.filter((item) => !item.reachable), JSON.stringify(reach)).toEqual([]);
+  if (!testInfo.project.name.startsWith("mobile-")) {
+    // With a fine pointer they float as one row below the bubble.
+    expect(new Set(reach.map((item) => item.top)).size, JSON.stringify(reach)).toBe(1);
+  }
+  await operator.getByRole("button", { name: "Fork conversation here", exact: true }).click();
+  await expect.poll(() => forked).toEqual([expect.objectContaining({ through_message_id: "hello-message" })]);
+  await expect(page.getByRole("button", { name: "Open parent" })).toBeVisible();
 });
 
 test("New chat detaches from an in-flight saved conversation load", async ({ page }) => {

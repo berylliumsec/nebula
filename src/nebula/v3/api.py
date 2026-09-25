@@ -9957,16 +9957,21 @@ def create_app(
         tags=["chat"],
         dependencies=[Depends(require_auth)],
     )
-    def list_chat_subagents(session_id: str, response: Response) -> dict[str, Any]:
+    def list_chat_subagents(
+        session_id: str, request: Request, response: Response
+    ) -> Any:
         store.get(ChatSession, session_id)
-        response.headers["Cache-Control"] = "no-store"
         subagents = chat_service().subagents
-        return {
+        listing = {
             "session_id": session_id,
             "subagents": [
                 subagents.view(item) for item in subagents.for_session(session_id)
             ],
         }
+        # The subagent rail polls this while a response runs; a list that
+        # has not changed since the last poll answers 304 with no body.
+        unchanged = conditional(request, response, content_etag("subagents", listing))
+        return unchanged or listing
 
     @app.post(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/subagents/{{subagent_id}}/stop",

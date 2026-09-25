@@ -503,6 +503,8 @@ describe("Nebula workspace", () => {
     expect(screen.getByRole("button", { name: "Assistant settings" })).toHaveTextContent("Codex");
   });
 
+  // A full App render, the lazy Workbench and typed input take 3-5 s under
+  // load, against vitest's 5 s default (CI passes --testTimeout=15000).
   it("streams analyst chat with explicit provider/model selection and cloud knowledge consent", async () => {
     const entity = {
       created_at: "2026-07-12T10:00:00Z",
@@ -564,6 +566,10 @@ describe("Nebula workspace", () => {
           manifest_sha256: "a".repeat(64), executable_sha256: "b".repeat(64),
         }]), { status: 200 });
       }
+      // Since #548 a send first confirms the provider credential with Core.
+      if (url.pathname.endsWith(`/credentials/${encodeURIComponent("env:OPENAI_API_KEY")}/status`)) {
+        return new Response(JSON.stringify({ reference: "env:OPENAI_API_KEY", persistence: "environment", available: true, state: "available" }), { status: 200 });
+      }
       if (url.pathname.endsWith("/chat/completions")) {
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
@@ -618,7 +624,7 @@ describe("Nebula workspace", () => {
       messages: [{ role: "user", content: "Review the scope" }],
     });
     expect(await screen.findByText("Lifecycle hooks · 1/1 completed")).toBeVisible();
-  });
+  }, 15_000);
 
   it("reconciles an interrupted provider hook then resumes from Core state", async () => {
     const entity = {
@@ -948,7 +954,8 @@ describe("Nebula workspace", () => {
     const user = userEvent.setup();
     const rendered = renderApp("/sessions");
 
-    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }, { timeout: 5_000 }));
+    // The lazy Workbench is the slow part of a full App render under load.
+    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }, { timeout: 10_000 }));
     expect(screen.queryByLabelText("Conversations")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Show conversations" }));
     const conversationPanel = await screen.findByLabelText("Conversations");
@@ -1010,7 +1017,8 @@ describe("Nebula workspace", () => {
     await user.click(screen.getByRole("button", { name: "More actions for Port review" }));
     await user.click(within(screen.getByRole("menu", { name: "Actions for Port review" })).getByRole("menuitem", { name: "Archive" }));
     const archivedToggle = await screen.findByRole("button", { name: /Archived\s*1/ });
-    expect(archivedToggle).toHaveAttribute("aria-expanded", "true");
+    // The group opens for the selected conversation once the list shows it archived.
+    await waitFor(() => expect(archivedToggle).toHaveAttribute("aria-expanded", "true"));
     expect(screen.getByText("This conversation is archived. Sending a message moves it back to your conversations.")).toBeVisible();
     expect(screen.getByRole("button", { name: "More actions for Port review" })).toBeVisible();
     const archiveCall = [...fetchMock.mock.calls].reverse().find(([input, request]) => new URL(String(input)).pathname.endsWith("/chat-sessions/session-1") && request?.method === "PATCH");

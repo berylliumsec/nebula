@@ -720,6 +720,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
           ? <form className="chat-message-edit" onSubmit={event => {event.preventDefault(); void actions.resendEditedMessage();}}>
             <textarea
               aria-label="Edit message"
+              data-selection-actions-disabled="true"
               value={editing.text}
               autoFocus
               disabled={editing.busy}
@@ -3632,6 +3633,13 @@ export function SessionsPage() {
     if (streamEvent.type === "started") {
       if (request.backend === "provider" && streamEvent.turnId) {
         activeProviderTurnIdRef.current = streamEvent.turnId;
+      }
+      // Core starts a provider turn only once it is admitted, so any queue
+      // position still shown is over.
+      if (request.backend === "provider") {
+        setMessages((current) => current.map((message) => message.id === assistantId && message.state === "streaming" && message.detail
+          ? { ...message, detail: undefined }
+          : message));
       }
       if (streamEvent.harnessSessionId) setHarnessSessionId(streamEvent.harnessSessionId);
       if (request.backend === "harness") {

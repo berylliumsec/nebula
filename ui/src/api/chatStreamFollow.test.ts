@@ -22,6 +22,17 @@ function stream(values: unknown[], broken = false) {
 const started = (epoch: string) => ({type: "started", turn_id: "turn", session_id: "chat", provider_id: "provider", model: "model", sequence: 1, epoch});
 const done = {type: "done", turn_id: "turn", session_id: "chat", provider_id: "provider", backend: "provider", model: "model", message: {id: "answer", role: "assistant", content: "saved new"}, usage: {input_tokens: 1, output_tokens: 1, total_tokens: 2}, citations: []};
 const seen = (events: ChatStreamEvent[]) => events.map(event => event.type === "connection" ? `connection:${event.state}` : event.type);
+const queued = (position: number, sequence: number) => ({type: "queued", turn_id: "turn", queued_at: "2026-09-24T12:00:00Z", queue_position: position, capacity_lane: "direct", detail: "Waiting for Core capacity", sequence, epoch: "runtime-a"});
+/** A stream the test feeds frame by frame, as Core writes them over time. */
+function controlled() {
+  let target!: ReadableStreamDefaultController<Uint8Array>;
+  const body = new ReadableStream<Uint8Array>({start(controller) { target = controller; }});
+  return {
+    response: new Response(body, {status: 200, headers: {"content-type": "text/event-stream"}}),
+    push: (value: unknown) => target.enqueue(encode(value)),
+    end: () => target.close(),
+  };
+}
 
 beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
@@ -80,8 +91,89 @@ describe("provider stream follow", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch.mock.calls[1][0]).toBe("http://core/api/v1/chat/turns/turn/events?after=40&epoch=runtime-a");
     const replay = events.slice(events.findIndex(event => event.type === "restarted"));
+    // The resumed runtime queued and started at once: no wait is reported.
     expect(seen(replay)).toEqual(["restarted", "started", "delta", "delta", "done"]);
     expect(replay.flatMap(event => event.type === "delta" ? [event.delta] : [])).toEqual(["saved", " new"]);
+  });
+
+  it("reports a capacity wait once it lasts, then each new position and the admission", async () => {
+    const frames = controlled();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(frames.response);
+    const client = new ApiClient({baseUrl: "http://core/api/v1", fetch});
+    const events: ChatStreamEvent[] = [];
+    const pending = client.streamChat(request, event => events.push(event));
+
+    // Exactly what Core sends while a turn waits for provider capacity.
+    frames.push(queued(3, 1));
+    await vi.advanceTimersByTimeAsync(100);
+    frames.push(queued(2, 2));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(seen(events)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(300);
+    // The wait keeps its start; the report carries the newest position.
+    expect(events).toEqual([{type: "queued", turnId: "turn", queuedAt: "2026-09-24T12:00:00Z", queuePosition: 2, capacityLane: "direct", detail: "Waiting for Core capacity"}]);
+    frames.push(queued(1, 3));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(events.flatMap(event => event.type === "queued" ? [event.queuePosition] : [])).toEqual([2, 1]);
+    frames.push({type: "admitted", turn_id: "turn", admitted_at: "2026-09-24T12:00:09Z", capacity_lane: "direct", sequence: 4, epoch: "runtime-a"});
+    frames.push({...started("runtime-a"), sequence: 5});
+    frames.push({...done, sequence: 6, epoch: "runtime-a"});
+    frames.end();
+    await pending;
+
+    expect(seen(events)).toEqual(["queued", "queued", "admitted", "started", "done"]);
+    expect(events[2]).toEqual({type: "admitted", turnId: "turn", admittedAt: "2026-09-24T12:00:09Z", capacityLane: "direct"});
+  });
+
+  it("never reports the moment a free slot takes to admit a turn", async () => {
+    const frames = controlled();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(frames.response);
+    const client = new ApiClient({baseUrl: "http://core/api/v1", fetch});
+    const events: ChatStreamEvent[] = [];
+    const pending = client.streamChat(request, event => events.push(event));
+
+    frames.push(queued(1, 1));
+    await vi.advanceTimersByTimeAsync(40);
+    frames.push({type: "admitted", turn_id: "turn", admitted_at: "2026-09-24T12:00:00Z", capacity_lane: "direct", sequence: 2, epoch: "runtime-a"});
+    await vi.advanceTimersByTimeAsync(5_000);
+    frames.push({...started("runtime-a"), sequence: 3});
+    frames.push({...done, sequence: 4, epoch: "runtime-a"});
+    frames.end();
+    await pending;
+
+    expect(seen(events)).toEqual(["admitted", "started", "done"]);
+  });
+
+  it("follows a queued background turn whose position Core has not assigned yet", async () => {
+    const frames = controlled();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(frames.response);
+    const client = new ApiClient({baseUrl: "http://core/api/v1", fetch});
+    const events: ChatStreamEvent[] = [];
+    const pending = client.followChatTurn("turn", request, event => events.push(event));
+    frames.push({type: "queued", turn_id: "turn", queued_at: "2026-09-24T12:00:00Z", queue_position: null, capacity_lane: "background", detail: "Waiting for Core capacity", sequence: 1, epoch: "runtime-a"});
+    await vi.advanceTimersByTimeAsync(500);
+    frames.push({...done, sequence: 2, epoch: "runtime-a"});
+    frames.end();
+    await pending;
+    expect(seen(events)).toEqual(["connection:connected", "queued", "done"]);
+    expect(events[1]).toMatchObject({type: "queued", turnId: "turn", capacityLane: "background"});
+    expect(events[1]).not.toHaveProperty("queuePosition", expect.anything());
+  });
+
+  it("drops a held wait when the viewer detaches", async () => {
+    const frames = controlled();
+    const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValueOnce(frames.response);
+    const client = new ApiClient({baseUrl: "http://core/api/v1", fetch});
+    const events: ChatStreamEvent[] = [];
+    const viewer = new AbortController();
+    const pending = client.streamChat(request, event => events.push(event), viewer.signal);
+    frames.push(queued(4, 1));
+    await vi.advanceTimersByTimeAsync(100);
+    viewer.abort();
+    frames.push(queued(3, 2));
+    await expect(pending).rejects.toThrow();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(events).toEqual([]);
   });
 
   it("keeps deduplicating frames of the same runtime across a reconnect", async () => {
