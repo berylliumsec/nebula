@@ -1,5 +1,5 @@
 {
-  "change_digest": "65ee695d3963685ea53f97c5cd0aebcedf3e642f2b52b3e98c6fc929ec9e384a",
+  "change_digest": "1e59251cb11accaf139a740ea27762ad89fe35dd1bb581fec9d33c56b4719665",
   "reviewed_by": "Codex focused review for supervisor-selected subagent effort",
   "reason": "The provider and harness supervisors can spawn a child with an explicit reasoning effort. An omitted effort now starts the child at low, independent of the parent level. Three collected Python cases cover both runtime paths, the explicit override, invalid levels, and the advertised tool instructions. One collected production real-Core browser journey in each of desktop Chromium and mobile Chromium/WebKit verifies the durable child effort, visible wait, resumed answer, and reload at a LAN origin.",
   "exclusions": "No full-suite approval was given. Native and frontend component code are unchanged. Other browser projects and unrelated operator journeys are excluded because the UI layout and browser capabilities did not change; 390 px mobile profiles cover the selected journey. Browser profiles are emulated rather than physical devices. The real-Core journey uses a local scripted model rather than an external provider account.",

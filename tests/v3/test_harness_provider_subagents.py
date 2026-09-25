@@ -832,10 +832,15 @@ def test_waits_stay_below_each_harness_tool_timeout(tmp_path):
     assert "set reasoning_effort on subagent.start" in instructions
     start = _gateway_subagent_tools(HarnessKind.GROK_ACP)["subagent.start"]
     assert "Effort defaults to low" in start[0]
-    assert "Omit to use low effort" in start[1]["properties"]["reasoning_effort"]["description"]
+    assert (
+        "Omit to use low effort"
+        in start[1]["properties"]["reasoning_effort"]["description"]
+    )
 
 
-def test_harness_subagents_default_to_low_unless_the_supervisor_selects_an_effort(tmp_path):
+def test_harness_subagents_default_to_low_unless_the_supervisor_selects_an_effort(
+    tmp_path,
+):
     async def scenario() -> None:
         store, project, harness, chat, adapter, runtime = _setup(tmp_path)
         harness = store.update(
