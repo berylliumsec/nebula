@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApiClient } from "../../api/client";
+import { sameJson, startVisiblePoll, type PollOutcome } from "../../api/visiblePoll";
 import type { ChatSubagentView } from "../../api/types";
 import { logCaughtDiagnostic } from "../../diagnostics";
 
 /** How often an active delegation is read back. */
 const POLL_MS = 2_000;
+/**
+ * While a response runs with no child active yet, the wait doubles up to
+ * this: a first child still appears within seconds, at half the requests.
+ */
+const LIVE_IDLE_POLL_MS = 4_000;
 /** Consecutive failures after which polling stops until someone retries. */
 const FAILURE_LIMIT = 3;
 
@@ -24,7 +30,8 @@ export interface ChatSubagentState {
  * Core owns their lifecycle; this only reads. Polling runs while any child is
  * active and stops when they all finish, so an idle conversation costs nothing.
  * `live` keeps it polling while a response runs, because that response may
- * start the first child at any moment.
+ * start the first child at any moment. A hidden page is not polled; it reads
+ * again as soon as it is visible. An unchanged list keeps its identity.
  */
 export function useChatSubagents(
   api: ApiClient | undefined,
@@ -32,50 +39,63 @@ export function useChatSubagents(
   { enabled = true, live = false }: { enabled?: boolean; live?: boolean } = {},
 ): ChatSubagentState {
   const [subagents, setSubagents] = useState<ChatSubagentView[]>([]);
+  const shown = useRef<ChatSubagentView[]>(subagents);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const errorShown = useRef(false);
   const [nonce, setNonce] = useState(0);
   const refresh = useCallback(() => setNonce((value) => value + 1), []);
 
   useEffect(() => {
     if (!api || !sessionId || !enabled) {
-      setSubagents([]);
+      if (shown.current.length) {
+        shown.current = [];
+        setSubagents(shown.current);
+      }
+      errorShown.current = false;
       setError(undefined);
       return;
     }
     const controller = new AbortController();
-    let timer: number | undefined;
     let stopped = false;
     let failures = 0;
+    let first = true;
 
-    const read = async (first: boolean) => {
+    const read = async (signal: AbortSignal): Promise<PollOutcome> => {
       if (first) setLoading(true);
-      let keepPolling = false;
       try {
-        const page = await api.listChatSubagents(sessionId, controller.signal);
-        if (stopped) return;
+        const page = await api.listChatSubagents(sessionId, signal);
+        if (stopped) return "stop";
+        // Setting unchanged state still re-renders the page once; skip it.
+        if (errorShown.current) {
+          errorShown.current = false;
+          setError(undefined);
+        }
         failures = 0;
-        setSubagents(page);
-        setError(undefined);
-        keepPolling = live || page.some((item) => ACTIVE_STATUSES.has(item.status));
+        if (!sameJson(shown.current, page)) {
+          shown.current = page;
+          setSubagents(page);
+        }
+        // An idle conversation stops asking; the next response restarts it.
+        if (page.some((item) => ACTIVE_STATUSES.has(item.status))) return "active";
+        return live ? "idle" : "stop";
       } catch (caught) {
-        if (controller.signal.aborted || stopped) return;
+        if (controller.signal.aborted || stopped) return "stop";
         failures += 1;
         void logCaughtDiagnostic("interface.chat_subagents.list_failed", "Delegated subagents could not be read.", caught, "chat_subagents");
+        errorShown.current = true;
         setError(caught instanceof Error ? caught.message : "Subagents could not be read.");
-        keepPolling = failures < FAILURE_LIMIT;
+        return failures < FAILURE_LIMIT ? "active" : "stop";
       } finally {
-        if (!stopped) setLoading(false);
-        // An idle conversation stops asking; the next response restarts it.
-        if (!stopped && keepPolling) timer = window.setTimeout(() => void read(false), POLL_MS);
+        if (!stopped && first) setLoading(false);
+        first = false;
       }
     };
 
-    void read(true);
+    startVisiblePoll({ read, intervalMs: POLL_MS, maxIntervalMs: LIVE_IDLE_POLL_MS, signal: controller.signal });
     return () => {
       stopped = true;
       controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
     };
   }, [api, enabled, live, nonce, sessionId]);
 

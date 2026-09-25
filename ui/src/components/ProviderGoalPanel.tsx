@@ -21,8 +21,29 @@ export function activeSeconds(goal: ChatGoal, now = Date.now()): number {
 
 /** Lightweight display estimate used only until Core reports exact usage. */
 export function estimateLiveTokens(text: string): number {
-  if (!text) return 0;
-  return Math.max(1, Math.ceil(new TextEncoder().encode(text).length / 4));
+  return estimateTokensFromBytes(utf8Length(text));
+}
+
+/** The same estimate from a running byte count, so a stream adds only its new chunk. */
+export function estimateTokensFromBytes(bytes: number): number {
+  return bytes > 0 ? Math.max(1, Math.ceil(bytes / 4)) : 0;
+}
+
+/** UTF-8 length of a string without encoding it. */
+export function utf8Length(text: string): number {
+  let bytes = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 0x80) bytes += 1;
+    else if (code < 0x800) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length
+      && text.charCodeAt(index + 1) >= 0xdc00 && text.charCodeAt(index + 1) <= 0xdfff) {
+      // A surrogate pair is one four-byte code point.
+      bytes += 4;
+      index += 1;
+    } else bytes += 3;
+  }
+  return bytes;
 }
 
 /** Which goal states each transition is allowed from, as Core enforces them. */

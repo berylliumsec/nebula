@@ -6,7 +6,7 @@ import { DiagnosticErrorNotice } from "../../diagnostics";
 import { StandardEmptyState } from "../SurfacePrimitives";
 import { ResultTimeline, shapeLabel, whenLabel } from "./ResultTimeline";
 import { StructuredResultDashboard } from "./StructuredResultDashboard";
-import { useStructuredResult, useStructuredResults, type StructuredResultDetail } from "./useStructuredResults";
+import { useStructuredResult, useStructuredResults, type StructuredResultDetail, type StructuredResultList } from "./useStructuredResults";
 
 export interface AgentViewStream {
   items: StructuredResultSummary[];
@@ -34,10 +34,16 @@ export function useAgentViewStream(
   sessionId: string,
   /** The chosen snapshot, when a caller keeps it across remounts. */
   pin?: readonly [string | undefined, (id: string | undefined) => void],
+  /**
+   * This conversation's results as the page already polls them. Given, the
+   * view reads them instead of polling the same list a second time.
+   */
+  shared?: StructuredResultList,
 ): AgentViewStream {
-  const { items, loading, error, refresh } = useStructuredResults(api, projectId, { chatSessionId: sessionId, live: true, limit: 50 });
-  const own = useState<string>();
-  const [chosen, setChosen] = pin ?? own;
+  const own = useStructuredResults(shared ? undefined : api, projectId, { chatSessionId: sessionId, live: true, limit: 50 });
+  const { items, loading, error, refresh } = shared ?? own;
+  const ownPin = useState<string>();
+  const [chosen, setChosen] = pin ?? ownPin;
   const pinned = Boolean(chosen && items.some((item) => item.id === chosen));
   const current = pinned ? chosen : items[0]?.id;
   const detail = useStructuredResult(api, projectId, current);

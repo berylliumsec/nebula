@@ -1400,7 +1400,8 @@ test("automation callback keeps its endpoint compact and accessible", async ({ p
     ].map(event => `data: ${JSON.stringify(event)}\n\n`).join("");
     return route.fulfill({ status: 200, contentType: "text/event-stream", body });
   });
-  await page.route("**/api/v1/chat/sessions/*/pending-turn", route => route.fulfill({ json: callbackIssued ? {
+  // Waiting polls ask for `pending-turn?view=status`; answer both forms.
+  await page.route("**/api/v1/chat/sessions/*/pending-turn*", route => route.fulfill({ json: callbackIssued ? {
     ...entity, id: "callback-turn-1", session_id: "session-1", status: "waiting_callback", revision: 1, content: "", reasoning: "",
     approval_id: null, harness_turn_id: null, tool_call_ids: ["tool-callback-1"], results_url: resultsUrl, process_id: "callback-process-1",
   } : null }));
@@ -4215,6 +4216,251 @@ test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, t
   await expect(page.locator(".session-new-chat.active")).toContainText("New chat");
   await page.getByRole("button", { name: "Assistant settings" }).click();
   await expect(page.getByRole("combobox", { name: "Chat runtime" })).toBeEnabled();
+});
+
+/**
+ * Count, from the production bundle, how often the conversation page and its
+ * transcript rows re-render. React reports every commit to a DevTools hook;
+ * an element re-rendered when it received a new props object. The chat
+ * composer form is rendered by the page itself, so it counts page renders.
+ */
+async function installRenderCounter(page: Page) {
+  await page.addInitScript(() => {
+    type Fiber = { type: unknown; stateNode: unknown; memoizedProps: unknown; child: Fiber | null; sibling: Fiber | null };
+    const counts = { commits: 0, pageRenders: 0, rowRenders: 0, rows: {} as Record<string, number> };
+    const seen = new WeakMap<object, unknown>();
+    (window as unknown as { __nebulaRenderCounts: typeof counts }).__nebulaRenderCounts = counts;
+    const visit = (root: Fiber | null) => {
+      const pending = [root];
+      while (pending.length) {
+        const node = pending.pop();
+        if (!node) continue;
+        const element = node.stateNode;
+        const row = node.type === "article" && element instanceof HTMLElement && element.classList.contains("chat-message");
+        const page = node.type === "form" && element instanceof HTMLElement && element.classList.contains("chat-composer");
+        if (row || page) {
+          if (seen.has(element as object) && seen.get(element as object) !== node.memoizedProps) {
+            counts[row ? "rowRenders" : "pageRenders"] += 1;
+            if (row) counts.rows[(element as HTMLElement).id] = (counts.rows[(element as HTMLElement).id] ?? 0) + 1;
+          }
+          seen.set(element as object, node.memoizedProps);
+        }
+        pending.push(node.sibling, node.child);
+      }
+    };
+    const renderers = new Map<number, unknown>();
+    (window as unknown as { __REACT_DEVTOOLS_GLOBAL_HOOK__: unknown }).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
+      isDisabled: false,
+      supportsFiber: true,
+      renderers,
+      inject(renderer: unknown) { renderers.set(renderers.size + 1, renderer); return renderers.size; },
+      checkDCE() {},
+      onScheduleFiberRoot() {},
+      onCommitFiberUnmount() {},
+      onPostCommitFiberRoot() {},
+      onCommitFiberRoot(_id: number, root: { current: Fiber }) { counts.commits += 1; visit(root.current); },
+    };
+  });
+}
+
+async function readRenderCounts(page: Page) {
+  return page.evaluate(() => {
+    const counts = (window as unknown as { __nebulaRenderCounts: { commits: number; pageRenders: number; rowRenders: number; rows: Record<string, number> } }).__nebulaRenderCounts;
+    return { ...counts, rows: { ...counts.rows } };
+  });
+}
+
+/** Emulate the browser backgrounding or restoring this tab. */
+async function setPageHidden(page: Page, hidden: boolean) {
+  await page.evaluate((value) => {
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value ? "hidden" : "visible" });
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => value });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, hidden);
+}
+
+test("assistant upgrade idle conversation pauses its polls in a hidden tab and keeps its transcript rows still", async ({ page, browserName }, testInfo) => {
+  test.setTimeout(120_000);
+  const sessionId = "idle-polling-chat";
+  const provider = {
+    ...entity, id: "idle-provider", name: "Idle provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["idle-model"], capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "idle-model" },
+  };
+  const state = {
+    schema: "nebula.session-state/v1", session_id: sessionId, revision: 3, turn_id: "idle-turn", harness_turn_id: null,
+    execution: "complete", busy: false, detail: "Response complete.", connection: "unknown", connection_scope: "harness_transport",
+    actions: ["check_status"], pending: [], decisions: [],
+  };
+  const polled = /\/chat\/sessions\/[^/]+\/(state|queue|catch-up|goal|subagents|pending-turn)$|\/structured-results$|\/chat\/session-activity$|\/container-terminal\/public-ip$|\/health$/;
+  const requests: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    const match = path.match(polled);
+    if (match) requests.push(match[1] ?? path.split("/").pop()!);
+  });
+  await installRenderCounter(page);
+  await page.clock.install();
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    // Core answers 304 when the page already holds the current validator.
+    // Playwright cannot fulfill a 304 in WebKit, so there the unchanged
+    // answer repeats its body; the page must keep its state either way.
+    const conditional = async (body: unknown) => {
+      const etag = `"${path.length}-${JSON.stringify(body).length}"`;
+      if (request.headers()["if-none-match"] === etag && browserName !== "webkit") await route.fulfill({ status: 304, headers: { ETag: etag } });
+      else await route.fulfill({ status: 200, headers: { ETag: etag }, contentType: "application/json", body: JSON.stringify(body) });
+    };
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({ json: [provider] });
+    if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["idle-model"] } });
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      return route.fulfill({ json: [{
+        ...entity, id: sessionId, engagement_id: "scratch-project", title: "Idle finished conversation",
+        backend: "provider", provider_profile_id: provider.id, model: "idle-model", metadata: {},
+      }] });
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) {
+      return route.fulfill({ json: Array.from({ length: 12 }, (_, index) => ({
+        ...entity, id: `idle-message-${index}`, engagement_id: "scratch-project", session_id: sessionId, sequence: index + 1,
+        role: index % 2 ? "assistant" : "user", content: `Saved message ${index} with enough prose to wrap across the transcript.`,
+        citations: [], metadata: {},
+      })) });
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) return route.fulfill({ json: null });
+    if (path.endsWith(`/chat/sessions/${sessionId}/state`)) return conditional(state);
+    if (path.endsWith(`/chat/sessions/${sessionId}/queue`)) return conditional({ revision: 0, paused: false, items: [] });
+    if (path.endsWith("/structured-results")) return conditional([]);
+    if (path.endsWith("/chat/session-activity")) return conditional([{ session_id: sessionId, state: "idle", turn_id: null }]);
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
+  await expect(page.getByText("Saved message 11 with enough prose", { exact: false })).toBeVisible();
+  await expect(page.locator("article.chat-message")).toHaveCount(12);
+  // Let the first reads settle before measuring an idle minute.
+  const idleFor = async (seconds: number) => {
+    for (let second = 0; second < seconds; second += 1) {
+      await page.clock.runFor(1_000);
+      await page.waitForTimeout(20);
+    }
+  };
+  await idleFor(5);
+  const counts = () => readRenderCounts(page);
+
+  requests.length = 0;
+  const before = await counts();
+  await idleFor(60);
+  const visible = [...requests];
+  const afterVisible = await counts();
+
+  requests.length = 0;
+  await setPageHidden(page, true);
+  await idleFor(60);
+  const hidden = [...requests];
+
+  requests.length = 0;
+  await setPageHidden(page, false);
+  await idleFor(1);
+  const returned = [...requests];
+
+  const tally = (items: string[]) => items.reduce<Record<string, number>>((all, item) => ({ ...all, [item]: (all[item] ?? 0) + 1 }), {});
+  const report = {
+    visiblePerMinute: tally(visible), hiddenPerMinute: tally(hidden), onReturn: tally(returned),
+    pageRendersPerIdleMinute: afterVisible.pageRenders - before.pageRenders,
+    rowRendersPerIdleMinute: afterVisible.rowRenders - before.rowRenders,
+  };
+  await testInfo.attach("idle-polling.json", { body: JSON.stringify(report, null, 2), contentType: "application/json" });
+  console.log("idle polling", JSON.stringify(report));
+
+  // An idle, finished conversation renders nothing while its polls return unchanged answers.
+  expect(report.pageRendersPerIdleMinute).toBe(0);
+  expect(report.rowRendersPerIdleMinute).toBe(0);
+  // Idle polls back off: at most one state read every 6 s, one queue read every 10 s.
+  expect(report.visiblePerMinute.state ?? 0).toBeLessThanOrEqual(11);
+  expect(report.visiblePerMinute.queue ?? 0).toBeLessThanOrEqual(7);
+  expect(report.visiblePerMinute["structured-results"] ?? 0).toBeLessThanOrEqual(5);
+  // A hidden tab asks for nothing, and reads everything again as soon as it is visible.
+  expect(hidden).toEqual([]);
+  expect(report.onReturn.state).toBeGreaterThanOrEqual(1);
+  expect(report.onReturn.queue).toBeGreaterThanOrEqual(1);
+  await expect(page.locator("article.chat-message")).toHaveCount(12);
+  await expect(page.getByText("Response status could not sync")).toHaveCount(0);
+});
+
+test("assistant upgrade streaming turn re-renders only its own transcript row", async ({ page }, testInfo) => {
+  const sessionId = "streaming-render-chat";
+  const provider = {
+    ...entity, id: "stream-provider", name: "Stream provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["stream-model"], capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "stream-model" },
+  };
+  await installRenderCounter(page);
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({ json: [provider] });
+    if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["stream-model"] } });
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      return route.fulfill({ json: [{
+        ...entity, id: sessionId, engagement_id: "scratch-project", title: "Streaming conversation",
+        backend: "provider", provider_profile_id: provider.id, model: "stream-model", metadata: {},
+      }] });
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) {
+      return route.fulfill({ json: Array.from({ length: 12 }, (_, index) => ({
+        ...entity, id: `saved-message-${index}`, engagement_id: "scratch-project", session_id: sessionId, sequence: index + 1,
+        role: index % 2 ? "assistant" : "user", content: `Saved message ${index} in a long conversation.`, citations: [], metadata: {},
+      })) });
+    }
+    if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+  await page.addInitScript((session) => {
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
+      const encoder = new TextEncoder();
+      const frame = (event: unknown) => encoder.encode(`data: ${JSON.stringify(event)}\n\n`);
+      const base = { provider_id: "stream-provider", model: "stream-model" };
+      const stream = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          controller.enqueue(frame({ type: "started", ...base, session_id: session, turn_id: "stream-turn" }));
+          // One chunk per animation frame, as a real provider stream arrives.
+          for (let index = 0; index < 40; index += 1) {
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            controller.enqueue(frame({ type: "delta", ...base, delta: `word${index} ` }));
+          }
+          controller.enqueue(frame({ type: "done", ...base, turn_id: "stream-turn", session_id: session, message: { role: "assistant", content: Array.from({ length: 40 }, (_, index) => `word${index} `).join("") }, usage: { input_tokens: 3, output_tokens: 40, total_tokens: 43 }, finish_reason: "stop", citations: [] }));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+  }, sessionId);
+
+  await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
+  await expect(page.locator("article.chat-message")).toHaveCount(12);
+  await page.waitForTimeout(500);
+  const before = await readRenderCounts(page);
+  await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Stream a long answer.");
+  await page.getByRole("button", { name: "Send message", exact: true }).click();
+  await expect(page.locator(".chat-message.assistant").last()).toContainText("word39");
+  await page.waitForTimeout(500);
+  const after = await readRenderCounts(page);
+  const savedRows = Array.from({ length: 12 }, (_, index) => `chat-message-saved-message-${index}`);
+  const perSavedRow = savedRows.map((id) => (after.rows[id] ?? 0) - (before.rows[id] ?? 0));
+  const report = {
+    pageRenders: after.pageRenders - before.pageRenders,
+    rowRenders: after.rowRenders - before.rowRenders,
+    maxRendersOfAnEarlierRow: Math.max(...perSavedRow),
+  };
+  await testInfo.attach("streaming-renders.json", { body: JSON.stringify(report, null, 2), contentType: "application/json" });
+  console.log("streaming renders", JSON.stringify(report));
+  // Forty streamed chunks leave earlier messages alone: they re-render only
+  // when the response starts and ends (Send and edit controls change then).
+  expect(report.maxRendersOfAnEarlierRow).toBeLessThanOrEqual(3);
 });
 
 test("New chat detaches from an in-flight saved conversation load", async ({ page }) => {

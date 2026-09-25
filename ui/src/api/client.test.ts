@@ -9,6 +9,32 @@ vi.mock("../diagnostics", async (importOriginal) => ({
 }));
 
 describe("ApiClient", () => {
+  it("sends the last validator on polled reads and treats 304 as unchanged", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 3 }), { status: 200, headers: { ETag: '"state-3"' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 304, headers: { ETag: '"state-3"' } }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+    diagnostics.logDiagnostic.mockClear();
+
+    const first = await client.requestIfChanged<{ revision: number }>("chat/sessions/s/state", undefined);
+    expect(first).toEqual({ value: { revision: 3 }, etag: '"state-3"' });
+    expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has("If-None-Match")).toBe(false);
+
+    await expect(client.requestIfChanged("chat/sessions/s/state", first?.etag)).resolves.toBeUndefined();
+    expect(new Headers(fetchMock.mock.calls[1][1]?.headers).get("If-None-Match")).toBe('"state-3"');
+    // An unchanged answer is not a failed request.
+    expect(diagnostics.logDiagnostic).not.toHaveBeenCalled();
+  });
+
+  it("asks for the compact pending-turn view while waiting on a turn", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      id: "turn-1", session_id: "s", status: "waiting_callback", revision: 7,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+    await expect(client.getPendingChatTurnStatus("s")).resolves.toEqual({ id: "turn-1", status: "waiting_callback", revision: 7 });
+    expect(String(fetchMock.mock.calls[0][0])).toBe("http://127.0.0.1:8765/api/v1/chat/sessions/s/pending-turn?view=status");
+  });
+
   it("sends MCP imports as snake_case and maps the preview report", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       dry_run: true, created: 1, updated: 1, unchanged: 0, replaced: 0, skipped: 0, invalid: 0,

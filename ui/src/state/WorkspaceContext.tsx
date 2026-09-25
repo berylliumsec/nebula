@@ -13,6 +13,7 @@ import { NebulaEventStream, type StreamState } from "../api/events";
 import { providerVerificationModel } from "../api/providerCapabilities";
 import { providerWithDiscoveredModels, providersWithDiscoveredModels } from "../api/providerRuntime";
 import { resolveApiRuntime, type ApiRuntime } from "../api/runtime";
+import { sameJson } from "../api/visiblePoll";
 import { setCoreDiagnosticsHealth } from "../diagnostics";
 import { projectIdFromPath } from "../resourceRoutes";
 import { readStorage, removeStorage, writeStorage } from "./browserStorage";
@@ -225,7 +226,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   }, []);
 
   const observeHealth = useCallback((nextHealth: HealthResponse) => {
-    setHealth(nextHealth);
+    // The same answer every five seconds must not re-render the workspace.
+    setHealth((current) => sameJson(current, nextHealth) ? current : nextHealth);
     setCoreDiagnosticsHealth(nextHealth);
     // Successful reachability restores saved state, never execution. A browser
     // online event alone is not proof that this Core is reachable again.

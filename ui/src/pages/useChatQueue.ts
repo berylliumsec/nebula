@@ -1,13 +1,24 @@
 import { logCaughtDiagnostic } from "../diagnostics";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { chatRequestBody, type ApiClient } from "../api/client";
+import { sameJson, startVisiblePoll, type PollOutcome, type VisiblePoll } from "../api/visiblePoll";
 import type { ChatCompletionRequest } from "../api/types";
 
 export interface QueueItem {
   id: string; key: string; status: string; detail?: string; turn_id?: string;
-  request: { messages: {role: string; content: string; content_blocks?: {type: string; [key: string]: unknown}[]}[]; context_attachments?: unknown[]; [key: string]: unknown };
+  /** Core drops the request of a settled (complete or cancelled) follow-up. */
+  request?: { messages: {role: string; content: string; content_blocks?: {type: string; [key: string]: unknown}[]}[]; context_attachments?: unknown[]; [key: string]: unknown };
 }
 export interface ChatQueue { revision: number; paused: boolean; items: QueueItem[] }
+/** How often a queue with undispatched or sending work is read back. */
+const QUEUE_POLL_MS = 2_000;
+/** An idle, unchanged queue backs off to this. */
+const QUEUE_IDLE_POLL_MS = 10_000;
+/** Core dispatches (or is dispatching) this queue without any operator action. */
+function queueIsMoving(queue: ChatQueue | undefined): boolean {
+  return Boolean(queue?.items.some(item => item.status === "claiming" || item.status === "sending"
+    || (!queue.paused && item.status === "queued")));
+}
 function validateQueue(value: ChatQueue): ChatQueue {
   if (!value || !Array.isArray(value.items) || typeof value.revision !== "number" || typeof value.paused !== "boolean") throw new Error("Core returned an unsupported queue response");
   return value;
@@ -24,18 +35,45 @@ export function useChatQueue(api: ApiClient | undefined, sessionId: string) {
   const reload = useCallback(async () => {
     if (!api || !sessionId) return;
     const saved = validateQueue(await api.request<ChatQueue>(path));
-    if (activePath.current === path) {current.current = saved; setQueue(saved);} return saved;
+    if (activePath.current === path) {
+      if (!sameJson(current.current, saved)) {current.current = saved; setQueue(saved);}
+      // New or edited work moves soon; read it at the base cadence again.
+      pollRef.current?.reset();
+    }
+    return saved;
   }, [api, sessionId, path]);
+  const pollRef = useRef<VisiblePoll | undefined>(undefined);
   useEffect(() => {
     let disposed = false; const controller = new AbortController();
     current.current = undefined; setQueue(undefined); setError(undefined); pending.current = undefined;
     if (!api || !sessionId) return;
-    const poll = async () => {
-      try { const saved = validateQueue(await api.request<ChatQueue>(path, {signal: controller.signal})); if (!disposed && !locked.current) {current.current = saved; setQueue(saved);} }
-      catch (e) { void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat"); if (!disposed) setError(e instanceof Error ? e.message : "Queue could not be read. Reload to retry."); }
-    };
-    void poll(); const timer = setInterval(() => void poll(), 2000);
-    return () => {disposed = true; controller.abort(); clearInterval(timer);};
+    // Core answers 304 while the queue is unchanged, and an unchanged queue
+    // keeps its identity, so an idle poll re-renders nothing.
+    let etag: string | undefined;
+    pollRef.current = startVisiblePoll({
+      intervalMs: QUEUE_POLL_MS,
+      maxIntervalMs: QUEUE_IDLE_POLL_MS,
+      signal: controller.signal,
+      read: async (signal): Promise<PollOutcome> => {
+        try {
+          const answer = await api.requestIfChanged<ChatQueue>(path, etag, {signal});
+          if (disposed) return "stop";
+          if (!answer) return queueIsMoving(current.current) ? "active" : "idle";
+          const saved = validateQueue(answer.value);
+          // A mutation owns the queue while it runs; take its result instead.
+          if (locked.current) return "active";
+          etag = answer.etag;
+          const changed = !sameJson(current.current, saved);
+          if (changed) {current.current = saved; setQueue(saved);}
+          return changed || queueIsMoving(saved) ? "active" : "idle";
+        } catch (e) {
+          void logCaughtDiagnostic("interface.assistant_chat.operation_failed", "An assistant chat operation failed.", e, "assistant_chat");
+          if (!disposed) setError(e instanceof Error ? e.message : "Queue could not be read. Reload to retry.");
+          return "active";
+        }
+      },
+    });
+    return () => {disposed = true; controller.abort(); pollRef.current = undefined;};
   }, [api, sessionId, path]);
   const mutate = async (body: Record<string, unknown>) => {
     if (!api || !sessionId || locked.current) return false;

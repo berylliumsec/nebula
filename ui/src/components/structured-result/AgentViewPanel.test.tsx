@@ -14,7 +14,10 @@ vi.mock("../../diagnostics", () => ({
 
 const listStructuredResults = vi.fn();
 const getStructuredResult = vi.fn();
-const api = { listStructuredResults, getStructuredResult } as unknown as ApiClient;
+// Polls read conditionally; this fake always answers with a fresh page.
+const listStructuredResultsIfChanged = vi.fn(async (projectId: string, options: unknown, _etag: unknown, signal?: AbortSignal) =>
+  ({ items: await listStructuredResults(projectId, options, signal) }));
+const api = { listStructuredResults, listStructuredResultsIfChanged, getStructuredResult } as unknown as ApiClient;
 
 function summary(id: string, sequence: number): StructuredResultSummary {
   return {
@@ -164,6 +167,14 @@ describe("the floating Agent view", () => {
 
     const saved = JSON.parse(localStorage.getItem("nebula.agent-view.geometry") ?? "{}");
     expect(saved).toMatchObject({ x: before.left - 24, y: before.top + 24, width: before.width - 24 });
+  });
+
+  it("reads the page's own poll of this conversation instead of polling it again", async () => {
+    const results = { items: [summary("step-2", 2), summary("step-1", 1)], loading: false, refresh: vi.fn() };
+    panel({ results });
+    expect(await screen.findByText("Following newest · 2 snapshots")).toBeInTheDocument();
+    expect(listStructuredResults).not.toHaveBeenCalled();
+    expect(listStructuredResultsIfChanged).not.toHaveBeenCalled();
   });
 
   it("is a sheet on a phone, with nothing to drag", async () => {
