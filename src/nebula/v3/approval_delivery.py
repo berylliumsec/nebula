@@ -4,14 +4,15 @@ from sqlalchemy import func, or_, select
 
 from .database import EntityRow, OperationEventRow
 from .domain import Approval, ApprovalContinuation, HarnessTurn, ToolCall, utc_now
-from .storage import ConflictError
+from .storage import ConflictError, readable_entities
 
 
 def pending_deliveries(store):
+    # Read at startup: an unreadable approval is skipped and recorded, not
+    # fatal to Core.
     with store.database.session() as database:
-        return [
-            Approval.model_validate(row.payload)
-            for row in database.scalars(
+        return readable_entities(
+            database.scalars(
                 select(EntityRow).where(
                     EntityRow.kind == Approval.entity_kind,
                     or_(
@@ -21,8 +22,9 @@ def pending_deliveries(store):
                         == "pending",
                     ),
                 )
-            )
-        ]
+            ),
+            Approval,
+        )
 
 
 def approval_harness_turn(store, approval):

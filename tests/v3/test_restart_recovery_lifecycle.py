@@ -832,6 +832,7 @@ def test_recovery_tick_reads_only_turns_that_can_need_recovery(tmp_path, monkeyp
     scan_threads: set[str] = set()
     read_history = service.turn_ledger.history
     find_entities = store.find_entities
+    iter_readable_entities = store.iter_readable_entities
 
     def history(turn):
         histories.append(turn.id)
@@ -842,6 +843,12 @@ def test_recovery_tick_reads_only_turns_that_can_need_recovery(tmp_path, monkeyp
             scan_threads.add(threading.current_thread().name)
         return find_entities(model, filters, **kwargs)
 
+    def find_readable(model, filters=None, **kwargs):
+        # Recovery scans skip unreadable rows; they filter in SQL the same way.
+        if model is ChatTurn:
+            scan_threads.add(threading.current_thread().name)
+        return iter_readable_entities(model, filters, **kwargs)
+
     def full_scan(model, *args, **kwargs):
         if model is ChatTurn:
             pytest.fail("the recovery tick paged every chat turn")
@@ -849,6 +856,7 @@ def test_recovery_tick_reads_only_turns_that_can_need_recovery(tmp_path, monkeyp
 
     monkeypatch.setattr(service.turn_ledger, "history", history)
     monkeypatch.setattr(store, "find_entities", find)
+    monkeypatch.setattr(store, "iter_readable_entities", find_readable)
     monkeypatch.setattr(store, "list_entities", full_scan)
 
     async def ticks():

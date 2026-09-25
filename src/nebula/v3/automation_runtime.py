@@ -73,7 +73,7 @@ from .sandbox import (
     SandboxWorkspaceAccess,
     _runtime_environment,
 )
-from .storage import ConflictError, NebulaStore, NotFoundError
+from .storage import ConflictError, CorruptRecordError, NebulaStore, NotFoundError
 from .credentials import CredentialStore
 
 
@@ -951,16 +951,20 @@ class AutomationRuntimeManager:
         return True
 
     async def startup(self) -> None:
-        active_sessions = [
-            session
-            for session in self._all_entities(AutomationSession)
-            if session.status
-            in {
-                AutomationSessionStatus.STARTING,
-                AutomationSessionStatus.READY,
-                AutomationSessionStatus.CLOSING,
-            }
-        ]
+        # Only readable records: one unreadable row must not keep Core from
+        # starting and settling the others.
+        active_sessions = list(
+            self.store.iter_readable_entities(
+                AutomationSession,
+                {
+                    "status": [
+                        AutomationSessionStatus.STARTING.value,
+                        AutomationSessionStatus.READY.value,
+                        AutomationSessionStatus.CLOSING.value,
+                    ]
+                },
+            )
+        )
         cleanup_limit = asyncio.Semaphore(8)
 
         async def cleanup(session: AutomationSession) -> str:
@@ -984,21 +988,25 @@ class AutomationRuntimeManager:
                 expected_revision=session.revision,
             )
 
-        for execution in self._all_entities(CommandExecution):
-            if execution.status in {
-                CommandExecutionStatus.RUNNING,
-                CommandExecutionStatus.WAITING_APPROVAL,
-            }:
-                self.store.update(
-                    CommandExecution,
-                    execution.id,
-                    {
-                        "status": CommandExecutionStatus.INTERRUPTED,
-                        "completed_at": utc_now(),
-                        "error": "Core restarted before the process completed",
-                    },
-                    expected_revision=execution.revision,
-                )
+        for execution in self.store.iter_readable_entities(
+            CommandExecution,
+            {
+                "status": [
+                    CommandExecutionStatus.RUNNING.value,
+                    CommandExecutionStatus.WAITING_APPROVAL.value,
+                ]
+            },
+        ):
+            self.store.update(
+                CommandExecution,
+                execution.id,
+                {
+                    "status": CommandExecutionStatus.INTERRUPTED,
+                    "completed_at": utc_now(),
+                    "error": "Core restarted before the process completed",
+                },
+                expected_revision=execution.revision,
+            )
         await asyncio.to_thread(self._sweep_stale_captures)
 
     def _sweep_stale_captures(self) -> int:
@@ -1080,6 +1088,9 @@ class AutomationRuntimeManager:
         except NotFoundError:
             # diagnostic-expected: deleted runner state is returned to startup recovery.
             return "Core restarted; runtime teardown skipped because its runner was removed"
+        except CorruptRecordError:
+            # diagnostic-expected: the store recorded the unreadable runner; startup still settles this session.
+            return "Core restarted; runtime teardown skipped because its runner record is unreadable"
         if profile.revision != session.runner_profile_revision:
             return "Core restarted; runtime teardown skipped because its runner changed"
         try:

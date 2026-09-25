@@ -26,9 +26,11 @@ from .domain import (
 )
 from .runtime_platform import RuntimeToolComponents
 from .storage import NebulaStore, NotFoundError
+from .policy import PolicyDecision, PolicyEffect
 from .tools import (
     AmbiguousToolState,
     InvalidToolArguments,
+    PolicyDenied,
     StoreToolLedger,
     ToolExecutionResult,
     ToolSpec,
@@ -145,7 +147,11 @@ class CompanionBroker:
             or invocation.engagement_id != session.engagement_id
             or scope.engagement_id != session.engagement_id
         ):
-            raise InvalidToolArguments("Browser capability belongs to another project.")
+            # Another project's browser is unavailable to this call, described
+            # as a missing resource is, and nothing has run yet.
+            elsewhere = NotFoundError("Browser capability belongs to another project.")
+            setattr(elsewhere, "_nebula_before_execution", True)
+            raise elsewhere
         if (
             not invocation.chat_session_id
             or session.metadata.get("conversation_id") != invocation.chat_session_id
@@ -159,9 +165,17 @@ class CompanionBroker:
             setattr(detached, "_nebula_before_execution", True)
             raise detached
         if session.metadata.get("assistant_paused", True):
-            raise InvalidToolArguments(
-                "Browser control is paused. Ask the operator to resume it beside the page."
+            # The operator withheld control: a denial to ask about, not an
+            # argument to correct, and refused before anything runs.
+            paused = PolicyDenied(
+                PolicyDecision(
+                    effect=PolicyEffect.DENY,
+                    reason="Browser control is paused. Ask the operator to resume it beside the page.",
+                    rule="browser_companion_paused",
+                )
             )
+            setattr(paused, "_nebula_before_execution", True)
+            raise paused
         if approval is not None:
             raise InvalidToolArguments(
                 "Review browser actions in the browser's inline approval panel."

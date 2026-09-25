@@ -489,3 +489,93 @@ def test_one_failing_schedule_does_not_stop_the_others(tmp_path, monkeypatch):
     paused = schedules.get("healthy")
     assert paused.enabled is False
     assert "Provider was removed" in (paused.skip_reason or "")
+
+
+class _GatedProvider(FakeProvider):
+    """Answers a scheduled occurrence only once the test lets it."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def complete(self, request):
+        if request.metadata.get("operation") != "conversation_naming":
+            self.entered.set()
+            await self.release.wait()
+        return await super().complete(request)
+
+
+def test_a_scheduled_occurrence_streams_to_the_viewer_the_page_attaches(
+    tmp_path, monkeypatch
+):
+    """The chat page follows turns Core starts by itself, schedules included.
+
+    An occurrence is dispatched like goal auto-continue, so its frames stream
+    to a viewer the page attaches from the session snapshot, and the schedule
+    records how it settled.
+    """
+
+    import nebula.v3.api as api_module
+
+    services: list[ChatService] = []
+
+    class RecordedChatService(ChatService):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            services.append(self)
+
+    monkeypatch.setattr(api_module, "ChatService", RecordedChatService)
+    store = NebulaStore(tmp_path / "schedules.db")
+    store.create(Engagement(id="project", name="Project"))
+    _scheduled_session(store)
+    # One step, so the goal pauses instead of continuing after the occurrence.
+    _running_goal(store, step_budget=1)
+    provider = _GatedProvider("provider", local=True)
+    monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    auth = {"Authorization": "Bearer test-token"}
+
+    async def entered():
+        await asyncio.wait_for(provider.entered.wait(), 5)
+
+    with TestClient(create_app(store, auth_token="test-token")) as client:
+        client.portal.call(services[0].fire_due_schedules)
+        client.portal.call(entered)
+        started = ChatScheduleService(store).get("session")
+        assert started.last_status == "started"
+        turn_id = started.last_turn_id
+
+        # What the page reads to decide to attach a viewer.
+        state = client.get("/api/v1/chat/sessions/session/state", headers=auth)
+        assert state.status_code == 200, state.text
+        snapshot = state.json()
+        assert snapshot["turn_id"] == turn_id
+        assert snapshot["busy"] is True
+        assert snapshot["execution"] in {"queued", "running"}
+
+        # The follow route attaches to this runtime (its gate) and streams the
+        # frames it produces from here on.
+        assert services[0].has_provider_turn_stream(turn_id)
+
+        async def follow_while_it_runs():
+            frames: list[dict] = []
+
+            async def collect():
+                async for _, payload in services[0].follow_provider_turn(turn_id):
+                    frames.append(payload)
+
+            follower = asyncio.create_task(collect())
+            await asyncio.sleep(0)
+            provider.release.set()
+            await asyncio.wait_for(follower, 5)
+            return frames
+
+        frames = client.portal.call(follow_while_it_runs)
+
+        types = [frame["type"] for frame in frames]
+        assert types[0] == "queued" and "admitted" in types
+        assert types[-1] == "done"
+        assert frames[-1]["message"]["content"].startswith("Evidence-backed answer")
+        assert {frame["epoch"] for frame in frames} == {frames[0]["epoch"]}
+        assert ChatScheduleService(store).get("session").last_status == "complete"
+        assert store.get(ChatTurn, turn_id).status == ChatTurnStatus.COMPLETE

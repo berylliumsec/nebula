@@ -525,7 +525,7 @@ class SetupService:
             )
             self._emit(SetupEventReason.RUNTIME_DETECTION_STARTED)
             try:
-                profiles = self.store.list_entities(StoredRunnerProfile, limit=1_000)
+                profiles = list(self.store.iter_readable_entities(StoredRunnerProfile))
                 if profiles:
                     candidates = await asyncio.gather(
                         *(self._verify_configured(profile) for profile in profiles)
@@ -1351,9 +1351,11 @@ class SetupService:
         )
 
     def _snapshot(self) -> SetupStatus:
+        # Built with Core itself: one unreadable profile must not stop Core
+        # starting or the setup status from reading the others.
         providers = [
             provider
-            for provider in self.store.list_entities(ProviderProfile, limit=1_000)
+            for provider in self.store.iter_readable_entities(ProviderProfile)
             if provider.enabled
         ]
         provider = providers[0] if providers else None

@@ -145,9 +145,11 @@ class ExecutionAIService:
         self._shutting_down = False
 
     async def startup(self) -> None:
-        for draft in self._all_drafts():
-            if draft.status != GeneratedDraftStatus.GENERATING:
-                continue
+        # Only readable records: one unreadable row must not keep Core from
+        # starting and settling the others.
+        for draft in self.store.iter_readable_entities(
+            GeneratedDraft, {"status": GeneratedDraftStatus.GENERATING.value}
+        ):
             failed = self.store.update(
                 GeneratedDraft,
                 draft.id,

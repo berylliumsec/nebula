@@ -55,21 +55,14 @@ def temporary_chat_router(store, chat_service, harness_runtime):
 
     async def collect():
         while True:
-            offset = 0
-            expired = []
-            while True:
-                rows = store.list_entities(
-                    ChatSession, include_temporary=True, offset=offset, limit=1000
-                )
-                expired.extend(
-                    row.id
-                    for row in rows
-                    if row.metadata.get("temporary_assistant")
-                    and row.updated_at + timedelta(days=1) < utc_now()
-                )
-                if len(rows) < 1000:
-                    break
-                offset += len(rows)
+            # An unreadable conversation is skipped and recorded; it must not
+            # end this sweep for good.
+            expired = [
+                row.id
+                for row in store.iter_readable_entities(ChatSession)
+                if row.metadata.get("temporary_assistant")
+                and row.updated_at + timedelta(days=1) < utc_now()
+            ]
             for session_id in expired:
                 try:
                     await discard(session_id)

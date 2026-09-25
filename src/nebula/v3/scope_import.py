@@ -507,9 +507,11 @@ class ScopeImportService:
     async def startup(self) -> None:
         """Fail imports the previous Core process left mid-generation."""
 
-        for scope_import in self._all_imports():
-            if scope_import.status != ScopeImportStatus.GENERATING:
-                continue
+        # Only readable records: one unreadable row must not keep Core from
+        # starting and settling the others.
+        for scope_import in self.store.iter_readable_entities(
+            ScopeImport, {"status": ScopeImportStatus.GENERATING.value}
+        ):
             self.store.update(
                 ScopeImport,
                 scope_import.id,
@@ -522,16 +524,6 @@ class ScopeImportService:
 
     async def shutdown(self) -> None:
         return None
-
-    def _all_imports(self) -> list[ScopeImport]:
-        result: list[ScopeImport] = []
-        offset = 0
-        while True:
-            page = self.store.list_entities(ScopeImport, offset=offset, limit=1000)
-            result.extend(page)
-            if len(page) < 1000:
-                return result
-            offset += len(page)
 
     def discard(self, scope_import_id: str) -> ScopeImport:
         scope_import = self.store.get(ScopeImport, scope_import_id)

@@ -219,13 +219,18 @@ class ExecutionService:
     async def startup(self) -> None:
         """Fail closed after a prior Core died mid-execution."""
 
-        for execution in self._all_executions():
-            if execution.status not in {
-                OperatorExecutionStatus.QUEUED,
-                OperatorExecutionStatus.RUNNING,
-                OperatorExecutionStatus.CANCELLING,
-            }:
-                continue
+        # Only readable records: one unreadable row must not keep Core from
+        # starting and settling the others.
+        for execution in self.store.iter_readable_entities(
+            OperatorExecution,
+            {
+                "status": [
+                    OperatorExecutionStatus.QUEUED.value,
+                    OperatorExecutionStatus.RUNNING.value,
+                    OperatorExecutionStatus.CANCELLING.value,
+                ]
+            },
+        ):
             await self._cleanup_container(execution)
             if await self._recover_spool(execution):
                 continue
