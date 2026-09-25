@@ -329,19 +329,20 @@ textarea { border-radius: var(--radius-control); }
 .chat-message.agent-message header strong + span { color: var(--muted); font-size: var(--type-meta); }
 .chat-message.agent-message header .chat-message-time { margin-left: auto; }
 .chat-message.operator { position: relative; width: fit-content; max-width: min(560px, 82%); margin-right: max(0px, calc((100% - var(--chat-reading-track)) / 2)); margin-left: auto; padding: 9px 14px; border-radius: 14px; background: var(--surface-muted); }
-.chat-message.operator > .chat-message-body { display: grid; }
-.chat-message.operator .assistant-markdown { overflow-wrap: anywhere; white-space: pre-wrap; }
+.chat-message.operator > .chat-message-body { display: grid; min-width: 0; }
+.chat-message.operator .assistant-markdown { overflow-wrap: anywhere; }
+.chat-message.operator .assistant-markdown p { white-space: pre-wrap; }
 /* The hover header floats below the bubble so the bubble hugs its text. */
-.chat-message.operator header { position: absolute; top: 100%; right: 0; order: 2; justify-content: flex-end; min-height: 0; margin: 2px 0 0; white-space: nowrap; opacity: 0; transition: opacity var(--motion-fast) var(--motion-ease); }
+.chat-message.operator > .chat-message-body > header { position: absolute; top: 100%; right: 0; order: 2; justify-content: flex-end; min-height: 0; margin: 2px 0 0; white-space: nowrap; opacity: 0; transition: opacity var(--motion-fast) var(--motion-ease); }
 /* With a fine pointer the operator's time and actions float outside the bubble so
    it hugs its text; touch keeps them in flow with 44px targets. */
 @media (hover: hover) and (pointer: fine) {
-  .chat-message.operator header { top: 50%; right: 100%; margin: 0 10px 0 0; transform: translateY(-50%); }
+  .chat-message.operator > .chat-message-body > header { top: 50%; right: 100%; margin: 0 10px 0 0; transform: translateY(-50%); }
   /* One row below the bubble even when a short message is narrower than it. */
   .chat-message.operator .chat-message-actions { position: absolute; top: 100%; right: 0; width: max-content; margin-top: 4px; }
 }
-.chat-message.operator:hover header,
-.chat-message.operator:focus-within header { opacity: 1; }
+.chat-message.operator:hover > .chat-message-body > header,
+.chat-message.operator:focus-within > .chat-message-body > header { opacity: 1; }
 .chat-message.assistant > .chat-message-body { min-width: 0; }
 .chat-message.assistant header { align-items: baseline; margin-bottom: 8px; }
 .chat-message.assistant header strong { color: var(--muted-strong); font-weight: var(--weight-semibold); }
@@ -362,7 +363,7 @@ textarea { border-radius: var(--radius-control); }
 /* Editing a sent message keeps it in place: the bubble becomes an editor that
    replaces this message and the turns below it in the same conversation. */
 .chat-message.operator.editing { width: 100%; max-width: var(--chat-reading-track); padding: 12px 14px; border: 1px solid var(--blue); background: var(--surface); }
-.chat-message.operator.editing header { display: none; }
+.chat-message.operator.editing > .chat-message-body > header { display: none; }
 .chat-message.pending-replacement { opacity: 0.45; }
 .chat-message-edit { display: grid; gap: 10px; }
 .chat-message-edit textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface-muted); font-size: var(--type-reading); resize: vertical; }

@@ -109,6 +109,25 @@ describe("exact assistant Markdown", () => {
     expect(screen.queryByRole("button", { name: /Review and run/ })).toBeNull();
   });
 
+  it("renders unlabeled and labeled user code fences as separate exact blocks", () => {
+    const { container } = render(
+      <AssistantMarkdown
+        content={"Before `inline`.\n\n```\n0x100002580: bl 0x100009a84\n```\n\n```json\n{\"path\": \"projects/research/artifacts/evidence/result.json\"}\n```"}
+        durable={false}
+        messageId="subagent-task"
+        runnableLanguages={new Set(["python"])}
+        onRun={vi.fn()}
+      />,
+    );
+    const blocks = container.querySelectorAll(".assistant-code-block");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0].querySelector("code")?.textContent).toBe("0x100002580: bl 0x100009a84\n");
+    expect(blocks[1].querySelector("code")?.textContent).toBe('{"path": "projects/research/artifacts/evidence/result.json"}\n');
+    expect(screen.getAllByRole("button", { name: "Copy exact code" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /Run/ })).toBeNull();
+    expect(screen.getByText("inline").tagName).toBe("CODE");
+  });
+
   it("recognizes common terminal fence labels as shell commands", () => {
     const onRun = vi.fn();
     const { rerender } = render(
