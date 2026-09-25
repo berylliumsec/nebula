@@ -1,35 +1,38 @@
 {
-  "change_digest": "f8e1af0a33d90b2080377f1b9d1de7988975b3e4a5d50aab33749271315033f7",
-  "reviewed_by": "Claude focused review for refusal-leftovers",
-  "reason": "Two follow-ups to #587. (1) A retried subagent start (harness vendor retry, provider step replay) now returns the child's real status through SubagentService.start_output on both paths instead of a hard-coded running; a start that never ran fails again. (2) Browser companion refusals left after #581/#586 are classified per docs/TOOL_FAILURE_CONTRACT.md: another project's browser and a closed/revoked session are unavailable_resource, the service's pre-dispatch refusals (stale tab, misplaced file or credential reference, out-of-scope page) are invalid_arguments or permission_denied before execution, and the post-capture screenshot refusals report no side effects. Selected: the new test_subagent_start_replay.py and the whole of test_browser_companion.py (new provider-loop, harness-gateway and broker tests; needs Chromium for its real-browser test), the subagent files whose start path changed (test_harness_provider_subagents.py, test_chat_subagents.py, test_subagent_refusal_categories.py, test_chat_subagent_lifecycle.py, test_subagent_delivery.py), test_assistant_browser_viewer.py for the companion service's operator routes, and the browser-gateway nodes in test_harnesses.py and the companion stream node in test_api.py.",
-  "exclusions": "Full suites are not approved and are excluded. No UI, native Rust/Tauri or Playwright code changed and the UI does not read failure categories, so frontend, native and playwright are empty. The rest of test_harnesses.py and test_api.py is unaffected: only _gateway_subagent's start result and the companion broker changed, and the selected nodes cover the browser gateway paths. The companion service's operator routes keep answering ValueError as before (CompanionRequestRefused subclasses it); test_browser_security.py, test_browser_host.py and test_browserd.py cover browserd and assessments, which are unchanged.",
+  "change_digest": "933caaaf9bc0bf11d2d6d7e6d1b7382e80fbabfa853ae9051bbfc6ed7c8d9fd3",
+  "reviewed_by": "Claude focused review for send-consent-credential",
+  "reason": "Two composer send defects. (1) SessionsPage submit left Subagents (and SSH targets, project model context, a subagent's parent messages) out of its tool-result consent decision, so a Subagents provider conversation on a cloud provider with no command runtime never asked and Core refused every send. The composer now mirrors Core's tool families (chatToolResultConsent.ts), and Core's refusal carries code tool_result_consent_required plus an operator_detail naming the families, so the composer also asks, and resends once with consent, for tools only Core sees (project web search, skill resources). A declined share or a text-only runtime now explains in place and keeps the message; a Core-requested decline returns the message to the composer. (2) prepareProviderCredential threw Error(undefined) for an unknown or unreadable credential state and the send was dropped behind the generic fallback; every state, an unreadable answer and an unreachable Core now name what failed and the next action, and the message is kept. Python covers the typed refusal in ChatService and the 409 API envelope, plus the chat, subagent, harness provider-subagent and preflight files whose tool-enablement path changed. Frontend covers the consent helpers, the credential states, full-App send journeys (consent asked/declined/Core-requested/credential) and the existing App and Subagents-choice journeys through SessionsPage. Playwright runs entry:assistant on desktop, mobile Chromium and mobile WebKit (SessionsPage changed; two new mocked journeys) and area:chat-subagents.",
+  "exclusions": "Full suites are not approved and are excluded. Harness consent (MCP servers, browser control, agent messaging) is unchanged in behaviour and harness adapters are not selected beyond test_harness_provider_subagents.py. Credential storage (credentials.py) is unchanged, so tests/v3/test_credentials.py is not selected. Mission, native Rust/Tauri and real-Core Playwright areas are not selected: the consent journey was exercised against a scratch real Core (OpenRouter deepseek/deepseek-v4.1-flash, LAN origin, production bundle) and recorded in the PR body; committed real-Core coverage would need a cloud-classified provider stub.",
   "expected_tests": {
-    "python": 156,
-    "frontend": 0,
+    "python": 161,
+    "frontend": 68,
     "native": 0,
-    "playwright": 0
+    "playwright": 213
   },
   "python_versions": [
     "3.12"
   ],
-  "python_browser": true,
+  "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_browser_companion.py",
-    "tests/v3/test_subagent_start_replay.py",
-    "tests/v3/test_harness_provider_subagents.py",
     "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_subagent_refusal_categories.py",
-    "tests/v3/test_chat_subagent_lifecycle.py",
-    "tests/v3/test_subagent_delivery.py",
-    "tests/v3/test_assistant_browser_viewer.py",
-    "tests/v3/test_harnesses.py::test_linked_retry_refreshes_current_browser_binding",
-    "tests/v3/test_harnesses.py::test_browser_gateway_rechecks_conversation_binding_before_execution",
-    "tests/v3/test_harnesses.py::test_browser_gateway_refuses_paused_control_as_a_denial_before_execution",
-    "tests/v3/test_harnesses.py::test_browser_gateway_refuses_a_change_paused_while_its_page_is_read",
-    "tests/v3/test_api.py::test_companion_stream_closes_with_4404_for_a_missing_session"
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_harness_provider_subagents.py",
+    "tests/v3/test_turn_preflight_latency.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/pages/chatToolResultConsent.test.ts",
+    "ui/src/pages/providerCredentialRecovery.test.ts",
+    "ui/src/App.sendConsent.test.tsx",
+    "ui/src/App.subagentChoice.test.tsx",
+    "ui/src/App.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit",
+    "area:chat-subagents"
+  ]
 }
