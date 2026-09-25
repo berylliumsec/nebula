@@ -1923,11 +1923,25 @@ def test_stopped_subagent_reports_messages_it_never_read(tmp_path: Path) -> None
         parent = store.get(ChatTurn, parent_turn_id)
         queued = _result(_entries(store, parent, "message_subagent")[0])
         assert queued["delivery"] == "queued"
-        (report,) = _result(_entries(store, parent, "wait_subagents")[0])["subagents"]
+        # The report reaches the parent once, in whichever subagent result
+        # comes first after the stop (here the update Core adds before the
+        # next step); the wait that follows does not send it again.
+        (report,) = [
+            view
+            for entry in _history(store, parent)
+            if entry["name"] in {"list_subagents", "wait_subagents"}
+            and entry.get("provider_result")
+            for view in _result(entry).get("subagents", [])
+            if "report" in view
+        ]
         assert report["status"] == "stopped"
         (unread,) = report["undelivered_messages"]
         assert unread["content"] == "Check the logs too."
         assert unread["note"] == "The subagent stopped before reading it."
+        (waited,) = _result(_entries(store, parent, "wait_subagents")[0])["subagents"]
+        assert waited["status"] == "stopped"
+        assert waited["report_received_earlier"] is True
+        assert "report" not in waited
         (message,) = _sent(store, "to_child")
         assert message.status == ChatSubagentMessageStatus.UNDELIVERED
         await chat.shutdown()
