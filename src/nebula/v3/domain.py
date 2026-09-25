@@ -2523,6 +2523,10 @@ class AgentAttempt(Entity):
     status: TaskStatus = TaskStatus.PENDING
     input: dict[str, Any] = Field(default_factory=dict)
     output: dict[str, Any] | None = None
+    # The model's routing response for this turn, recorded before any of its
+    # calls is brokered. A turn re-dispatched after a Core restart replays it
+    # instead of asking the model again, so its calls keep their identity.
+    routing_response: dict[str, Any] | None = None
     tokens_used: int = Field(default=0, ge=0)
     cost_usd: float = Field(default=0.0, ge=0)
     started_at: datetime | None = None

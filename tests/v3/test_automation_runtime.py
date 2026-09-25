@@ -22,6 +22,7 @@ from nebula.v3.automation_runtime import (
 )
 from nebula.v3.automation_tools import AutomationBroker, PROCESS_IO_NAME
 from nebula.v3.domain import (
+    AgentRun,
     Approval,
     ApprovalStatus,
     AutomationApprovalPolicy,
@@ -39,7 +40,9 @@ from nebula.v3.domain import (
     ProviderProfile,
     RunnerIsolation,
     RunnerProfile,
+    RunBudget,
     RunnerRuntime,
+    RunStatus,
     ScopePolicy,
     ToolCall,
     ToolCallOrigin,
@@ -59,7 +62,12 @@ from nebula.v3.tool_results import (
     WorkspaceOutputService,
     sanitize_model_history_result,
 )
-from nebula.v3.tools import PolicyDenied, ToolInvocation
+from nebula.v3.tools import (
+    AmbiguousToolState,
+    ApprovalRequired,
+    PolicyDenied,
+    ToolInvocation,
+)
 
 
 IMAGE = "registry.invalid/nebula-automation@sha256:" + "a" * 64
@@ -1892,3 +1900,196 @@ def test_host_command_returns_when_a_detached_grandchild_keeps_the_pipes(tmp_pat
                 os.kill(daemon_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+def test_automation_broker_refuses_replay_of_an_unknown_ledger_row(tmp_path):
+    """MIS-2: a call whose ledger row is running/failed/cancelled without a
+    trustworthy receipt is an unknown effect and is never executed again."""
+
+    async def scenario():
+        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+        policy = manager.project_policy(engagement.id)
+        manager.update_project_policy(
+            engagement.id,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=True,
+            runner_profile_id="runner",
+            max_timeout_ms=30_000,
+            expected_revision=policy.revision,
+        )
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+        store.create(
+            AgentRun(
+                id="run-ambiguous",
+                engagement_id=engagement.id,
+                objective="x",
+                status=RunStatus.RUNNING,
+                budget=RunBudget(
+                    max_concurrency=1, max_delegation_depth=1, max_tool_calls=10
+                ),
+            )
+        )
+        scope = store.get(ScopePolicy, engagement.scope_policy_id)
+        for prior in (
+            ToolCallStatus.RUNNING,
+            ToolCallStatus.FAILED,
+            ToolCallStatus.CANCELLED,
+        ):
+            invocation = ToolInvocation(
+                engagement_id=engagement.id,
+                run_id="run-ambiguous",
+                origin=ToolCallOrigin.MISSION,
+                tool_name="run_command",
+                arguments={"command": f"echo {prior.value}", "cwd": "."},
+                workspace=manager.workspace_resolver(engagement.id),
+                idempotency_key=f"task:t1:turn:1:call:{prior.value}",
+                requested_by="network_service",
+            )
+            call = await broker.ledger.reserve(invocation, broker.specs["run_command"])
+            running = await broker.ledger.transition(call, ToolCallStatus.RUNNING)
+            if prior != ToolCallStatus.RUNNING:
+                await broker.ledger.transition(running, prior)
+            before = len(store.list_entities(CommandExecution))
+            with pytest.raises(AmbiguousToolState):
+                await broker.execute(invocation, scope)
+            after = len(store.list_entities(CommandExecution))
+            assert after == before
+
+    asyncio.run(scenario())
+
+
+def test_automation_broker_resumes_a_waiting_approval_call_exactly_once(tmp_path):
+    """MIS-2/MIS-3: an approved command parked at WAITING_APPROVAL runs once on
+    resume, and a second resume of that consumed slot is refused."""
+
+    async def scenario():
+        manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
+        policy = manager.project_policy(engagement.id)
+        manager.update_project_policy(
+            engagement.id,
+            approval_policy=AutomationApprovalPolicy.ALWAYS,
+            network_enabled=False,
+            runner_profile_id="runner",
+            max_timeout_ms=30_000,
+            expected_revision=policy.revision,
+        )
+        broker = AutomationBroker(
+            manager=manager,
+            store=store,
+            output_service=ToolOutputService(store, artifacts),
+        )
+        store.create(
+            AgentRun(
+                id="run-approve",
+                engagement_id=engagement.id,
+                objective="scan",
+                status=RunStatus.RUNNING,
+                budget=RunBudget(
+                    max_concurrency=1, max_delegation_depth=1, max_tool_calls=10
+                ),
+            )
+        )
+        scope = store.get(ScopePolicy, engagement.scope_policy_id)
+        invocation = ToolInvocation(
+            engagement_id=engagement.id,
+            run_id="run-approve",
+            origin=ToolCallOrigin.MISSION,
+            task_id="task-approve",
+            tool_name="run_command",
+            arguments={"command": "echo scan", "cwd": "."},
+            workspace=manager.workspace_resolver(engagement.id),
+            idempotency_key="task:task-approve:turn:1:call:0",
+            requested_by="network_service",
+        )
+        with pytest.raises(ApprovalRequired) as paused:
+            await broker.execute(invocation, scope)
+        approval = paused.value.approval
+        # The card is bound to this ledger slot and its Mission task.
+        assert approval.tool_call_id is not None
+        assert approval.task_id == "task-approve"
+        parked = store.get(ToolCall, approval.tool_call_id)
+        assert parked.status == ToolCallStatus.WAITING_APPROVAL
+
+        approved = store.update(
+            Approval,
+            approval.id,
+            {
+                "status": ApprovalStatus.APPROVED,
+                "decided_by": "operator",
+                "decided_at": utc_now(),
+            },
+            expected_revision=approval.revision,
+        )
+        result = await broker.execute(invocation, scope, approval=approved)
+        assert result.receipt is not None
+        assert len(store.list_entities(CommandExecution)) == 1
+
+        # The consumed slot is now COMPLETE; resuming it again returns the same
+        # durable receipt instead of running the command a second time.
+        replay = await broker.execute(invocation, scope, approval=approved)
+        assert replay.output == result.output
+        assert len(store.list_entities(CommandExecution)) == 1
+
+    asyncio.run(scenario())
+
+
+def test_cancelling_a_foreground_command_terminates_it_and_records_cancelled(
+    tmp_path,
+):
+    """MIS-4: cancelling the task awaiting a foreground command stops the
+    process and finalizes the execution as cancelled, never leaving it
+    running with the execution stuck in running."""
+
+    async def scenario():
+        manager, store, _artifacts, engagement, sessions = runtime(tmp_path)
+        policy = manager.project_policy(engagement.id)
+        manager.update_project_policy(
+            engagement.id,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            network_enabled=True,
+            runner_profile_id="runner",
+            max_timeout_ms=60_000,
+            expected_revision=policy.revision,
+        )
+        store.create(
+            AgentRun(
+                id="run-cancel",
+                engagement_id=engagement.id,
+                objective="cancel",
+                status=RunStatus.RUNNING,
+                budget=RunBudget(
+                    max_concurrency=1, max_delegation_depth=1, max_tool_calls=10
+                ),
+            )
+        )
+        worker = asyncio.create_task(
+            manager.run_command(
+                engagement_id=engagement.id,
+                owner_kind="mission",
+                owner_id="run-cancel",
+                request=RunCommandRequest(command="wait-forever"),
+            )
+        )
+        for _ in range(200):
+            await asyncio.sleep(0.01)
+            if sessions and sessions[0].processes:
+                break
+        worker.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await worker
+        # The process is stopped at once; the (shielded) finalizer then
+        # records the outcome.
+        assert sessions[0].processes[0]._done.done()
+        [execution] = store.list_entities(CommandExecution)
+        for _ in range(200):
+            execution = store.get(CommandExecution, execution.id)
+            if execution.status != CommandExecutionStatus.RUNNING:
+                break
+            await asyncio.sleep(0.01)
+        assert execution.status == CommandExecutionStatus.CANCELLED
+
+    asyncio.run(scenario())

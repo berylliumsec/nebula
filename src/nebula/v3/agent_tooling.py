@@ -16,7 +16,14 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .context import DEFAULT_MAX_OUTPUT_TOKENS
-from .domain import Approval, ChatTokenUsage, RiskClass, RunBudget, ScopePolicy
+from .domain import (
+    Approval,
+    ChatTokenUsage,
+    RiskClass,
+    RunBudget,
+    ScopePolicy,
+    ToolCall as LedgerToolCall,
+)
 from .orchestration import (
     MissionError,
     call_records,
@@ -32,14 +39,18 @@ from .providers import (
     ModelMessage,
     ModelProvider,
     ModelRequest,
+    ModelResponse,
     ModelToolResult,
+    ModelUsage,
     ToolCall,
     ToolChoice,
     ToolDefinition,
     _GEMINI_SYNTHETIC_CALL_ID,
 )
 from .redaction import redact_text
+from .storage import NebulaStore
 from .tools import (
+    AmbiguousToolState,
     ApprovalRequired,
     InvalidToolArguments,
     PolicyDenied,
@@ -79,6 +90,7 @@ _MAX_CONSECUTIVE_ROUTING_DEVIATIONS = 3
 # message that issued it (see ``_with_replay_state``). They are for the
 # provider that made the response, never for another task or model.
 _REPLAY_FIELDS = ("response_group", "reasoning_state", "provider_metadata")
+_ROUTING_RECORD_SCHEMA = "nebula.specialist-routing/v1"
 _NO_ACTION_FEEDBACK = (
     "Your previous response contained no routing action. Call one of the "
     f"supplied tools, or call {FINISH_TOOL} with status, summary and rationale "
@@ -253,6 +265,7 @@ class BrokeredToolSpecialist:
         specs: Mapping[str, ToolSpec],
         model: str | None = None,
         max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
+        store: NebulaStore | None = None,
     ) -> None:
         if not provider.config.enabled:
             raise MissionError(f"provider {provider.config.id!r} is disabled")
@@ -272,6 +285,9 @@ class BrokeredToolSpecialist:
         self.allowed_tools = frozenset(role_specs)
         self.model = model
         self.max_output_tokens = max_output_tokens
+        # The durable store holding approvals and ledger rows. A composite
+        # broker has no single ledger, so Missions pass it explicitly.
+        self.store = store
 
     async def run(self, context: SpecialistContext) -> SpecialistResult:
         allowed = self.allowed_tools & context.allowed_tools
@@ -299,15 +315,18 @@ class BrokeredToolSpecialist:
                     outcome=SpecialistOutcome.BLOCKED,
                     output={"status": "blocked", "observations": []},
                 )
-            invocation, model_call_id = await self._approved_invocation(context)
+            invocation, model_call_id, approval = await self._approved_invocation(
+                context
+            )
             return await self._execute_invocation(
                 context,
                 invocation,
                 model_call_id=model_call_id,
                 usage=(0, 0),
+                approval=approval,
             )
 
-        response = await self.provider.complete(self._routing_request(context, allowed))
+        response = await self._routing_response(context, allowed)
         usage = (response.usage.input_tokens, response.usage.output_tokens)
         commentary = self._routing_commentary(response, context)
         # The whole response is classified before any of it reaches the broker.
@@ -323,7 +342,7 @@ class BrokeredToolSpecialist:
         executed: list[SpecialistResult] = []
         brokered = False
         slots = context.remaining_tool_calls
-        for action in actions:
+        for position, action in enumerate(actions):
             call = action.call
             if action.routing_error is not None:
                 executed.append(
@@ -340,12 +359,15 @@ class BrokeredToolSpecialist:
                     break
                 if slots is not None:
                     slots -= 1
+            # The identity is the call's place in the turn, not the id the
+            # provider made up: a turn replayed after a restart re-derives it,
+            # so the broker finds the original ledger slot.
             invocation_id = str(
                 uuid5(
                     NAMESPACE_URL,
                     (
                         f"nebula:model-tool:{context.run_id}:{context.task.id}:"
-                        f"{context.turn_index}:{call.id}"
+                        f"{context.turn_index}:position:{position}"
                     ),
                 )
             )
@@ -358,8 +380,7 @@ class BrokeredToolSpecialist:
                 arguments=call.arguments,
                 workspace=self.workspace,
                 idempotency_key=(
-                    f"task:{context.task.id}:turn:{context.turn_index}:"
-                    f"model-call:{call.id}"
+                    f"task:{context.task.id}:turn:{context.turn_index}:call:{position}"
                 ),
                 requested_by=self.role.value,
             )
@@ -422,6 +443,83 @@ class BrokeredToolSpecialist:
             metadata=self._metadata(context),
         )
 
+    async def _routing_response(
+        self, context: SpecialistContext, allowed: frozenset[str]
+    ) -> ModelResponse:
+        """This turn's routing response: the recorded one, or a new one.
+
+        A response is recorded before any of its calls is brokered. A turn
+        dispatched again after a Core restart replays that response rather
+        than asking the model again, whose fresh reply would carry new calls
+        under new identities and repeat work that already ran.
+        """
+
+        journal = context.routing_journal
+        recorded = journal.recorded() if journal is not None else None
+        if recorded is not None:
+            response = self._recorded_response(recorded)
+            record_diagnostic(
+                "warning",
+                "missions",
+                "missions.routing.replayed_after_restart",
+                "A specialist turn resumed after a Core restart replayed its "
+                "recorded routing response instead of asking the model again.",
+                outcome="recovered",
+                stage="routing",
+                run_id=context.run_id,
+                metadata={
+                    "task_id": context.task.id,
+                    "turn": context.turn_index,
+                    "calls": len(response.tool_calls),
+                },
+            )
+            return response
+        response = await self.provider.complete(self._routing_request(context, allowed))
+        if journal is not None:
+            journal.record(self._routing_record(response))
+        return response
+
+    @staticmethod
+    def _routing_record(response: ModelResponse) -> dict[str, Any]:
+        """Everything a replay of this response needs, as durable JSON."""
+
+        return {
+            "schema": _ROUTING_RECORD_SCHEMA,
+            "provider_id": response.provider_id,
+            "model": response.model,
+            "text": response.text,
+            "reasoning": response.reasoning,
+            "finish_reason": response.finish_reason,
+            "provider_request_id": response.provider_request_id,
+            "usage": response.usage.model_dump(mode="json"),
+            "reasoning_state": response.reasoning_state,
+            "tool_calls": [
+                {
+                    **call.model_dump(mode="json"),
+                    "provider_metadata": call.provider_metadata,
+                }
+                for call in response.tool_calls
+            ],
+        }
+
+    @staticmethod
+    def _recorded_response(record: Mapping[str, Any]) -> ModelResponse:
+        if record.get("schema") != _ROUTING_RECORD_SCHEMA:
+            raise MissionError("the recorded routing response has an unknown format")
+        return ModelResponse(
+            provider_id=str(record.get("provider_id") or ""),
+            model=str(record.get("model") or ""),
+            text=str(record.get("text") or ""),
+            reasoning=str(record.get("reasoning") or ""),
+            finish_reason=record.get("finish_reason"),
+            provider_request_id=record.get("provider_request_id"),
+            usage=ModelUsage.model_validate(record.get("usage") or {}),
+            reasoning_state=record.get("reasoning_state"),
+            tool_calls=[
+                ToolCall.model_validate(call) for call in record.get("tool_calls") or []
+            ],
+        )
+
     async def _execute_invocation(
         self,
         context: SpecialistContext,
@@ -429,6 +527,7 @@ class BrokeredToolSpecialist:
         *,
         model_call_id: str,
         usage: tuple[int, int],
+        approval: Approval | None = None,
     ) -> SpecialistResult:
         arguments = self._brokered_arguments(invocation.tool_name, invocation.arguments)
         invocation = invocation.model_copy(update={"arguments": arguments})
@@ -437,7 +536,11 @@ class BrokeredToolSpecialist:
         )
 
         try:
-            result = await self.broker.execute(invocation, self.scope)
+            result = await (
+                self.broker.execute(invocation, self.scope, approval=approval)
+                if approval is not None
+                else self.broker.execute(invocation, self.scope)
+            )
         except ApprovalRequired as exc:
             record_caught_exception(
                 "missions",
@@ -475,6 +578,28 @@ class BrokeredToolSpecialist:
             summary = str(failure["problem"])
             evidence_ids: list[str] = []
             reproducible: list[str] = []
+            exit_code = None
+            output_truncated = False
+            trusted_result = False
+        except AmbiguousToolState as unknown:
+            # The ledger slot had already started, most often because Core
+            # stopped while this call ran. It is never run again; the model
+            # reads that its outcome is unknown.
+            record_caught_exception(
+                "missions",
+                "missions.agent_tooling.effect_outcome_unknown",
+                "A specialist call's earlier execution has an unknown outcome; it was not run again.",
+                unknown,
+                stage="agent_tooling",
+            )
+            status = "failed"
+            provider_result = self._unknown_outcome(invocation)
+            summary = (
+                f"{invocation.tool_name} outcome is unknown: it had started "
+                "before Nebula Core stopped and was not run again"
+            )
+            evidence_ids = []
+            reproducible = []
             exit_code = None
             output_truncated = False
             trusted_result = False
@@ -608,6 +733,33 @@ class BrokeredToolSpecialist:
                 else 1
             ),
         )
+
+    def _unknown_outcome(self, invocation: ToolInvocation) -> dict[str, Any]:
+        """A failure envelope for a call whose earlier run left no receipt."""
+
+        failure = tool_failure(
+            self.specs[invocation.tool_name],
+            invocation.arguments,
+            AmbiguousToolState("tool call outcome is unknown"),
+            phase="after_execution",
+            call_id=invocation.id,
+        )
+        failure.update(
+            {
+                "category": "outcome_unknown",
+                "problem": (
+                    "The outcome of this call is unknown. It had started when "
+                    "Nebula Core stopped, and it was not run again."
+                ),
+                "side_effects": "unknown",
+                "next_action": (
+                    "Inspect the current state before any follow-up; do not "
+                    "repeat the same call unchanged."
+                ),
+                "retry_safe": False,
+            }
+        )
+        return failure
 
     @staticmethod
     def _finish_tool() -> ToolDefinition:
@@ -1428,33 +1580,52 @@ class BrokeredToolSpecialist:
 
     async def _approved_invocation(
         self, context: SpecialistContext
-    ) -> tuple[ToolInvocation, str]:
+    ) -> tuple[ToolInvocation, str, Approval]:
+        """Rebuild the exact invocation an operator decision releases.
+
+        The paused ledger row is authoritative: its tool, arguments and
+        idempotency key identify the one slot the approval belongs to. The
+        approval's ``exact_request`` is the broker's rendering of that request
+        (normalized command options, edited arguments) and is checked by the
+        broker, so it is never used to address the slot.
+        """
+
         response = context.approval_response or {}
         approval_id = response.get("approval_id")
         if not isinstance(approval_id, str) or not approval_id:
             raise MissionError("approval resume is missing its durable approval id")
-        approval: Approval = await self.broker.ledger.get_approval(approval_id)
-        if approval.run_id != context.run_id or approval.task_id != context.task.id:
-            raise MissionError("approval does not belong to this specialist task")
-        exact = approval.exact_request
-        tool_name = exact.get("tool_name")
-        arguments = exact.get("arguments")
-        if tool_name not in self.allowed_tools or not isinstance(arguments, dict):
-            raise MissionError("approval contains an invalid tool request")
+        store = self.store or getattr(
+            getattr(self.broker, "ledger", None), "store", None
+        )
+        if store is None:
+            raise MissionError("approval resume requires a durable store")
+        approval = await asyncio.to_thread(store.get, Approval, approval_id)
         if not approval.tool_call_id:
             raise MissionError("approval is not linked to a durable tool call")
+        call = await asyncio.to_thread(store.get, LedgerToolCall, approval.tool_call_id)
+        if (
+            approval.run_id != context.run_id
+            or call.run_id != context.run_id
+            or call.task_id != context.task.id
+            or approval.task_id not in {None, context.task.id}
+        ):
+            raise MissionError("approval does not belong to this specialist task")
+        if call.tool_name not in self.allowed_tools:
+            raise MissionError("approval contains an invalid tool request")
         return (
             ToolInvocation(
-                id=approval.tool_call_id,
+                id=call.id,
                 engagement_id=context.engagement_id,
                 run_id=context.run_id,
                 task_id=context.task.id,
-                tool_name=tool_name,
-                arguments=arguments,
+                tool_name=call.tool_name,
+                arguments=dict(call.arguments),
                 workspace=self.workspace,
+                idempotency_key=call.idempotency_key,
                 requested_by=self.role.value,
             ),
-            approval.tool_call_id,
+            call.id,
+            approval,
         )
 
     @staticmethod

@@ -1785,7 +1785,9 @@ class AutomationRuntimeManager:
             process.forced_status = CommandExecutionStatus.CANCELLED
             await process.backend.terminate()
             if process.final_task is not None:
-                await process.final_task
+                # Shielded so a cancelled caller cannot cancel the finalizer
+                # and leave the terminated command recorded as running.
+                await asyncio.shield(process.final_task)
         return await self._poll(managed, process, request.max_bytes)
 
     def list_processes(self, session_id: str) -> list[CommandExecution]:

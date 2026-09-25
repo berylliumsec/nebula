@@ -6724,6 +6724,27 @@ def create_app(
             },
         )
 
+    def mission_command_run(approval: Approval) -> AgentRun | None:
+        """The native Mission a command approval pauses, if one does.
+
+        A command card is owned by whatever awaited the command: a chat, a
+        harness session or a Mission. Only a Mission's card names its run,
+        and that run resumes (or stops) from the operator decision.
+        """
+
+        if (
+            approval.origin != ToolCallOrigin.MISSION
+            or approval.exact_request.get("tool_name") != "run_command"
+            or approval_harness_turn(store, approval) is not None
+        ):
+            return None
+        try:
+            run = store.get(AgentRun, approval.run_id)
+        except NotFoundError:
+            # diagnostic-expected: a command card owned by a non-Mission runtime names no run.
+            return None
+        return run if run.backend == RunBackend.NATIVE else None
+
     @app.post(
         f"{API_PREFIX}/approvals/{{approval_id}}/decision",
         response_model=Approval,
@@ -6752,9 +6773,12 @@ def create_app(
                 # decision drives the resume again instead of stranding the run.
                 if (
                     approval.origin == ToolCallOrigin.MISSION
-                    and approval.exact_request.get("tool_name") != "run_command"
                     and request.decision != "stop"
                     and approval_harness_turn(store, approval) is None
+                    and (
+                        approval.exact_request.get("tool_name") != "run_command"
+                        or mission_command_run(approval) is not None
+                    )
                     and missions.approval_resume_pending(approval)
                 ):
                     await missions.resume_after_approval(
@@ -6775,8 +6799,10 @@ def create_app(
                 detail="command approvals apply to exact shell text and cannot be edited",
             )
         approval_run = (
-            store.get(AgentRun, approval.run_id)
-            if approval.origin == ToolCallOrigin.MISSION and not automation_approval
+            mission_command_run(approval)
+            if automation_approval
+            else store.get(AgentRun, approval.run_id)
+            if approval.origin == ToolCallOrigin.MISSION
             else None
         )
         harness_turn = approval_harness_turn(store, approval)
@@ -6792,7 +6818,7 @@ def create_app(
                 "decided_at": utc_now(),
                 "decision_note": "approval expired before an operator decision",
             }
-            if automation_approval:
+            if automation_approval and approval_run is None:
                 store.update(
                     Approval,
                     approval.id,
@@ -6847,7 +6873,8 @@ def create_app(
             # that describes the pre-edit arguments.
             exact.pop("argv", None)
             changes["exact_request"] = exact
-        if automation_approval:
+        if automation_approval and approval_run is None:
+            # A chat or harness command card has no run event log.
             updated = store.update(
                 Approval,
                 approval.id,
@@ -6870,7 +6897,7 @@ def create_app(
                 actor_id=operator_id,
                 idempotency_key=f"approval:{approval.id}:resolved",
             )
-        if automation_approval and harness_turn is None:
+        if automation_approval and harness_turn is None and approval_run is None:
             return updated
         if harness_turn is not None:
             await harness_runtime.resolve_approval(updated)

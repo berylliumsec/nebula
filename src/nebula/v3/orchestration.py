@@ -25,7 +25,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .domain import (
     AgentAttempt,
@@ -260,6 +260,54 @@ class Verifier(Protocol):
     ) -> VerificationResult: ...
 
 
+class RoutingJournal:
+    """The durable routing response of one specialist turn.
+
+    A specialist records the model's routing response before any of its calls
+    reaches the broker. A Core restart resumes the checkpoint before the turn,
+    so the same turn is dispatched again; it then replays the recorded
+    response instead of asking the model for a new one. Every call keeps its
+    ledger identity, a call that already finished returns its receipt, and a
+    call that was running is refused by the broker as an unknown effect
+    instead of being executed a second time.
+    """
+
+    def __init__(self, store: NebulaStore, attempt_id: str) -> None:
+        self.store = store
+        self.attempt_id = attempt_id
+
+    def recorded(self) -> dict[str, Any] | None:
+        try:
+            attempt = self.store.get(AgentAttempt, self.attempt_id)
+        except NotFoundError:  # diagnostic-expected: a turn without an attempt row has no recorded response
+            return None
+        return attempt.routing_response
+
+    def record(self, response: dict[str, Any]) -> None:
+        for _ in range(3):
+            attempt = self.store.get(AgentAttempt, self.attempt_id)
+            if attempt.routing_response is not None:
+                # The first recorded response is the one whose calls may run.
+                return
+            try:
+                self.store.update(
+                    AgentAttempt,
+                    attempt.id,
+                    {"routing_response": response},
+                    expected_revision=attempt.revision,
+                )
+                return
+            except ConflictError as exc:
+                record_caught_exception(
+                    "missions",
+                    "missions.orchestration.routing_record_conflict",
+                    "A specialist turn changed while its routing response was recorded.",
+                    exc,
+                    stage="orchestration",
+                )
+        raise MissionError("the specialist routing response could not be recorded")
+
+
 class SpecialistContext(BaseModel):
     engagement_id: str
     run_id: str
@@ -273,6 +321,13 @@ class SpecialistContext(BaseModel):
     remaining_tool_calls: int | None = Field(default=None, ge=0)
     allowed_tools: frozenset[str]
     approval_response: dict[str, Any] | None = None
+    # Where the turn's routing response is recorded before its calls run
+    # (see ``RoutingJournal``). Absent for a specialist run outside a Mission.
+    routing_journal: RoutingJournal | None = Field(
+        default=None, exclude=True, repr=False
+    )
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class EvidenceVerifier:
@@ -954,6 +1009,7 @@ class MissionRuntime:
                             approval_response=state.get("approval_responses", {}).get(
                                 task.id
                             ),
+                            routing_journal=RoutingJournal(self.store, attempt_id),
                         )
                     ),
                     timeout=remaining_seconds,
@@ -2249,6 +2305,7 @@ __all__ = [
     "MissionRuntime",
     "ModelSpecialist",
     "PlannedTask",
+    "RoutingJournal",
     "SpecialistContext",
     "SpecialistApprovalRequired",
     "SpecialistOutcome",

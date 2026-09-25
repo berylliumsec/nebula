@@ -24,6 +24,7 @@ from nebula.v3.domain import (
     RunBackend,
     RunStatus,
     ScopePolicy,
+    ToolCallOrigin,
     Task,
     TaskStatus,
     ToolCall,
@@ -1420,3 +1421,237 @@ def test_scheduled_missions_wait_for_capacity_before_running(tmp_path, monkeypat
         await service.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_startup_cancels_a_run_the_operator_stopped_before_restart(tmp_path):
+    """MIS-6: a CANCELLING run is finalized as cancelled by restart recovery,
+    never resurrected from its checkpoint and driven to completion."""
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "cancelling-restart.db")
+        engagement = store.create(Engagement(name="Cancelling restart"))
+        profile = _profile(store)
+        provider = RecordingProvider(profile)
+        run = store.create(
+            AgentRun(
+                engagement_id=engagement.id,
+                objective="stop me",
+                status=RunStatus.CANCELLING,
+                supervisor_provider_id=profile.id,
+                supervisor_model="security-model",
+                metadata={"origin": "api", "analysis_only": True},
+            )
+        )
+        stats = {"active": 0, "max_active": 0, "resumed": 0, "recovered": 0}
+        service = MissionService(
+            store,
+            checkpoint_path=tmp_path / "cancelling-checkpoints.db",
+            provider_factory=lambda _profile: provider,
+            runtime_factory=_gated_runtime_factory(store, {}, stats),
+        )
+
+        await service.startup()
+        await asyncio.sleep(0.1)
+
+        assert store.get(AgentRun, run.id).status == RunStatus.CANCELLED
+        assert stats["recovered"] == 0
+        assert run.id not in service.active_run_ids
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_second_restart_recovery_starts_a_fresh_generation(tmp_path):
+    """MIS-5: a run recovered once and interrupted again reconciles under a new
+    recovery generation, so its events do not collide with the first cycle's."""
+
+    store = NebulaStore(tmp_path / "second-restart.db")
+    engagement = store.create(Engagement(name="Second restart"))
+    run = store.create(
+        AgentRun(
+            engagement_id=engagement.id,
+            objective="long mission",
+            status=RunStatus.RUNNING,
+            metadata={"origin": "api", "analysis_only": True},
+        )
+    )
+
+    def running_call(name: str) -> ToolCall:
+        return store.create(
+            ToolCall(
+                engagement_id=engagement.id,
+                run_id=run.id,
+                tool_name=name,
+                status=ToolCallStatus.RUNNING,
+                risk_class=RiskClass.ACTIVE_SCAN,
+                started_at=utc_now(),
+            )
+        )
+
+    service = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
+
+    first_call = running_call("first_scan")
+    first = service._reconcile_interrupted_run(run.id)
+    assert first.status == RunStatus.QUEUED
+    assert first.metadata["restart_recovery"]["generation"] == 1
+
+    # A fresh Core start before recovery runs re-queues the same cycle: the
+    # generation is unchanged and no second recovery event is written.
+    requeued = service._reconcile_interrupted_run(run.id)
+    assert requeued.metadata["restart_recovery"]["generation"] == 1
+    queued_events = [
+        event
+        for event in store.replay_events(run.id)
+        if event.event_type == "run.recovery_queued"
+    ]
+    assert len(queued_events) == 1
+
+    # Recovery ran and the run was interrupted again with a new in-flight call.
+    current = store.get(AgentRun, run.id)
+    store.update(
+        AgentRun,
+        run.id,
+        {"status": RunStatus.RUNNING},
+        expected_revision=current.revision,
+    )
+    second_call = running_call("second_scan")
+
+    second = service._reconcile_interrupted_run(run.id)
+    assert second.status == RunStatus.QUEUED
+    assert second.metadata["restart_recovery"]["generation"] == 2
+    assert set(
+        second.metadata["restart_recovery"]["auto_continued_unknown_tool_call_ids"]
+    ) == {first_call.id, second_call.id}
+
+
+def test_repeated_recovery_approval_interrupts_are_each_persisted(tmp_path):
+    """MIS-5: a second recovery cycle that interrupts for approval persists the
+    transition instead of dropping it under a reused idempotency key."""
+
+    from contextlib import asynccontextmanager
+
+    class InterruptingRuntime:
+        async def recover(self, run_id):
+            del run_id
+            return {"__interrupt__": [{"kind": "tool_approval"}]}
+
+    @asynccontextmanager
+    async def factory(**kwargs):
+        del kwargs
+        yield InterruptingRuntime()
+
+    async def scenario() -> None:
+        store = NebulaStore(tmp_path / "approve-twice.db")
+        engagement = store.create(Engagement(name="Approve twice"))
+        profile = _profile(store)
+        provider = RecordingProvider(profile)
+        run = store.create(
+            AgentRun(
+                engagement_id=engagement.id,
+                objective="approve twice",
+                status=RunStatus.RUNNING,
+                supervisor_provider_id=profile.id,
+                supervisor_model="security-model",
+                metadata={"origin": "api", "analysis_only": True},
+            )
+        )
+        for _ in range(2):
+            service = MissionService(
+                store,
+                checkpoint_path=tmp_path / "approve-twice-checkpoints.db",
+                provider_factory=lambda _profile: provider,
+                runtime_factory=factory,
+            )
+            await service.startup()
+            await asyncio.sleep(0.2)
+            assert store.get(AgentRun, run.id).status == RunStatus.WAITING_APPROVAL
+            await service.shutdown()
+            # The operator approves; the resumed graph runs until the next
+            # restart interrupts it for approval again.
+            current = store.get(AgentRun, run.id)
+            store.update(
+                AgentRun,
+                run.id,
+                {"status": RunStatus.RUNNING},
+                expected_revision=current.revision,
+            )
+
+    asyncio.run(scenario())
+
+
+def test_mission_command_approval_decision_resumes_the_run(tmp_path):
+    """MIS-3: approving a Mission run_command card via the API resumes the run
+    instead of leaving it stranded in WAITING_APPROVAL forever."""
+
+    store = NebulaStore(tmp_path / "command-approval.db")
+    engagement = store.create(Engagement(name="Command approval"))
+    profile = _profile(store)
+    provider = RecordingProvider(profile)
+    gates: dict[str, asyncio.Event] = {}
+    stats = {"active": 0, "max_active": 0, "resumed": 0, "recovered": 0}
+    service = MissionService(
+        store,
+        checkpoint_path=tmp_path / "command-approval-checkpoints.db",
+        provider_factory=lambda _profile: provider,
+        runtime_factory=_gated_runtime_factory(store, gates, stats),
+        cancellation_timeout_seconds=2,
+    )
+    app = create_app(store, auth_token="test-token", mission_service=service)
+    with TestClient(app) as client:
+        run = store.create(
+            AgentRun(
+                engagement_id=engagement.id,
+                objective="Run a scanning command after approval",
+                status=RunStatus.WAITING_APPROVAL,
+                supervisor_provider_id=profile.id,
+                supervisor_model="security-model",
+                budget=RunBudget(
+                    max_concurrency=1,
+                    max_delegation_depth=1,
+                    max_tool_calls=10,
+                ),
+                metadata={"origin": "api", "waiting_approval": True},
+            )
+        )
+        call = store.create(
+            ToolCall(
+                engagement_id=engagement.id,
+                run_id=run.id,
+                origin=ToolCallOrigin.MISSION,
+                task_id="task-1",
+                tool_name="run_command",
+                status=ToolCallStatus.WAITING_APPROVAL,
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                arguments={"command": "echo scan", "cwd": "."},
+                idempotency_key="task:task-1:turn:1:call:0",
+            )
+        )
+        approval = store.create(
+            Approval(
+                engagement_id=engagement.id,
+                run_id=run.id,
+                origin=ToolCallOrigin.MISSION,
+                task_id="task-1",
+                tool_call_id=call.id,
+                status=ApprovalStatus.PENDING,
+                risk_class=RiskClass.WORKSPACE_WRITE,
+                exact_request={
+                    "tool_name": "run_command",
+                    "arguments": {"command": "echo scan", "cwd": "."},
+                },
+                policy_rationale="the project requires approval for every command",
+                requested_by="network_service",
+            )
+        )
+
+        decision = client.post(
+            f"/api/v1/approvals/{approval.id}/decision",
+            headers=_auth(),
+            json={"decision": "approve"},
+        )
+
+        assert decision.status_code == 200
+        assert decision.json()["status"] == "approved"
+        _wait_for_status(client, run.id, "complete")
+        assert stats["resumed"] == 1
+        assert store.get(AgentRun, run.id).status == RunStatus.COMPLETE
