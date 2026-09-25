@@ -1,15 +1,19 @@
 # Nebula 3 interface
 
-This directory is the independent React/TypeScript interface and Tauri 2 shell for Nebula 3. It can run in a browser against the versioned Core API or as a local desktop application.
+This directory is the React/TypeScript interface and Tauri 2 shell for Nebula 3. It can run in a browser against the versioned Core API or as a desktop application connected to a local or configured remote Core.
 
 ## Development
 
 ```bash
-npm install
+npm ci
 npm run dev
-npm test
 npm run build
 ```
+
+Choose the test file for the changed behavior and follow the
+[focused test policy](../docs/TEST_SELECTION.md). For example, a change to
+runtime defaults can use `npm test -- src/api/runtimeDefaults.test.ts`.
+Unscoped `npm test` is rejected.
 
 Set `VITE_NEBULA_API_URL` only when the browser API is not served from the same origin. Vite proxies `/api` to `NEBULA_DEV_BACKEND` (default `http://127.0.0.1:8765`) during development. Preview data is visibly labeled and disappears only after Core health, authentication, and initial resource loading succeed.
 
@@ -45,12 +49,12 @@ WebM files are removed after successful conversion.
 
 - HTTP resources are accessed only through `src/api/client.ts` under `/api/v1`. The client maps Core's snake_case entity arrays to UI summaries at that boundary; components do not depend on persistence records.
 - Run events use `src/api/events.ts`. A selected run is required; reconnects replay after its last accepted monotonic sequence. The one-time token is carried in a WebSocket subprotocol, never in the URL.
-- Human PTY sessions use `src/api/terminal.ts`. If the runner is unavailable, the terminal is inert; it never falls back to a host shell.
-- Agent tool execution is intentionally not implemented in this interface. It must pass through the Core policy broker and certified sandbox runner.
+- Human PTY sessions use `src/api/containerTerminal.ts`. If the runner is unavailable, the terminal is inert; it never falls back to a host shell.
+- Chat and mission tool requests flow through `src/api/client.ts`; Core owns policy checks, approvals, and execution.
 
 ## Desktop sidecar contract
 
-The shell launches only a canonicalized `nebula-core` sibling binary. It clears inherited environment variables, binds Core to loopback with port `0`, and sends a 256-bit one-time IPC token over stdin as one JSON line:
+In Local Core mode, the shell launches only a canonicalized `nebula-core` sibling binary. It clears inherited environment variables, binds Core to loopback with port `0`, and sends a 256-bit one-time IPC token over stdin as one JSON line:
 
 ```json
 {"protocol":"nebula-sidecar-v1","ipc_token":"…"}

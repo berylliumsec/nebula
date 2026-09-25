@@ -1,9 +1,13 @@
 # Nebula 3 release readiness and parity backlog
 
-This file tracks only work that remains release-gated after the zero-setup
-Workbench parity implementation. It replaces the obsolete phased
-plan for code rendering, reviewed execution, notes, and PDF export; those
-capabilities already have implementation and tests and must not be rebuilt.
+This is an earlier parity backlog, not the current release checklist. Some
+items have since shipped or changed scope. Use the [Nebula 3 guide](docs/NEBULA3.md)
+for current behavior and the [release runbook](packaging/RELEASING.md) for the
+supported release matrix and gates.
+
+This file originally tracked work remaining after the zero-setup Workbench
+parity implementation. It replaced an earlier phased plan for code rendering,
+reviewed execution, notes, and PDF export.
 
 ## Release objective
 

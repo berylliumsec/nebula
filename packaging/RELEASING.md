@@ -41,31 +41,35 @@ manual draft creation must complete before a GitHub Release exists.
 
    ```console
    git pull --ff-only origin main
-   python scripts/nebula3_version.py check --expected 3.0.0-alpha.5
-   test -s docs/releases/3.0.0-alpha.5.md
+   version="$(cat NEBULA3_VERSION)"
+   release_tag="nebula-v${version}"
+   python scripts/nebula3_version.py check --expected "$version"
+   test -s "docs/releases/${version}.md"
    ```
 
 3. Review the checked-in notes. They are the exact GitHub Release body; do not
    describe an artifact, platform, migration, or security property that the
    workflow does not verify.
-4. Run the portable release gates:
+4. Review the diff-bound CI test selection and its receipt. Run the focused
+   packaging contracts and portable build checks; the preparation workflow
+   separately verifies the native build, sandbox, and package installation:
 
    ```console
    poetry install --with dev --no-interaction
-   poetry run pytest -q tests/v3
-   poetry run pytest -q packaging/updater/test_generate_manifest.py
+   poetry run pytest --collect-only -q tests/v3/test_packaging.py packaging/updater/test_generate_manifest.py
+   poetry run pytest -q tests/v3/test_packaging.py packaging/updater/test_generate_manifest.py
    npm --prefix ui ci
    npm --prefix ui run audit:diagnostics
-   npm --prefix ui test
    npm --prefix ui run build
-   cargo test --locked --manifest-path ui/src-tauri/Cargo.toml
    ```
 
 5. Create the immutable tag at the reviewed `main` commit and push it:
 
    ```console
-   git tag -a nebula-v3.0.0-alpha.5 -m "Nebula 3.0.0-alpha.5"
-   git push origin nebula-v3.0.0-alpha.5
+   version="$(cat NEBULA3_VERSION)"
+   release_tag="nebula-v${version}"
+   git tag -a "$release_tag" -m "Nebula $version"
+   git push origin "$release_tag"
    ```
 
 The tag push starts the preparation workflow on Ubuntu 22.04 x86_64. It builds
@@ -109,8 +113,9 @@ Record the successful preparation workflow run ID. Then manually run **Create
 Nebula 3 Linux release draft** with the immutable tag and preparation run ID:
 
 ```console
+release_tag="nebula-v$(cat NEBULA3_VERSION)"
 gh workflow run nebula3-release-finalize.yml \
-  -f release_tag=nebula-v3.0.0-alpha.5 \
+  -f release_tag="$release_tag" \
   -f preparation_run_id=123456789 \
   -f create_draft=true
 ```
@@ -142,12 +147,14 @@ generation on GitHub Pages. Confirm that workflow succeeds and preserves the
 existing website before announcing the release.
 
 If the updater-manifest workflow itself needs a post-publication repair, merge
-the workflow fix to `main` and recover the same immutable published release with:
+the workflow fix to `main`, set `release_tag` to that immutable published tag,
+and recover it with:
 
 ```bash
+release_tag="nebula-v<version>"
 gh workflow run publish-updater-manifest.yml \
   --ref main \
-  -f release_tag=nebula-v3.0.0-alpha.5
+  -f release_tag="$release_tag"
 ```
 
 The recovery path rejects drafts, reloads the published timestamp and channel
