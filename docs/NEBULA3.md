@@ -31,8 +31,10 @@ and redacted support bundles are documented in the
 - React/TypeScript workspace and Tauri shell with a loopback-only sidecar token
   handshake.
 - A human-operated Kali terminal plus reviewed assistant code execution. The
-  human terminal has an explicit root/writable/unrestricted boundary; reviewed
-  and agent execution remains offline or single-target scoped.
+  human terminal has an explicit root/writable/unrestricted boundary. Reviewed
+  code runs in a fresh non-root container with unrestricted outbound networking
+  after exact-source review; agent commands follow the selected Project execution
+  mode and approval policy.
 - Deterministic server-rendered PDF reports, operator-triggered AI execution
   notes, review-first AI report drafting and note transforms, and
   integrity-manifested engagement bundle v3 export.
@@ -50,11 +52,9 @@ poetry run nebula-core migrate
 poetry run nebula-core serve --host 127.0.0.1 --port 8765
 ```
 
-Run the Nebula 3 backend test boundary:
-
-```bash
-poetry run pytest -q tests/v3
-```
+For changes, collect and run only the affected test files or exact cases as
+described in the [focused test policy](TEST_SELECTION.md). A full backend suite
+requires a fresh, explicit approval.
 
 The server prints a generated bearer token. Remote binding requires an explicit
 `--allow-remote` acknowledgement and should be placed behind a properly
@@ -513,13 +513,12 @@ review. Every run starts a new non-root container with fixed v1 limits:
 and stderr capture limits. The program has no interactive stdin. Only the
 engagement workspace is mounted at `/workspace`; containers are never resumed.
 
-Reviewed and agent execution remains offline by default. Scoped execution
-accepts one explicit policy-approved target and selected ports, resolves and pins its addresses at
-confirmation, and uses the per-invocation egress helper. Run is exposed as one
-release-gated feature only when both offline and scoped paths are ready. There
-is no bridge/host network mode, host shell fallback, or runtime socket exposed
-to the webview. The human terminal exception above does not widen either
-execution API and cannot be requested by an agent or assistant code block.
+Reviewed code execution uses unrestricted outbound bridge networking in a fresh
+non-root container after exact-source review and Core preflight. It has no host
+shell fallback, interactive stdin, or container-runtime socket exposed to the
+webview. Agent commands use the Project's selected Docker or Host mode; Docker
+sessions start offline and activate the frozen Project network scope only under
+the Project approval policy. See [Automation runtime](AUTOMATION-RUNTIME.md).
 
 Project workspaces have no application-imposed total-size, entry-count or
 individual-file quota. Terminal readiness and uploads do not recursively scan
@@ -541,26 +540,27 @@ Command stdout and stderr are immutable artifacts. Models receive compact redact
 
 ## Operator-workflow release verification
 
-CI exercises the migration upgrade/downgrade cycle and immutable operation
-ledger on SQLite and PostgreSQL, the raw code adapter in Linux Docker, a real
-rootless Podman execution with workspace persistence, macOS Docker Desktop and
-Podman Machine command/profile boundaries, the frozen-Core package audit, the
-UI accessibility/visual suite, and the full v3 backend suite.
+CI runs a reviewed selection of affected Python, frontend, native, and browser
+journeys. The release workflow adds sandbox integration, packaging contracts,
+native compile checks, and package install/smoke gates without rerunning the full
+product suites. See [Focused test policy](TEST_SELECTION.md) and the
+[release runbook](../packaging/RELEASING.md).
 
 Before a release, manually smoke-test the prepared Kali agent runtime and the
 official Kali terminal on Docker Desktop or a rootless Podman Machine. Confirm
 Kali pull/digest resolution, root and writable ephemeral state, outbound bridge
 connectivity, no added capabilities or published ports, terminal
-disconnect/Core-restart cleanup, an offline run, a scoped single-target run,
+disconnect/Core-restart cleanup, an offline Docker command, a Project-scoped
+Docker command, an acknowledged Host-mode command,
 cancellation cleanup, Core-restart interruption, workspace promotion/reset,
 terminal catalog validation, harmless `nmap --version` selected recording beside
 an unselected shell command with no artifacts, recovery/truncation warnings,
 acknowledged raw-output download,
 Draft note/Discuss in chat, cached PDF export, and sensitive bundle v3 export.
-The release is blocked if Run appears without both reviewed-execution modes,
-non-human execution can request unrestricted/root/writable settings, a runtime
-socket or host terminal reaches the webview, or any runner failure falls back
-to host execution.
+The release is blocked if reviewed execution runs without exact-source review,
+agent command execution bypasses its Project mode or approval policy, a runtime
+socket or host terminal reaches the webview, or any Docker runner failure falls
+back to host execution.
 
 ## Current release boundary
 

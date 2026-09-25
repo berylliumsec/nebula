@@ -40,7 +40,7 @@ Nebula supports hosted, local, and OpenAI-compatible model runtimes. A model pro
 
 ## Install the preview
 
-Nebula 3 preview builds are published for Linux x86_64 as `nebula-v3.*` prereleases on [GitHub Releases](https://github.com/BerylliumSec/nebula/releases); the newest one is the current release candidate, and its notes are in [docs/releases](docs/releases/). Docker or Podman is required for terminal and automation features.
+Nebula 3 preview builds for Linux x86_64 appear as `nebula-v3.*` prereleases on [GitHub Releases](https://github.com/BerylliumSec/nebula/releases). Choose a release with native artifacts and read its published notes before installing; checked-in [release notes](docs/releases/) may also describe unpublished candidates. Docker or Podman is required for the container terminal and Docker-mode automation. Features in a source checkout may be ahead of the published preview.
 
 The preferred installation method is the signed [Nebula APT repository](https://github.com/BerylliumSec/nebula-apt). Its archive-key fingerprint is:
 
@@ -71,7 +71,7 @@ under administrator control through the normal APT workflow.
 <details>
 <summary>Install a downloaded DEB manually instead</summary>
 
-Download the DEB and `SHA256SUMS-linux-x64.txt` from [GitHub Releases](https://github.com/BerylliumSec/nebula/releases), then verify and install (replace `<version>` with the release version, such as `3.0.0-alpha.20`):
+Download the DEB and `SHA256SUMS-linux-x64.txt` from [GitHub Releases](https://github.com/BerylliumSec/nebula/releases), then verify and install (replace `<version>` with the published release version):
 
 ```console
 sha256sum --check --ignore-missing SHA256SUMS-linux-x64.txt
@@ -130,7 +130,7 @@ command builds the local Nebula Core sidecar, starts the UI development server,
 and opens the native desktop directly from the checkout.
 
 <details>
-<summary>Browser-only development and pre-merge checks</summary>
+<summary>Browser-only development and focused checks</summary>
 
 Build the workspace and let Core choose an available loopback port:
 
@@ -139,12 +139,12 @@ npm --prefix ui run build
 poetry run nebula-core ui
 ```
 
-Run the principal checks:
+Check version metadata and the UI build. Select and collect tests for the changed
+journey using the [focused test policy](docs/TEST_SELECTION.md); a routine change
+does not run the complete backend or UI suites.
 
 ```console
 python scripts/nebula3_version.py check
-poetry run pytest -q tests/v3
-npm --prefix ui test
 npm --prefix ui run build
 ```
 
