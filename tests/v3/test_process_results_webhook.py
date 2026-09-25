@@ -1,6 +1,8 @@
 import asyncio
 import json
+from typing import Any
 
+import httpx
 from fastapi.testclient import TestClient
 
 from nebula.v3.api import create_app
@@ -25,8 +27,13 @@ from nebula.v3.domain import (
     ToolCallStatus,
     utc_now,
 )
-from nebula.v3.providers import ModelMessage, ModelRequest, ToolCall
-from nebula.v3.tool_results import ToolOutputService
+from nebula.v3.providers import ModelMessage, ModelRequest, ModelResponse, ToolCall
+from nebula.v3.tool_results import (
+    MAX_EXCERPT_BYTES,
+    ToolArtifactRef,
+    ToolOutputService,
+    ToolResultReceipt,
+)
 from tests.v3.test_automation_runtime import runtime
 from tests.v3.test_chat import FakeProvider
 from tests.v3.test_chat_tool_loop import ScriptedProvider, _response
@@ -382,7 +389,12 @@ def test_terminal_background_process_without_callback_becomes_unknown_failure(
     asyncio.run(scenario())
 
 
-async def _approved_background_command_chat(tmp_path):
+async def _approved_background_command_chat(
+    tmp_path,
+    *,
+    approval_policy: AutomationApprovalPolicy = AutomationApprovalPolicy.ALWAYS,
+    provider: ScriptedProvider | None = None,
+):
     """A provider turn whose approved background command waits for its webhook."""
 
     manager, store, artifacts, engagement, _sessions = runtime(tmp_path)
@@ -390,7 +402,7 @@ async def _approved_background_command_chat(tmp_path):
     policy = manager.project_policy(engagement.id)
     manager.update_project_policy(
         engagement.id,
-        approval_policy=AutomationApprovalPolicy.ALWAYS,
+        approval_policy=approval_policy,
         network_enabled=True,
         runner_profile_id="runner",
         max_timeout_ms=30_000,
@@ -442,7 +454,7 @@ async def _approved_background_command_chat(tmp_path):
             max_tool_calls=5,
         )
     )
-    provider = ScriptedProvider(
+    provider = provider or ScriptedProvider(
         [
             _response(
                 calls=[
@@ -632,7 +644,335 @@ def test_approval_and_results_webhook_resume_through_provider_admission(tmp_path
         replayed = provider.requests[1].tool_results[-1].output
         assert isinstance(replayed, dict)
         assert replayed["status"] == "completed"
+        assert replayed["summary"] == "ports enumerated"
         assert replayed["results_api_key"] is None
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+class _ReactiveProvider(ScriptedProvider):
+    """Answers each routing step from the request that reaches it.
+
+    A step is a ready response or a function of the request, so a later step
+    can use an ID that only exists once an earlier tool result came back.
+    """
+
+    def __init__(self, steps: list[Any]) -> None:
+        super().__init__([])
+        self.steps = list(steps)
+
+    async def complete(self, request: ModelRequest) -> ModelResponse:
+        self.requests.append(request)
+        if request.metadata.get("operation") == "conversation_naming":
+            return _response(text="Background command")
+        if not self.steps:
+            raise AssertionError("provider script was exhausted")
+        step = self.steps.pop(0)
+        return step(request) if callable(step) else step
+
+    def routed(self) -> list[ModelRequest]:
+        return [
+            request
+            for request in self.requests
+            if request.metadata.get("operation") != "conversation_naming"
+        ]
+
+
+_RUN_IN_BACKGROUND = _response(
+    calls=[
+        ToolCall(
+            id="call-1",
+            name="run_command",
+            arguments={"command": "wait-forever", "background": True},
+        )
+    ]
+)
+
+
+def _read_posted_stdout(request: ModelRequest) -> ModelResponse:
+    receipt = request.tool_results[-1].output
+    assert isinstance(receipt, dict)
+    (posted,) = [
+        item
+        for item in receipt.get("artifacts") or []
+        if item["filename"].endswith(".results-stdout.txt")
+    ]
+    return _response(
+        calls=[
+            ToolCall(
+                id="call-2",
+                name="tool_output.read",
+                arguments={"artifact_id": posted["artifact_id"]},
+            )
+        ]
+    )
+
+
+def _assert_bounded_history_result(output: object) -> dict[str, Any]:
+    assert isinstance(output, dict)
+    rendered = json.dumps(output, ensure_ascii=False, sort_keys=True)
+    assert len(rendered.encode("utf-8")) <= MAX_EXCERPT_BYTES
+    assert "Historical pre-v2 action output was omitted" not in rendered
+    assert "results_api_key" not in output or output["results_api_key"] is None
+    return output
+
+
+def test_callback_result_reaches_the_model_through_the_results_webhook(
+    tmp_path, monkeypatch
+):
+    """The posted summary and output reach the next provider request.
+
+    The command POSTs to the real webhook route; the wake it triggers resumes
+    through ``start_provider_turn`` and provider admission. The next routing
+    request must carry a valid ``nebula.tool-result/v2`` receipt with the
+    callback's summary and references to its posted output, not the pre-v2
+    omission notice, and the posted output must be readable through
+    ``tool_output.read``.
+    """
+
+    nonce = "nebula-nonce-7f3a91"
+
+    async def scenario():
+        provider = _ReactiveProvider(
+            [
+                _RUN_IN_BACKGROUND,
+                _read_posted_stdout,
+                _response(),
+                _response(text=f"The command printed {nonce}."),
+            ]
+        )
+        (
+            manager,
+            store,
+            chat,
+            turn,
+            _,
+            prepared_for,
+        ) = await _approved_background_command_chat(
+            tmp_path,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            provider=provider,
+        )
+        chat.prepare_resume = lambda turn_id: prepared_for(  # type: ignore[method-assign]
+            store.get(ChatTurn, turn_id)
+        )
+        chat.start_provider_turn(prepared_for(turn))
+        events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
+        assert events[-1] == "callback_required", events
+        waiting = store.get(ChatTurn, turn.id)
+        assert waiting.status == ChatTurnStatus.WAITING_CALLBACK
+        entry = waiting.tool_history[-1]
+        results_api_key = json.loads(entry["provider_result"])["results_api_key"]
+
+        # The app's wake is the one this test's chat serves, so the webhook
+        # route itself drives accept_results and the resume.
+        wake = ChatService.continue_after_tool_callback
+        monkeypatch.setattr(
+            ChatService,
+            "continue_after_tool_callback",
+            lambda _self, process_id: wake(chat, process_id),
+        )
+        app = create_app(
+            store,
+            artifact_store=manager.artifact_store,
+            auth_token="test-token",
+            automation_runtime=manager,
+        )
+        big_output = {
+            "nonce": nonce,
+            "rows": [f"row-{index}" for index in range(4_000)],
+        }
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            posted = await client.post(
+                f"/api/v1/automation-processes/{entry['process_id']}/results",
+                headers={"X-Nebula-Api-Key": results_api_key},
+                json={
+                    "status": "complete",
+                    "summary": (
+                        f"Printed {nonce}. Authorization: Bearer "
+                        "abcdefghijklmnopqrstuvwxyz0123456789"
+                    ),
+                    "exit_code": 0,
+                    "output": big_output,
+                    "stdout": f"started\n{nonce}\n" + "x" * 60_000 + "\n",
+                },
+            )
+        assert posted.status_code == 200, posted.text
+
+        events = [item async for item in chat.follow_provider_turn(turn.id)]
+        names = [name for name, _ in events]
+        assert names[:4] == ["queued", "admitted", "started", "tool_completed"]
+        assert names[-1] == "done"
+        completed = events[3][1]
+        assert completed["status"] == "complete"
+        assert nonce in completed["summary"]
+        finished = store.get(ChatTurn, turn.id)
+        assert finished.status == ChatTurnStatus.COMPLETE
+
+        routed = provider.routed()
+        replayed = _assert_bounded_history_result(routed[1].tool_results[-1].output)
+        receipt = ToolResultReceipt.model_validate(replayed)
+        assert receipt.status.value == "completed"
+        assert receipt.exit_code == 0
+        assert receipt.incomplete is False
+        assert receipt.results_url is None
+        assert receipt.summary is not None
+        assert nonce in receipt.summary
+        # The posted summary is redacted before it enters model context.
+        assert "abcdefghijklmnopqrstuvwxyz0123456789" not in receipt.summary
+        assert routed[1].tool_results[-1].is_error is False
+        assert {item.kind for item in receipt.artifacts} == {"stdout", "parsed"}
+        assert all(item.searchable for item in receipt.artifacts)
+        assert completed["artifacts"] == [
+            item.model_dump(mode="json") for item in receipt.artifacts
+        ]
+        # The durable tool row records the same valid receipt.
+        call = store.get(DurableToolCall, receipt.tool_call_id)
+        assert call.status == ToolCallStatus.COMPLETE
+        assert ToolResultReceipt.model_validate(call.result) == receipt
+
+        # The posted output is evidence the model can read on demand.
+        read = routed[2].tool_results[-1].output
+        assert isinstance(read, dict)
+        assert read["schema"] == "nebula.tool-output.read/v1"
+        assert [line["text"] for line in read["lines"][:2]] == ["started", nonce]
+        # Replayed again on the synthesis request, the receipt is unchanged.
+        assert routed[-1].tool_results[0].output == replayed
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_failed_callback_reaches_the_model_as_a_failed_receipt(tmp_path):
+    """A command that reports failure gives the model its own account of it."""
+
+    async def scenario():
+        (
+            manager,
+            store,
+            chat,
+            turn,
+            provider,
+            prepared_for,
+        ) = await _approved_background_command_chat(
+            tmp_path,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            provider=_ReactiveProvider(
+                [
+                    _RUN_IN_BACKGROUND,
+                    _response(),
+                    _response(text="The scan failed."),
+                ]
+            ),
+        )
+        chat.prepare_resume = lambda turn_id: prepared_for(  # type: ignore[method-assign]
+            store.get(ChatTurn, turn_id)
+        )
+        chat.start_provider_turn(prepared_for(turn))
+        events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
+        assert events[-1] == "callback_required", events
+        entry = store.get(ChatTurn, turn.id).tool_history[-1]
+        manager.accept_results(
+            entry["process_id"],
+            json.loads(entry["provider_result"])["results_api_key"],
+            ProcessResultsRequest(
+                status="failed",
+                summary="target 203.0.113.7 refused every probe",
+                exit_code=2,
+                stdout="probe 1 refused\nprobe 2 refused\n",
+            ),
+        )
+        assert chat.continue_after_tool_callback(entry["process_id"]) == turn.id
+        events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
+        assert events[-1] == "done", events
+
+        assert isinstance(provider, _ReactiveProvider)
+        result = provider.routed()[1].tool_results[-1]
+        assert result.is_error is True
+        receipt = ToolResultReceipt.model_validate(
+            _assert_bounded_history_result(result.output)
+        )
+        assert receipt.status.value == "failed"
+        assert receipt.exit_code == 2
+        assert receipt.summary == "target 203.0.113.7 refused every probe"
+        assert [item.kind for item in receipt.artifacts] == ["stdout"]
+        (step,) = chat._turn_history(store.get(ChatTurn, turn.id))
+        assert step["status"] == "failed"
+        call = store.get(DurableToolCall, receipt.tool_call_id)
+        assert call.status == ToolCallStatus.FAILED
+        assert ToolResultReceipt.model_validate(call.result) == receipt
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_producer_that_ends_without_its_callback_reaches_the_model_as_unknown(
+    tmp_path,
+):
+    """A process that exits without posting gives the model an unknown effect.
+
+    The failure envelope stays bounded and never retry-safe, and it names the
+    call and the output the process did record, so the advice to inspect that
+    output can be followed.
+    """
+
+    async def scenario():
+        (
+            manager,
+            store,
+            chat,
+            turn,
+            provider,
+            prepared_for,
+        ) = await _approved_background_command_chat(
+            tmp_path,
+            approval_policy=AutomationApprovalPolicy.NEVER,
+            provider=_ReactiveProvider(
+                [
+                    _RUN_IN_BACKGROUND,
+                    _response(),
+                    _response(text="The command ended without results."),
+                ]
+            ),
+        )
+        chat.prepare_resume = lambda turn_id: prepared_for(  # type: ignore[method-assign]
+            store.get(ChatTurn, turn_id)
+        )
+        manager.bind_process_terminal_observer(chat.continue_after_tool_callback)
+        chat.start_provider_turn(prepared_for(turn))
+        events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
+        assert events[-1] == "callback_required", events
+        entry = store.get(ChatTurn, turn.id).tool_history[-1]
+
+        managed = manager._processes[entry["process_id"]]
+        await managed.backend.terminate()
+        assert managed.final_task is not None
+        execution = await managed.final_task
+        assert execution.metadata.get("results_received") is not True
+        events = [name async for name, _ in chat.follow_provider_turn(turn.id)]
+        assert events[-1] == "done", events
+
+        assert isinstance(provider, _ReactiveProvider)
+        result = provider.routed()[1].tool_results[-1]
+        assert result.is_error is True
+        failure = _assert_bounded_history_result(result.output)
+        assert failure["schema"] == "nebula.tool-failure/v1"
+        assert failure["category"] == "missing_callback"
+        assert failure["side_effects"] == "unknown"
+        assert failure["retry_safe"] is False
+        assert failure["tool_call_id"] == entry["tool_call_id"]
+        refs = [ToolArtifactRef.model_validate(item) for item in failure["artifacts"]]
+        assert {item.kind for item in refs} == {"stdout", "stderr"}
+        assert {item.artifact_id for item in refs} == {
+            execution.stdout_artifact_id,
+            execution.stderr_artifact_id,
+        }
+        call = store.get(DurableToolCall, entry["tool_call_id"])
+        assert call.status == ToolCallStatus.FAILED
+        assert call.result == failure
         await chat.shutdown()
 
     asyncio.run(scenario())

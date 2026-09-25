@@ -1601,28 +1601,96 @@ class AutomationRuntimeManager:
             if request.status == "complete"
             else CommandExecutionStatus.FAILED
         )
-        return self.store.update(
-            CommandExecution,
-            execution.id,
-            {
-                "status": status,
-                "completed_at": utc_now(),
-                "exit_code": request.exit_code
-                if request.exit_code is not None
-                else (0 if request.status == "complete" else 1),
-                "error": None
-                if request.status == "complete"
-                else (request.summary or "callback reported failure"),
-                "metadata": {
-                    **execution.metadata,
-                    "results_received": True,
-                    "results_summary": request.summary,
-                    "results_output": request.output,
-                    "results_stdout": request.stdout[: 64 * 1024],
+        posted = self._callback_artifacts(execution, request)
+        with self.store.transaction() as transaction:
+            # The posted output and the execution that points at it commit
+            # together, so a receipt never names an artifact that is missing.
+            transaction.add_all([artifact for _, artifact in posted])
+            return transaction.update(
+                CommandExecution,
+                execution.id,
+                {
+                    "status": status,
+                    "completed_at": utc_now(),
+                    "exit_code": request.exit_code
+                    if request.exit_code is not None
+                    else (0 if request.status == "complete" else 1),
+                    "error": None
+                    if request.status == "complete"
+                    else (request.summary or "callback reported failure"),
+                    "metadata": {
+                        **execution.metadata,
+                        "results_received": True,
+                        "results_summary": request.summary,
+                        "results_output": request.output,
+                        "results_stdout": request.stdout[: 64 * 1024],
+                        **{
+                            f"results_{kind}_artifact_id": artifact.id
+                            for kind, artifact in posted
+                        },
+                    },
                 },
-            },
-            expected_revision=execution.revision,
-        )
+                expected_revision=execution.revision,
+            )
+
+    def _callback_artifacts(
+        self, execution: CommandExecution, request: ProcessResultsRequest
+    ) -> list[tuple[Literal["stdout", "output"], Artifact]]:
+        """Keep a callback's posted output as evidence the model reads on demand.
+
+        Like captured process output it never enters model context whole: the
+        receipt names these artifacts and ``tool_output`` returns bounded,
+        redacted excerpts. They carry the command's tool call so the same
+        ownership check authorizes them.
+        """
+
+        metadata = {
+            "command_execution_id": execution.id,
+            "process_id": execution.process_id,
+            "tool_call_id": execution.metadata.get("tool_call_id"),
+            "callback": True,
+        }
+        posted: list[tuple[Literal["stdout", "output"], Artifact]] = []
+        if request.stdout:
+            data = request.stdout[: 64 * 1024].encode("utf-8")
+            posted.append(
+                (
+                    "stdout",
+                    self.artifact_store.put_bytes(
+                        data,
+                        engagement_id=execution.engagement_id,
+                        filename=f"command-{execution.id}.results-stdout.txt",
+                        media_type="text/plain",
+                        source="automation-runtime-callback",
+                        metadata={
+                            **metadata,
+                            "kind": "stdout",
+                            "searchable": b"\x00" not in data[:8192],
+                        },
+                    ),
+                )
+            )
+        if request.output:
+            posted.append(
+                (
+                    "output",
+                    self.artifact_store.put_bytes(
+                        json.dumps(
+                            request.output,
+                            ensure_ascii=False,
+                            indent=2,
+                            sort_keys=True,
+                            default=str,
+                        ).encode("utf-8"),
+                        engagement_id=execution.engagement_id,
+                        filename=f"command-{execution.id}.results-output.json",
+                        media_type="application/json",
+                        source="automation-runtime-callback",
+                        metadata={**metadata, "kind": "parsed", "searchable": True},
+                    ),
+                )
+            )
+        return posted
 
     async def process_io(
         self,
