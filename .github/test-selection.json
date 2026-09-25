@@ -1,13 +1,13 @@
 {
-  "change_digest": "5e829ab4727a19c5d92ea2f9a3774c46a6a98c4b72eae2ca574cbbad2aebf987",
+  "change_digest": "547203b5cf8169c504ff51fcefa02f443315c4f36c060d24c6d9f843a0143649",
   "reviewed_by": "Claude focused review for chat-polling-cost",
-  "reason": "P13 lowers what an open conversation costs Core and the browser. Core: polled projections (/state, /catch-up, /pending-turn, /session-activity, the follow-up queue worker) read revision-keyed turn headers instead of whole turn payloads; /state, /queue, /session-activity and /structured-results support ETag/304; /pending-turn?view=status serves waiting polls; conversation results filter in SQL; settled follow-ups are bounded without request bodies and dormant queues are skipped; public-IP reads are cached per terminal. UI: polls pause in hidden tabs, back off when idle, send If-None-Match and keep state identity; the Agent view shares the page's results poll; transcript rows are memoized; the goal token estimate is incremental; the logger downgrades duplicate and browser-extension rejections. The Python files cover the new header/ETag/queue/public-IP contracts plus every existing file or node that exercises session state, catch-up, pending_turn, recoverable final answers, session activity, the queue, structured results and goals. The frontend files cover the poll scheduler, the conditional client, each changed hook and component, and the logger. Playwright runs the assistant chat workspace on desktop, mobile Chromium and mobile WebKit (SessionsPage changed), including the new idle-polling and streaming render-count journeys, plus the queue, structured-results/Agent view, subagent, goal token, automation-callback and LAN-connection areas, and the real-Core LAN queue journey.",
-  "exclusions": "Full suites are not approved and are excluded. Selected files and nodes were compared against pristine origin/main; not selected because they fail there for reasons outside this change: tests/v3/test_api.py::test_goal_conversation_exists_before_its_first_message, ui/src/App.test.tsx and ui/src/pages/chatDraftNavigation.test.tsx (5 s timeouts on main), and both entry:durable-conversation-core real-Core entries (on main the fork click is intercepted by the next row on desktop and by the selected-text toolbar on WebKit 390). Five tests inside entry:assistant/desktop, entry:assistant/mobile-chromium and entry:assistant/mobile-webkit fail identically on origin/main (collapsed-thinking assertions and mocks that no longer match since #550/#551); they are named in the PR and not changed here. GET /subagents server cost (P3), harness session_activity (P9), stream follow/attach (P12), native Rust/Tauri and provider adapters are unchanged and not selected.",
+  "reason": "P13 lowers what an open conversation costs Core and the browser. Core: polled projections (/state, /catch-up, /pending-turn, /session-activity, the follow-up queue worker) read revision-keyed turn headers instead of whole turn payloads; /state, /queue, /session-activity and /structured-results support ETag/304; /pending-turn?view=status serves waiting polls; conversation results filter in SQL; settled follow-ups are bounded without request bodies and dormant queues are skipped; public-IP reads are cached per terminal. UI: polls pause in hidden tabs, back off when idle, send If-None-Match and keep state identity; the Agent view shares the page's results poll; transcript rows are memoized; the goal token estimate is incremental; the logger downgrades duplicate and browser-extension rejections. The Python files cover the new header/ETag/queue/public-IP contracts plus every existing file or node that exercises session state, catch-up, pending_turn, recoverable final answers, session activity, the queue, structured results and goals. The frontend files cover the poll scheduler, the conditional client, each changed hook and component, and the logger. Playwright runs the assistant chat workspace on desktop, mobile Chromium and mobile WebKit (SessionsPage changed), including the new idle-polling and streaming render-count journeys, plus the queue, structured-results/Agent view, subagent, goal token, automation-callback and LAN-connection areas,, the real-Core LAN queue journey, and (after rebasing onto #574, whose row text, UI-8 wait labels and callback-wait handling now live in the extracted ChatTranscriptRow and visible-poll code) the chat-stream-follow mocked and real-Core follow journeys.",
+  "exclusions": "Full suites are not approved and are excluded. Selected files and nodes were compared against pristine origin/main; not selected because they fail there for reasons outside this change: tests/v3/test_api.py::test_goal_conversation_exists_before_its_first_message, ui/src/App.test.tsx and ui/src/pages/chatDraftNavigation.test.tsx (5 s timeouts on main), and both entry:durable-conversation-core real-Core entries (on main the fork click is intercepted by the next row on desktop and by the selected-text toolbar on WebKit 390). GET /subagents server cost (P3), harness session_activity (P9), native Rust/Tauri and provider adapters are unchanged and not selected.",
   "expected_tests": {
-    "python": 273,
-    "frontend": 201,
+    "python": 282,
+    "frontend": 214,
     "native": 0,
-    "playwright": 218
+    "playwright": 260
   },
   "python_versions": [
     "3.12"
@@ -31,7 +31,8 @@
     "tests/v3/test_container_terminal.py::test_public_ip_polls_share_one_container_read_for_a_short_window",
     "tests/v3/test_container_terminal.py::test_public_ip_comes_from_the_live_project_terminal",
     "tests/v3/test_api.py::test_native_hook_outcomes_and_reconciliation_are_visible_through_chat_api",
-    "tests/v3/test_api.py::test_pending_turn_api_recovers_recorded_result_after_restart"
+    "tests/v3/test_api.py::test_pending_turn_api_recovers_recorded_result_after_restart",
+    "tests/v3/test_chat_stream_follow.py"
   ],
   "frontend": [
     "ui/src/api/visiblePoll.test.ts",
@@ -49,7 +50,10 @@
     "ui/src/diagnostics/loggerCancellation.test.ts",
     "ui/src/diagnostics/logger.test.ts",
     "ui/src/state/WorkspaceContext.recovery.test.tsx",
-    "ui/src/state/useCoreConnectionMonitor.test.tsx"
+    "ui/src/state/useCoreConnectionMonitor.test.tsx",
+    "ui/src/api/chatStreamFollow.test.ts",
+    "ui/src/pages/providerTurnFollow.test.ts",
+    "ui/src/components/CallbackWaitingStatus.test.tsx"
   ],
   "native": [],
   "playwright": [
@@ -73,6 +77,11 @@
     "entry:chat-provider-queue/desktop",
     "entry:chat-provider-queue/mobile-webkit",
     "entry:core-connection-resilience/desktop",
-    "entry:assistant-queue-core/assistant-real-desktop"
+    "entry:assistant-queue-core/assistant-real-desktop",
+    "entry:chat-stream-follow/desktop",
+    "entry:chat-stream-follow/mobile-chromium-ledger-390",
+    "entry:chat-stream-follow/mobile-webkit",
+    "entry:chat-stream-follow-core/assistant-real-desktop",
+    "entry:chat-stream-follow-core/assistant-real-webkit-390"
   ]
 }
