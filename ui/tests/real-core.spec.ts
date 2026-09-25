@@ -5395,6 +5395,12 @@ test("assistant upgrade real Core keeps a subagent wait attached and follows the
     await expect(page.getByRole("status", { name: "Waiting for subagents" })).toHaveCount(0);
     await expect(page.getByText("Callback ready")).toHaveCount(0);
     await expect.poll(() => modelStub.requests.some(body => JSON.stringify(body.messages ?? "").includes("CHILD_TASK") && !JSON.stringify(body.messages ?? "").includes("\"tool\"")), { timeout: 20_000 }).toBe(true);
+    await expect.poll(async () => {
+      const response = await api.get(`chat/sessions/${sessionId}/subagents`);
+      expect(response.ok(), await response.text()).toBe(true);
+      const body = await response.json() as { subagents: Array<{ reasoning_effort?: string }> };
+      return body.subagents[0]?.reasoning_effort;
+    }).toBe("low");
     await expectNoChatStreamFailure(page);
     const waitingReply = page.locator(".chat-message.assistant").last();
     await expect(waitingReply).toContainText("Waiting for delegated work.");

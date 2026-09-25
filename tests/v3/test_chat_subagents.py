@@ -1325,7 +1325,7 @@ def test_subagent_start_failure_leaves_no_child_conversation_or_duplicate_report
     asyncio.run(scenario())
 
 
-def test_subagents_take_the_conversation_reasoning_level_unless_told_otherwise(
+def test_subagents_default_to_low_unless_the_supervisor_selects_an_effort(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -1345,7 +1345,7 @@ def test_subagents_take_the_conversation_reasoning_level_unless_told_otherwise(
                     task="List the config files.",
                     name="Config",
                     context=None,
-                    reasoning_effort="low",
+                    reasoning_effort="high",
                 ),
                 _call(
                     "p3",
@@ -1382,15 +1382,15 @@ def test_subagents_take_the_conversation_reasoning_level_unless_told_otherwise(
             for request in provider.child_requests
         }
         assert child_efforts == {
-            "Map the API routes.": "high",
-            "List the config files.": "low",
+            "Map the API routes.": "low",
+            "List the config files.": "high",
         }
         records = {item.name: item for item in store.list_entities(ChatSubagent)}
         assert {name: item.reasoning_effort for name, item in records.items()} == {
-            "Routes": "high",
-            "Config": "low",
+            "Routes": "low",
+            "Config": "high",
         }
-        assert chat.subagents.view(records["Routes"])["reasoning_effort"] == "high"
+        assert chat.subagents.view(records["Routes"])["reasoning_effort"] == "low"
         parent = store.get(ChatTurn, parent_turn_id)
         assert [entry["status"] for entry in _history(store, parent)[:3]] == [
             "complete",
@@ -1399,7 +1399,10 @@ def test_subagents_take_the_conversation_reasoning_level_unless_told_otherwise(
         ]
         # The delegating model is told which level each child got.
         started = json.loads(_history(store, parent)[0]["provider_result"])
-        assert started["reasoning_effort"] == "high"
+        assert started["reasoning_effort"] == "low"
+        assert "reasoning_effort on start_subagent" in (
+            provider.parent_requests[0].instructions or ""
+        )
         await chat.shutdown()
 
     asyncio.run(scenario())
