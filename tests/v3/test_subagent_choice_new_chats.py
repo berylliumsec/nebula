@@ -135,9 +135,9 @@ def test_goal_conversation_starts_with_the_composer_subagent_choice(tmp_path):
         assert turn.request_snapshot.get("allow_subagents") is True
         assert turn.request_snapshot.get("max_active_subagents") == 2
         assert (
-            resolve_request_snapshot(store, turn.request_snapshot)["model_request"][
-                "reasoning_effort"
-            ]
+            resolve_request_snapshot(
+                store, turn.request_snapshot, session_id=turn.session_id
+            )["model_request"]["reasoning_effort"]
             == "high"
         )
         # The turn recorded its settings back without unchecking the box.

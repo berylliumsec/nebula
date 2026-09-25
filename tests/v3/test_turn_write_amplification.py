@@ -20,8 +20,12 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import update
 
+from fastapi.testclient import TestClient
+
 from nebula.v3 import chat as chat_module
 from nebula.v3 import workspace_provenance
+from nebula.v3.api import create_app
+from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.chat import (
     ChatCompletionRequest,
     ChatRequestMessage,
@@ -294,7 +298,9 @@ def test_routing_steps_rewrite_only_the_turn_and_goal_fields_that_change(
         "mcp_catalog_snapshot",
         "mcp_snapshot",
     }
-    resolved = resolve_request_snapshot(store, final.request_snapshot)
+    resolved = resolve_request_snapshot(
+        store, final.request_snapshot, session_id=final.session_id
+    )
     assert resolved["mcp_catalog_snapshot"] == CATALOG
     assert resolved["model_request"] == MODEL_REQUEST
 
@@ -396,9 +402,9 @@ def test_snapshot_parts_are_shared_in_a_conversation_and_deleted_with_it(tmp_pat
     assert parts_of("first") == []
     survivor = store.get(ChatTurn, "c")
     assert (
-        resolve_request_snapshot(store, survivor.request_snapshot)[
-            "mcp_catalog_snapshot"
-        ]
+        resolve_request_snapshot(
+            store, survivor.request_snapshot, session_id=survivor.session_id
+        )["mcp_catalog_snapshot"]
         == CATALOG
     )
 
@@ -425,11 +431,88 @@ def test_altered_or_missing_snapshot_part_is_reported_as_corruption(tmp_path):
             )
         )
     with pytest.raises(CorruptRecordError, match="integrity"):
-        resolve_request_snapshot(store, compact)
+        resolve_request_snapshot(store, compact, session_id=session.id)
     with pytest.raises(CorruptRecordError, match="missing"):
         resolve_request_snapshot(
-            store, {SNAPSHOT_PARTS_KEY: {"model_request": "absent-part"}}
+            store,
+            {SNAPSHOT_PARTS_KEY: {"model_request": "absent-part"}},
+            session_id=session.id,
         )
+
+
+def test_a_part_resolves_only_for_the_conversation_that_stored_it(tmp_path):
+    """A reference written into another conversation's goal or turn reads nothing."""
+
+    store = NebulaStore(tmp_path / "foreign-part.db")
+    owner = _conversation(store, "owner")
+    other = _conversation(store, "other")
+    goals = ChatGoalService(store)
+    owner_goal = goals.create(
+        owner.id, GoalCreate(objective="Review.", completion_criteria=["done"])
+    )
+    owner_goal = goals.replace_skills(
+        owner.id, expected_revision=owner_goal.revision, snapshots=_skills(1)
+    )
+    compact, parts = split_request_snapshot(
+        {"mcp_catalog_snapshot": CATALOG},
+        engagement_id="project",
+        session_id=owner.id,
+    )
+    with store.transaction() as transaction:
+        stage_snapshot_parts(transaction, parts)
+    # The goal CRUD route accepts any skill entry; one naming the owner's
+    # part must not carry the owner's instructions into this conversation.
+    foreign = store.create(
+        ChatGoal(
+            engagement_id="project",
+            session_id=other.id,
+            objective="Borrow.",
+            completion_criteria=["done"],
+            skill_snapshots=owner_goal.skill_snapshots,
+        )
+    )
+
+    assert goals.skill_snapshots(owner_goal) == _skills(1)
+    with pytest.raises(CorruptRecordError, match="another conversation"):
+        goals.skill_snapshots(foreign)
+    with pytest.raises(CorruptRecordError, match="another conversation"):
+        resolve_request_snapshot(store, compact, session_id=other.id)
+
+
+def test_snapshot_parts_have_no_generic_record_routes(tmp_path):
+    """Parts are read only through the turn or goal that owns them."""
+
+    store = NebulaStore(tmp_path / "routes.db")
+    session = _conversation(store)
+    _, parts = split_request_snapshot(
+        {"mcp_catalog_snapshot": CATALOG},
+        engagement_id="project",
+        session_id=session.id,
+    )
+    with store.transaction() as transaction:
+        stage_snapshot_parts(transaction, parts)
+    app = create_app(
+        store,
+        artifact_store=ArtifactStore(tmp_path / "artifacts"),
+        auth_token="test-token",
+    )
+    paths = {getattr(route, "path", "") for route in app.routes}
+
+    assert not [path for path in paths if "snapshot-parts" in path]
+    assert not [path for path in paths if "snapshot_parts" in path]
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer test-token"}
+    base = "/api/v1/chat-snapshot-parts"
+    assert client.get(base, headers=headers).status_code == 404
+    assert client.get(f"{base}/{parts[0].id}", headers=headers).status_code == 404
+    assert (
+        client.post(base, headers=headers, json=parts[0].model_dump(mode="json"))
+    ).status_code in {404, 405}
+    assert client.delete(f"{base}/{parts[0].id}", headers=headers).status_code in {
+        404,
+        405,
+    }
+    assert store.get(ChatSnapshotPart, parts[0].id) == parts[0]
 
 
 def test_value_written_inline_after_the_split_supersedes_its_part(tmp_path):
@@ -444,9 +527,9 @@ def test_value_written_inline_after_the_split_supersedes_its_part(tmp_path):
         stage_snapshot_parts(transaction, parts)
     newer = {"model": "model-a", "messages": [{"role": "user", "content": "newer"}]}
     assert (
-        resolve_request_snapshot(store, {**compact, "model_request": newer})[
-            "model_request"
-        ]
+        resolve_request_snapshot(
+            store, {**compact, "model_request": newer}, session_id=session.id
+        )["model_request"]
         == newer
     )
 

@@ -111,13 +111,21 @@ def split_request_snapshot(
     return compact, parts
 
 
-def load_snapshot_part(store: NebulaStore, part_id: str) -> Any:
-    """The verified value of one part; a missing or altered part is corruption."""
+def load_snapshot_part(store: NebulaStore, part_id: str, *, session_id: str) -> Any:
+    """The verified value of one of ``session_id``'s parts.
+
+    A missing or altered part, or one stored for another conversation, is
+    corruption: an owner only ever references parts of its own conversation.
+    """
 
     try:
         part = store.get(ChatSnapshotPart, part_id)
     except NotFoundError as exc:
         raise CorruptRecordError(f"chat snapshot part is missing: {part_id}") from exc
+    if part.session_id != session_id:
+        raise CorruptRecordError(
+            f"chat snapshot part belongs to another conversation: {part_id}"
+        )
     if hashlib.sha256(_canonical(part.value)).hexdigest() != part.sha256:
         raise CorruptRecordError(
             f"chat snapshot part failed its integrity check: {part_id}"
@@ -126,9 +134,9 @@ def load_snapshot_part(store: NebulaStore, part_id: str) -> Any:
 
 
 def resolve_request_snapshot(
-    store: NebulaStore, snapshot: Mapping[str, Any]
+    store: NebulaStore, snapshot: Mapping[str, Any], *, session_id: str
 ) -> dict[str, Any]:
-    """A turn's request snapshot with every split-out value read back."""
+    """A request snapshot of ``session_id``'s turn with split-out values read back."""
 
     resolved = {
         key: value for key, value in snapshot.items() if key != SNAPSHOT_PARTS_KEY
@@ -138,7 +146,9 @@ def resolve_request_snapshot(
         return resolved
     for key, part_id in references.items():
         if key not in resolved:
-            resolved[key] = load_snapshot_part(store, str(part_id))
+            resolved[key] = load_snapshot_part(
+                store, str(part_id), session_id=session_id
+            )
     return resolved
 
 
@@ -177,9 +187,9 @@ def split_skill_snapshots(
 
 
 def resolve_skill_snapshots(
-    store: NebulaStore, entries: Iterable[Mapping[str, Any]]
+    store: NebulaStore, entries: Iterable[Mapping[str, Any]], *, session_id: str
 ) -> list[dict[str, Any]]:
-    """Full skill snapshots for goal entries written split or inline."""
+    """Full skill snapshots for ``session_id``'s goal entries, split or inline."""
 
     resolved: list[dict[str, Any]] = []
     for entry in entries:
@@ -187,7 +197,7 @@ def resolve_skill_snapshots(
         if "instructions" in entry or not isinstance(part_id, str):
             resolved.append(dict(entry))
             continue
-        value = load_snapshot_part(store, part_id)
+        value = load_snapshot_part(store, part_id, session_id=session_id)
         if not isinstance(value, dict):
             raise CorruptRecordError(f"skill snapshot part is not an object: {part_id}")
         resolved.append(value)

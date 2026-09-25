@@ -573,6 +573,8 @@ CUSTOM_RESOURCES = {
     "action_intents",
     "automation_policies",
     "chat_turns",
+    # Write-once values a turn or goal resumes from; only their owners read them.
+    "chat_snapshot_parts",
     "context_snapshots",
     "library_items",
     "operator_profiles",

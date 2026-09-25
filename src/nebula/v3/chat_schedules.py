@@ -175,7 +175,9 @@ class ChatScheduleService:
         turns = self.store.list_session_entities(ChatTurn, session_id)
         latest = next((item for item in reversed(turns) if item.request_snapshot), None)
         snapshot = (
-            resolve_request_snapshot(self.store, latest.request_snapshot)
+            resolve_request_snapshot(
+                self.store, latest.request_snapshot, session_id=latest.session_id
+            )
             if latest is not None
             else {}
         )

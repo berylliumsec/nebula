@@ -4088,7 +4088,9 @@ class ChatService:
         skill_snapshots = [
             SkillSnapshot.model_validate(item)
             for item in (
-                resolve_skill_snapshots(self.store, goal.skill_snapshots)
+                resolve_skill_snapshots(
+                    self.store, goal.skill_snapshots, session_id=goal.session_id
+                )
                 if goal is not None
                 else []
             )
@@ -8199,7 +8201,9 @@ class ChatService:
             part_id = str(item["part_id"])
             text = self._sealed_reasoning.get(part_id)
             if text is None:
-                value = load_snapshot_part(self.store, part_id)
+                value = load_snapshot_part(
+                    self.store, part_id, session_id=turn.session_id
+                )
                 text = value if isinstance(value, str) else ""
                 self._sealed_reasoning[part_id] = text
                 while len(self._sealed_reasoning) > 64:
@@ -9120,7 +9124,9 @@ class ChatService:
             raise ChatConfigurationError("the chat provider is no longer enabled")
         provider = self.provider_factory(profile)
         # The write-once request values live beside the turn row.
-        snapshot = resolve_request_snapshot(self.store, turn.request_snapshot)
+        snapshot = resolve_request_snapshot(
+            self.store, turn.request_snapshot, session_id=turn.session_id
+        )
         model_request = ModelRequest.model_validate(snapshot.get("model_request"))
         automatic_note = (
             recovery.get("automatic_note") if isinstance(recovery, dict) else None
@@ -10633,7 +10639,9 @@ class ChatService:
                 # The copy's skills are stored in the fork, which outlives
                 # the source conversation if that is deleted.
                 skill_entries, skill_parts = split_skill_snapshots(
-                    resolve_skill_snapshots(self.store, goal.skill_snapshots),
+                    resolve_skill_snapshots(
+                        self.store, goal.skill_snapshots, session_id=goal.session_id
+                    ),
                     engagement_id=fork.engagement_id,
                     session_id=fork.id,
                 )

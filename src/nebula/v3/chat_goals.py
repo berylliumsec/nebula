@@ -486,7 +486,9 @@ class ChatGoalService:
         # The child's skills are stored in its own conversation, which may
         # outlive the parent's.
         skill_entries, skill_parts = split_skill_snapshots(
-            resolve_skill_snapshots(self.store, parent.skill_snapshots),
+            resolve_skill_snapshots(
+                self.store, parent.skill_snapshots, session_id=parent.session_id
+            ),
             engagement_id=parent.engagement_id,
             session_id=child_session.id,
         )
@@ -610,7 +612,9 @@ class ChatGoalService:
 
         return [
             SkillSnapshot.model_validate(item)
-            for item in resolve_skill_snapshots(self.store, goal.skill_snapshots)
+            for item in resolve_skill_snapshots(
+                self.store, goal.skill_snapshots, session_id=goal.session_id
+            )
         ]
 
 

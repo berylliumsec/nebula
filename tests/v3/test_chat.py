@@ -1088,9 +1088,9 @@ def test_provider_skill_is_snapshotted_on_turn_and_running_goal(tmp_path, monkey
     )
 
     assert prepared.turn is not None
-    snapshot = resolve_request_snapshot(store, prepared.turn.request_snapshot)[
-        "skill_snapshots"
-    ][0]
+    snapshot = resolve_request_snapshot(
+        store, prepared.turn.request_snapshot, session_id=prepared.turn.session_id
+    )["skill_snapshots"][0]
     assert snapshot["path"] == str(skill_path.resolve())
     assert snapshot["instructions"] == "Review only changed files."
     assert snapshot["sha256"] in (prepared.model_request.instructions or "")
@@ -1116,9 +1116,9 @@ def test_provider_skill_is_snapshotted_on_turn_and_running_goal(tmp_path, monkey
         )
     )
     assert continued.turn is not None
-    assert resolve_request_snapshot(store, continued.turn.request_snapshot)[
-        "skill_snapshots"
-    ] == [snapshot]
+    assert resolve_request_snapshot(
+        store, continued.turn.request_snapshot, session_id=continued.turn.session_id
+    )["skill_snapshots"] == [snapshot]
     assert "Review only changed files." in (continued.model_request.instructions or "")
     assert "Changed after start." not in (continued.model_request.instructions or "")
 
