@@ -1,10 +1,10 @@
 {
-  "change_digest": "343966056a530d0a3b25b9eb85dfca9d1a3d9b0dccacbe2fd93a4e15fa8cb9b2",
-  "reviewed_by": "Claude focused review for queue-context-refusals",
-  "reason": "Backend-only fixes for three audit leftovers. (1) provider_turn_queue rows now follow their turn when it ends outside admission release (stop while parked, approval stop, supervisor stop, failed unresumable wait, cancel before admission), startup and the recovery tick close open rows of ended or missing turns in SQL off the event loop, recover() releases running rows as the turn stands, and _complete reads status in SQL. A turn whose admission or execution claim fails in _run_provider_turn now fails with an actionable error and a closed row (a restart-recovery resume returns to interrupted with its automatic retry pending, row parked); _resume_stopped_turn shares that retry helper (test_chat restart-recovery tests). Covered by the scheduler/admission tests (test_chat_throughput), restart recovery and startup-robustness tests (test_restart_recovery_lifecycle, test_startup_unreadable_rows), stop/cancel and turn-outcome paths (test_turn_outcome_history, test_chat, test_chat_tool_loop, test_native_hook_turn_ends), approval park/resume (test_approval_continuation) and subagent waits and failures (test_chat_subagents, test_subagent_delivery). (2) ExecutionAI._context reads one execution's output events through replay_operation_events (new event_types filter): test_execution_ai, test_storage. (3) CompanionBroker marks schema/request-model/region refusals before execution: test_browser_companion, test_tool_failures, and test_harnesses for the harness gateway that calls the same broker.",
-  "exclusions": "Full suites are not approved and are excluded. No UI, native or Playwright changes: frontend, native and playwright are empty because no ui/ or Rust file changed and no operator-visible control or copy changed (the queue row state is not shown in the UI; queue position and metrics only count queued rows). Mission tests are not selected: missions never attach the conversation browser companion and agent_tooling's before-execution handling is unchanged. test_executions.py is not selected: execution event writing is unchanged; the new read is covered by test_execution_ai. python_browser is true because tests/v3/test_browser_companion.py::test_real_chromium_capture_retains_fields_and_rejects_changed_document launches Chromium.",
+  "change_digest": "899be597200905805a22b67e45f50c5fb8fb0504c8afa0be14749ba91812fcaa",
+  "reviewed_by": "Claude focused review for mission-checkpoint-growth",
+  "reason": "MIS-8: Mission LangGraph checkpoints grew with the square of a task's turns (~34 MB persisted / ~67 MB DB file per 100 turns) because AsyncSqliteSaver keeps every superstep's checkpoint and each carries the whole MissionState. LatestCheckpointSqliteSaver.aput now stores the same row and, in one transaction, deletes this thread's older checkpoints and writes; MissionRuntime runs the graph with durability=sync and releases a finished thread; MissionService discards finished runs' checkpoints on worker end, on stop, and at startup. The selection covers the mission graph, specialist replay/approval, restart recovery and the row-horizon guard on the two edited modules. tests/v3/test_mission_checkpoint_retention.py is new: it pins the bounded storage and proves restart recovery is byte-for-byte unchanged by pruning across four crash points (between supersteps, during a routing call, during a tool effect, after completion) by comparing the stock saver against the pruning saver, and pins the service cleanup. test_orchestration, test_missions, test_specialist_tool_batches and test_specialist_routing_tolerance exercise the graph, checkpointing and #571's recovery/approval/batch contract that this change must preserve. test_row_horizon guards missions.py for unpaged reads (edited). Three single nodes cover the mission-start API path (test_automation_runtime), the analysis-mission specialist (test_model_output_budget) and the CLI mission runtime (test_cli), all of which route through the edited MissionRuntime/MissionService. Real-Core check ran on a scratch Core (branch build, port 42633, OpenRouter deepseek/deepseek-v4.1-flash, host mode): an analysis mission completed keeping at most one checkpoint and zero after finishing; a command mission crashed mid-run (SIGKILL with a checkpoint present) recovered on restart (recovery generation 1), ran each command exactly once, finished terminal on its token budget, and released its checkpoint to zero, with no saver errors in the Core log.",
+  "exclusions": "Full suites are not approved and are excluded. This is a backend-only change to Mission checkpoint persistence (src/nebula/v3/orchestration.py, src/nebula/v3/missions.py) with no UI, API-shape, mobile, LAN or migration surface, so frontend, native and Playwright layers have no relevant tests and are empty. The load-sensitive host test tests/v3/test_automation_runtime.py::test_host_scope_expiry_closes_running_commands is not selected: it is unrelated to checkpoint persistence and fails identically on pristine origin/main under concurrent load (documented in the 2026-09-24 batch); only the mission-degradation node from that file is relevant and is selected. Chat/harness command paths share the broker but their persistence is unchanged by this change and covered elsewhere.",
   "expected_tests": {
-    "python": 467,
+    "python": 91,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -12,24 +12,18 @@
   "python_versions": [
     "3.12"
   ],
-  "python_browser": true,
+  "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_throughput.py",
-    "tests/v3/test_restart_recovery_lifecycle.py",
-    "tests/v3/test_startup_unreadable_rows.py",
-    "tests/v3/test_turn_outcome_history.py",
-    "tests/v3/test_chat_subagents.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_native_hook_turn_ends.py",
-    "tests/v3/test_approval_continuation.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_subagent_delivery.py",
-    "tests/v3/test_execution_ai.py",
-    "tests/v3/test_storage.py",
-    "tests/v3/test_browser_companion.py",
-    "tests/v3/test_tool_failures.py",
-    "tests/v3/test_harnesses.py"
+    "tests/v3/test_mission_checkpoint_retention.py",
+    "tests/v3/test_orchestration.py",
+    "tests/v3/test_missions.py",
+    "tests/v3/test_specialist_tool_batches.py",
+    "tests/v3/test_specialist_routing_tolerance.py",
+    "tests/v3/test_row_horizon.py",
+    "tests/v3/test_automation_runtime.py::test_default_mission_degrades_to_analysis_when_command_runtime_is_unprepared",
+    "tests/v3/test_model_output_budget.py::test_analysis_mission_specialist_uses_the_model_output_default",
+    "tests/v3/test_cli.py::test_cli_run_uses_an_explicit_vllm_profile_without_tools"
   ],
   "frontend": [],
   "native": [],
