@@ -1189,3 +1189,76 @@ def test_conversation_browser_is_found_after_a_page_of_project_sessions(tmp_path
 
     assert attached_session(store, project.id, chat.id) == session.id
     assert attached_session(store, project.id, "other-chat") is None
+
+
+def test_detached_browser_is_an_unavailable_resource_to_a_provider_chat(tmp_path):
+    """The provider path refuses a detached browser as the harness gateway does."""
+
+    import dataclasses
+    import json
+
+    from nebula.v3.browser_companion_tools import CompanionBroker
+    from nebula.v3.domain import (
+        BrowserIdentity as Identity,
+        BrowserSession as Browser,
+        ChatTurn,
+        ChatTurnStatus,
+        ToolCall as PersistedToolCall,
+    )
+    from nebula.v3.providers import ToolCall
+    from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
+
+    arguments = {"operation": "tabs", "url": "https://example.test/"}
+    store, service, prepared, provider = _prepared(
+        tmp_path,
+        [
+            _response(
+                calls=[
+                    ToolCall(id="call-1", name="browser.companion", arguments=arguments)
+                ]
+            ),
+            _response(text="The browser is no longer attached."),
+        ],
+        RecordingBroker(),
+    )
+    identity = store.create(Identity(engagement_id="project", name="Browser"))
+    browser = store.create(
+        Browser(
+            engagement_id="project",
+            identity_id=identity.id,
+            name="Browser",
+            # Attached to another conversation: the operator moved it.
+            metadata={
+                "browser_companion_version": 1,
+                "assistant_paused": False,
+                "conversation_id": "another-conversation",
+            },
+        )
+    )
+    broker = CompanionBroker(store, browser.id)
+    prepared.tool_components = dataclasses.replace(
+        prepared.tool_components,
+        broker=broker,
+        specs={broker.spec.name: broker.spec},
+    )
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == "The browser is no longer attached."
+    turn = store.get(ChatTurn, "turn")
+    assert turn.status == ChatTurnStatus.COMPLETE
+    [entry] = turn.tool_history
+    assert entry["name"] == "browser.companion" and entry["status"] == "failed"
+    failure = json.loads(entry["provider_result"])
+    # Refused before anything ran (#520 contract): an unavailable resource,
+    # not an argument to correct or an operation with unknown effects.
+    assert failure["schema"] == "nebula.tool-failure/v1"
+    assert failure["category"] == "unavailable_resource"
+    assert failure["side_effects"] == "none"
+    assert failure["retry_safe"] is False
+    [replayed] = provider.requests[1].tool_results
+    assert replayed.is_error is True
+    assert replayed.output["category"] == "unavailable_resource"
+    # Nothing reached the browser or its ledger.
+    assert broker.service.actions(browser.id) == []
+    assert store.list_entities(PersistedToolCall) == []
