@@ -17,7 +17,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable, Iterator
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, TypeVar, cast
 from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -84,6 +84,63 @@ class PolicyDenied(ToolBrokerError):
     def __init__(self, decision: PolicyDecision) -> None:
         super().__init__(decision.reason)
         self.decision = decision
+
+
+class ToolNotPermitted(PolicyDenied):
+    """A call this caller or conversation may not make, refused before it ran.
+
+    Not an argument error: the same call stays refused until the operator
+    changes the setting, so the model must not repeat it.
+    """
+
+    def __init__(self, detail: str, *, rule: str) -> None:
+        super().__init__(
+            PolicyDecision(effect=PolicyEffect.DENY, reason=detail, rule=rule)
+        )
+        self._nebula_before_execution = True
+
+
+class ToolLimitReached(ToolBrokerError):
+    """A well-formed call refused before it ran, at an operator or Core limit.
+
+    ``resource``, ``maximum`` and ``current`` are Core's own numbers; the
+    failure contract hands them to the model, never this message.
+    """
+
+    def __init__(
+        self, detail: str, *, resource: str, maximum: int, current: int
+    ) -> None:
+        super().__init__(detail)
+        self.resource = resource
+        self.maximum = maximum
+        self.current = current
+        self._nebula_before_execution = True
+
+    @property
+    def limit(self) -> dict[str, Any]:
+        return {
+            "resource": self.resource,
+            "maximum": self.maximum,
+            "current": self.current,
+        }
+
+
+class CapacityReached(ToolLimitReached):
+    """Running work holds every slot; the same call succeeds once one frees."""
+
+
+class BudgetExhausted(ToolLimitReached):
+    """An allowance the call needs is used up; waiting does not restore it."""
+
+
+_Refusal = TypeVar("_Refusal", bound=BaseException)
+
+
+def refused_before_execution(error: _Refusal) -> _Refusal:
+    """Mark ``error`` as a refusal that happened before the call ran."""
+
+    setattr(error, "_nebula_before_execution", True)
+    return error
 
 
 class ApprovalRequired(ToolBrokerError):
@@ -2121,6 +2178,8 @@ __all__ = [
     "AnalysisTool",
     "AmbiguousToolState",
     "ApprovalRequired",
+    "BudgetExhausted",
+    "CapacityReached",
     "IdempotencyBehavior",
     "InvalidToolArguments",
     "PolicyDenied",
@@ -2129,9 +2188,12 @@ __all__ = [
     "ToolBroker",
     "ToolExecutionResult",
     "ToolInvocation",
+    "ToolLimitReached",
+    "ToolNotPermitted",
     "ToolPlugin",
     "ToolRegistry",
     "ToolSpec",
     "UnknownTool",
     "invocation_digest",
+    "refused_before_execution",
 ]

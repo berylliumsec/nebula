@@ -13,7 +13,14 @@ from uuid import uuid4
 from jsonschema.exceptions import ValidationError
 
 from .diagnostics import get_diagnostics, record_diagnostic
-from .tools import InvalidToolArguments, PolicyDenied, ToolSpec
+from .tools import (
+    BudgetExhausted,
+    CapacityReached,
+    InvalidToolArguments,
+    PolicyDenied,
+    ToolLimitReached,
+    ToolSpec,
+)
 
 FAILURE_SCHEMA = "nebula.tool-failure/v1"
 _SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -173,8 +180,16 @@ def tool_failure(
         field = "tool_call_id"
     timeout = isinstance(error, TimeoutError)
     cancelled = type(error).__name__ == "CancelledError"
+    # A limit refusal happens before the call runs whichever path reports it.
+    limited = isinstance(error, ToolLimitReached)
+    capacity = isinstance(error, CapacityReached)
+    exhausted = isinstance(error, BudgetExhausted)
     category = (
-        "permission_denied"
+        "capacity_reached"
+        if capacity
+        else "budget_exhausted"
+        if exhausted
+        else "permission_denied"
         if denied
         else "invalid_arguments"
         if invalid
@@ -188,10 +203,20 @@ def tool_failure(
         if isinstance(error, (ConnectionError, OSError))
         else "execution_failed"
     )
-    before_execution = phase == "before_execution"
+    before_execution = phase == "before_execution" or limited
     no_effects = before_execution or read_only_retrieval
     side_effects = "none" if no_effects else "unknown"
-    if hash_as_artifact:
+    if capacity:
+        problem = "The limit on how much of this work may run at once is reached."
+        action = "Wait for running work to finish, then retry this call."
+    elif exhausted:
+        problem = "An allowance this call needs is used up."
+        action = (
+            "Do not retry this call; waiting does not restore the allowance. "
+            "Continue with the tools and results you have, or tell the operator "
+            "what the limit stopped."
+        )
+    elif hash_as_artifact:
         problem = "artifact_id contains a SHA-256 digest, not an artifact receipt ID."
         action = "Use the artifact_id from an authorized tool result receipt; sha256 is a separate digest field."
     elif invalid:
@@ -279,8 +304,11 @@ def tool_failure(
         "schema_truncated": not inline_schema,
         "schema_reference": schema_reference,
         "next_action": action,
-        "retry_safe": no_effects and not denied and not missing,
+        "retry_safe": no_effects and not denied and not missing and not exhausted,
         "diagnostic_reference": reference,
         "diagnostic_available": captured,
     }
+    if isinstance(error, ToolLimitReached):
+        # Core's own numbers, the only detail of a refusal the model reads.
+        result["limit"] = error.limit
     return json.loads(json.dumps(result, ensure_ascii=False, default=str))

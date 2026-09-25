@@ -1017,7 +1017,8 @@ def test_subagent_gets_the_ssh_hosts_of_a_parent_whose_snapshot_is_split(tmp_pat
     """The hosts a child inherits are read back from the parent's snapshot part."""
 
     from nebula.v3.domain import SshEnvironment
-    from nebula.v3.tools import InvalidToolArguments, ToolCallOrigin, ToolInvocation
+    from nebula.v3.chat_subagents import SubagentNotStarted
+    from nebula.v3.tools import ToolCallOrigin, ToolInvocation
     from tests.v3.test_chat_subagent_lifecycle import _session
     from tests.v3.test_chat_subagents import RoutedProvider, _setup
 
@@ -1054,7 +1055,7 @@ def test_subagent_gets_the_ssh_hosts_of_a_parent_whose_snapshot_is_split(tmp_pat
             raise RuntimeError("stop before the provider")
 
         chat.prepare_async = capture  # type: ignore[method-assign]
-        with pytest.raises(InvalidToolArguments):
+        with pytest.raises(SubagentNotStarted):
             await chat.subagents.start(
                 ToolInvocation(
                     engagement_id="project",

@@ -22,7 +22,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.harnesses import HarnessRuntimeService
 from nebula.v3.storage import NebulaStore
-from nebula.v3.tools import InvalidToolArguments, ToolInvocation
+from nebula.v3.tools import InvalidToolArguments, ToolInvocation, ToolNotPermitted
 
 
 def _session(
@@ -206,7 +206,9 @@ def test_sender_must_still_be_an_opted_in_main_agent(tmp_path):
     sender = _session(store, project.id, "Coordinator", allow_agent_messaging=False)
     _session(store, project.id, "Reviewer")
 
-    with pytest.raises(InvalidToolArguments, match="turned off"):
+    # A setting refuses the call, not its arguments: the model reads
+    # permission_denied and does not repeat it.
+    with pytest.raises(ToolNotPermitted, match="turned off"):
         AgentMessageService(store).list_output(_invocation(sender, tmp_path))
 
 

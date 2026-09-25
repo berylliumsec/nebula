@@ -596,12 +596,13 @@ def test_subagent_tools_follow_the_chat_setting(tmp_path):
             expected_revision=saved.revision,
         )
 
-        # A turn without the setting refuses the tools even on an old catalog.
+        # A turn without the setting refuses the tools even on an old catalog:
+        # the session no longer offers them, so the call names no tool.
+        refused: dict = {}
+
         async def stale(connection: ScriptedConnection, prompt: str) -> str:
             del prompt
-            response = await connection.call("subagent.start", task="Nope.")
-            assert response["isError"] is True
-            assert "turned off" in response["content"][0]["text"]
+            refused.update(await connection.call("subagent.start", task="Nope."))
             return "Refused."
 
         _, _, off_again = _prepare(
@@ -614,6 +615,8 @@ def test_subagent_tools_follow_the_chat_setting(tmp_path):
         )
         adapter.script = stale
         await runtime.start_chat_turn(off_again.id)
+        assert refused["isError"] is True
+        assert refused["structuredContent"]["category"] == "unavailable_tool"
         assert len(adapter.opens) == 3
         assert not SUBAGENT_TOOLS & {
             item["name"] for item in adapter.opens[2].gateway_tools
@@ -658,14 +661,25 @@ def test_operator_limit_reaches_the_harness_and_is_enforced(tmp_path):
         )
         await runtime.start_chat_turn(turn.id)
         # The refusal is a schema-guided failure (#520), which carries no
-        # Core error text; the limit reaches the model in its instructions.
-        # Which failure category a capacity refusal gets is not settled by
-        # docs/TOOL_FAILURE_CONTRACT.md, so it is not pinned here.
+        # Core error text: a capacity refusal says to wait for running work
+        # and retry, with the operator's limit as Core's own numbers.
         refused = seen["refused"]
         assert refused["isError"] is True
-        assert refused["structuredContent"]["schema"] == "nebula.tool-failure/v1"
-        assert refused["structuredContent"]["tool"] == "subagent.start"
-        assert refused["structuredContent"]["side_effects"] == "none"
+        failure = refused["structuredContent"]
+        assert failure["schema"] == "nebula.tool-failure/v1"
+        assert failure["tool"] == "subagent.start"
+        assert failure["category"] == "capacity_reached"
+        assert failure["side_effects"] == "none"
+        assert failure["retry_safe"] is True
+        assert failure["next_action"] == (
+            "Wait for running work to finish, then retry this call."
+        )
+        assert failure["limit"] == {
+            "resource": "running_subagents",
+            "maximum": 1,
+            "current": 1,
+        }
+        assert "running at once" not in refused["content"][0]["text"]
         (record,) = store.list_entities(ChatSubagent)
         assert "at most 1 run at once" in instructions(adapter.opens[0])
 

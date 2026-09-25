@@ -90,7 +90,17 @@ from .providers import REASONING_EFFORTS, ReasoningEffort
 from .runtime_platform import RuntimeToolComponents
 from .storage import ConflictError, NotFoundError, StoreTransaction
 from .tool_results import MAX_EXCERPT_BYTES, model_result_bytes
-from .tools import InvalidToolArguments, ToolExecutionResult, ToolInvocation, ToolSpec
+from .tools import (
+    BudgetExhausted,
+    CapacityReached,
+    InvalidToolArguments,
+    ToolBrokerError,
+    ToolExecutionResult,
+    ToolInvocation,
+    ToolNotPermitted,
+    ToolSpec,
+    refused_before_execution,
+)
 
 if TYPE_CHECKING:
     from .chat import ChatService
@@ -268,6 +278,14 @@ _TERMINAL_TURN_STATUS = {
 }
 _DETAIL_ARGUMENTS = ("command", "path", "query", "url", "target", "pattern", "name")
 _FAILED_STEP_STATUSES = frozenset({"failed", "denied", "cancelled", "timed_out"})
+
+
+class SubagentNotStarted(ToolBrokerError):
+    """Core tried to start a subagent or its next round and could not.
+
+    Not an argument error: the model reads the failure contract's
+    ``execution_failed`` guidance and checks the subagents' state.
+    """
 
 
 class SubagentRoundSuperseded(Exception):
@@ -890,9 +908,13 @@ class SubagentService:
         try:
             record = self.get(subagent_id)
         except NotFoundError as exc:
-            raise InvalidToolArguments(f"unknown subagent id {subagent_id!r}") from exc
+            raise refused_before_execution(
+                InvalidToolArguments(f"unknown subagent id {subagent_id!r}")
+            ) from exc
         if record.parent_session_id != parent_session_id:
-            raise InvalidToolArguments(f"unknown subagent id {subagent_id!r}")
+            raise refused_before_execution(
+                InvalidToolArguments(f"unknown subagent id {subagent_id!r}")
+            )
         return record
 
     @staticmethod
@@ -1506,19 +1528,29 @@ class SubagentService:
     ) -> ChatSubagent:
         from .chat import ChatCompletionRequest, ChatRequestMessage
 
+        # Every refusal below comes before anything is stored, so each one
+        # says it had no effect; the failure contract classifies it by type.
         if not invocation.chat_turn_id:
-            raise InvalidToolArguments("subagents require a provider chat turn")
+            raise ToolNotPermitted(
+                "subagents require a provider chat turn", rule="subagents.chat_turn"
+            )
         parent_turn = self.store.get(ChatTurn, invocation.chat_turn_id)
         parent_session = self.store.get(ChatSession, parent_turn.session_id)
         if is_subagent_session(parent_session):
-            raise InvalidToolArguments("subagents cannot start their own subagents")
+            raise ToolNotPermitted(
+                "subagents cannot start their own subagents", rule="subagents.depth"
+            )
         task = task.strip()
         if not task:
-            raise InvalidToolArguments("task must describe the delegated work")
+            raise refused_before_execution(
+                InvalidToolArguments("task must describe the delegated work")
+            )
         requested_effort = _known_effort(reasoning_effort)
         if reasoning_effort is not None and requested_effort is None:
-            raise InvalidToolArguments(
-                "reasoning_effort must be one of " + ", ".join(REASONING_EFFORTS)
+            raise refused_before_execution(
+                InvalidToolArguments(
+                    "reasoning_effort must be one of " + ", ".join(REASONING_EFFORTS)
+                )
             )
         label = " ".join((name or task).split())[:80] or "Subagent"
         siblings = self.for_session(parent_session.id)
@@ -1530,19 +1562,15 @@ class SubagentService:
                 return existing
         snapshot = parent_turn.request_snapshot
         limit = self._limit(parent_turn)
-        if limit is not None and len(self.active(siblings)) >= limit:
-            raise InvalidToolArguments(
-                f"the operator allows {limit} running at once and {limit} "
-                "already are; wait for one to finish"
-            )
         mcp_server_ids = [
             item for item in snapshot.get("mcp_server_ids", []) if isinstance(item, str)
         ]
         if parent_turn.backend == ChatBackend.HARNESS:
             setting = snapshot.get("provider_subagent")
             if not isinstance(setting, dict):
-                raise InvalidToolArguments(
-                    "provider subagents are turned off for this conversation"
+                raise ToolNotPermitted(
+                    "provider subagents are turned off for this conversation",
+                    rule="subagents.turned_off",
                 )
             provider_id = str(setting.get("provider_profile_id") or "")
             model = str(setting.get("model") or "")
@@ -1575,7 +1603,12 @@ class SubagentService:
             )
         effort = requested_effort or inherited_effort
         if not provider_id or not model:
-            raise InvalidToolArguments("subagents need a provider model")
+            raise ToolNotPermitted(
+                "subagents need a provider model", rule="subagents.provider_model"
+            )
+        # Limits come after the rules: a call that is not permitted must not
+        # be told to wait and retry.
+        self._refuse_at_limits(parent_turn, siblings, limit)
         parent_request: dict[str, Any] = {
             "idempotency_key": invocation.idempotency_key,
             "tools_enabled": tools_enabled,
@@ -1669,8 +1702,50 @@ class SubagentService:
                 f"Subagent could not start ({type(exc).__name__}): {exc}", 1_000
             )
             self._discard_unstarted(record, child_session, child_turn_id, error)
-            raise InvalidToolArguments(error) from exc
+            raise SubagentNotStarted(error) from exc
         return record
+
+    def _refuse_at_limits(
+        self,
+        parent_turn: ChatTurn | None,
+        siblings: Iterable[ChatSubagent],
+        limit: int | None,
+    ) -> None:
+        """Refuse another running subagent at its goal's budget or the limit.
+
+        The goal's token budget comes first: its subagents spend it (a child
+        request that cannot fit fails), and waiting never refills it. The
+        operator's running-at-once limit frees as soon as one finishes, so
+        that refusal tells the model to wait and retry.
+        """
+
+        goal: ChatGoal | None = None
+        if parent_turn is not None and parent_turn.goal_id:
+            try:
+                goal = self.store.get(ChatGoal, parent_turn.goal_id)
+            except NotFoundError:  # diagnostic-expected: the goal was removed; its budget no longer bounds the parent
+                goal = None
+        if (
+            goal is not None
+            and goal.token_budget is not None
+            and goal.usage.total_tokens >= goal.token_budget
+        ):
+            raise BudgetExhausted(
+                "the goal's token budget is used up; raise it and resume the "
+                "goal to delegate more",
+                resource="goal_tokens",
+                maximum=goal.token_budget,
+                current=goal.usage.total_tokens,
+            )
+        running = len(self.active(siblings))
+        if limit is not None and running >= limit:
+            raise CapacityReached(
+                f"the operator allows {limit} running at once and {running} "
+                "already are; wait for one to finish",
+                resource="running_subagents",
+                maximum=limit,
+                current=running,
+            )
 
     def _ssh_environment_ids(
         self, record: ChatSubagent, parent_turn: ChatTurn | None
@@ -1904,7 +1979,9 @@ class SubagentService:
         record = self._owned(parent_session_id, subagent_id)
         content = content.strip()
         if not content:
-            raise InvalidToolArguments("message must say something")
+            raise refused_before_execution(
+                InvalidToolArguments("message must say something")
+            )
         existing = self._existing_message(record, idempotency_key)
         if existing is not None:
             return {
@@ -1914,20 +1991,16 @@ class SubagentService:
                 "delivery": "already_sent",
             }
         if record.status in CHAT_SUBAGENT_TERMINAL_STATUSES:
-            limit = (
-                self._limit(self.store.get(ChatTurn, parent_turn_id))
-                if parent_turn_id
-                else None
+            # Another round is another running subagent: the same limits
+            # apply, before the message is stored.
+            driving_turn = (
+                self.store.get(ChatTurn, parent_turn_id) if parent_turn_id else None
             )
-            if (
-                limit is not None
-                and len(self.active(self.for_session(parent_session_id))) >= limit
-            ):
-                raise InvalidToolArguments(
-                    f"{record.name} has {record.status.value}, and another round "
-                    f"would exceed the operator's limit of {limit} running at "
-                    "once; wait for one to finish"
-                )
+            self._refuse_at_limits(
+                driving_turn,
+                self.for_session(parent_session_id),
+                self._limit(driving_turn) if driving_turn is not None else None,
+            )
             message = self._add_message(
                 record,
                 ChatSubagentMessageDirection.TO_CHILD,
@@ -1942,7 +2015,7 @@ class SubagentService:
                 self._mark_messages(
                     [message], ChatSubagentMessageStatus.UNDELIVERED, reason
                 )
-                raise InvalidToolArguments(
+                raise SubagentNotStarted(
                     f"{reason} The message was not delivered."
                 ) from exc
             except Exception as exc:
@@ -1960,7 +2033,7 @@ class SubagentService:
                 self._mark_messages(
                     [message], ChatSubagentMessageStatus.UNDELIVERED, reason
                 )
-                raise InvalidToolArguments(
+                raise SubagentNotStarted(
                     f"{reason} The message was not delivered."
                 ) from exc
             return {
@@ -2033,7 +2106,9 @@ class SubagentService:
         record = self._invoking_child(invocation)
         content = content.strip()
         if not content:
-            raise InvalidToolArguments("message must say something")
+            raise refused_before_execution(
+                InvalidToolArguments("message must say something")
+            )
         existing = self._existing_message(record, invocation.idempotency_key)
         if existing is not None:
             return existing
@@ -2059,16 +2134,22 @@ class SubagentService:
 
     def _invoking_child(self, invocation: ToolInvocation) -> ChatSubagent:
         if not invocation.chat_session_id:
-            raise InvalidToolArguments("only a subagent can message its parent")
+            raise ToolNotPermitted(
+                "only a subagent can message its parent", rule="subagents.parent"
+            )
         session = self.store.get(ChatSession, invocation.chat_session_id)
         record = self._for_child_session(session)
         if record is None:
-            raise InvalidToolArguments("only a subagent can message its parent")
+            raise ToolNotPermitted(
+                "only a subagent can message its parent", rule="subagents.parent"
+            )
         if (
             record.status in CHAT_SUBAGENT_TERMINAL_STATUSES
             or record.child_turn_id != invocation.chat_turn_id
         ):
-            raise InvalidToolArguments("this subagent round has already ended")
+            raise ToolNotPermitted(
+                "this subagent round has already ended", rule="subagents.round_ended"
+            )
         return record
 
     _CHILD_INBOX_NOTE = (
@@ -2428,8 +2509,8 @@ class SubagentService:
             by_id = {item.id: item for item in records}
             missing = [item for item in ids if item not in by_id]
             if missing:
-                raise InvalidToolArguments(
-                    f"unknown subagent ids: {', '.join(missing)}"
+                raise refused_before_execution(
+                    InvalidToolArguments(f"unknown subagent ids: {', '.join(missing)}")
                 )
             return [by_id[item] for item in dict.fromkeys(ids)]
         # With none running, the finished ones whose reports the parent has
@@ -2659,7 +2740,9 @@ class SubagentService:
 
         records = self.resolve_wait(parent_session_id, ids)
         if not records:
-            raise InvalidToolArguments("there are no subagents to wait for")
+            raise refused_before_execution(
+                InvalidToolArguments("there are no subagents to wait for")
+            )
         resolved = [item.id for item in records]
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_seconds
@@ -4004,7 +4087,9 @@ class SubagentBroker:
         arguments = invocation.arguments
         session_id = invocation.chat_session_id
         if not session_id:
-            raise InvalidToolArguments("subagents require a provider chat session")
+            raise ToolNotPermitted(
+                "subagents require a provider chat session", rule="subagents.chat_turn"
+            )
         name = invocation.tool_name
         if name == "message_parent":
             message = await self.service.send_to_parent(
@@ -4046,7 +4131,7 @@ class SubagentBroker:
                 else None,
             )
             if record.status == ChatSubagentStatus.FAILED:
-                raise InvalidToolArguments(record.error or "subagent could not start")
+                raise SubagentNotStarted(record.error or "subagent could not start")
             return ToolExecutionResult(
                 output={
                     "subagent_id": record.id,
@@ -4082,7 +4167,9 @@ class SubagentBroker:
             ids = [str(item) for item in raw_ids] if isinstance(raw_ids, list) else None
             records = self.service.resolve_wait(session_id, ids)
             if not records:
-                raise InvalidToolArguments("there are no subagents to wait for")
+                raise refused_before_execution(
+                    InvalidToolArguments("there are no subagents to wait for")
+                )
             resolved = [item.id for item in records]
             if self.service.wait_satisfied(resolved, mode):
                 return ToolExecutionResult(output=self.service.wait_output(resolved))
@@ -4091,7 +4178,9 @@ class SubagentBroker:
                 {"ids": resolved, "mode": mode},
                 f"Waiting for {count} subagent{'' if count == 1 else 's'} to report.",
             )
-        raise InvalidToolArguments(f"unsupported subagent capability {name!r}")
+        raise refused_before_execution(
+            InvalidToolArguments(f"unsupported subagent capability {name!r}")
+        )
 
 
 def _spec(name: str, description: str, properties: dict[str, Any]) -> ToolSpec:
@@ -4284,6 +4373,7 @@ __all__ = [
     "SUBAGENT_TOOL_NAMES",
     "ParentUpdate",
     "SubagentBroker",
+    "SubagentNotStarted",
     "SubagentRoundSuperseded",
     "SubagentService",
     "SubagentWaitPending",
