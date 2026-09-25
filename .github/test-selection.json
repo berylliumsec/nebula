@@ -1,10 +1,10 @@
 {
-  "change_digest": "760d9d4a24a2df92aeaf6a6dabaa53044a26b2b5cd8e02daf5d7749dc6fd4eb6",
+  "change_digest": "160f211f4f0d560101fc1f738436af05d21783f77527abf69fd672fc5bf777d8",
   "reviewed_by": "Claude focused review for storage-waste",
-  "reason": "Removes write amplification and retention leaks found during the lifecycle batch. (1) MIS-7/MIS-9: automation_runtime reuses the captured stream artifact as the redacted reference when redaction changes no bytes (a differing redacted copy is still written); ToolOutputService search skips a redacted twin of a stream it already searches; StoreToolEvidenceRecorder stops writing empty stdout/stderr placeholders for tools that produced no process output, and skips an MCP structured_content block that a text block already serializes. Receipt artifact, Evidence and ToolCall.result are kept. (2) delete_chat_session and delete_archived_engagement remove chat_turn_step_events and chat_turn_checkpoints of the deleted turns. (3) Grok ACP notifications Nebula ignores are counted on the terminal event instead of stored as notice rows; unhandled requests keep their notice. (4) Mission harness activity_events filters the run ledger to the turn's harness rows in SQL. Selected: the new regression file; the automation runtime/broker, callback webhook, storage, Grok ACP, harness command/activity/adapter, MCP probe, web search, structured results, SSH, browser companion and tool-failure suites (recorder and receipt consumers); the conversation/project deletion suites (archived project, temporary chat, guarded delete, chat API, subagent lifecycle); chat catch-up and the chat tool loop (harness activity and command receipts); missions; and the test_harnesses.py and test_tool_catalog.py nodes that exercise gateway MCP receipts, activity replay and mission harness turns.",
-  "exclusions": "Full suites are not approved and are excluded. test_harnesses.py and test_tool_catalog.py are selected by node: the rest of those files is unrelated, and 5 test_harnesses.py nodes (gateway lists scoped sources, browser gateway binding recheck, workspace retrieval argument errors x3) plus 2 test_tool_catalog.py nodes (unknown-tool call, discovery limit) fail identically on pristine origin/main 4d44dfd (the #520 failure-envelope contract) and are unrelated to this change. test_api.py (harness activity endpoint) is excluded: it carries pre-existing red on main and the endpoint delegates to activity_events, covered directly. No UI, Playwright, native Rust/Tauri or migration changes: no schema change, old rows keep validating, and existing redacted twins stay readable by id.",
+  "reason": "Removes write amplification and retention leaks found during the lifecycle batch. (1) MIS-7/MIS-9: automation_runtime reuses the captured stream artifact as the redacted reference when redaction changes no bytes (a differing redacted copy is still written); ToolOutputService search skips a redacted twin of a stream it already searches; StoreToolEvidenceRecorder stops writing empty stdout/stderr placeholders for tools that produced no process output, and skips an MCP structured_content block that a text block already serializes. Receipt artifact, Evidence and ToolCall.result are kept. (2) delete_chat_session and delete_archived_engagement remove chat_turn_step_events and chat_turn_checkpoints of the deleted turns. (3) Grok ACP notifications Nebula ignores are counted on the terminal event instead of stored as notice rows; unhandled requests keep their notice. (4) Mission harness activity_events filters the run ledger to the turn's harness rows in SQL. Selected: the new regression file; the automation runtime/broker, callback webhook, storage, Grok ACP, harness command/activity/adapter, MCP probe, web search, structured results, SSH, browser companion and tool-failure suites (recorder and receipt consumers); the conversation/project deletion suites (archived project, temporary chat, guarded delete, chat API, subagent lifecycle); chat catch-up and the chat tool loop (harness activity and command receipts); missions; and test_harnesses.py and test_tool_catalog.py (gateway MCP receipts, activity replay, mission harness turns, catalog MCP calls).",
+  "exclusions": "Full suites are not approved and are excluded. test_api.py (the harness activity endpoint) is excluded: the endpoint delegates to activity_events, which the selection covers directly. No UI, Playwright, native Rust/Tauri or migration changes: no schema change, old rows keep validating, and existing redacted twins stay readable by id.",
   "expected_tests": {
-    "python": 548,
+    "python": 679,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -37,20 +37,8 @@
     "tests/v3/test_chat_catchup.py",
     "tests/v3/test_chat_tool_loop.py",
     "tests/v3/test_missions.py",
-    "tests/v3/test_harnesses.py::test_activity_replay_bounds_legacy_verbose_tool_summaries",
-    "tests/v3/test_harnesses.py::test_chat_harness_activity_is_durable_replayable_and_viewer_independent",
-    "tests/v3/test_harnesses.py::test_reasoning_summary_snapshot_is_identical_after_durable_replay",
-    "tests/v3/test_harnesses.py::test_harness_mission_freezes_browser_gateway_and_lease",
-    "tests/v3/test_harnesses.py::test_harness_mission_executes_operator_stages_sequentially",
-    "tests/v3/test_harnesses.py::test_scheduled_harness_mission_survives_runtime_restart",
-    "tests/v3/test_harnesses.py::test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt",
-    "tests/v3/test_harnesses.py::test_harness_gateway_digest_in_artifact_id_is_terminal_and_actionable",
-    "tests/v3/test_harnesses.py::test_mcp_policy_fails_closed_and_routes_exact_approval",
-    "tests/v3/test_harnesses.py::test_harness_api_chat_mission_handoff_and_catalog",
-    "tests/v3/test_harnesses.py::test_supporting_evidence_reads_normalized_harness_events",
-    "tests/v3/test_tool_catalog.py::test_tools_array_is_identical_across_search_load_and_call",
-    "tests/v3/test_tool_catalog.py::test_preloaded_tool_is_callable_from_the_first_step",
-    "tests/v3/test_tool_catalog.py::test_direct_call_to_an_unloaded_deferred_tool_still_runs"
+    "tests/v3/test_harnesses.py",
+    "tests/v3/test_tool_catalog.py"
   ],
   "frontend": [],
   "native": [],
