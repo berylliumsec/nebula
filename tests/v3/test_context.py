@@ -2296,3 +2296,69 @@ def test_trimming_keeps_what_the_operator_asked_for_longest():
     assert len(fitted.constraints) == 4
     assert fitted.user_requests[0].text.startswith("request 0:")
     assert len(fitted.references) < 8
+
+
+def test_an_answer_without_a_summary_gets_one_composed_from_its_items(tmp_path):
+    store = NebulaStore(tmp_path / "composed-summary-context.db")
+    profile = _profile()
+    session = _owner(store, profile)
+    sources = _chat_history(
+        store,
+        session,
+        {
+            1: (ChatRole.USER, "Audit 10.20.30.40 for SEC-4471."),
+            2: (ChatRole.ASSISTANT, "TLS rotation is next."),
+        },
+    )
+    answer = json.dumps(
+        {
+            "user_requests": [
+                {"text": "Audit 10.20.30.40 for SEC-4471", "sources": ["m1"]}
+            ],
+            "current_state": [{"text": "TLS rotation is next.", "sources": ["m2"]}],
+        }
+    )
+    provider = ScriptedProvider(profile.id, [answer, answer])
+
+    result = _compact(store, session, profile, provider, sources)
+
+    # One repair asked for the summary; the second answer had none either.
+    assert len(provider.requests) == 2
+    assert "summary is missing" in str(provider.requests[1].messages[-1].content)
+    memory = result.snapshot.memory
+    assert memory is not None
+    assert memory.summary == (
+        "The operator asked: Audit 10.20.30.40 for SEC-4471. "
+        "Where it stands: TLS rotation is next."
+    )
+    # A missing summary is not a dropped item; the items are all there.
+    assert result.snapshot.dropped_items == 0
+    assert result.snapshot.quality == ContextSnapshotQuality.COMPLETE
+
+
+@pytest.mark.parametrize(
+    ("lists", "expected"),
+    [
+        (
+            {"decisions": ["Keep port 8443"], "references": ["/etc/app.yaml: config"]},
+            "Keep port 8443.",
+        ),
+        (
+            {"user_requests": ["Scan the lab hosts?"]},
+            "The operator asked: Scan the lab hosts?",
+        ),
+        ({}, "Earlier work is recorded in the items below."),
+    ],
+)
+def test_a_composed_summary_uses_the_best_ranked_item(lists, expected):
+    from nebula.v3.context import _composed_summary
+
+    reference = ContextSourceReference(
+        source_kind="chat_message", source_id="message-1", sequence=1
+    )
+    items = {
+        name: [ContextMemoryItem(text=text, sources=[reference]) for text in texts]
+        for name, texts in lists.items()
+    }
+
+    assert _composed_summary(items) == expected
