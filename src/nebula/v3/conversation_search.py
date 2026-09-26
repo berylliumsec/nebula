@@ -15,7 +15,8 @@ Core restart may run it again.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from typing import Any
 
@@ -56,6 +57,14 @@ _DETAIL_RESERVE = 400
 # An explicit search may take a few seconds, so it embeds more of the archive
 # per call than the automatic excerpts a turn's preparation waits for.
 SEARCH_DENSE_MAX_NEW = 64
+# Searches one turn may run. A turn looks up the few details its answer needs;
+# past this it is re-reading what it found (models have searched a hundred
+# times in one turn to re-confirm a dozen facts they already had, each search
+# another provider round trip over a growing history).
+TURN_SEARCH_BUDGET = 8
+# Searches in a row that found nothing: the conversation most likely never
+# said it, and rewording again rarely changes that.
+TURN_EMPTY_SEARCH_LIMIT = 3
 
 CONVERSATION_SEARCH_INPUT: dict[str, Any] = {
     "type": "object",
@@ -217,6 +226,66 @@ def search_archived_conversation(
     }
 
 
+def _found_nothing(entry: Mapping[str, Any]) -> bool:
+    result = entry.get("provider_result")
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except (
+            ValueError
+        ):  # diagnostic-expected: an unreadable receipt is not an empty search
+            return False
+    return isinstance(result, dict) and result.get("result_count") == 0
+
+
+def turn_search_budget_spent(
+    history: Iterable[Mapping[str, Any]], query: str
+) -> dict[str, Any] | None:
+    """The result a further search this turn gets instead of running, if any.
+
+    Counted from the turn's own ledger (the searches that ran), so a turn
+    resumed after a restart keeps its count. The result is a normal one, not
+    an error: the model is told to answer from what it found.
+    """
+
+    searches = [
+        entry
+        for entry in history
+        if entry.get("name") == CONVERSATION_SEARCH_TOOL_NAME
+        and entry.get("budget_class") == "artifact_query"
+    ]
+    empty = 0
+    for entry in reversed(searches):
+        if not _found_nothing(entry):
+            break
+        empty += 1
+    if empty >= TURN_EMPTY_SEARCH_LIMIT:
+        detail = (
+            f"The last {empty} searches of the earlier conversation found "
+            "nothing, so the conversation most likely never said it. No "
+            "further search runs this turn: tell the operator what could not "
+            "be found, and answer from what you have."
+        )
+    elif len(searches) >= TURN_SEARCH_BUDGET:
+        detail = (
+            f"This turn has searched the earlier conversation {len(searches)} "
+            "times, its allowance, and no further search runs. Answer from "
+            "what the searches found and your working memory, and tell the "
+            "operator which details you could not confirm."
+        )
+    else:
+        return None
+    return {
+        "tool": CONVERSATION_SEARCH_TOOL_NAME,
+        "query": query,
+        "search_budget_spent": True,
+        "searches_this_turn": len(searches),
+        "result_count": 0,
+        "results": [],
+        "detail": detail,
+    }
+
+
 class ConversationSearchTool(InvocationAnalysisTool):
     """``conversation.search`` bound to the chat session it was offered in."""
 
@@ -266,7 +335,10 @@ class ConversationSearchTool(InvocationAnalysisTool):
 
 __all__ = [
     "CONVERSATION_SEARCH_TOOL_NAME",
+    "TURN_EMPTY_SEARCH_LIMIT",
+    "TURN_SEARCH_BUDGET",
     "ConversationSearchTool",
     "conversation_search_spec",
     "search_archived_conversation",
+    "turn_search_budget_spent",
 ]
