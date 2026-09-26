@@ -626,6 +626,35 @@ def test_responses_commentary_phase_is_reasoning_not_answer_text():
     assert [call.name for call in response.tool_calls] == ["lookup_asset"]
 
 
+def test_responses_unlabelled_prose_beside_a_call_stays_answer_text():
+    provider, _ = _http_provider(
+        OpenAIResponsesProvider,
+        ProviderKind.OPENAI_RESPONSES,
+        _responses(
+            [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Checking now."}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "lookup_asset",
+                    "arguments": '{"address":"10.0.0.1"}',
+                },
+            ]
+        ),
+    )
+
+    response = _complete(provider, _routing_request())
+
+    # Only a route's own commentary label moves prose out of the answer.
+    assert response.text == "Checking now."
+    assert response.reasoning == ""
+    assert [call.name for call in response.tool_calls] == ["lookup_asset"]
+
+
 def test_responses_final_answer_phase_stays_answer_text():
     provider, _ = _http_provider(
         OpenAIResponsesProvider,

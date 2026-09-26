@@ -1,10 +1,10 @@
 {
-  "change_digest": "41c71dff4de71a3520e2ed10d48bf46a6ae616aeb5f06103ade62ae1d415ace9",
-  "reviewed_by": "Claude focused review for ctx-evals",
-  "reason": "Adds scripts/context_retention_eval.py, a standalone retention eval that drives a scratch Core only over its HTTP API (plus optional read-only SQLite probes), its unit tests, and a 'Measuring retention' section in docs/CHAT_CONTEXT_LIFECYCLE.md. No Core, UI, native or provider code changes. The selected file covers the script's pure parts: deterministic scenario generation, exact-match scoring and answer-line parsing, tool re-read counting, cache-aware pricing, metrics, aggregation and the Markdown report.",
-  "exclusions": "No src/, ui/ or native code changes, so Core Python suites, frontend, native and Playwright tests are excluded (the script imports nothing from Core). The script's HTTP driving is exercised against real scratch Cores served from origin/main (baseline run recorded in the PR), not in CI, because it needs a provider key and a real model. No full-suite, browser, LAN or device gate is claimed.",
+  "change_digest": "48ddb1b20dc7bd7f097ee0bd6abc471f4e112333dc45498fe5f9fd24c237f6a3",
+  "reviewed_by": "Claude focused review for responses-commentary-reasoning",
+  "reason": "Only the OpenAI Responses adapter's output parsing and replay change: a message the route labels phase=commentary is reasoning (and is replayed to the same route as a phase=commentary message ahead of its calls) instead of answer text. #521 (9114b6f) had folded it into answer text, leaving test_responses_commentary_phase_is_reasoning_not_answer_text red on main since 2026-09-22. Selected: all of test_native_adapter_outcomes.py (Responses commentary, unlabelled prose beside a call, final_answer phase, and the refusal/blocked/failed paths whose message parsing was restructured, plus the other native adapters' outcome tests in the same file); all of test_reasoning_replay.py (the Responses replay test whose expected replay changed, and the other providers' prose-beside-call replay contract from #521, which this must not disturb); and the one test_providers.py node that parses a Responses commentary message. Counts from pytest --collect-only: 35 + 22 + 1 = 58.",
+  "exclusions": "No frontend, native or Playwright tests: no UI, Rust or route change; commentary now reaches the transcript through the existing reasoning channel (test_reasoning_replay.py's Responses chat run asserts the saved message keeps commentary in reasoning, not content). Other Responses adapter files (test_provider_contracts.py, test_tool_call_assembly.py, test_provider_leftovers.py, test_native_adapter_requests.py, test_prompt_caching.py, test_reasoning_controls.py, test_synthesis_tool_declarations.py) are excluded: none sends a phase field, and non-commentary messages parse exactly as before. test_chat_leftovers.py is excluded: it stubs ModelResponse text directly and never reaches the adapter. No real OpenAI Responses provider or browser journey was exercised. No full suite.",
   "expected_tests": {
-    "python": 34,
+    "python": 58,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -15,7 +15,9 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/test_context_retention_eval.py"
+    "tests/v3/test_native_adapter_outcomes.py",
+    "tests/v3/test_reasoning_replay.py",
+    "tests/v3/test_providers.py::test_openai_responses_translates_flattened_tools_and_parses_calls"
   ],
   "frontend": [],
   "native": [],

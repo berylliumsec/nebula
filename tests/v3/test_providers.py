@@ -129,8 +129,9 @@ def test_openai_responses_translates_flattened_tools_and_parses_calls():
     ]
     assert payload["text"]["format"]["schema"]["additionalProperties"] is False
     assert payload["parallel_tool_calls"] is True
-    assert response.text == "Ready."
-    assert response.reasoning == "Need a lookup."
+    # Commentary is the route's own label for preamble: reasoning, not answer.
+    assert response.text == ""
+    assert response.reasoning == "Need a lookup.\n\nReady."
     assert response.tool_calls[0].model_dump() == {
         "id": "call_1",
         "name": "lookup_asset",
