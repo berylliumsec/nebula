@@ -91,7 +91,7 @@ stateDiagram-v2
 ```
 
 Receipts say what each step acted on and how it ended. Their byte bound is 3%
-of input capacity, between 16 KiB and 64 KiB; over it, individual receipts are
+of the working input capacity, between 16 KiB and 64 KiB; over it, individual receipts are
 omitted while their covered ranges/count and an `omitted_steps` count remain.
 A checkpoint also carries the conversation's latest working notes. Clearing
 keeps result identity and available artifact references, and a cleared result
