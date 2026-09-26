@@ -37,6 +37,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.runtime_platform import conversation_search_components
 from nebula.v3.storage import NebulaStore
+from nebula.v3.tool_results import MAX_EXCERPT_BYTES, serialize_model_result
 from nebula.v3.tools import (
     RETRIEVAL_TOOL_NAMES,
     InvalidToolArguments,
@@ -275,7 +276,10 @@ def test_search_output_is_bounded_whatever_the_limit(tmp_path):
     output = result.output
     assert 1 <= output["result_count"] < 10
     assert output["omitted_results"] == 10 - output["result_count"]
-    assert sum(len(item["content"].encode()) for item in output["results"]) <= 6_000
+    # What the model is sent stays within the delivery bound, whole.
+    delivered = serialize_model_result(output)
+    assert len(delivered.encode()) <= MAX_EXCERPT_BYTES
+    assert json.loads(delivered)["results"] == output["results"]
     assert "narrow the query" in output["detail"]
 
 

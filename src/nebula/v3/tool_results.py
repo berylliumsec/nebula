@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from time import monotonic
+from collections.abc import Sequence
 from typing import Annotated, Any, BinaryIO, Iterator, Literal, Protocol, TypeAlias
 
 import regex  # type: ignore[import-untyped]
@@ -1008,6 +1009,49 @@ def model_result_bytes(value: dict[str, Any]) -> int:
     return len(_render_model_result(value).encode("utf-8"))
 
 
+def fit_model_result(
+    result: dict[str, Any],
+    key: str,
+    items: Sequence[dict[str, Any]],
+    *,
+    text_key: str = "text",
+    reserve: int = 0,
+) -> tuple[dict[str, Any], int]:
+    """``result`` carrying as many ``items`` under ``key`` as reach the model.
+
+    ``serialize_model_result`` replaces an oversized result with a notice, so
+    a retriever that returned one more excerpt than fits would deliver none.
+    Items are kept in order while the whole result stays within
+    ``MAX_EXCERPT_BYTES`` less ``reserve`` (room the caller keeps for fields it
+    adds afterwards); when not even the first fits, its ``text_key`` is
+    shortened and it is marked ``truncated``. Returns the fitted result and how
+    many items were left out.
+    """
+
+    limit = MAX_EXCERPT_BYTES - reserve
+    kept: list[dict[str, Any]] = []
+    for item in items:
+        if model_result_bytes({**result, key: [*kept, item]}) <= limit:
+            kept.append(item)
+            continue
+        text = item.get(text_key)
+        if not kept and isinstance(text, str):
+
+            def shortened(length: int) -> dict[str, Any]:
+                return {**item, text_key: text[:length] + "…", "truncated": True}
+
+            low, high = 0, len(text)
+            while low < high:
+                middle = (low + high + 1) // 2
+                if model_result_bytes({**result, key: [shortened(middle)]}) <= limit:
+                    low = middle
+                else:
+                    high = middle - 1
+            kept.append(shortened(low))
+        break
+    return {**result, key: kept}, len(items) - len(kept)
+
+
 def serialize_model_result(value: dict[str, Any]) -> str:
     """One shared serialization path for receipts and bounded retrievers."""
 
@@ -1159,6 +1203,7 @@ __all__ = [
     "WorkspaceOutputService",
     "artifact_ref",
     "bytes_are_searchable",
+    "fit_model_result",
     "model_result_bytes",
     "sanitize_model_history_result",
     "serialize_model_result",

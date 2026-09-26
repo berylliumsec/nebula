@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import json
 
 import nebula.v3.chat as chat_module
 from nebula.v3.chat import ChatCompletionRequest, ChatService, _routing_instructions
@@ -201,3 +203,260 @@ def test_a_cloud_turn_needs_knowledge_consent_and_never_reads_local_only_sources
     found = _search(store, confirmed, "maintenance window")["matches"]
     assert found and ids["harbor.md"] not in {item["source_id"] for item in found}
     assert store.get(ChatSession, confirmed.turn.session_id)
+
+
+def _long_matches(count: int, relevances=None):
+    from nebula.v3.chat import HarnessKnowledgeMatch, HarnessKnowledgeSearchResult
+    from nebula.v3.domain import ChatCitation
+
+    text = ('Line with "quotes" and\nnewlines, escaped on the wire. ' * 40)[:1_800]
+    return HarnessKnowledgeSearchResult(
+        [
+            HarnessKnowledgeMatch(
+                text=text,
+                citation=ChatCitation(
+                    source_id=f"source-{index}",
+                    name=f"doc-{index}.md",
+                    chunk_id=f"chunk-{index}",
+                    excerpt=text[:320],
+                ),
+                local_only=False,
+                relevance=(relevances or ["possible"] * count)[index],
+            )
+            for index in range(count)
+        ]
+    )
+
+
+def test_a_search_returns_only_what_reaches_the_model(tmp_path):
+    from nebula.v3.knowledge_search import KnowledgeSearchTool
+    from nebula.v3.tool_results import MAX_EXCERPT_BYTES, serialize_model_result
+
+    tool = KnowledgeSearchTool(
+        "eng-a", lambda *args: _long_matches(5), allow_local_only=True
+    )
+    invocation = ToolInvocation(
+        engagement_id="eng-a",
+        run_id="turn",
+        tool_name=KNOWLEDGE_SEARCH_TOOL_NAME,
+        arguments={"query": "anything"},
+        workspace=tmp_path,
+    )
+
+    output = asyncio.run(tool.execute(invocation, runner=None)).output
+    delivered = serialize_model_result(output)
+
+    # Five full-size excerpts would exceed the delivery bound, and the model
+    # would have received a size notice with none of them.
+    assert len(delivered.encode()) <= MAX_EXCERPT_BYTES
+    assert json.loads(delivered)["tool"] == KNOWLEDGE_SEARCH_TOOL_NAME
+    assert 1 <= output["result_count"] < 5
+    assert "did not fit" in output["detail"]
+
+
+def test_conversation_search_returns_only_what_reaches_the_model(tmp_path):
+    from nebula.v3.domain import (
+        ChatMessage,
+        ChatRole,
+        ContextMemory,
+        ContextOwnerType,
+        ContextSnapshot,
+        ContextSnapshotStatus,
+        ContextSourceReference,
+        Engagement,
+    )
+    from nebula.v3.chat import _stored_model_text
+    from nebula.v3.conversation_search import search_archived_conversation
+    from nebula.v3.storage import NebulaStore
+    from nebula.v3.tool_results import MAX_EXCERPT_BYTES, serialize_model_result
+
+    store = NebulaStore(tmp_path / "conversation.db")
+    store.create(Engagement(id="eng-a", name="A"))
+    session = store.create(
+        ChatSession(
+            id="session",
+            engagement_id="eng-a",
+            title="Long",
+            provider_profile_id="provider-a",
+            model="model-a",
+        )
+    )
+    # Mostly characters JSON escapes: a result's wire size is about twice
+    # its text, which a limit on raw text did not account for.
+    passage = "deploy window " + '"\n' * 460
+    messages = [
+        ChatMessage(
+            id=f"message-{index}",
+            engagement_id="eng-a",
+            session_id=session.id,
+            sequence=index,
+            role=ChatRole.USER,
+            content=f"{index} {passage}",
+        )
+        for index in range(1, 13)
+    ]
+    store.create_many(messages)
+    store.create(
+        ContextSnapshot(
+            engagement_id="eng-a",
+            owner_type=ContextOwnerType.CHAT_SESSION,
+            owner_id=session.id,
+            status=ContextSnapshotStatus.READY,
+            compacted_through=12,
+            memory=ContextMemory(summary="Earlier."),
+            source_references=[
+                ContextSourceReference(
+                    source_kind="chat_message",
+                    source_id=item.id,
+                    sequence=item.sequence,
+                )
+                for item in messages
+            ],
+            provider_profile_id="provider-a",
+            model="model-a",
+            prompt_version="test",
+            source_sha256="0" * 64,
+        )
+    )
+
+    output = search_archived_conversation(
+        store, session.id, "deploy window", limit=10, text_of=_stored_model_text
+    )
+    delivered = serialize_model_result(output)
+
+    assert len(delivered.encode()) <= MAX_EXCERPT_BYTES
+    assert json.loads(delivered)["tool"] == "conversation.search"
+    assert output["result_count"] >= 1
+    assert output["omitted_results"] == 10 - output["result_count"]
+
+
+class _SearchBroker:
+    """Answers knowledge.search through the real tool, and conversation.search."""
+
+    def __init__(self, workspace):
+        from nebula.v3.knowledge_search import KnowledgeSearchTool
+
+        self.knowledge = KnowledgeSearchTool(
+            "project",
+            lambda *args: _long_matches(3, ["possible", "weak", "weak"]),
+            allow_local_only=True,
+        )
+        self.workspace = workspace
+
+    async def execute(self, invocation, scope, *, approval=None):
+        from nebula.v3.tools import ToolExecutionResult
+
+        del scope, approval
+        if invocation.tool_name == KNOWLEDGE_SEARCH_TOOL_NAME:
+            return await self.knowledge.execute(
+                invocation.model_copy(update={"engagement_id": "project"}), None
+            )
+        return ToolExecutionResult(
+            output={
+                "tool": "conversation.search",
+                "results": [
+                    {
+                        "message_id": "user-message",
+                        "sequence": 1,
+                        "role": "user",
+                        "content": "an earlier message",
+                        "source_id": "source-conversation",
+                        "chunk_id": "chunk-conversation",
+                    }
+                ],
+            }
+        )
+
+
+def test_excerpts_the_model_searched_are_cited_once_and_survive_a_restart(tmp_path):
+    from nebula.v3.chat import ChatMessage, ChatRole
+    from nebula.v3.conversation_search import conversation_search_spec
+    from nebula.v3.domain import ChatCitation
+    from nebula.v3.providers import ToolCall as ModelToolCall
+    from tests.v3.test_chat_tool_loop import _prepared, _response
+
+    attached = ChatCitation(
+        source_id="source-0",
+        name="doc-0.md",
+        chunk_id="chunk-0",
+        excerpt="attached before the turn",
+    )
+    responses = [
+        _response(
+            calls=[
+                ModelToolCall(
+                    id="call-1",
+                    name=KNOWLEDGE_SEARCH_TOOL_NAME,
+                    arguments={"query": "quotes"},
+                )
+            ]
+        ),
+        _response(
+            calls=[
+                ModelToolCall(
+                    id="call-2",
+                    name="conversation.search",
+                    arguments={"query": "earlier"},
+                )
+            ]
+        ),
+        _response(text="Answer citing [source-1:chunk-1]."),
+    ]
+    store, service, prepared, _ = _prepared(
+        tmp_path,
+        responses,
+        _SearchBroker(tmp_path),
+        extra_specs=[knowledge_search_spec(), conversation_search_spec()],
+    )
+    prepared.citations = [attached]
+
+    completion = asyncio.run(service.complete(prepared))
+
+    # The attached chunk once, then the searched one the answer used; not
+    # the weak match it left alone, nor anything from the conversation.
+    assert [(c.source_id, c.chunk_id) for c in completion.citations] == [
+        ("source-0", "chunk-0"),
+        ("source-1", "chunk-1"),
+    ]
+    assert completion.citations[0].excerpt == "attached before the turn"
+    assert completion.citations[1].name == "doc-1.md"
+    assert completion.citations[1].excerpt.startswith('Line with "quotes" and newlines')
+    [answer] = [
+        message
+        for message in store.list_session_entities(ChatMessage, "session")
+        if message.role == ChatRole.ASSISTANT
+    ]
+    assert answer.citations == completion.citations
+
+    # A restarted Core rebuilds the turn with only what was attached; the
+    # searched chunk comes back from the durable step ledger.
+    restarted = ChatService(store, worker_id="restarted")
+    rebuilt = dataclasses.replace(
+        prepared, citations=[attached], turn=store.get(ChatTurn, "turn")
+    )
+    assert [
+        c.chunk_id
+        for c in restarted._turn_citations(rebuilt, completion.message.content)
+    ] == [
+        "chunk-0",
+        "chunk-1",
+    ]
+
+
+def test_a_single_excerpt_too_large_to_deliver_is_shortened_not_dropped():
+    from nebula.v3.tool_results import (
+        MAX_EXCERPT_BYTES,
+        fit_model_result,
+        model_result_bytes,
+    )
+
+    items = [{"text": "x" * 20_000, "chunk_id": "a"}, {"text": "y", "chunk_id": "b"}]
+
+    fitted, omitted = fit_model_result({"tool": "t"}, "matches", items, reserve=100)
+
+    [only] = fitted["matches"]
+    assert only["chunk_id"] == "a" and only["truncated"] is True
+    assert only["text"].endswith("…")
+    assert omitted == 1
+    assert model_result_bytes(fitted) <= MAX_EXCERPT_BYTES - 100
+    assert model_result_bytes(fitted) > MAX_EXCERPT_BYTES - 200

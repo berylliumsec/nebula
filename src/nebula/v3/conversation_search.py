@@ -37,6 +37,7 @@ from .domain import (
     message_is_replaced,
 )
 from .storage import NebulaStore
+from .tool_results import fit_model_result
 from .tools import (
     IdempotencyBehavior,
     InvalidToolArguments,
@@ -48,10 +49,10 @@ from .tools import (
 CONVERSATION_SEARCH_TOOL_NAME = "conversation.search"
 DEFAULT_RESULTS = 5
 MAX_RESULTS = 10
-# Every result stays in the turn's replayed history, so one call returns at
-# most about two thousand tokens of passages whatever ``limit`` asks for, like
-# ``tool_output.read``'s 8 KiB page.
-MAX_RESULT_BYTES = 6_000
+# Every result stays in the turn's replayed history, so one call returns what
+# fits the 8 KiB model-delivery bound whatever ``limit`` asks for, like
+# ``tool_output.read``'s page; this is kept beside the passages for the detail.
+_DETAIL_RESERVE = 400
 # An explicit search may take a few seconds, so it embeds more of the archive
 # per call than the automatic excerpts a turn's preparation waits for.
 SEARCH_DENSE_MAX_NEW = 64
@@ -173,15 +174,22 @@ def search_archived_conversation(
         (QueryPart(query, 1.0),),
         dense=dense,
     )
-    results: list[dict[str, Any]] = []
-    used = 0
-    for item in ranked[:limit]:
-        size = len(item.chunk.text.encode("utf-8"))
-        if results and used + size > MAX_RESULT_BYTES:
-            break
-        results.append(item.chunk.payload())
-        used += size
-    omitted = min(limit, len(ranked)) - len(results)
+    # Only what fits the model-delivery bound is returned: a result over it
+    # would reach the model as a size notice with no passage at all.
+    fitted, omitted = fit_model_result(
+        {
+            **base,
+            "archived_through": boundary,
+            "searched_messages": len(archived),
+            "result_count": limit,
+            "omitted_results": limit,
+        },
+        "results",
+        [item.chunk.payload() for item in ranked[:limit]],
+        text_key="content",
+        reserve=_DETAIL_RESERVE,
+    )
+    results = fitted["results"]
     if results:
         detail = (
             f"{len(results)} passage(s) from {len(archived)} archived "
