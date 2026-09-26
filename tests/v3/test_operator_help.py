@@ -330,3 +330,178 @@ def test_selected_context_neither_hides_nor_invents_a_runbook_question(tmp_path)
 
     assert ordinary.citations == []
     assert ordinary.reference_material == ""
+
+
+def _receipt(name: str, error: BaseException) -> str:
+    spec = ToolSpec(
+        name=name,
+        description="Run one bounded command.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "command": {"type": "string"},
+                "cwd": {"type": "string"},
+            },
+            "required": ["command"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object", "additionalProperties": True},
+        risk_class=RiskClass.LOCAL_READ,
+    )
+    return serialize_model_result(
+        tool_failure(
+            spec,
+            {"command": "ls"},
+            error,
+            phase="after_execution",
+            call_id="call-1",
+        )
+    )
+
+
+def test_a_failure_receipt_is_searched_by_what_it_says_not_its_schema():
+    from nebula.v3.tool_failures import failure_receipt_text
+
+    receipt = _receipt("run_command", RuntimeError("the probe failed"))
+    # The receipt repeats the tool's input schema for the model. Searched
+    # whole, its words ("properties", "required", "type") ranked the MCP
+    # article above the one about the failure.
+    whole = search_operator_help([receipt], limit=8, observed_failure=True)
+    assert whole[0].article.article_id == "mcp-servers"
+
+    text = failure_receipt_text(receipt)
+    assert text is not None
+    assert "could not complete" in text
+    assert "properties" not in text
+    assert [
+        match.article.article_id
+        for match in search_operator_help([text], limit=8, observed_failure=True)
+    ] == ["diagnostics"]
+    # Anything that is not a failure receipt is searched as it is.
+    assert failure_receipt_text('{"result_count": 1}') is None
+    assert failure_receipt_text("nmap: operation not permitted") is None
+
+
+def test_a_failed_step_is_answered_with_its_runbook_and_not_the_mcp_article(
+    tmp_path,
+):
+    import asyncio
+
+    from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
+    from nebula.v3.providers import ToolCall
+
+    class FailingBroker(RecordingBroker):
+        async def execute(self, invocation, scope, *, approval=None):
+            del scope, approval
+            self.calls.append(invocation)
+            raise RuntimeError("the probe failed")
+
+    store, service, prepared, scripted = _prepared(
+        tmp_path,
+        [
+            _response(
+                calls=[
+                    ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})
+                ]
+            ),
+            _response(),
+            _response(text="The read failed."),
+        ],
+        FailingBroker(),
+    )
+    # A window large enough that the help budget never trims what matched.
+    prepared.provider_profile = prepared.provider_profile.model_copy(
+        update={
+            "metadata": {
+                "model_descriptors": [
+                    {
+                        "id": "model-a",
+                        "context_window": 200_000,
+                        "max_output_tokens": 4_096,
+                    }
+                ]
+            }
+        }
+    )
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert [citation.source_id for citation in completion.citations] == [
+        "nebula-help:diagnostics"
+    ]
+
+
+FAILURE_LOG = "\n".join(
+    [
+        "2026-09-26T10:00:01Z automation task queued",
+        "2026-09-26T10:00:02Z preparing workspace",
+        "Error: podman unavailable: no rootless runtime was detected",
+        "2026-09-26T10:00:03Z task ended",
+    ]
+)
+
+
+def test_a_troubleshooting_question_about_a_selected_nebula_failure_gets_its_runbook(
+    tmp_path,
+):
+    from nebula.v3.operator_help import help_subject
+
+    # The operator's words name nothing of Nebula; the failure is in what
+    # they selected, and they ask about it.
+    prepared = _prepare_with_selection(
+        tmp_path / "log", "why does this fail?", FAILURE_LOG
+    )
+    assert [item.source_id for item in prepared.citations] == [
+        "nebula-help:runner-setup"
+    ]
+
+    # A large selection does not drown the one failing line in it.
+    note = build_scenario("s1", DEFAULT_SEED).turns[0].content
+    selection = (
+        note[:4_000]
+        + "\nWorkstation image preparation failed: image pull failed (exit 1).\n"
+        + note[4_000:8_000]
+    )
+    prepared = _prepare_with_selection(
+        tmp_path / "large", "what's wrong here?", selection
+    )
+    assert [item.source_id for item in prepared.citations] == [
+        "nebula-help:workstation-image"
+    ]
+
+    # Only the failing lines join the operator's words, a few at most.
+    assert help_subject("why does this fail?", [FAILURE_LOG]) == [
+        "why does this fail?",
+        "Error: podman unavailable: no rootless runtime was detected",
+    ]
+    many = "\n".join(f"runner {index} unavailable" for index in range(20))
+    assert len(help_subject("why?", [many])) == 6
+
+
+def test_a_selection_joins_the_subject_only_for_a_nebula_failure_question(tmp_path):
+    from nebula.v3.operator_help import help_subject
+
+    # Not a troubleshooting question: the operator's words alone decide.
+    assert help_subject("Summarise this selection.", [FAILURE_LOG]) == [
+        "Summarise this selection."
+    ]
+    summary = _prepare_with_selection(
+        tmp_path / "summary", "Summarise this selection.", FAILURE_LOG
+    )
+    assert summary.citations == []
+
+    # A failure of the operator's own project, named without a Nebula
+    # surface, stays theirs.
+    build = _prepare_with_selection(
+        tmp_path / "build",
+        "why does this fail?",
+        "docker build failed: missing base image python:3.12-slim",
+    )
+    assert build.citations == []
+
+    # A question about a selection that reports no failure.
+    note = build_scenario("s1", DEFAULT_SEED).turns[0].content
+    ordinary = _prepare_with_selection(
+        tmp_path / "ordinary", "why does this fail?", note[:6_000]
+    )
+    assert ordinary.citations == []
