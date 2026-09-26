@@ -14,10 +14,34 @@ export function contextUsePercent(status: ContextStatus | undefined): number | u
     : undefined;
 }
 
+// Core's target is this share of the input capacity (context.py CONTEXT_TARGET_FRACTION).
+const CONTEXT_TARGET_FRACTION = 0.75;
+
+/**
+ * The input ceiling Core sized the target from: the effective window less the
+ * reply allowance, held to the smallest verified route's input limit. It is
+ * shown only when it reproduces Core's target exactly, so an input limit the
+ * status does not carry (a model's own maximum) never yields a wrong figure.
+ */
+function inputCeiling(status: ContextStatus): number | undefined {
+  const windowInput = status.contextWindow - status.maxOutputTokens;
+  const ceiling = status.routeInputLimit === undefined ? windowInput : Math.min(windowInput, status.routeInputLimit);
+  return ceiling > 0 && Math.max(1, Math.floor(ceiling * CONTEXT_TARGET_FRACTION)) === status.targetInputTokens ? ceiling : undefined;
+}
+
 /** Where the window size comes from, so an estimated limit never reads as exact. */
 export function contextCapacityLabel(status: ContextStatus): string {
   if (status.routeLimitsRequired && status.routeLimitsVerified) {
-    return `${status.eligibleRouteCount ?? 0} compatible routes · ${(status.routeContextWindow ?? status.contextWindow).toLocaleString()} route minimum · ${(status.routeInputLimit ?? status.targetInputTokens).toLocaleString()} input ceiling`;
+    const routeWindow = status.routeContextWindow ?? status.contextWindow;
+    const ceiling = inputCeiling(status);
+    const routes = [`${status.eligibleRouteCount ?? 0} compatible routes`, `${routeWindow.toLocaleString()} route minimum`];
+    const input = ceiling === undefined ? [] : [`${ceiling.toLocaleString()} input ceiling`];
+    // Core already holds the model window to the smallest verified route, so a
+    // smaller effective window is the profile's configured cap: it binds, and
+    // leads; the route facts follow it.
+    return (status.contextWindow < routeWindow
+      ? [`${status.contextWindow.toLocaleString()} configured cap`, ...input, ...routes]
+      : [...routes, ...input]).join(" · ");
   }
   if (status.routeLimitsRequired) return `route limits unverified · safe ${status.contextWindow.toLocaleString()}-token ceiling`;
   if (status.capacitySource === "model_catalog") return "exact model catalog";

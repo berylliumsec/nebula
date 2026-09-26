@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextMemory, ContextMemoryItem, ContextStatus } from "../api/types";
-import { WorkingContextPanel } from "./WorkingContextPanel";
+import { WorkingContextPanel, contextCapacityLabel } from "./WorkingContextPanel";
 
 const item = (text: string): ContextMemoryItem => ({ text, sources: [{ sourceKind: "chat_message", sourceId: "message-1", sequence: 1 }] });
 
@@ -180,3 +180,39 @@ describe("WorkingContextPanel", () => {
     expect(screen.queryByRole("meter")).not.toBeInTheDocument();
   });
 });
+
+describe("contextCapacityLabel", () => {
+  // OpenRouter with verified routes, as Core reports it for one conversation.
+  const routed = (overrides: Partial<ContextStatus>): ContextStatus => contextStatus({
+    routeLimitsRequired: true, routeLimitsVerified: true, eligibleRouteCount: 27, ...overrides,
+  });
+
+  it("leads with a smaller configured window and keeps the route facts after it", () => {
+    // options.context_window 16,000 under routes that accept 1,000,000.
+    expect(contextCapacityLabel(routed({
+      contextWindow: 16_000, maxOutputTokens: 2_000, targetInputTokens: 10_500,
+      routeContextWindow: 1_000_000, routeInputLimit: 1_000_000,
+    }))).toBe("16,000 configured cap · 14,000 input ceiling · 27 compatible routes · 1,000,000 route minimum");
+  });
+
+  it("leads with the routes when the smallest route is the window", () => {
+    expect(contextCapacityLabel(routed({
+      contextWindow: 65_536, maxOutputTokens: 8_000, targetInputTokens: 42_750,
+      routeContextWindow: 65_536, routeInputLimit: 57_000,
+    }))).toBe("27 compatible routes · 65,536 route minimum · 57,000 input ceiling");
+    // The route's input limit is above what the window leaves, so the window binds the input.
+    expect(contextCapacityLabel(routed({
+      contextWindow: 65_536, maxOutputTokens: 8_000, targetInputTokens: 43_152,
+      routeContextWindow: 65_536, routeInputLimit: 65_536,
+    }))).toBe("27 compatible routes · 65,536 route minimum · 57,536 input ceiling");
+  });
+
+  it("omits an input ceiling it cannot reproduce from Core's target", () => {
+    // A model input limit the status does not carry sized this target.
+    expect(contextCapacityLabel(routed({
+      contextWindow: 65_536, maxOutputTokens: 8_000, targetInputTokens: 30_000,
+      routeContextWindow: 65_536, routeInputLimit: 65_536,
+    }))).toBe("27 compatible routes · 65,536 route minimum");
+  });
+});
+
