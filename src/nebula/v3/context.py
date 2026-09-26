@@ -22,6 +22,7 @@ from .domain import (
     ChatMessage,
     ChatSession,
     ChatTokenUsage,
+    ChatTurn,
     ContextMemory,
     ContextMemoryItem,
     ContextOwnerType,
@@ -404,8 +405,9 @@ class _CompactorPlan:
 class _SourceIds:
     """The short ids the compactor model cites in place of whole references.
 
-    A chat message is "m<sequence>"; any other source is "s<n>" in order of
-    first appearance, so an append-only archive keeps its earlier ids.
+    A chat message is "m<sequence>" and a provider turn's tool step
+    "t<step>"; any other source is "s<n>" in order of first appearance, so an
+    append-only archive keeps its earlier ids.
     """
 
     by_key: dict[ReferenceKey, str]
@@ -423,6 +425,9 @@ class _SourceIds:
                 f"m{reference.sequence}"
                 if reference.source_kind == "chat_message"
                 and reference.sequence is not None
+                else f"t{reference.source_id}"
+                if reference.source_kind == "turn_step"
+                and reference.source_id.isdigit()
                 else ""
             )
             if not short or short in by_id:
@@ -1312,7 +1317,15 @@ class ContextCompactor:
         compacted_through: int,
         objective: str | None = None,
         budget: ContextCallBudget | None = None,
+        prior: ContextSnapshot | None = None,
     ) -> CompactionResult:
+        """Compact ``sources`` into a new snapshot of the owner, or reuse one.
+
+        ``prior`` is an earlier snapshot of the same owner whose sources are
+        among these: when it was made the same way, only the sources it does
+        not cover are summarised, and their memory is rolled up with its own.
+        """
+
         lock = self._locks.setdefault((owner_type.value, owner_id), asyncio.Lock())
         async with lock:
             return await self._compact_serialized(
@@ -1326,6 +1339,7 @@ class ContextCompactor:
                 compacted_through=compacted_through,
                 objective=objective,
                 budget=budget,
+                prior=prior,
             )
 
     async def _compact_serialized(
@@ -1341,6 +1355,7 @@ class ContextCompactor:
         compacted_through: int,
         objective: str | None,
         budget: ContextCallBudget | None,
+        prior: ContextSnapshot | None = None,
     ) -> CompactionResult:
         if not sources:
             raise ContextCompactionError(
@@ -1389,6 +1404,7 @@ class ContextCompactor:
                 owner_id=owner_id,
                 engagement_id=engagement_id,
                 progress=progress,
+                prior=prior,
             )
             memory, unsourced = self._drop_unsourced(memory, seen_references)
             progress.dropped += unsourced
@@ -1473,13 +1489,16 @@ class ContextCompactor:
         owner_id: str,
         engagement_id: str,
         progress: _Progress,
+        prior: ContextSnapshot | None = None,
     ) -> ContextMemory:
         """Summarise leaf source groups, then roll their memories up to one.
 
         A leaf group's memory is reused from an earlier compaction of the same
         owner when its exact sources, model, prompt, objective and allowance
         match. A group the model fails on gets a deterministic memory: an
-        extract of its sources, or a merge of the memories it rolls up.
+        extract of its sources, or a merge of the memories it rolls up. A
+        usable ``prior`` snapshot stands for the sources it covers, so only
+        the rest are summarised.
         """
 
         plan = self._compactor_plan(profile, provider, model, objective)
@@ -1494,14 +1513,28 @@ class ContextCompactor:
             known_id=self._id_checker(engagement_id),
             ids=ids,
         )
-        leaf_groups = self._group_sources(
-            self._split_sources(sources, plan.segment_budget, ids),
-            plan.segment_budget,
-            ids,
-        )
-        progress.segments = len(leaf_groups)
         # Each memory with the canonical sources its group covers.
         memories: list[tuple[ContextMemory, frozenset[ReferenceKey]]] = []
+        prior_keys = self._usable_prior(
+            prior, sources, profile_id=profile.id, model=model
+        )
+        if prior is not None and prior.memory is not None and prior_keys:
+            memories.append((prior.memory, prior_keys))
+            sources = [
+                source
+                for source in sources
+                if self._reference_key(source.reference) not in prior_keys
+            ]
+        leaf_groups = (
+            self._group_sources(
+                self._split_sources(sources, plan.segment_budget, ids),
+                plan.segment_budget,
+                ids,
+            )
+            if sources
+            else []
+        )
+        progress.segments = len(leaf_groups)
         for group in leaf_groups:
             covered = frozenset(
                 self._reference_key(reference)
@@ -1628,6 +1661,37 @@ class ContextCompactor:
                 rolled.append((memory, covered))
             memories = rolled
         return memories[0][0]
+
+    def _usable_prior(
+        self,
+        prior: ContextSnapshot | None,
+        sources: list[ContextSource],
+        *,
+        profile_id: str,
+        model: str,
+    ) -> frozenset[ReferenceKey]:
+        """The sources ``prior`` stands for, or none when it cannot be built on.
+
+        It must be ready, made by the same profile, model and prompt, cover
+        only sources among these, and not be a degraded extract, which the
+        model is asked again rather than extended.
+        """
+
+        if (
+            prior is None
+            or prior.status != ContextSnapshotStatus.READY
+            or prior.memory is None
+            or prior.quality == ContextSnapshotQuality.DEGRADED
+            or prior.provider_profile_id != profile_id
+            or prior.model != model
+            or prior.prompt_version != CONTEXT_PROMPT_VERSION
+        ):
+            return frozenset()
+        keys = frozenset(
+            self._reference_key(reference) for reference in prior.source_references
+        )
+        present = {self._reference_key(source.reference) for source in sources}
+        return keys if keys and keys <= present else frozenset()
 
     async def _model_memory(
         self,
@@ -2525,6 +2589,24 @@ class ContextCompactor:
         owner_id: str,
         sources: list[ContextSource],
     ) -> None:
+        if owner_type == ContextOwnerType.CHAT_TURN:
+            # A turn's own ledger names its steps; the import is deferred
+            # because the ledger sizes its checkpoints with this module.
+            from .chat_turn_ledger import ChatTurnLedger
+
+            turn = self.store.get(ChatTurn, owner_id)
+            steps = {
+                str(int(entry.get("step", 0)))
+                for entry in ChatTurnLedger(self.store.database).history(turn)
+            }
+            for source in sources:
+                reference = source.reference
+                if (
+                    reference.source_kind != "turn_step"
+                    or reference.source_id not in steps
+                ):
+                    raise ValueError("turn memory source is not a step of this turn")
+            return
         if owner_type == ContextOwnerType.CHAT_SESSION:
             session = self.store.get(ChatSession, owner_id)
             messages: dict[str, ChatMessage] = {}
@@ -2614,6 +2696,16 @@ class ContextCompactor:
         return source.provenance or (source.reference,)
 
     def _persist(self, snapshot: ContextSnapshot) -> None:
+        if snapshot.owner_type == ContextOwnerType.CHAT_TURN:
+            # A running turn is rewritten by its own routing loop under
+            # optimistic revisions; its progress memory is found by owner, not
+            # through a pointer written into the turn.
+            try:
+                self.store.create(snapshot)
+            except ConflictError:
+                # diagnostic-expected: the same snapshot id is already stored; ids are derived from the sources and version
+                return
+            return
         owner_model: type[ChatSession] | type[AgentRun]
         owner_model = (
             ChatSession

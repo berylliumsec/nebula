@@ -76,6 +76,10 @@ class ScriptedProvider(ModelProvider):
         self.requests.append(request)
         if request.metadata.get("operation") == "conversation_naming":
             return _response(text="Tool result")
+        if request.metadata.get("operation") == "context_compaction":
+            # A long turn summarises its folded steps; the script is for
+            # the turn's own requests.
+            return _response(text=json.dumps({"summary": "Earlier steps ran."}))
         if not self.responses:
             raise AssertionError("provider script was exhausted")
         return self.responses.pop(0)

@@ -1631,6 +1631,16 @@ class NebulaStore:
                 harness_session_ids.difference_update(
                     str(item.payload["harness_session_id"]) for item in shared_with_runs
                 )
+            # A turn's progress memory is owned by the turn, which goes with
+            # the conversation; its ids are read before any row is deleted.
+            turn_ids = list(
+                session.scalars(
+                    select(EntityRow.id).where(
+                        EntityRow.kind == "chat_turns",
+                        EntityRow.chat_session_id.in_(session_ids),
+                    )
+                )
+            )
             owned_predicates = [
                 and_(
                     EntityRow.kind.in_(
@@ -1654,6 +1664,11 @@ class NebulaStore:
                     EntityRow.kind.in_(("context_snapshots", "context_segments")),
                     EntityRow.payload["owner_type"].as_string() == "chat_session",
                     EntityRow.payload["owner_id"].as_string().in_(session_ids),
+                ),
+                and_(
+                    EntityRow.kind.in_(("context_snapshots", "context_segments")),
+                    EntityRow.payload["owner_type"].as_string() == "chat_turn",
+                    EntityRow.payload["owner_id"].as_string().in_(turn_ids),
                 ),
                 and_(
                     EntityRow.kind.in_(("tool_calls", "approvals")),

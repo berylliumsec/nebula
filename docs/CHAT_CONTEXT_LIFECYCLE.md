@@ -282,7 +282,8 @@ bounded transformations:
   `omitted_steps` records the count. There is no separate token cap; the
   stored `token_estimate` is the checkpoint's own estimate. The hash and
   coverage prove which durable steps were folded; **they do not mean their
-  individual findings are present in the model request**.
+  individual findings are present in the model request** (the progress
+  memory below carries findings).
 * **Older-result clearing.** If the checkpoint plus replay exceeds the target,
   `_with_tool_history` advances the checkpoint and then replaces the oldest
   full results still whole with short receipts, retaining call IDs/batch
@@ -320,10 +321,42 @@ API returns them as `working_notes` (`content`, `revision`, `updated_at`,
 `turn_id`), or null when the assistant has never written notes. They are
 deleted with the conversation; a fork starts without them.
 
-This is a bounded replay strategy plus the agent's own notes, not a semantic
-summary of the task. A long turn can have complete durable evidence yet lose
-an early observation from the model-facing checkpoint and recent tail if the
-agent did not note it. The agent must revisit canonical outputs, or rely on
+**Progress memory.** Receipts say what each folded step did, not what it
+found. Before each routing request and the final answer, Core checks the steps
+a checkpoint may fold (outside the recent eight response groups and not
+waiting). Once their arguments and results that the progress memory does not
+yet cover reach about 8,000 estimated tokens (`turn_progress.DIGEST_TOKEN_TRIGGER`;
+replayed reasoning is not counted), the turn's own model summarises them with
+`ContextCompactor` (owner type `chat_turn`, see
+[The compactor](#the-compactor)). Each step is a source cited as `t<step>`,
+given as its tool and status, its `did` brief, Core's summary, and the output
+the model was sent (the result's summary and status first, redacted), whole up
+to 4,000 characters and otherwise its head and last 1,000 characters. The result is structured memory (findings, attempts
+and outcomes, current state, exact references), each item validated against
+the steps it cites. It is incremental: the previous memory stands for the
+steps it covers, only steps folded since are summarised, and the two are
+unioned (or rolled up by the model when they outgrow the allowance). The
+objective is the turn's goal, if any.
+
+The memory is stored as a `ContextSnapshot` owned by the turn and is only
+carried by the next checkpoint the turn writes, as `progress` (schema
+`nebula.turn-progress/v1`: covered step ranges, `quality`, the memory with
+each item's steps named, and a note that it is derived). Only a memory whose
+steps the checkpoint folds is carried. So the checkpoint block, progress
+included, still changes only when the checkpoint advances, and provider
+prefix caches keep hitting between advances. The summary calls are added to
+the turn's `context_usage` and charged to the goal (or the parent goal of a
+subagent) like conversation compaction; a goal already at its budget skips
+them. A failure (capacity, budget, or a provider error the compactor cannot
+absorb) records `chat.turn_progress.caught_failure_001` and leaves the
+checkpoint with its receipts; the turn continues, and another attempt waits
+until as much new output has folded again. Turn memories and their reusable
+segments are deleted with the conversation.
+
+This is a bounded replay strategy plus derived progress memory and the
+agent's own notes. A long turn can still lose an early observation from the
+model-facing request if it fell outside a step's excerpt or the memory's
+allowance. The agent must revisit canonical outputs, or rely on memory and
 notes that cite them, before drawing a conclusion that depends on them. The
 checkpoint does not by itself establish that the final answer is correct or
 incorrect.
@@ -443,6 +476,8 @@ all omitted findings were lost from every possible retrieval path.
   snapshot reuse, and budget accounting.
 * `src/nebula/v3/chat_turn_ledger.py`: append-only step reconstruction,
   checkpoint eligibility, contents, and size cap.
+* `src/nebula/v3/turn_progress.py`: when a turn's folded steps are summarised,
+  what each step contributes, and how the checkpoint carries the memory.
 * `src/nebula/v3/tool_activity.py`: step briefs and the tool-activity block
   a stored answer carries into later requests.
 * `src/nebula/v3/working_notes.py`: `notes.write`, notes storage, and the
@@ -451,9 +486,9 @@ all omitted findings were lost from every possible retrieval path.
   memory contracts.
 * `tests/v3/test_context.py`, `tests/v3/test_chat_context_assembly.py`,
   `tests/v3/test_turn_prompt_cache.py`, `tests/v3/test_in_turn_context_pruning.py`,
-  and `tests/v3/test_tool_history_memory.py`: focused behavioral coverage.
-  These tests prove particular contracts, not semantic completeness of a
-  summary.
+  `tests/v3/test_tool_history_memory.py`, and `tests/v3/test_turn_progress.py`:
+  focused behavioral coverage. These tests prove particular contracts, not
+  semantic completeness of a summary.
 
 ## Measuring retention
 

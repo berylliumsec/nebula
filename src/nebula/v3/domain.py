@@ -3409,6 +3409,8 @@ class HarnessDetailedUsage(NebulaModel):
 class ContextOwnerType(StringEnum):
     CHAT_SESSION = "chat_session"
     AGENT_RUN = "agent_run"
+    # A provider turn's progress memory of its folded tool steps.
+    CHAT_TURN = "chat_turn"
 
 
 class ContextSnapshotStatus(StringEnum):

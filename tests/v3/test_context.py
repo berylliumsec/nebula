@@ -2193,3 +2193,53 @@ def test_trimming_keeps_what_the_operator_asked_for_longest():
     assert len(fitted.constraints) == 4
     assert fitted.user_requests[0].text.startswith("request 0:")
     assert len(fitted.references) < 8
+
+
+def test_a_prior_snapshot_stands_for_the_sources_it_covers(tmp_path):
+    store = NebulaStore(tmp_path / "prior-context.db")
+    profile = _profile()
+    session = _owner(store, profile)
+    sources = _chat_history(
+        store,
+        session,
+        {index: (ChatRole.USER, f"Keep port {8440 + index}.") for index in range(1, 5)},
+    )
+    provider = SourcedMemoryProvider(profile.id)
+    first = _compact(store, session, profile, provider, sources[:2])
+
+    second = _compact(store, session, profile, provider, sources, prior=first.snapshot)
+
+    later = json.loads(str(provider.requests[-1].messages[0].content))
+    # Only the sources the prior memory does not cover are summarised ...
+    assert [source["id"] for source in later["sources"]] == ["m3", "m4"]
+    memory = second.snapshot.memory
+    assert memory is not None
+    # ... and its items are kept beside theirs (the same text once, citing
+    # both).
+    cited = {
+        reference.sequence
+        for item in memory.confirmed_facts
+        for reference in item.sources
+    }
+    assert cited == {1, 3}
+    assert len(second.snapshot.source_references) == 4
+    assert len(provider.requests) == 2
+
+
+def test_a_degraded_or_foreign_prior_is_not_built_on(tmp_path):
+    store = NebulaStore(tmp_path / "prior-ignored-context.db")
+    profile = _profile()
+    session = _owner(store, profile)
+    sources = _chat_history(
+        store, session, {index: (ChatRole.USER, f"Step {index}.") for index in (1, 2)}
+    )
+    degraded = _compact(
+        store, session, profile, ScriptedProvider(profile.id, ["x", "y"]), sources[:1]
+    )
+    assert degraded.snapshot.quality == ContextSnapshotQuality.DEGRADED
+    provider = SourcedMemoryProvider(profile.id)
+
+    _compact(store, session, profile, provider, sources, prior=degraded.snapshot)
+
+    shown = json.loads(str(provider.requests[0].messages[0].content))
+    assert [source["id"] for source in shown["sources"]] == ["m1", "m2"]

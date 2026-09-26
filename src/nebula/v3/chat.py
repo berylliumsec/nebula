@@ -80,6 +80,7 @@ from .runtime_platform import (
     notes_components,
 )
 from .tool_activity import lookup_identifiers, step_brief, tool_activity_block
+from .turn_progress import TurnProgress
 from .working_notes import (
     NOTES_ROUTING_INSTRUCTIONS,
     NOTES_WRITE_TOOL_NAME,
@@ -2275,6 +2276,8 @@ class ChatService:
         self.managed_skill_root = managed_skill_root
         self.worker_id = worker_id or f"core-worker-{uuid4()}"
         self.turn_ledger = ChatTurnLedger(store.database)
+        # Long turns' progress memory of their folded tool steps.
+        self.turn_progress = TurnProgress(store, self.turn_ledger)
         # Sealed reasoning parts by id; they are write-once, so a copy stays
         # valid. Recovery passes read turns off the event loop too.
         self._sealed_reasoning: OrderedDict[str, str] = OrderedDict()
@@ -7379,6 +7382,7 @@ class ChatService:
                             "parallel_tool_calls": True,
                         }
                     )
+                    await self._refresh_turn_progress(prepared, turn)
                     routing = self._with_tool_history(prepared, turn, routing)
                     routing = self._with_completion_hook_feedback(routing, turn)
                     if routing.tool_results and not self._fits_request_capacity(
@@ -8009,6 +8013,7 @@ class ChatService:
             # first, then the conversation ahead of the tool history is
             # compacted; only a request that still cannot fit fails, saying
             # what does not.
+            await self._refresh_turn_progress(prepared, turn)
             final_request = synthesis_request(operator_help_chunks)
             if operator_help_chunks and not fits_capacity(final_request):
                 operator_help_chunks = []
@@ -8871,7 +8876,8 @@ class ChatService:
         """The turn's checkpoint and replay, sized for the request's model.
 
         A checkpoint written now bounds its receipts by the model's input
-        capacity and carries the conversation's working notes.
+        capacity and carries the conversation's working notes and the turn's
+        progress memory (``_refresh_turn_progress``).
         """
 
         return self.turn_ledger.compacted_history(
@@ -8882,6 +8888,7 @@ class ChatService:
             working_notes=lambda: checkpoint_notes(
                 read_working_notes(self.store, turn.session_id)
             ),
+            progress=lambda steps: self.turn_progress.block(turn, steps),
         )
 
     def _fold_deeper(
@@ -8929,6 +8936,88 @@ class ChatService:
             },
         )
         return True
+
+    async def _refresh_turn_progress(
+        self, prepared: PreparedChat, turn: ChatTurn
+    ) -> None:
+        """Summarise a long turn's folded steps before its next request is built.
+
+        Once enough foldable output has accumulated
+        (``turn_progress.DIGEST_TOKEN_TRIGGER``), the turn's model turns it
+        into a cited progress memory; the next checkpoint the request advances
+        carries it, so the memory changes only when the checkpoint does. It is
+        charged to the goal like conversation compaction. A failure leaves the
+        checkpoint with its receipts alone and the turn going.
+        """
+
+        sources = self.turn_progress.due(turn)
+        if not sources:
+            return
+        goal_id = turn.goal_id or self.subagents.child_goal_id(turn)
+        goal = self.store.get(ChatGoal, goal_id) if goal_id else None
+        if (
+            goal is not None
+            and goal.token_budget is not None
+            and goal.usage.total_tokens >= goal.token_budget
+        ):
+            return
+        try:
+            result = await self.turn_progress.refresh(
+                turn,
+                sources,
+                profile=prepared.provider_profile,
+                provider=prepared.provider,
+                model=prepared.resolved_model,
+                objective=goal.objective if goal is not None else None,
+                budget=ContextCallBudget(
+                    max_tokens=(
+                        max(0, goal.token_budget - goal.usage.total_tokens)
+                        if goal is not None and goal.token_budget is not None
+                        else None
+                    )
+                ),
+            )
+            usage = result.snapshot.usage if result.created else ChatTokenUsage()
+            if result.created:
+                record_diagnostic(
+                    "debug",
+                    "chat",
+                    "chat.turn_progress.updated",
+                    "The turn's folded tool steps were summarised into its "
+                    "progress memory.",
+                    outcome="success",
+                    stage="routing",
+                    metadata={
+                        "provider": prepared.provider_profile.id,
+                        "model_id": prepared.resolved_model,
+                        "item_count": len(sources),
+                    },
+                )
+        except ContextCompactionError as exc:
+            record_caught_exception(
+                "chat",
+                "chat.turn_progress.caught_failure_001",
+                "The turn's progress memory could not be refreshed; its "
+                "checkpoint keeps the step receipts.",
+                exc,
+                stage="routing",
+            )
+            usage = exc.usage
+        if not usage.total_tokens:
+            return
+        prepared.context_usage = ChatTokenUsage(
+            input_tokens=prepared.context_usage.input_tokens + usage.input_tokens,
+            output_tokens=prepared.context_usage.output_tokens + usage.output_tokens,
+            total_tokens=prepared.context_usage.total_tokens + usage.total_tokens,
+        )
+        if goal is not None:
+            self._charge_goal(
+                goal.id,
+                usage,
+                exhausted_reason=(
+                    "Token budget exhausted while summarising the turn's progress."
+                ),
+            )
 
     @staticmethod
     def _clearing_watermark(target: int, capacity: int) -> int:

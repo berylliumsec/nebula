@@ -51,11 +51,13 @@ approvals/recovery block a new user turn before this diagram begins.
 stateDiagram-v2
     [*] --> ToolStep: tool completes or fails
     ToolStep --> Ledger: append step event; retain output/artifact
+    Ledger --> Progress: foldable output not yet summarised >= ~8k tokens
+    Progress --> Replay: summarise newly foldable steps into cited progress memory
     Ledger --> Replay: reconstruct latest step projection
     Replay --> Recent: retain latest 8 response groups in full
     Recent --> Checkpoint: 16 eligible steps or 24k estimated tokens
     Recent --> Fit: checkpoint does not advance
-    Checkpoint --> Fit: fold older nonwaiting steps into bounded receipts + notes
+    Checkpoint --> Fit: fold older nonwaiting steps into bounded receipts + notes + progress memory
     Fit --> Sticky: replay results already cleared this turn as receipts
     Sticky --> Send: request fits target
     Sticky --> Cross: request crosses target

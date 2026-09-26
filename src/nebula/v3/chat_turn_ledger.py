@@ -602,6 +602,37 @@ class ChatTurnLedger:
             or f"step:{entry.get('step', 0)}"
         )
 
+    def _foldable(
+        self,
+        history: list[dict[str, Any]],
+        recent_groups: int = RECENT_RESPONSE_GROUPS,
+    ) -> list[dict[str, Any]]:
+        """The steps of ``history`` a checkpoint may fold.
+
+        Every step outside the latest ``recent_groups`` response groups,
+        except one still waiting on the operator or a callback.
+        """
+
+        groups: list[str] = []
+        for entry in history:
+            group = self._group(entry)
+            if group not in groups:
+                groups.append(group)
+        keep_groups = set(groups[-recent_groups:]) if recent_groups > 0 else set()
+        return [
+            entry
+            for entry in history
+            if self._group(entry) not in keep_groups
+            and entry.get("status") not in PENDING_STATUSES
+        ]
+
+    def foldable(
+        self, turn: ChatTurn, recent_groups: int = RECENT_RESPONSE_GROUPS
+    ) -> list[dict[str, Any]]:
+        """The turn's steps its next checkpoint may fold, in recorded order."""
+
+        return self._foldable(self.history(turn), recent_groups)
+
     def compacted_history(
         self,
         turn: ChatTurn,
@@ -610,6 +641,7 @@ class ChatTurnLedger:
         byte_limit: int = CHECKPOINT_BYTE_LIMIT,
         working_notes: Callable[[], dict[str, Any] | None] | None = None,
         recent_groups: int = RECENT_RESPONSE_GROUPS,
+        progress: Callable[[set[int]], dict[str, Any] | None] | None = None,
     ) -> tuple[TurnCheckpoint | None, list[dict[str, Any]]]:
         """The turn's checkpoint and the entries replayed whole after it.
 
@@ -626,6 +658,9 @@ class ChatTurnLedger:
         A checkpoint that advances bounds its receipts by ``byte_limit`` and
         carries the session's working notes as ``working_notes`` returns them
         then: a folded ``notes.write`` call no longer replays its content.
+        It also carries the turn's progress memory as ``progress`` returns it
+        for the steps it folds; the memory changes only when the checkpoint
+        does.
 
         An advance with fewer ``recent_groups`` folds deeper, for a request
         that no longer fits even with every result cleared. Coverage only
@@ -636,18 +671,7 @@ class ChatTurnLedger:
         history = self.history(turn)
         if not history:
             return None, []
-        groups: list[str] = []
-        for entry in history:
-            group = self._group(entry)
-            if group not in groups:
-                groups.append(group)
-        keep_groups = set(groups[-recent_groups:]) if recent_groups > 0 else set()
-        fold = [
-            entry
-            for entry in history
-            if self._group(entry) not in keep_groups
-            and entry.get("status") not in PENDING_STATUSES
-        ]
+        fold = self._foldable(history, recent_groups)
         checkpoint = self.latest_checkpoint(turn.id)
         uncheckpointed = [
             entry
@@ -665,6 +689,11 @@ class ChatTurnLedger:
                 fold,
                 byte_limit=byte_limit,
                 notes=working_notes() if working_notes is not None else None,
+                progress=(
+                    progress({_step(entry) for entry in fold})
+                    if progress is not None
+                    else None
+                ),
             )
         if checkpoint is None:
             return None, history
@@ -677,6 +706,7 @@ class ChatTurnLedger:
         *,
         byte_limit: int = CHECKPOINT_BYTE_LIMIT,
         notes: dict[str, Any] | None = None,
+        progress: dict[str, Any] | None = None,
     ) -> TurnCheckpoint:
         entries = list(entries)
         through_step = max(_step(item) for item in entries)
@@ -768,6 +798,10 @@ class ChatTurnLedger:
             # bound: dropping receipts to make room for them would trade one
             # memory for the other.
             summary["working_notes"] = dict(notes)
+        if progress:
+            # The progress memory is bounded by the compactor's allowance, and
+            # like the notes it stays outside the receipts' bound.
+            summary["progress"] = dict(progress)
         token_estimate = _token_estimate(summary)
         checkpoint = TurnCheckpoint(through_step, summary, digest, token_estimate)
         with self.database.session() as session:
