@@ -1,10 +1,10 @@
 {
-  "change_digest": "ad14baca065313d2ceafbd0264074e4fe0afa1b686121a763d1e904f180c0b70",
+  "change_digest": "c78178ef8ab8c28598bd86f54b3c3de17201072dbfa475644d5268e775d652b3",
   "reviewed_by": "Claude focused review for ctx-reference",
-  "reason": "Stream K: per-turn operator help and project knowledge move from the instructions to a labelled reference block on the current user message of the provider request (chat.py: _reference_material/_with_reference_material, _model_context(reference=...) which attaches it before sizing and matches excerpts to the operator's words only, PreparedChat.reference_material reused by the context-length recovery path; the shared renderer's labels now state trust). Selected: the new regression file; test_chat.py (prepare/complete with knowledge, operator help, cloud-knowledge redaction, context recovery); every file driving _model_context or the excerpt query (context assembly, conversation.search wiring, turn prompt cache); context-length recovery (history fidelity, leftovers); knowledge retrieval timing and probe budgets; the knowledge index (harness_knowledge_context uses the relabelled renderer); operator help (docs/NEBULA3.md edited); resume (restart recovery lifecycle) and the tool loop (within-turn stability test). Counts from pytest --collect-only.",
+  "reason": "Stream K: per-turn operator help and project knowledge move from the instructions to a labelled reference block on the current user message of the provider request (chat.py: _reference_material/_with_reference_material, _model_context(reference=...) which attaches it before sizing and matches excerpts to the operator's words only, PreparedChat.reference_material reused by the context-length recovery path; the shared renderer's labels now state trust). Selected: the new regression file; test_chat.py (prepare/complete with knowledge, operator help, cloud-knowledge redaction, context recovery); every file driving _model_context or the excerpt query (context assembly, conversation.search wiring, turn prompt cache); context-length recovery (history fidelity, leftovers); knowledge retrieval timing and probe budgets; the knowledge index (harness_knowledge_context uses the relabelled renderer); operator help (docs/NEBULA3.md edited); resume (restart recovery lifecycle) and the tool loop (within-turn stability test); Stream C1's working-notes/tool-history tests, since its notes block now follows the reference block on the same message (rebased onto 8930a17). Counts from pytest --collect-only.",
   "exclusions": "No frontend, native or Playwright tests: no UI, Rust or visible layout change (the request placement is provider-facing only; citations and the transcript are unchanged). test_orchestration.py excluded: missions do not use operator help, _reference_material or _model_context. test_context_retrieval.py excluded: the pure ranker is unchanged and receives the same query as before. Real-Core evidence (scratch Core on 18719, OpenRouter deepseek/deepseek-v4.1-flash, fix vs base 343d289) is in the PR body. No full suite.",
   "expected_tests": {
-    "python": 214,
+    "python": 224,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -27,7 +27,8 @@
     "tests/v3/test_turn_preflight_latency.py",
     "tests/v3/test_inference_timeouts_probe_budget.py",
     "tests/v3/test_restart_recovery_lifecycle.py",
-    "tests/v3/test_chat_tool_loop.py"
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_tool_history_memory.py"
   ],
   "frontend": [],
   "native": [],
