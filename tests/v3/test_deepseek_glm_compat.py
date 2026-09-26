@@ -24,7 +24,12 @@ from typing import Any
 import httpx
 import pytest
 
-from nebula.v3.context import ContextCompactionError, ContextCompactor, ContextSource
+from nebula.v3.context import (
+    ContextCompactionError,
+    ContextCompactor,
+    ContextSource,
+    memory_prompt_schema,
+)
 from nebula.v3.domain import ChatTokenUsage, ContextMemory, ContextSourceReference
 from nebula.v3.model_catalog import openrouter_model_routes
 from nebula.v3.providers import (
@@ -377,9 +382,9 @@ def test_compaction_falls_back_when_response_format_rejected(
     )
     provider = _provider(flavor, model, base_url=base_url, handler=handler)
 
-    memory, usage = _request_memory(provider, model, tmp_path)
+    result = _request_memory(provider, model, tmp_path)
 
-    assert memory.summary == "Three hosts are up in 10.0.0.0/24."
+    assert result.memory.summary == "Three hosts are up in 10.0.0.0/24."
     assert len(seen) == 2
     first, retry = (json.loads(request.content) for request in seen)
     assert "response_format" in first
@@ -389,9 +394,7 @@ def test_compaction_falls_back_when_response_format_rejected(
     system = _system(retry)
     assert system.count("Return JSON matching this schema: ") == 1
     assert (
-        json.dumps(
-            ContextMemory.model_json_schema(), ensure_ascii=False, separators=(",", ":")
-        )
+        json.dumps(memory_prompt_schema(), ensure_ascii=False, separators=(",", ":"))
         in system
     )
 

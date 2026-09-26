@@ -73,9 +73,10 @@ unknown. This is an estimate, not a promise from the provider.
 
 The default trigger is `floor(0.75 × input_capacity)`, where input capacity is
 the resolved context window minus reserved output, also capped by any separate
-input limit. The post-compaction target is `floor(0.60 × input_capacity)` for
-the compactor's sizing policy. The effective values depend on model, route,
-output request, and profile.
+input limit. `compacted_input_target`, `floor(0.60 × input_capacity)`, is not a
+size the assembled request is reduced to: it only sizes the compactor's output
+allowance (see [The compactor](#the-compactor)). The effective values depend on
+model, route, output request, and profile.
 
 The estimate compared with the trigger counts everything the request will
 carry: instructions and messages, the conversation's working notes, and for
@@ -116,9 +117,9 @@ When the estimate exceeds the 75% target, `_model_context`:
    supplied with them, through `ContextCompactor`. The compactor's objective is
    the active goal's objective, or none: the latest message ("thanks") is no
    guide to what later turns served by the same memory will ask. The selected
-   model produces structured memory with cited source references. Long source
-   sets are chunked and reduced hierarchically; source references must
-   validate.
+   model produces structured memory: lists whose every item cites the
+   canonical messages that support it, and a short free-text summary (see
+   [The compactor](#the-compactor)).
 4. Sends the memory as a leading block of the first kept message, labeled as
    derived history rather than instructions, and appends up to eight matching
    original transcript excerpts (as JSON data, within a fifth of the target and
@@ -147,14 +148,79 @@ Snapshots are immutable, scoped to one chat session, and keyed for reuse by
 canonical source content, provider/model, and prompt version. A ready snapshot
 keeps serving while the later messages still fit and its covered messages match
 it by ID and content. An edit (even in place) or retraction of a covered message
-forces fresh compaction. A failed summarization records a failed snapshot and
-returns an error; Core does not silently drop the old messages. The context API
-exposes status, limits, source references, coverage, usage, and cost, but no
+forces fresh compaction. A summarization problem degrades the memory rather than
+failing the turn (see [The compactor](#the-compactor)); only capacity and budget
+errors record a failed snapshot and return an error, and Core never silently
+drops the old messages. The context API exposes status, the served snapshot's
+`quality`, limits, source references, coverage, usage, and cost, but no
 mutation route: `GET /api/v1/chat/sessions/{session_id}/context`.
 
-This validation proves structural provenance and a bounded request. It cannot
-prove that a model summary preserved every fact or the exact meaning of a long
-source. For consequential details, consult the original message or artifact.
+### The compactor
+
+`ContextCompactor` is shared by chat and provider-backed missions. Its prompt
+(`CONTEXT_PROMPT_VERSION = "nebula-context-v2"`) is detailed instructions plus
+the `ContextMemory` schema, whose field descriptions travel with a
+structured-output request. It asks for the operator's requests in order and
+close to verbatim, the current state and next step, decisions with reasons,
+constraints, confirmed facts, attempts and their outcomes (failures included),
+corrections, exact references (paths, URLs, hosts, commands, IDs), open
+questions, and a summary of at most about 200 words. Pleasantries, superseded
+plans, and bulky output already referenced by an ID are dropped. Source text is
+presented as data, never as instructions. The full guidance may take at most
+half of the input capacity; a smaller model (roughly under 3,000 to 4,000 input
+tokens) gets a brief form of it.
+When no objective is supplied, none is sent and none is reserved.
+
+**Sizing.** A compactor call may write
+`min(max_output_tokens, max(1,024, floor(0.05 × compacted_input_target)))`
+tokens, lowered further only so that two memories still fit one roll-up request
+on a small window. On the 8,192-token fallback window that is 1,024 tokens
+(previously 184). Every request stays within the model's input capacity; the
+instructions, schema, and objective are reserved first, and 60% of the remainder
+is the budget for one group of sources. Long source sets are split into groups
+greedily from the start and reduced hierarchically: each group becomes a memory,
+and groups of memories are rolled up until one remains. If no two memories fit
+one roll-up request, they are merged mechanically within the allowance.
+
+**Validation and repair.** Every list item must cite only the canonical sources
+of its request, and every strong identifier in its text (URL, CVE, UUID, IPv4
+address and port, long hex string, multi-segment path, file name with a known
+extension) must appear in the original text of the sources it cites. For a
+roll-up, that is the original messages its merged items cite, never a derived
+summary. Identifiers in the free-text summary must appear in some source.
+Evidence and artifact IDs must be named by the sources and exist in the
+project. An answer that fails any check, is not JSON, or was cut off by the
+output limit gets one repair request that names the problems (or asks for a
+shorter answer). After that, invalid items are dropped and counted, an
+unverified summary identifier becomes `[unverified]`, and the rest is used.
+
+**Degraded, not blocked.** If the provider call fails, or neither answer holds
+a usable memory, that group's memory is a deterministic extract of the original
+messages: each operator request (up to 240 characters), an excerpt of the
+latest reply, and the exact identifiers the messages contain, each citing its
+message, under a summary that says summarisation failed. After one such
+failure the rest of that compaction is deterministic rather than calling a
+failing model again. The snapshot is still written `ready`, so the turn
+continues. Its `quality` records the outcome: `complete`, `salvaged` (items
+dropped; `dropped_items` counts them), or `degraded` (an extract). A degraded
+snapshot is served until the next compaction, which asks the model again.
+Capacity errors (the current message or a minimal compaction cannot fit the
+window) and goal/mission budget errors still fail the request and record a
+`failed` snapshot; they need the operator to act.
+
+**Incremental cost.** Each summarised leaf group is also stored as a
+`ContextSegment` owned by the session (or mission run), keyed by a digest of its
+exact sources, provider profile, model, prompt, objective, and output allowance.
+Because groups are formed greedily from the start of an append-only archive,
+the next compaction finds the earlier groups unchanged and reuses their
+memories. Only new or changed groups and the roll-ups are summarised again.
+`segment_count` and `reused_segments` on the snapshot show how much was
+reused. Segments are derived like snapshots and are deleted with their owner.
+
+These checks prove structural provenance, identifier faithfulness, and a
+bounded request. They cannot prove that a model summary preserved every fact or
+the exact meaning of a long source. For consequential details, consult the
+original message or artifact.
 
 ## Tool history within one uninterrupted turn
 
@@ -267,9 +333,11 @@ a switch that requires compaction needs an explicit confirmation fingerprint.
    latter is not necessarily the historical request. The session's
    `context_calibration` shows the factor later estimates were scaled by.
 3. For conversation compaction, inspect `context_snapshots` for status,
-   `compacted_through`, source IDs/hash, model, prompt version, and usage. Check
-   the original covered messages and any selected context before trusting a
-   derived memory item.
+   `quality`, `dropped_items`, `compacted_through`, source IDs/hash, model,
+   prompt version, usage, and `segment_count`/`reused_segments`
+   (`context_segments` holds the reusable leaf memories). A `degraded` snapshot
+   is an extract, not a summary. Check the original covered messages and any
+   selected context before trusting a derived memory item.
 4. For an uninterrupted turn, inspect `chat_turn_step_events` and
    `chat_turn_checkpoints`, compare covered ranges, `step_count`, `steps`,
    `omitted_steps`, and `working_notes`, then follow tool-call/artifact
@@ -293,15 +361,17 @@ all omitted findings were lost from every possible retrieval path.
 
 * `src/nebula/v3/chat.py`: `prepare_async`, `_merge_history`, `_model_context`,
   `_with_tool_history`, `context_status`, and runtime-switch preflight.
-* `src/nebula/v3/context.py`: limit resolution, structured compaction,
-  snapshot validation/reuse, and budget accounting.
+* `src/nebula/v3/context.py`: limit resolution, the compactor prompt and
+  sizing, validation/repair/salvage, the extractive fallback, leaf-segment reuse,
+  snapshot reuse, and budget accounting.
 * `src/nebula/v3/chat_turn_ledger.py`: append-only step reconstruction,
   checkpoint eligibility, contents, and size cap.
 * `src/nebula/v3/tool_activity.py`: step briefs and the tool-activity block
   a stored answer carries into later requests.
 * `src/nebula/v3/working_notes.py`: `notes.write`, notes storage, and the
   notes data block.
-* `src/nebula/v3/domain.py`: durable `ContextSnapshot` and memory contracts.
+* `src/nebula/v3/domain.py`: durable `ContextSnapshot`, `ContextSegment`, and
+  memory contracts.
 * `tests/v3/test_context.py`, `tests/v3/test_chat_context_assembly.py`,
   `tests/v3/test_turn_prompt_cache.py`, `tests/v3/test_in_turn_context_pruning.py`,
   and `tests/v3/test_tool_history_memory.py`: focused behavioral coverage.

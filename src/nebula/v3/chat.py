@@ -12174,6 +12174,11 @@ class ChatService:
             working_notes=working_notes_status(
                 read_working_notes(self.store, session.id)
             ),
+            quality=(
+                latest.quality
+                if latest is not None and latest.status == ContextSnapshotStatus.READY
+                else None
+            ),
         )
 
     def runtime_switch_preflight(
