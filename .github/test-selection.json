@@ -1,13 +1,13 @@
 {
-  "change_digest": "c20930fe52155edc9e043d995741d4ff6b075988e2d0887484859c1546265411",
-  "reviewed_by": "Claude focused review for ctx-midturn",
-  "reason": "Stream D (F12) changes how a running provider tool turn fits its requests: ChatService._compact_mid_turn (conversation compaction mid-turn with the ledger replay unchanged, recorded in the turn snapshot, conversation.search offered, goal charged), the routing context_full branch and final-answer fitting ladder (help, compaction, deeper checkpoint folds via ChatTurnLedger.compacted_history(recent_groups)), context-length recovery after tools (compaction retry, second recovery after a refused clearing retry, later syntheses rebuilt), clearing order (lookups last) and identifiers kept in lookup receipts (tool_activity.lookup_identifiers), and _model_context's requested_output_tokens/target_headroom parameters. Selected: the new test_midturn_compaction.py; in-turn replay/clearing/checkpoint files (test_in_turn_context_pruning, test_turn_prompt_cache, test_tool_history_memory, test_chat_tool_loop, test_routing_prose_answer, test_synthesis_tool_declarations, test_tool_failures, test_chat_routing_tolerance); final-answer and recovery paths (test_chat_final_synthesis_recovery, test_restart_recovery_lifecycle, test_turn_outcome_history, test_chat_leftovers, test_history_content_fidelity, test_operator_help); every _model_context caller and context assembly (test_chat, test_chat_api, test_chat_context_assembly, test_conversation_search, test_context_retrieval, test_chat_reference_material, test_api_stream_context, test_context); goal charging (test_chat_goals). Counts from pytest --collect-only.",
-  "exclusions": "No frontend, native or Playwright tests: no ui/ or Rust changes and no visible UI change (compaction and folding reuse existing records and the generic tool card). Harness chats, missions and provider adapters are excluded: harness turns own their context, mission compaction does not use _model_context or the chat ledger, and no adapter changed. tests/v3/test_minimal_agent_instructions.py stays excluded (its turn-protocol test already fails on origin/main). Real-Core evidence (scratch Core, OpenRouter deepseek/deepseek-v4.1-flash, 12K window, host mode) and the retention-eval rerun of s1/s2 are in the PR body. No full suite.",
+  "change_digest": "d380d20d5ea500bfaccb87be00002b24be6207e0c1672aea19d5f4d606ebc314",
+  "reviewed_by": "Claude focused review for ctx-capacity-source",
+  "reason": "Core now reports which limit binds the context window. resolve_context_limits records binding_limit (model | configured | route | fallback) and input_limit_binds; ContextStatus exposes binding_limit, input_capacity and input_limit_binds on the chat and mission context APIs (null for runtime-managed context); source/capacity_source keep their meaning (they are read by api.py and chat.py only to fill capacity_source). The Working context capacity label now uses binding_limit and input_capacity instead of inferring them. Python: test_context.py (five binding-limit unit tests: configured below verified routes, smallest route with and without its input limit, catalog window below every route, catalog/known/configured/fallback, unverified OpenRouter floor/primary route/configured) plus the files that resolve limits or serve the context API: test_chat_api.py (chat, mission and harness context payloads), test_model_output_budget.py and test_chat_context_assembly.py. Frontend: WorkingContextPanel (label cases for every binding and an older Core), client mapping, ProviderRequestInputDetails and the App saved-memory journey. Playwright: area:working-context and entry:assistant on desktop, mobile Chromium and mobile WebKit (SessionsPage renders the panel).",
+  "exclusions": "Full suites are not approved and are excluded. Rules for chat.py/api.py/context.py also map conversation-progress, provider-reasoning and core-api; they are not selected because the backend change only adds three fields to the context status payload and ContextLimits (no request, prompt, stream or storage behaviour changes), which the selected Python files cover. provider-request-breakdown-core is not selected: its local vLLM profile has no route limits and its label text is unchanged. The real-Core check (OpenRouter with verified routes, capped and uncapped, and an OpenAI-compatible profile, at a LAN origin with the production bundle) is recorded in the PR body. Native/Tauri tests are unaffected.",
   "expected_tests": {
-    "python": 453,
-    "frontend": 0,
+    "python": 152,
+    "frontend": 139,
     "native": 0,
-    "playwright": 0
+    "playwright": 226
   },
   "python_versions": [
     "3.12"
@@ -15,32 +15,23 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_midturn_compaction.py",
-    "tests/v3/test_in_turn_context_pruning.py",
-    "tests/v3/test_turn_prompt_cache.py",
-    "tests/v3/test_tool_history_memory.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_chat_context_assembly.py",
-    "tests/v3/test_conversation_search.py",
-    "tests/v3/test_context_retrieval.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_chat_final_synthesis_recovery.py",
-    "tests/v3/test_chat_leftovers.py",
-    "tests/v3/test_history_content_fidelity.py",
-    "tests/v3/test_turn_outcome_history.py",
-    "tests/v3/test_operator_help.py",
-    "tests/v3/test_api_stream_context.py",
     "tests/v3/test_context.py",
-    "tests/v3/test_chat_goals.py",
-    "tests/v3/test_restart_recovery_lifecycle.py",
-    "tests/v3/test_chat_routing_tolerance.py",
-    "tests/v3/test_routing_prose_answer.py",
-    "tests/v3/test_synthesis_tool_declarations.py",
-    "tests/v3/test_tool_failures.py",
-    "tests/v3/test_chat_reference_material.py"
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_model_output_budget.py",
+    "tests/v3/test_chat_context_assembly.py"
+  ],
+  "frontend": [
+    "ui/src/components/WorkingContextPanel.test.tsx",
+    "ui/src/components/ProviderRequestInputDetails.test.tsx",
+    "ui/src/api/client.test.ts",
+    "ui/src/App.test.tsx"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit",
+    "area:working-context"
+  ]
 }
