@@ -488,10 +488,14 @@ def test_a_covering_snapshot_serves_turns_until_the_tail_outgrows_it(tmp_path):
         > limits.target_input_tokens * 2 // 5
     )
 
-    while not compacted:
+    # Then a later boundary serves: compacted by the turn that needed it, or
+    # in the background after the turn before.
+    for _ in range(20):
         prepared, compacted = _turn(
             service, session, profile, provider, f"Later: {FOLLOW_UP}"
         )
+        if prepared.context_snapshot.id != snapshot.id:
+            break
     assert prepared.context_snapshot.compacted_through > snapshot.compacted_through
 
 

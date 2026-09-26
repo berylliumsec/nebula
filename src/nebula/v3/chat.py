@@ -1065,6 +1065,81 @@ _MAX_OPERATOR_HELP_ARTICLES = 3
 # compacting again, before it settles for a request above the target that
 # still fits the model's input capacity.
 _COMPACTION_BOUNDARY_ATTEMPTS = 3
+# A conversation whose estimate passes this share of the target is compacted
+# in the background after a turn, so the turn that crosses the target finds
+# its snapshot ready instead of waiting a minute or more for the compactor.
+_PRECOMPACTION_THRESHOLD = 0.6
+# Background compactions running at once across all conversations: each is
+# one or more provider calls, and turns the operator started come first.
+_PRECOMPACTION_CONCURRENCY = 2
+# The smallest answer a compactor call is allowed; a goal whose remaining
+# budget cannot cover the archive plus this is not compacted in the background.
+_PRECOMPACTION_OUTPUT_RESERVE = 1_024
+
+
+def _user_led(roles: Sequence[ChatRole], start: int, stored: int) -> int:
+    """The first operator message from ``start``; the current one at the latest.
+
+    A durable request appends one message, so everything before it that is
+    archived is already canonical (``stored`` messages).
+    """
+
+    while start < len(roles) - 1 and roles[start] != ChatRole.USER:
+        start += 1
+    return min(start, stored)
+
+
+def _recent_tail_start(
+    sizes: Sequence[int],
+    roles: Sequence[ChatRole],
+    *,
+    goal: int,
+    instruction_tokens: int,
+    stored: int,
+    growth: int = 0,
+) -> int:
+    """Where a request's recent, complete, user-led tail begins.
+
+    The tail keeps two fifths of what the goal leaves after the instructions
+    (at least the current message); the rest of the goal is for the memory,
+    retrieved originals and headroom. Everything before it is archived.
+    ``growth`` is what the conversation is expected to add before the
+    request this boundary is for: that much less is kept now, so the tail
+    then is the one a compaction at that point would keep.
+    """
+
+    tail_budget = max(
+        sizes[-1], max(0, goal - instruction_tokens) * 2 // 5 - max(0, growth)
+    )
+    start = len(sizes) - 1
+    tail_tokens = sizes[-1]
+    while start > 0 and tail_tokens + sizes[start - 1] <= tail_budget:
+        start -= 1
+        tail_tokens += sizes[start]
+    return _user_led(roles, start, stored)
+
+
+@dataclass(frozen=True)
+class _PrecompactionPlan:
+    """What one background compaction archives, with whose provider and budget."""
+
+    session: ChatSession
+    profile: ProviderProfile
+    provider: ModelProvider
+    archived: list[ChatMessage]
+    objective: str | None
+    budget: ContextCallBudget | None
+    goal_id: str | None
+
+
+@dataclass
+class _Precompaction:
+    """A conversation's background compaction, while it is pending or running."""
+
+    task: asyncio.Task[None] | None = None
+    # Set once its compactor call begins: a turn arriving before then
+    # cancels it and compacts itself; one arriving after waits for it.
+    started: bool = False
 
 
 def _chat_context_sources(messages: Sequence[ChatMessage]) -> list[ContextSource]:
@@ -2289,6 +2364,9 @@ class ChatService:
         )
         self._naming_tasks: set[asyncio.Task[Any]] = set()
         self._naming_sessions: set[str] = set()
+        # Background compactions by conversation id (see _schedule_precompaction).
+        self._precompactions: dict[str, _Precompaction] = {}
+        self._precompaction_slots = asyncio.Semaphore(_PRECOMPACTION_CONCURRENCY)
         self.subagents = SubagentService(store, self)
         self.agent_messages = AgentMessageService(store)
         self.shutting_down = False
@@ -4401,6 +4479,13 @@ class ChatService:
             if task is not None and not task.done()
         ]
         tasks.extend(self._naming_tasks)
+        # A cancelled background compaction persists nothing; the next turn
+        # after a restart compacts for itself.
+        tasks.extend(
+            item.task
+            for item in self._precompactions.values()
+            if item.task is not None and not item.task.done()
+        )
         for task in tasks:
             task.cancel()
         if tasks:
@@ -6039,6 +6124,7 @@ class ChatService:
         self._persist(prepared, completion)
         self._start_initial_naming(prepared, completion.message.content)
         self._release_execution(prepared)
+        self._schedule_precompaction(prepared)
         return completion
 
     async def _complete_with_context_recovery(
@@ -7233,6 +7319,7 @@ class ChatService:
                 self._persist(prepared, completion)
                 self._start_initial_naming(prepared, completion.message.content)
                 self._release_execution(prepared)
+                self._schedule_precompaction(prepared)
                 payload = completion.model_dump(mode="json")
                 payload["type"] = "done"
                 yield "done", payload
@@ -8266,6 +8353,7 @@ class ChatService:
                         turn = prepared.turn or turn
                         self._start_initial_naming(prepared, completion.message.content)
                         self._release_execution(prepared)
+                        self._schedule_precompaction(prepared)
                         payload = completion.model_dump(mode="json")
                         payload["type"] = "done"
                         yield "done", payload
@@ -8457,6 +8545,7 @@ class ChatService:
         self._persist(prepared, completion)
         self._start_initial_naming(prepared, completion.message.content)
         self._release_execution(prepared)
+        self._schedule_precompaction(prepared)
         payload = completion.model_dump(mode="json")
         payload["type"] = "done"
         yield "done", payload
@@ -12671,14 +12760,7 @@ class ChatService:
             for message in messages
         }
         limits = resolve_context_limits(profile, model=session.model)
-        try:
-            project_text = project_instructions_text(
-                self._project_instructions(session.engagement_id)
-            )
-        except ChatConfigurationError:
-            # diagnostic-expected: an unusable AGENTS.md is reported when a turn starts
-            project_text = ""
-        base_instructions = _CHAT_INSTRUCTIONS + project_text
+        base_instructions = self._estimated_base_instructions(session.engagement_id)
         estimated = calibrated_estimate(
             estimate_messages(estimated_forms.values(), base_instructions) + reserved,
             calibration,
@@ -12687,11 +12769,15 @@ class ChatService:
         latest = ContextCompactor(self.store).latest(
             ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
         )
-        if latest is None:
+        if latest is None or estimated <= limits.target_input_tokens:
+            # A conversation within the target is sent whole (see
+            # _model_context), whatever snapshot exists: one prepared in the
+            # background serves only once the conversation outgrows it.
             status = (
                 "not_needed" if estimated <= limits.target_input_tokens else "stale"
             )
             through = 0
+            latest = None
         elif latest.status == ContextSnapshotStatus.FAILED:
             status = "failed"
             through = latest.compacted_through
@@ -13185,28 +13271,37 @@ class ChatService:
             return kept
 
         compactor = ContextCompactor(self.store)
-        latest = compactor.latest(
-            ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
-        )
-        if (
-            reuse_snapshot
-            and latest is not None
-            and latest.status == ContextSnapshotStatus.READY
-            and latest.memory is not None
+        owner = session
+
+        async def served_by_latest() -> (
+            tuple[list[ChatRequestMessage], ContextSnapshot] | None
         ):
-            # While every message after its boundary still fits beside its
-            # memory, the latest snapshot keeps serving: re-summarising the
-            # archive each time the tail advanced cost a compaction on every
-            # turn, and a moving boundary changed the request's opening bytes.
-            # It must cover exactly the messages it stands for, by content as
-            # well as identity, so an edited or retracted one compacts afresh.
+            """The request the latest snapshot serves, if it still does.
+
+            While every message after its boundary still fits beside its
+            memory, the latest snapshot keeps serving: re-summarising the
+            archive each time the tail advanced cost a compaction on every
+            turn, and a moving boundary changed the request's opening bytes.
+            It must cover exactly the messages it stands for, by content as
+            well as identity, so an edited or retracted one compacts afresh.
+            """
+
+            latest = compactor.latest(
+                ContextOwnerType.CHAT_SESSION, owner.id, owner.engagement_id
+            )
+            if (
+                latest is None
+                or latest.status != ContextSnapshotStatus.READY
+                or latest.memory is None
+            ):
+                return None
             covered = [
                 message
                 for message in stored_messages
                 if message.sequence <= latest.compacted_through
             ]
             start = len(covered)
-            if (
+            if not (
                 covered
                 and start < len(messages)
                 and messages[start].role == ChatRole.USER
@@ -13219,33 +13314,35 @@ class ChatService:
                 and source_digest(_chat_context_sources(covered))
                 == latest.source_sha256
             ):
-                reused = await fitted(latest, start)
-                if reused is not None:
-                    return reused, instructions, ChatTokenUsage(), latest, session
+                return None
+            reused = await fitted(latest, start)
+            return (reused, latest) if reused is not None else None
+
+        if reuse_snapshot:
+            served_now = await served_by_latest()
+            if served_now is None and await self._settle_precompaction(session.id):
+                # A background compaction was preparing the snapshot this
+                # request needs: waiting for it was shorter than compacting
+                # again.
+                served_now = await served_by_latest()
+            if served_now is not None:
+                reused, latest = served_now
+                return reused, instructions, ChatTokenUsage(), latest, session
 
         sizes = [_estimated_message_tokens(estimated_form(item)) for item in messages]
+        roles = [message.role for message in messages]
         instruction_tokens = estimate_tokens(instructions)
 
         def user_led(start: int) -> int:
-            """The first operator message from ``start``; the current one at the latest.
+            return _user_led(roles, start, len(stored_messages))
 
-            A durable request appends one message, so everything before it
-            that is archived is already canonical.
-            """
-
-            while start < len(messages) - 1 and messages[start].role != ChatRole.USER:
-                start += 1
-            return min(start, len(stored_messages))
-
-        # Keep a recent, complete, user-led tail. The rest of the target is for
-        # the memory, retrieved originals, and headroom.
-        tail_budget = max(sizes[-1], max(0, goal - instruction_tokens) * 2 // 5)
-        start = len(messages) - 1
-        tail_tokens = sizes[-1]
-        while start > 0 and tail_tokens + sizes[start - 1] <= tail_budget:
-            start -= 1
-            tail_tokens += sizes[start]
-        start = user_led(start)
+        start = _recent_tail_start(
+            sizes,
+            roles,
+            goal=goal,
+            instruction_tokens=instruction_tokens,
+            stored=len(stored_messages),
+        )
 
         usage = ChatTokenUsage()
         cost = 0.0
@@ -13341,6 +13438,370 @@ class ChatService:
             },
         )
         return request_messages, instructions, usage, snapshot, session
+
+    def _estimated_base_instructions(self, engagement_id: str) -> str:
+        """The instructions every turn of the conversation begins with, for
+        estimates made outside a turn (the context meter, pre-compaction)."""
+
+        try:
+            project_text = project_instructions_text(
+                self._project_instructions(engagement_id)
+            )
+        except ChatConfigurationError:
+            # diagnostic-expected: an unusable AGENTS.md is reported when a turn starts
+            project_text = ""
+        return _CHAT_INSTRUCTIONS + project_text
+
+    def _schedule_precompaction(self, prepared: PreparedChat) -> None:
+        """Compact in the background what the next turns would wait for.
+
+        Called once a provider turn's answer is saved. The first compaction of
+        a conversation can take a minute or more, and the turn that crosses
+        the target used to wait for it. Past ``_PRECOMPACTION_THRESHOLD`` of
+        the target, the boundary that turn would choose is compacted now, with
+        the turn's provider and model; the turn then reuses the snapshot
+        without a model call (see ``_model_context``), or waits for a
+        compaction still running. Nothing here can fail the turn that
+        triggered it. A background compaction lost to a restart only means the
+        next turn compacts for itself, as it always could.
+        """
+
+        if self.shutting_down or not prepared.engagement_id:
+            return
+        session = prepared.session or prepared.pending_session
+        if session is None:
+            return
+        running = self._precompactions.get(session.id)
+        if running is not None and running.task is not None and not running.task.done():
+            # It reads the transcript when it starts, so it covers this turn.
+            return
+        goal_id = (
+            prepared.turn.goal_id
+            if prepared.turn is not None
+            else prepared.source_request.goal_id
+            if prepared.source_request is not None
+            else None
+        )
+        state = _Precompaction()
+        state.task = create_diagnostic_task(
+            self._precompact(
+                session.id,
+                prepared.provider_profile.id,
+                prepared.model_request.model or prepared.resolved_model,
+                goal_id,
+                state,
+            ),
+            feature="chat",
+            event_code="chat.context.precompaction",
+            failure_message=(
+                "Background context compaction failed; the next turn compacts "
+                "for itself."
+            ),
+            name="nebula-context-precompaction",
+        )
+        self._precompactions[session.id] = state
+
+        def finished(done: asyncio.Task[None]) -> None:
+            del done
+            if self._precompactions.get(session.id) is state:
+                del self._precompactions[session.id]
+
+        state.task.add_done_callback(finished)
+
+    async def _settle_precompaction(self, session_id: str) -> bool:
+        """Let a turn that needs a new snapshot use the background compaction.
+
+        One still waiting for a slot is cancelled (nothing was spent) and the
+        turn compacts for itself; one already compacting is waited for, so
+        its snapshot is reused instead of being computed twice. True when the
+        turn waited for one.
+        """
+
+        running = self._precompactions.get(session_id)
+        task = running.task if running is not None else None
+        if (
+            running is None
+            or task is None
+            or task.done()
+            or task.get_loop() is not asyncio.get_running_loop()
+        ):
+            return False
+        if not running.started:
+            task.cancel()
+            return False
+        # asyncio.wait neither raises the compaction's outcome here nor
+        # cancels it when this turn is stopped.
+        await asyncio.wait({task})
+        return True
+
+    async def _precompact(
+        self,
+        session_id: str,
+        profile_id: str,
+        model: str,
+        goal_id: str | None,
+        state: _Precompaction,
+    ) -> None:
+        async with self._precompaction_slots:
+            try:
+                plan, reason = self._precompaction_plan(
+                    session_id, profile_id, model, goal_id
+                )
+            except (NotFoundError, ChatError) as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.context.precompaction_skipped",
+                    "Background context compaction was not attempted.",
+                    exc,
+                    stage="context",
+                    metadata={"session_id": session_id},
+                )
+                return
+            if plan is None:
+                # Below the threshold and "the latest snapshot still serves"
+                # are the ordinary outcome of most turns, not events.
+                if reason not in {"below_threshold", "snapshot_serves"}:
+                    record_diagnostic(
+                        "info",
+                        "chat",
+                        "chat.context.precompaction_skipped",
+                        "Background context compaction was not needed or not allowed.",
+                        outcome="skipped",
+                        stage="context",
+                        metadata={"session_id": session_id, "reason": reason},
+                    )
+                return
+            state.started = True
+            record_diagnostic(
+                "info",
+                "chat",
+                "chat.context.precompaction_started",
+                "Background context compaction started after a turn.",
+                stage="context",
+                metadata={
+                    "session_id": session_id,
+                    "provider": profile_id,
+                    "model_id": model,
+                    "compacted_through": plan.archived[-1].sequence,
+                },
+            )
+            try:
+                result = await ContextCompactor(self.store).compact(
+                    owner_type=ContextOwnerType.CHAT_SESSION,
+                    owner_id=plan.session.id,
+                    engagement_id=plan.session.engagement_id,
+                    provider_profile=plan.profile,
+                    provider=plan.provider,
+                    model=model,
+                    compacted_through=plan.archived[-1].sequence,
+                    sources=_chat_context_sources(plan.archived),
+                    objective=plan.objective,
+                    budget=plan.budget,
+                )
+            except ContextCompactionError as exc:
+                record_caught_exception(
+                    "chat",
+                    "chat.context.precompaction_failed",
+                    "Background context compaction failed; the next turn "
+                    "compacts for itself.",
+                    exc,
+                    stage="context",
+                    metadata={"session_id": session_id},
+                )
+                self._charge_precompaction(plan.goal_id, exc.usage)
+                return
+            if result.created:
+                self._charge_precompaction(plan.goal_id, result.snapshot.usage)
+            record_diagnostic(
+                "info",
+                "chat",
+                "chat.context.precompaction_succeeded",
+                "Background context compaction prepared the next turn's snapshot.",
+                outcome="succeeded",
+                stage="context",
+                metadata={
+                    "session_id": session_id,
+                    "snapshot_id": result.snapshot.id,
+                    "created": result.created,
+                    "compacted_through": result.snapshot.compacted_through,
+                    "reused_segments": result.snapshot.reused_segments,
+                },
+            )
+
+    def _precompaction_plan(
+        self, session_id: str, profile_id: str, model: str, goal_id: str | None
+    ) -> tuple[_PrecompactionPlan | None, str]:
+        """What a background compaction would archive now, or why it would not.
+
+        The estimate is the context meter's (conversation, instructions and
+        the latest turn's tool reserve, calibrated). The boundary is the one
+        ``_model_context`` would choose for the turn that crosses the target,
+        with each operator message assumed as long as the last one.
+        """
+
+        session = self.store.get(ChatSession, session_id)
+        if (
+            session.backend != ChatBackend.PROVIDER
+            or session.provider_profile_id != profile_id
+            or (session.model is not None and session.model != model)
+        ):
+            # The operator switched runtime for the next turn.
+            return None, "runtime_changed"
+        profile = self.store.get(ProviderProfile, profile_id)
+        if not profile.enabled:
+            return None, "provider_disabled"
+        messages = self._session_messages(session)
+        if not messages:
+            return None, "no_messages"
+        images_supported = profile.capabilities.vision
+        forms = [
+            _estimation_message(
+                message.role,
+                _stored_model_text(message),
+                message.content_blocks,
+                images_supported=images_supported,
+            )
+            for message in messages
+        ]
+        instructions = self._estimated_base_instructions(session.engagement_id)
+        calibration = _context_calibration(session.metadata, profile_id, model)
+        reserved = _context_reserve(session.metadata)
+        limits = resolve_context_limits(profile, model=model)
+        if (
+            calibrated_estimate(
+                estimate_messages(forms, instructions) + reserved, calibration
+            )
+            < _PRECOMPACTION_THRESHOLD * limits.target_input_tokens
+        ):
+            return None, "below_threshold"
+        goal_tokens = (
+            estimate_allowance(limits.target_input_tokens, calibration) - reserved
+        )
+        sizes = [_estimated_message_tokens(form) for form in forms]
+        next_size = next(
+            (
+                size
+                for message, size in zip(reversed(messages), reversed(sizes))
+                if message.role == ChatRole.USER
+            ),
+            0,
+        )
+        latest = ContextCompactor(self.store).latest(
+            ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
+        )
+        if (
+            latest is not None
+            and latest.status == ContextSnapshotStatus.READY
+            and latest.memory is not None
+        ):
+            covered = [
+                message
+                for message in messages
+                if message.sequence <= latest.compacted_through
+            ]
+            start = len(covered)
+            first = messages[start] if start < len(messages) else None
+            if (
+                covered
+                and (first is None or first.role == ChatRole.USER)
+                and {
+                    reference.source_id
+                    for reference in latest.source_references
+                    if reference.source_kind == "chat_message"
+                }
+                == {message.id for message in covered}
+                and source_digest(_chat_context_sources(covered))
+                == latest.source_sha256
+            ):
+                led = _estimation_message(
+                    ChatRole.USER,
+                    _compacted_memory_text(
+                        latest.memory, _stored_model_text(first) if first else ""
+                    ),
+                    first.content_blocks if first else [],
+                    images_supported=images_supported,
+                )
+                if (
+                    estimate_messages([led, *forms[start + 1 :]], instructions)
+                    + next_size
+                    <= goal_tokens
+                ):
+                    return None, "snapshot_serves"
+        # The snapshot first serves the turn that crosses the target, so the
+        # boundary is the one that turn would choose: what the conversation
+        # adds until then becomes that turn's tail, so less is kept now.
+        start = _recent_tail_start(
+            [*sizes, next_size],
+            [*(message.role for message in messages), ChatRole.USER],
+            goal=goal_tokens,
+            instruction_tokens=estimate_tokens(instructions),
+            stored=len(messages),
+            growth=goal_tokens - estimate_messages(forms, instructions) - next_size,
+        )
+        archived = messages[:start]
+        if not archived:
+            return None, "nothing_to_archive"
+        goal: ChatGoal | None = None
+        if goal_id is not None:
+            try:
+                goal = self.store.get(ChatGoal, goal_id)
+            except NotFoundError:  # diagnostic-expected: a deleted goal neither guides nor pays for the compaction
+                goal = None
+        if goal is not None and goal.status != ChatGoalStatus.RUNNING:
+            # A finished goal does not guide the turns after it.
+            goal = None
+        budget: ContextCallBudget | None = None
+        if goal is not None and goal.token_budget is not None:
+            remaining = max(0, goal.token_budget - goal.usage.total_tokens)
+            if remaining < sum(sizes[:start]) + _PRECOMPACTION_OUTPUT_RESERVE:
+                return None, "goal_budget"
+            budget = ContextCallBudget(max_tokens=remaining)
+        provider = self.provider_factory(profile)
+        self._enforce_engagement_privacy(
+            self.store.get(Engagement, session.engagement_id), provider
+        )
+        return (
+            _PrecompactionPlan(
+                session=session,
+                profile=profile,
+                provider=provider,
+                archived=archived,
+                objective=goal.objective if goal is not None else None,
+                budget=budget,
+                goal_id=goal.id if goal is not None else None,
+            ),
+            "compact",
+        )
+
+    def _charge_precompaction(self, goal_id: str | None, usage: ChatTokenUsage) -> None:
+        """Debit a background compaction from the goal it prepared a turn for."""
+
+        if goal_id is None or usage.total_tokens <= 0:
+            return
+        last_error: Exception | None = None
+        for _ in range(3):
+            try:
+                self._charge_goal(
+                    goal_id,
+                    usage,
+                    exhausted_reason="Token budget exhausted during context compaction.",
+                )
+                return
+            except ConflictError as exc:  # diagnostic-expected: a running turn updated the goal; charged again against its revision
+                last_error = exc
+            except (
+                NotFoundError
+            ):  # diagnostic-expected: the goal was deleted; nothing is left to charge
+                return
+        if last_error is not None:
+            record_caught_exception(
+                "chat",
+                "chat.context.precompaction_uncharged",
+                "A background compaction could not be charged to its goal.",
+                last_error,
+                stage="context",
+                metadata={"goal_id": goal_id},
+            )
 
     def _conversation_dense(self) -> DenseEncoder | None:
         """The local embedding model for conversation retrieval, once ready.

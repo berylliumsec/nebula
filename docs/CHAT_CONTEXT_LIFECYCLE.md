@@ -110,7 +110,10 @@ excerpts, which are known only when a turn is assembled. The last provider
 request has a separate recorded estimate, with the provider's
 `reported_input_tokens` and `reported_cached_input_tokens`.
 
-When the estimate exceeds the 75% target, `_model_context`:
+When the estimate exceeds the 75% target, `_model_context` does the steps
+below. Before summarizing anew, it waits for a background compaction of the
+conversation that is already running (see
+[Background pre-compaction](#background-pre-compaction)).
 
 1. Refuses to proceed only if the current user message, required instructions
    and tool reserve exceed hard input capacity. A conversation with nothing
@@ -157,6 +160,53 @@ caches keep hitting. The stored message never contains any of these blocks;
 the next turn replays it without them. One exception stays in the instructions: when a tool
 step failed, final synthesis adds operator help matching the observed failure
 to that request's instructions, which already differ from routing's.
+
+### Background pre-compaction
+
+Compacting takes provider calls, and the first compaction of a conversation can
+take a minute or more (60–134 s measured with `deepseek/deepseek-v4.1-flash`).
+The turn that crosses the target used to wait for all of it. Instead, once a
+provider turn's answer is saved, Core checks the conversation with the context
+meter's accounting (saved messages, the turn's base instructions and the latest
+tool reserve, calibrated). Past 60% of the target, it compacts in the
+background the boundary the turn that crosses the target would choose. The next
+operator message is assumed as long as the last one, and the messages sent
+until the crossing count toward the tail that turn keeps, so the snapshot
+archives what a compaction at that point would. It is skipped while the latest
+ready snapshot would still serve the next turn.
+
+* It uses the turn's provider and model, the same per-conversation compaction
+  lock as a turn, and the active goal's objective. A running goal pays for it,
+  and it is skipped when the goal's remaining budget cannot cover the archive
+  plus a minimal answer. Provider privacy is checked again, and a disabled
+  provider or a runtime the operator switched away from is skipped.
+* At most two run at once across Core; turns the operator starts never wait
+  for that slot.
+* The conversation keeps being sent whole while it fits the target. The
+  snapshot waits, and the turn that crosses the target reuses it through step 2
+  below, without a model call.
+* A turn the current snapshot still serves never waits. A turn that needs a
+  new snapshot while one is being compacted waits for it and reuses it. If
+  the background compaction has not started yet, the turn cancels it and
+  compacts for itself.
+* The snapshot is not free. The first background boundary is set when the
+  conversation passes 60% of the target, so it can serve a turn or two fewer
+  than a compaction at the crossing turn would have. When turns follow each
+  other within seconds, a turn can arrive while the next background
+  compaction is still running and wait for the rest of it.
+* Nothing here can fail or delay the turn that triggered it. A failure records
+  `chat.context.precompaction_failed`, and the next turn compacts for itself.
+  Core shutdown cancels a running background compaction before anything is
+  stored, so after a restart the next turn compacts as it always could.
+* Diagnostics record `chat.context.precompaction_started`, `_succeeded`,
+  `_skipped` (with a reason; the ordinary "below the threshold" and "snapshot
+  still serves" outcomes are not recorded) and `_failed`.
+* Harness-managed chats and exchanges without a durable conversation are never
+  pre-compacted.
+
+The context endpoint describes the next request. While the conversation fits
+the target it reports `not_needed` with no snapshot, even when one has been
+prepared in the background or survives an edit that shrank the conversation.
 
 Snapshots are immutable, scoped to one chat session, and keyed for reuse by
 canonical source content, provider/model, and prompt version. A ready snapshot
@@ -437,7 +487,9 @@ all omitted findings were lost from every possible retrieval path.
 ## Code and tests
 
 * `src/nebula/v3/chat.py`: `prepare_async`, `_merge_history`, `_model_context`,
-  `_with_tool_history`, `context_status`, and runtime-switch preflight.
+  `_with_tool_history`, `context_status`, runtime-switch preflight, and
+  background pre-compaction (`_schedule_precompaction`, `_precompaction_plan`,
+  `_settle_precompaction`).
 * `src/nebula/v3/context.py`: limit resolution, the compactor prompt and
   sizing, validation/repair/salvage, the extractive fallback, leaf-segment reuse,
   snapshot reuse, and budget accounting.
@@ -451,7 +503,8 @@ all omitted findings were lost from every possible retrieval path.
   memory contracts.
 * `tests/v3/test_context.py`, `tests/v3/test_chat_context_assembly.py`,
   `tests/v3/test_turn_prompt_cache.py`, `tests/v3/test_in_turn_context_pruning.py`,
-  and `tests/v3/test_tool_history_memory.py`: focused behavioral coverage.
+  `tests/v3/test_tool_history_memory.py`, and `tests/v3/test_precompaction.py`:
+  focused behavioral coverage.
   These tests prove particular contracts, not semantic completeness of a
   summary.
 

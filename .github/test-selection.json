@@ -1,13 +1,13 @@
 {
-  "change_digest": "39bc21563ac9d9fc1d3c05f9ec084aea20a7f747eea0b4055cefc37d09b25c94",
-  "reviewed_by": "Claude focused review for ctx-capacity-source",
-  "reason": "Core now reports which limit binds the context window. resolve_context_limits records binding_limit (model | configured | route | fallback) and input_limit_binds; ContextStatus exposes binding_limit, input_capacity and input_limit_binds on the chat and mission context APIs (null for runtime-managed context); source/capacity_source keep their meaning (they are read by api.py and chat.py only to fill capacity_source). The Working context capacity label now uses binding_limit and input_capacity instead of inferring them. Python: test_context.py (five binding-limit unit tests: configured below verified routes, smallest route with and without its input limit, catalog window below every route, catalog/known/configured/fallback, unverified OpenRouter floor/primary route/configured) plus the files that resolve limits or serve the context API: test_chat_api.py (chat, mission and harness context payloads), test_model_output_budget.py and test_chat_context_assembly.py. Frontend: WorkingContextPanel (label cases for every binding and an older Core), client mapping, ProviderRequestInputDetails and the App saved-memory journey. Playwright: area:working-context and entry:assistant on desktop, mobile Chromium and mobile WebKit (SessionsPage renders the panel).",
-  "exclusions": "Full suites are not approved and are excluded. Rules for chat.py/api.py/context.py also map conversation-progress, provider-reasoning and core-api; they are not selected because the backend change only adds three fields to the context status payload and ContextLimits (no request, prompt, stream or storage behaviour changes), which the selected Python files cover. provider-request-breakdown-core is not selected: its local vLLM profile has no route limits and its label text is unchanged. The real-Core check (OpenRouter with verified routes, capped and uncapped, and an OpenAI-compatible profile, at a LAN origin with the production bundle) is recorded in the PR body. Native/Tauri tests are unaffected.",
+  "change_digest": "c5b524cc3b5d42b2d9b0e611ce0edbd76f8a793c2a391201d15c0f45ee1a3dc6",
+  "reviewed_by": "Claude focused review for ctx-precompact",
+  "reason": "Stream P, background pre-compaction. chat.py: after every persisted provider answer (the four _persist/_release_execution sites) _schedule_precompaction starts a tracked background task; under a global semaphore (2) _precompaction_plan applies the context meter's accounting and, past 60% of the target and when the latest snapshot would not serve the next turn, picks the boundary the target-crossing turn would choose (_recent_tail_start, extracted from _model_context, with projected growth) and calls ContextCompactor.compact under the same per-owner lock, charged to a running goal, skipped for a changed runtime, disabled provider, privacy refusal or an unaffordable goal budget; ChatService.shutdown cancels it. _model_context tries the current snapshot first, then waits for a running background compaction (a queued one is cancelled) and reuses it. context_status now reports not_needed and no snapshot while the conversation fits the target (it is sent whole). Selected: the new test file; every file that drives _model_context, turn completion/persistence and context_status (assembly, mid-turn compaction, pruning, prompt cache, conversation search, API stream context, chat API, compactor, preflight latency, chat, goals, subagents, agent messages, write amplification, polling cost, queue, restart recovery, tool loop, history fidelity, leftovers, output budget, tool-history memory, reference material, project instructions) and the runtime-switch preflight node. Counts from pytest --collect-only.",
+  "exclusions": "No frontend, native or Playwright tests: no UI change; the Working context panel renders context_status as before and only shows not_needed while the conversation is sent whole. test_orchestration.py excluded: missions use their own compaction path. Real-Core evidence (scratch Core on 18719, deepseek/deepseek-v4.1-flash, retention eval s1 with and without operator think time, base af61fff vs branch) is in the PR body. No full suite.",
   "expected_tests": {
-    "python": 152,
-    "frontend": 139,
+    "python": 483,
+    "frontend": 0,
     "native": 0,
-    "playwright": 226
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -15,22 +15,34 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_context.py",
+    "tests/v3/test_precompaction.py",
+    "tests/v3/test_chat_context_assembly.py",
+    "tests/v3/test_midturn_compaction.py",
+    "tests/v3/test_in_turn_context_pruning.py",
+    "tests/v3/test_turn_prompt_cache.py",
+    "tests/v3/test_conversation_search.py",
+    "tests/v3/test_api_stream_context.py",
     "tests/v3/test_chat_api.py",
+    "tests/v3/test_context.py",
+    "tests/v3/test_turn_preflight_latency.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_chat_agent_messages.py",
+    "tests/v3/test_turn_write_amplification.py",
+    "tests/v3/test_chat_polling_cost.py",
+    "tests/v3/test_chat_queue.py",
+    "tests/v3/test_restart_recovery_lifecycle.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_history_content_fidelity.py",
+    "tests/v3/test_chat_leftovers.py",
     "tests/v3/test_model_output_budget.py",
-    "tests/v3/test_chat_context_assembly.py"
+    "tests/v3/test_tool_history_memory.py",
+    "tests/v3/test_chat_reference_material.py",
+    "tests/v3/test_project_instructions.py",
+    "tests/v3/test_api.py::test_runtime_switch_preflight_keeps_incompatible_model_unselected"
   ],
-  "frontend": [
-    "ui/src/components/WorkingContextPanel.test.tsx",
-    "ui/src/components/ProviderRequestInputDetails.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/App.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit",
-    "area:working-context"
-  ]
+  "playwright": []
 }

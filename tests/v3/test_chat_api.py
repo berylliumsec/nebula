@@ -556,10 +556,27 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
             usage={"input_tokens": 4, "output_tokens": 2, "total_tokens": 6},
         )
     )
+    # A conversation within the target is sent whole, so a snapshot prepared
+    # for it (by background compaction) is not what the next request uses.
+    prepared_context = client.get(
+        f"/api/v1/chat/sessions/{session_id}/context", headers=_auth()
+    ).json()
+    assert prepared_context["status"] == "not_needed"
+    assert prepared_context["snapshot"] is None
+    assert prepared_context["compacted_through"] == 0
+    # Once the conversation outgrows the target, the snapshot serves it.
+    first = store.get(ChatMessage, history.json()[0]["id"])
+    store.update(
+        ChatMessage,
+        first.id,
+        {"content": "Hello " + "earlier detail " * 1_200},
+        expected_revision=first.revision,
+    )
     ready_context = client.get(
         f"/api/v1/chat/sessions/{session_id}/context", headers=_auth()
     ).json()
     assert ready_context["status"] == "ready"
+    assert ready_context["compacted_through"] == 1
     assert ready_context["quality"] == "complete"
     assert ready_context["snapshot"]["quality"] == "complete"
     assert ready_context["snapshot"]["dropped_items"] == 0
