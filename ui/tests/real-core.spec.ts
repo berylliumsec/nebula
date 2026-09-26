@@ -1566,6 +1566,108 @@ test("production assistant work survives a project switch through real Core", as
   }
 });
 
+test("assistant upgrade production LAN opens a conversation link in its own project", async ({ page }) => {
+  test.setTimeout(90_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const modelStub = await startLocalModelStub({ responseContent: "Project B keeps this durable answer." });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string; name: string }>;
+    const projectA = projects[0];
+    expect(projectA).toBeTruthy();
+    const projectBResponse = await api.post("engagements", { data: {
+      name: "Deep link Project B",
+      description: "Owns the linked conversations",
+      status: "active",
+      tags: [],
+    } });
+    expect(projectBResponse.ok(), await projectBResponse.text()).toBe(true);
+    const projectB = await projectBResponse.json() as { id: string };
+    const providerResponse = await api.post("providers", { data: {
+      name: "Deep link model",
+      provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`,
+      enabled: true,
+      is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+    const createChat = async (content: string) => {
+      const response = await api.post("chat/completions", { data: {
+        backend: "provider",
+        provider_id: provider.id,
+        model: "security-model",
+        engagement_id: projectB.id,
+        messages: [{ role: "user", content }],
+        include_knowledge: false,
+        stream: false,
+      } });
+      expect(response.ok(), await response.text()).toBe(true);
+      return (await response.json() as { session_id: string }).session_id;
+    };
+    const linkedChat = await createChat("Remember this in Project B");
+    const archivedChat = await createChat("Keep this after Project B is archived");
+
+    // The operator was last in Project A and opens a link that names Project A.
+    await page.addInitScript((projectId) => localStorage.setItem("nebula.engagement", projectId), projectA.id);
+    const open = (projectId: string, sessionId: string) =>
+      page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${sessionId}#token=${encodeURIComponent(core.token)}`);
+    const answer = page.locator(".chat-message.assistant .assistant-markdown").filter({ hasText: "Project B keeps this durable answer." });
+    const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+    const mobileViewport = (page.viewportSize()?.width ?? 1_000) <= 760;
+    await open(projectA.id, linkedChat);
+    await expect(answer).toBeVisible({ timeout: 20_000 });
+    expect(new URL(page.url()).pathname).toBe(`/projects/${projectB.id}/workbench`);
+    expect(new URL(page.url()).searchParams.get("session")).toBe(linkedChat);
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
+    if (!mobileViewport) await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Deep link Project B");
+    await expect(composer).toBeVisible();
+
+    // The corrected URL is the durable identity: loading it again opens the same conversation.
+    await open(projectB.id, linkedChat);
+    await expect(answer).toBeVisible({ timeout: 20_000 });
+    expect(new URL(page.url()).pathname).toBe(`/projects/${projectB.id}/workbench`);
+    // Resource links name the conversation without a view.
+    await page.goto(`${core.origin}/projects/${projectA.id}/workbench?session=${linkedChat}#token=${encodeURIComponent(core.token)}`);
+    await expect(answer).toBeVisible({ timeout: 20_000 });
+    expect(new URL(page.url()).pathname).toBe(`/projects/${projectB.id}/workbench`);
+
+    // A deleted conversation explains itself; it does not become a blank chat.
+    expect((await api.delete(`chat-sessions/${linkedChat}`)).status()).toBe(204);
+    await open(projectA.id, linkedChat);
+    const missing = page.getByRole("alert").filter({ hasText: "Conversation not found" });
+    await expect(missing).toBeVisible({ timeout: 20_000 });
+    await expect(composer).toHaveCount(0);
+    await missing.getByRole("button", { name: "Start new chat" }).click();
+    await expect(composer).toBeVisible();
+    await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeNull();
+
+    // An archived owner is named and can be restored in place.
+    const current = await (await api.get(`engagements/${projectB.id}`)).json() as { revision: number };
+    const archive = await api.patch(`engagements/${projectB.id}`, { data: { changes: { status: "archived" }, expected_revision: current.revision } });
+    expect(archive.ok(), await archive.text()).toBe(true);
+    await open(projectA.id, archivedChat);
+    const archived = page.getByRole("alert").filter({ hasText: "Conversation is in an archived project" });
+    await expect(archived).toContainText("It belongs to Deep link Project B.", { timeout: 20_000 });
+    await archived.getByRole("button", { name: "Restore project" }).click();
+    await expect(answer).toBeVisible({ timeout: 20_000 });
+    expect(new URL(page.url()).pathname).toBe(`/projects/${projectB.id}/workbench`);
+    expect(new URL(page.url()).searchParams.get("session")).toBe(archivedChat);
+    expect((await (await api.get(`engagements/${projectB.id}`)).json() as { status: string }).status).toBe("active");
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
+
 test("production LAN mission ledger survives failure, retry, restart recovery, and relaunch through real Core", async ({ page }) => {
   test.setTimeout(90_000);
   const lanAddress = localNetworkIpv4();

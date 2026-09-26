@@ -72,6 +72,9 @@
 
 /* Assistant controls share a bounded column; transcript and composer stay reachable. */
 .chat-panel > .chat-thread { flex: 1 1 0; min-height: 0; overflow: hidden; }
+/* A conversation link that is opening or cannot open stands in for the transcript. */
+.chat-panel > .chat-link-state { display: flex; flex: 1 1 0; min-height: 0; overflow-y: auto; }
+.chat-link-state > .surface-state.chat-empty-state { flex: 1 1 auto; background: transparent; }
 .chat-operator-updates { flex: 0 0 auto; min-height: 0; max-height: min(240px, 30cqh); overflow: auto; overscroll-behavior: contain; width: min(var(--chat-reading-track), calc(100% - 24px)); margin-inline: auto; }
 .chat-operator-updates:empty { display: none; }
 .chat-operator-updates > * { margin: 6px 0; }
