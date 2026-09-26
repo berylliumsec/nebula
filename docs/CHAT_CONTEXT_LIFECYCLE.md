@@ -342,9 +342,15 @@ original message or artifact.
 step. Each follow-up model call receives the turn's replay, subject to two
 bounded transformations:
 
-* **Deterministic checkpoint.** The most recent eight provider response groups
-  stay whole. Older completed, failed, or denied steps can enter a checkpoint;
-  waiting approval/callback steps stay whole. The checkpoint advances after
+* **Deterministic checkpoint.** The most recent provider response groups stay
+  whole: at most eight, and only as many whole groups, newest first, as fit a
+  quarter of the model's input capacity (at least 2,000 estimated tokens), but
+  never fewer than the newest group. The token bound matters when a model
+  batches several calls per response: counted in groups alone, five-call
+  batches kept about forty steps out of every checkpoint, and they were
+  cleared in place instead of folding into receipts. Older completed,
+  failed, or denied steps can enter a checkpoint; waiting approval/callback
+  steps stay whole. The checkpoint advances after
   16 eligible unfolded steps, about 24,000 estimated tokens (the same
   `estimate_tokens` count every request estimate uses), or an explicit
   advance when a request crosses its target. The same checkpoint and replay

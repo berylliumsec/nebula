@@ -34,6 +34,13 @@ CHECKPOINT_BYTE_CEILING = 64 * 1024
 _CHECKPOINT_CAPACITY_SHARE = 0.03
 _BYTES_PER_TOKEN = 3
 RECENT_RESPONSE_GROUPS = 8
+# The recent window also stops at a share of the model's input capacity, in
+# the same token estimate the checkpoint uses. Counted in response groups
+# alone, a model that batches five calls per response kept about forty steps
+# out of every checkpoint; once they outgrew the request they were cleared
+# in place, and what they found never reached a receipt.
+RECENT_WINDOW_CAPACITY_SHARE = 0.25
+RECENT_WINDOW_MIN_TOKENS = 2_000
 CHECKPOINT_SCHEMA = "nebula.chat-turn-checkpoint/v3"
 _CHECKPOINT_STEP_FIELDS = [
     "number",
@@ -73,6 +80,20 @@ def _token_estimate(value: Any) -> int:
     """Tokens ``value`` costs as JSON, counted as every request estimate is."""
 
     return estimate_tokens(_canonical(value).decode("utf-8"))
+
+
+def recent_window_tokens(input_capacity: int) -> int:
+    """The recent window's token bound for a working input capacity.
+
+    Callers pass ``ContextLimits.working_input_capacity``: past the working
+    ceiling a larger window buys a larger recent window no more than it
+    buys a larger request.
+    """
+
+    return max(
+        RECENT_WINDOW_MIN_TOKENS,
+        int(input_capacity * RECENT_WINDOW_CAPACITY_SHARE),
+    )
 
 
 def checkpoint_byte_limit(input_capacity: int) -> int:
@@ -594,6 +615,38 @@ class ChatTurnLedger:
                 token_estimate=row.token_estimate,
             )
 
+    @classmethod
+    def _recent_groups(
+        cls,
+        history: list[dict[str, Any]],
+        recent_groups: int,
+        recent_tokens: int | None,
+    ) -> set[str]:
+        """The response groups the recent window keeps whole.
+
+        At most ``recent_groups`` of them, newest first, and with
+        ``recent_tokens`` only as many whole groups as fit it; the newest is
+        kept whatever its size, since it is what the model is deciding on.
+        """
+
+        if recent_groups <= 0:
+            return set()
+        members: dict[str, list[dict[str, Any]]] = {}
+        for entry in history:
+            members.setdefault(cls._group(entry), []).append(entry)
+        kept: set[str] = set()
+        used = 0
+        for group in reversed(list(members)):
+            if len(kept) >= recent_groups:
+                break
+            if recent_tokens is not None:
+                size = _token_estimate(members[group])
+                if kept and used + size > recent_tokens:
+                    break
+                used += size
+            kept.add(group)
+        return kept
+
     @staticmethod
     def _group(entry: dict[str, Any]) -> str:
         return str(
@@ -610,6 +663,7 @@ class ChatTurnLedger:
         byte_limit: int = CHECKPOINT_BYTE_LIMIT,
         working_notes: Callable[[], dict[str, Any] | None] | None = None,
         recent_groups: int = RECENT_RESPONSE_GROUPS,
+        recent_tokens: int | None = None,
     ) -> tuple[TurnCheckpoint | None, list[dict[str, Any]]]:
         """The turn's checkpoint and the entries replayed whole after it.
 
@@ -631,17 +685,18 @@ class ChatTurnLedger:
         that no longer fits even with every result cleared. Coverage only
         grows: later calls with the default window keep replaying just what
         the deeper checkpoint left out.
+
+        ``recent_tokens`` (``recent_window_tokens``) bounds the recent window
+        in tokens as well: whole groups are kept newest first until it is
+        used, never fewer than the newest. It only decides which steps may
+        fold; they still fold in blocks, so the prefix stays stable between
+        advances.
         """
 
         history = self.history(turn)
         if not history:
             return None, []
-        groups: list[str] = []
-        for entry in history:
-            group = self._group(entry)
-            if group not in groups:
-                groups.append(group)
-        keep_groups = set(groups[-recent_groups:]) if recent_groups > 0 else set()
+        keep_groups = self._recent_groups(history, recent_groups, recent_tokens)
         fold = [
             entry
             for entry in history

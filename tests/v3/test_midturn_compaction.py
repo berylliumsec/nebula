@@ -587,7 +587,7 @@ class AlternatingProvider(TurnProvider):
         )
 
 
-def test_older_lookups_are_cleared_after_other_older_results(tmp_path):
+def test_older_lookups_are_cleared_after_other_older_results(tmp_path, monkeypatch):
     """What the model looked up to answer from is cleared last.
 
     Stream F saw conversation.search find the right passages, then the answer
@@ -595,6 +595,11 @@ def test_older_lookups_are_cleared_after_other_older_results(tmp_path):
     first. Other results are cleared before a lookup now.
     """
 
+    # The order applies whenever results are cleared. A recent window bounded
+    # by tokens folds these steps before any needs clearing (a folded lookup
+    # keeps what it found in its receipt), so this keeps the window counted
+    # in groups alone to reach clearing.
+    monkeypatch.setattr(chat_module, "recent_window_tokens", lambda _capacity: None)
     broker = ScanBroker()
     provider = AlternatingProvider(calls=12)
     store, service, prepared = _turn(

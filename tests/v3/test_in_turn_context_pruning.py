@@ -186,15 +186,16 @@ def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
     synthesis = [r for r in requests if r.tool_choice == ToolChoice.NONE]
     assert len(routing) == 21 and len(synthesis) == 1
     # Before checkpointing every prior call is replayed. Once the deterministic
-    # checkpoint is present, the newest calls after it remain full: at least
-    # the latest eight provider groups. The routing instructions never change.
+    # checkpoint is present, the newest calls after it remain full: the latest
+    # provider groups that fit the recent window's token bound (at least the
+    # newest, at most eight). The routing instructions never change.
     assert len({request.instructions for request in routing}) == 1
     for step, request in enumerate(routing):
         expected = [f"call-{index}" for index in range(1, step + 1)]
         replayed = [result.call_id for result in request.tool_results]
         assert replayed == expected[len(expected) - len(replayed) :]
         if replayed != expected:
-            assert len(replayed) >= 8
+            assert 1 <= len(replayed)
             assert _checkpointed(request)
     for request in (routing[-1], synthesis[0]):
         results = request.tool_results
