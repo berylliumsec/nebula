@@ -340,6 +340,9 @@ single chat session or mission run; it is not shared across an engagement.
 
 Analyst chat deterministically retrieves a small number of matching articles from
 the release-bundled [Nebula 3 Operator Help Knowledge Base](../src/nebula/v3/operator_help.md).
+Articles must hold up against the best match: one that only shares product vocabulary
+with the question is left out, while each problem the question names by an article's
+keyword phrase keeps its runbook, up to three per request.
 This product corpus is separate from Project knowledge uploads: it is available even
 when a Project has no documents, contains no engagement data, and does not require a
 cloud-knowledge transfer confirmation. Product-help citations use stable

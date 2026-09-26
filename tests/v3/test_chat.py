@@ -2717,7 +2717,10 @@ def test_chat_retrieves_bundled_operator_help_without_project_documents(
     )
 
     assert provider.requests == []
-    assert prepared.citations[0].source_id == "nebula-help:runner-setup"
+    # The runbook the message is about, not every article sharing its words.
+    assert [item.source_id for item in prepared.citations] == [
+        "nebula-help:runner-setup"
+    ]
     assert prepared.citations[0].artifact_id is None
     instructions = prepared.model_request.instructions or ""
     assert "OPERATOR HELP" not in instructions
