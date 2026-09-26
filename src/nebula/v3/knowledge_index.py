@@ -401,6 +401,23 @@ class ChromaKnowledgeIndex:
                 "the local embedding model is unavailable"
             ) from exc
 
+    def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed texts with the local model, one vector per text.
+
+        Callers check ``status`` first: on a request path this must only run
+        once the model is ready, never start its download.
+        """
+
+        if not texts:
+            return []
+        try:
+            vectors = self._embedding_function(list(texts))
+        except Exception as exc:
+            raise KnowledgeIndexError(
+                "the local embedding model is unavailable"
+            ) from exc
+        return [[float(value) for value in vector] for vector in vectors]
+
     def index_tools(self, documents: Mapping[str, str]) -> None:
         """Embed tool documents keyed by fingerprint, skipping known ones."""
 
