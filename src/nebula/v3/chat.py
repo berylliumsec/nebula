@@ -166,6 +166,12 @@ from .context import (
     source_digest,
     updated_calibration,
 )
+from .knowledge_rerank import (
+    MAX_RERANK_CANDIDATES,
+    RerankCandidate,
+    has_content,
+    relevant_candidates,
+)
 from .context_retrieval import (
     DenseEncoder,
     VectorCache,
@@ -739,6 +745,11 @@ class _RetrievedChunk:
     local_only: bool
     score: float
     ordinal: int
+    # The planned search that found the chunk, when not the operator's words,
+    # and its embedding similarity, when vector search found it: what the
+    # relevance gate reads besides the chunk (``knowledge_rerank``).
+    variant: str | None = None
+    similarity: float | None = None
 
 
 def _reference_instructions(
@@ -5675,6 +5686,9 @@ class ChatService:
             if (
                 request.include_knowledge
                 and engagement_id
+                # "thanks" or "ok, continue" has no subject a document could
+                # be about: no planning call, nothing attached.
+                and has_content(incoming[-1].content)
                 and self._has_ready_knowledge(engagement_id)
             ):
                 retrieval_queries = await self._plan_retrieval(
@@ -5682,7 +5696,10 @@ class ChatService:
                     model=selected_model,
                     query=incoming[-1].content,
                 )
-                engagement_chunks = self._retrieve(
+                # Vector search and relevance scoring are CPU work: off the
+                # event loop that streams every other conversation.
+                engagement_chunks = await asyncio.to_thread(
+                    self._retrieve,
                     engagement_id,
                     retrieval_queries,
                     redact=not provider.config.local,
@@ -14068,6 +14085,8 @@ class ChatService:
         token_budget: int,
         allow_local_only: bool = True,
     ) -> list[_RetrievedChunk]:
+        if not queries or not has_content(queries[0]):
+            return []
         query_terms = [
             {
                 token.casefold()
@@ -14106,6 +14125,7 @@ class ChatService:
         # adding a newly indexed source never hides an older source.
         legacy_candidates = self._retrieve_legacy_candidates(
             engagement_id,
+            queries=queries,
             query_terms=query_terms,
             redact=redact,
         )
@@ -14118,17 +14138,66 @@ class ChatService:
         if not allow_local_only:
             candidates = [item for item in candidates if not item.local_only]
         candidates.sort(key=lambda item: (-item.score, item.ordinal))
+        candidates = [
+            item for item in candidates if not (all_terms and item.score <= 0)
+        ]
+        candidates = self._relevant_knowledge(queries, candidates)
         selected: list[_RetrievedChunk] = []
         tokens = 0
         for candidate in candidates:
-            if all_terms and candidate.score <= 0:
-                continue
             candidate_tokens = estimate_tokens(candidate.text, message_count=1)
             if len(selected) >= 8 or tokens + candidate_tokens > token_budget:
                 continue
             selected.append(candidate)
             tokens += candidate_tokens
         return selected
+
+    def _relevant_knowledge(
+        self, queries: list[str], candidates: list[_RetrievedChunk]
+    ) -> list[_RetrievedChunk]:
+        """The candidates that answer the request, best first.
+
+        With the local relevance model ready, the best few candidates of the
+        existing ranking are scored against the operator's question and only
+        those that answer it remain (``knowledge_rerank``). Until then the
+        ranking stands as it is, and the model is prepared in the background.
+        """
+
+        reranker = getattr(self.knowledge_index, "reranker", None)
+        if reranker is None or not candidates:
+            return candidates
+        if not reranker.ready:
+            reranker.ensure_started()
+            return candidates
+        pool = candidates[:MAX_RERANK_CANDIDATES]
+        try:
+            kept = relevant_candidates(
+                queries[0],
+                [
+                    RerankCandidate(
+                        text=item.text,
+                        variant=item.variant,
+                        similarity=item.similarity,
+                    )
+                    for item in pool
+                ],
+                reranker.score,
+            )
+        except Exception as exc:
+            record_diagnostic(
+                "warning",
+                "chat",
+                "chat.retrieval.rerank_fallback",
+                "Relevance scoring of project knowledge failed; the retrieval "
+                "ranking was used unchanged.",
+                outcome="fallback",
+                stage="knowledge-retrieval",
+                retryable=True,
+                safe_failure_cause="The local relevance model could not score.",
+                exception=exc,
+            )
+            return candidates
+        return [dataclass_replace(pool[index], score=score) for index, score in kept]
 
     def _retrieve_vector_candidates(
         self,
@@ -14208,6 +14277,13 @@ class ChatService:
                     local_only=self._source_is_local_only(source),
                     score=semantic_score + lexical_bonus,
                     ordinal=match.rank,
+                    variant=(
+                        queries[match.query_index]
+                        if 0 < match.query_index < len(queries)
+                        else None
+                    ),
+                    # Chroma's cosine distance is 1 - similarity.
+                    similarity=1.0 - match.distance,
                 )
             )
         return candidates
@@ -14216,6 +14292,7 @@ class ChatService:
         self,
         engagement_id: str,
         *,
+        queries: list[str],
         query_terms: list[set[str]],
         redact: bool,
     ) -> list[_RetrievedChunk]:
@@ -14279,6 +14356,13 @@ class ChatService:
                     )
                     if per_query_scores:
                         score += per_query_scores[0]
+                    # The planned search that matched it best, for the
+                    # relevance gate to read it with.
+                    planned = max(
+                        range(1, len(per_query_scores)),
+                        key=lambda position: per_query_scores[position],
+                        default=0,
+                    )
                     chunk_id = str(raw.get("id") or f"{source.id}:{index + 1}")
                     chunk_page = raw.get("page")
                     if not isinstance(chunk_page, int) or chunk_page < 1:
@@ -14301,6 +14385,13 @@ class ChatService:
                             local_only=local_only,
                             score=score,
                             ordinal=ordinal,
+                            variant=(
+                                queries[planned]
+                                if planned
+                                and planned < len(queries)
+                                and per_query_scores[planned] > 0
+                                else None
+                            ),
                         )
                     )
                     ordinal += 1

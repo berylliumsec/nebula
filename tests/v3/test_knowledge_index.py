@@ -439,4 +439,6 @@ def test_default_chroma_index_reports_first_use_download_before_ingestion(
         "downloaded_bytes": 0,
         "total_bytes": 83_178_821,
         "detail": None,
+        # No relevance model is configured for this index.
+        "reranker": None,
     }

@@ -1,0 +1,547 @@
+{
+  "description": "Labelled calibration set for the project-knowledge relevance gate (knowledge_rerank). 'variants' are the searches deepseek/deepseek-v4.1-flash planned for each question with Nebula's retrieval-planner prompt on 2026-09-26.",
+  "documents": {
+    "harbor": "# Harbor service runbook\n\nThe harbor service listens on TCP port 8443 behind the internal load balancer.\nIts break-glass admin account is svc-harbor-admin; rotate its key after use.\nThe maintenance window is every Tuesday from 02:00 to 04:00 UTC.\nIncident escalation goes to the platform on-call rotation named tidewatch.\n",
+    "scope": "# Rules of engagement\n\nIn scope: the 10.20.0.0/24 network and the web application at app.example.test.\nOut of scope: the payment processing hosts in 10.20.5.0/28 and every third-party SaaS\nprovider. Denial-of-service and load testing are prohibited.\n\nTesting may run on weekdays between 18:00 and 06:00 local time. The client's security\nlead, Maya Chen, must be told before any exploitation attempt and can be reached on\n+1 555 0100 around the clock.\n",
+    "access": "# Access procedure\n\nOperators authenticate with a hardware credential (a YubiKey) before access to the\njump host bastion-01. SSH keys for the jump host rotate every 90 days, and the\nbreak-glass accounts are stored in the team vault under ops/breakglass.\nShared accounts are not permitted; every session is recorded.\n",
+    "network": "# Network notes\n\nThe VPN concentrator vpn.example.test accepts IKEv2 on UDP 500 and 4500; remote\nstaff connect through it to reach the internal segments. Split tunnelling is disabled.\n\nInternal DNS is served by ns1.corp.example.test and ns2.corp.example.test. The\nstaging environment mirrors production except that it has no customer data and uses\nself-signed certificates.\n\nKafka brokers run on kafka-01 to kafka-03 on port 9092 with SASL/SCRAM. The Postgres\nprimary is db-01 on port 5432, replicated to db-02 in the second availability zone.\nNightly database backups are written to s3://corp-backups-eu with 35 days retention.\n\nThe monitoring stack is Prometheus on mon-01 scraping every 30 seconds, with Grafana\ndashboards at grafana.corp.example.test. Alert routing sends paging alerts to the\non-call engineer and everything else to the #ops-alerts channel.\n",
+    "findings": "# 2025 assessment findings\n\n1. CVE-2025-12345 in the customer login portal allowed session fixation; patched in\n   release 4.2.\n2. SQL injection in the /api/v2/orders endpoint through the sort parameter; the\n   developers moved to parameterised queries.\n3. The legacy mail relay legacy-mail.example.test still accepted TLS 1.0.\n4. Default credentials on two printers in the 10.20.0.0/24 range.\n",
+    "deploy": "# Deployment guide for the orders platform\n\n## Overview\nThe orders platform is a set of Python services behind an nginx ingress. Releases are\ncut from the main branch every Thursday and promoted to production on Monday after the\nchange advisory board approves them. Hotfixes may skip the board with approval from the\nduty manager.\n\n## Build\nImages are built by the CI pipeline and pushed to registry.corp.example.test/orders.\nEvery image is signed with cosign using the key in the vault path ops/cosign; unsigned\nimages are rejected by the admission controller in every cluster.\n\n## Configuration\nRuntime configuration lives in the orders-config repository. Secrets are never stored\nthere; the services read them at start-up from the vault agent sidecar. Feature flags\nare served by the flagd service and default to off for new flags.\n\n## Rollback\nTo roll back, redeploy the previous image tag with the deploy tool: `deployctl rollback\norders --to <tag>`. Database migrations are forward-only, so a rollback that crosses a\nschema change needs the data team. Rollbacks must be announced in #orders-release.\n\n## Observability\nService logs ship to the Loki cluster and are retained for 14 days. Traces are sampled\nat 5 percent and sent to Tempo. The orders dashboard in Grafana shows request rate,\nerror rate and p99 latency per endpoint; paging alerts fire when the error rate stays\nabove 2 percent for ten minutes.\n\n## Capacity\nEach orders service runs three replicas per zone. Autoscaling adds replicas when CPU\nstays above 70 percent for five minutes, up to twelve replicas per zone. The Postgres\nconnection pool is limited to 40 connections per replica to protect the primary.\n\n## Contacts\nThe orders team owns the services; their lead is Priya Raman. The platform team owns\nthe clusters and the ingress. Security questions go to the application security channel.\n"
+  },
+  "questions": [
+    {
+      "question": "Which TCP port does the harbor service listen on?",
+      "relevant": [
+        "harbor"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "Harbor service default TCP port",
+        "Harbor registry listening port",
+        "Harbor HTTPS port configuration"
+      ]
+    },
+    {
+      "question": "What is the testing window for this engagement?",
+      "relevant": [
+        "scope"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "testing window engagement",
+        "engagement testing window dates",
+        "testing period engagement timeline"
+      ]
+    },
+    {
+      "question": "Where does the Postgres primary run?",
+      "relevant": [
+        "network"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "PostgreSQL primary server location",
+        "where does the PostgreSQL primary run",
+        "PostgreSQL primary node deployment"
+      ]
+    },
+    {
+      "question": "Was CVE-2025-12345 found before?",
+      "relevant": [
+        "findings"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "CVE-2025-12345",
+        "CVE-2025-12345 vulnerability",
+        "CVE-2025-12345 NVD"
+      ]
+    },
+    {
+      "question": "How often do SSH keys rotate?",
+      "relevant": [
+        "access"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "SSH key rotation best practices frequency",
+        "how often should SSH keys be rotated",
+        "SSH key rotation policy enterprise"
+      ]
+    },
+    {
+      "question": "Which Kafka brokers do we have and on what port?",
+      "relevant": [
+        "network"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "Kafka broker list",
+        "Kafka broker port configuration",
+        "Kafka broker addresses and ports"
+      ]
+    },
+    {
+      "question": "Who is the security lead for the client?",
+      "relevant": [
+        "scope"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "security lead client contact",
+        "client security lead name",
+        "who is the security lead for the client"
+      ]
+    },
+    {
+      "question": "Where are the nightly database backups stored?",
+      "relevant": [
+        "network"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "nightly database backups storage location",
+        "database backup storage configuration",
+        "where are database backups stored"
+      ]
+    },
+    {
+      "question": "How does a user log in?",
+      "relevant": [
+        "access"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "user login process",
+        "how to log in",
+        "sign in authentication flow"
+      ]
+    },
+    {
+      "question": "when can we take the system down",
+      "relevant": [
+        "harbor"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "system downtime maintenance window",
+        "scheduled system outage policy",
+        "when to take system down for maintenance"
+      ]
+    },
+    {
+      "question": "which hosts are off limits",
+      "relevant": [
+        "scope"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "hosts that are off limits",
+        "off limits hosts meaning",
+        "hosts not allowed"
+      ]
+    },
+    {
+      "question": "Who do I page if harbor breaks at night?",
+      "relevant": [
+        "harbor"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "harbor night emergency contact",
+        "harbor after hours support paging",
+        "harbor on-call engineer contact"
+      ]
+    },
+    {
+      "question": "Can we try flooding their servers with traffic?",
+      "relevant": [
+        "scope"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "DDoS attack legal consequences"
+      ]
+    },
+    {
+      "question": "What did last year's assessment uncover in the ordering API?",
+      "relevant": [
+        "findings"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "last year's assessment ordering API findings",
+        "ordering API assessment results 2025",
+        "ordering API audit findings previous year"
+      ]
+    },
+    {
+      "question": "How do remote employees get onto the internal network?",
+      "relevant": [
+        "network"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "remote employee VPN access internal network",
+        "how do remote workers connect to corporate network securely",
+        "remote access VPN setup for employees"
+      ]
+    },
+    {
+      "question": "Is the pre-production copy loaded with real customer records?",
+      "relevant": [
+        "network"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "pre-production environment customer data",
+        "pre-production copy real customer records",
+        "pre-production data anonymization"
+      ]
+    },
+    {
+      "question": "What old encryption protocol was still accepted by the mail server?",
+      "relevant": [
+        "findings"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "old encryption protocol still accepted by mail server",
+        "deprecated TLS version supported by mail server",
+        "mail server accepts SSLv3 TLS 1.0 legacy protocol"
+      ]
+    },
+    {
+      "question": "Nebula says no rootless container runner is available. What should I check first? Two sentences at most.",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": [
+        "Nebula rootless container runner not available troubleshooting",
+        "Nebula rootless container runner configuration requirements"
+      ]
+    },
+    {
+      "question": "The terminal keeps disconnecting, what do I do?",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": [
+        "terminal keeps disconnecting fix",
+        "SSH connection drops frequently solution",
+        "terminal session disconnects troubleshooting"
+      ]
+    },
+    {
+      "question": "Write a Python function that reverses a string.",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": [
+        "Python function reverse string example",
+        "how to reverse a string in Python",
+        "Python string reversal function code"
+      ]
+    },
+    {
+      "question": "thanks, that's all for now",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": []
+    },
+    {
+      "question": "What's the capital of France?",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": [
+        "capital of France"
+      ]
+    },
+    {
+      "question": "How do I import MCP servers from a JSON file?",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": [
+        "import MCP servers from JSON file",
+        "MCP server configuration JSON import",
+        "how to add MCP servers from JSON config"
+      ]
+    },
+    {
+      "question": "The model is unavailable: the provider returned error 429.",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": []
+    },
+    {
+      "question": "Summarise the plot of Hamlet in three sentences.",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": [
+        "Hamlet plot summary three sentences",
+        "Hamlet play summary short",
+        "Shakespeare Hamlet plot synopsis"
+      ]
+    },
+    {
+      "question": "What port does nginx listen on by default?",
+      "relevant": [],
+      "kind": "hard_negative",
+      "variants": [
+        "nginx default port",
+        "nginx listen port default configuration"
+      ]
+    },
+    {
+      "question": "How do I rotate my AWS access keys?",
+      "relevant": [],
+      "kind": "hard_negative",
+      "variants": [
+        "How to rotate AWS access keys",
+        "AWS access key rotation best practices",
+        "Rotate IAM user access keys step by step"
+      ]
+    },
+    {
+      "question": "Which Kafka version introduced KRaft mode?",
+      "relevant": [],
+      "kind": "hard_negative",
+      "variants": [
+        "Apache Kafka KRaft mode introduced version",
+        "Kafka KRaft mode first release version",
+        "Kafka KRaft mode production ready version"
+      ]
+    },
+    {
+      "question": "Explain how TLS 1.3 differs from TLS 1.2.",
+      "relevant": [],
+      "kind": "hard_negative",
+      "variants": [
+        "TLS 1.3 vs TLS 1.2 differences",
+        "TLS 1.3 handshake improvements over TLS 1.2",
+        "TLS 1.3 removed features compared to TLS 1.2"
+      ]
+    },
+    {
+      "question": "How do I install Prometheus on Kubernetes?",
+      "relevant": [],
+      "kind": "hard_negative",
+      "variants": [
+        "install Prometheus on Kubernetes",
+        "Prometheus Kubernetes setup guide",
+        "deploy Prometheus Kubernetes cluster"
+      ]
+    },
+    {
+      "question": "How do I roll back a bad orders release?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "orders release rollback procedure",
+        "roll back a bad orders release",
+        "revert orders deployment"
+      ]
+    },
+    {
+      "question": "How long are orders service logs kept?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "orders service logs retention period",
+        "how long are orders service logs kept",
+        "orders service log retention policy"
+      ]
+    },
+    {
+      "question": "What happens to unsigned images?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "unsigned images code signing",
+        "what happens to unsigned executables Windows",
+        "unsigned software security risks"
+      ]
+    },
+    {
+      "question": "When are orders releases promoted to production?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "order release promotion to production process",
+        "production promotion schedule for order releases",
+        "order release production deployment timing"
+      ]
+    },
+    {
+      "question": "What is the maximum number of replicas per zone?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "maximum number of replicas per zone"
+      ]
+    },
+    {
+      "question": "Which registry do the orders images go to?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "lexical",
+      "variants": [
+        "orders images container registry",
+        "order service container image registry",
+        "orders microservice image repository"
+      ]
+    },
+    {
+      "question": "Can a quick emergency fix bypass the approval board?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "emergency change management bypass approval board policy",
+        "expedited change approval process critical incident",
+        "ITIL emergency change procedure authorization"
+      ]
+    },
+    {
+      "question": "How do we undo a broken deploy?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "how to rollback a broken deployment",
+        "undo a failed deploy best practices",
+        "deployment rollback strategies"
+      ]
+    },
+    {
+      "question": "Where do the services get their passwords from when they boot?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "service password management boot configuration",
+        "how services retrieve passwords at startup",
+        "secret management for services during boot"
+      ]
+    },
+    {
+      "question": "How many database connections can each instance open?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "database connection limit per instance",
+        "max_connections database setting per instance",
+        "connection pool size per instance"
+      ]
+    },
+    {
+      "question": "Who leads the team that owns ordering?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "paraphrase",
+      "variants": []
+    },
+    {
+      "question": "When does someone get woken up about failures?",
+      "relevant": [
+        "deploy"
+      ],
+      "kind": "paraphrase",
+      "variants": [
+        "on-call alerting wake up failures",
+        "when are engineers woken up for production failures",
+        "incident response wake up criteria"
+      ]
+    },
+    {
+      "question": "Nebula shows the workstation image failed to build. What now?",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": [
+        "Nebula workstation image build failed",
+        "Nebula image build error troubleshooting",
+        "Nebula workstation image rebuild steps"
+      ]
+    },
+    {
+      "question": "How do I approve a pending tool call in Nebula?",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": [
+        "Nebula approve pending tool call",
+        "Nebula tool call approval process",
+        "Nebula pending tool call how to approve"
+      ]
+    },
+    {
+      "question": "Please translate 'good morning' into Spanish.",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": [
+        "traducir 'good morning' al español"
+      ]
+    },
+    {
+      "question": "ok continue",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": [
+        "continue"
+      ]
+    },
+    {
+      "question": "Why is my browser session in Nebula paused?",
+      "relevant": [],
+      "kind": "unrelated",
+      "variants": [
+        "Nebula browser session paused",
+        "Nebula paused session reason",
+        "Nebula browser extension paused"
+      ]
+    },
+    {
+      "question": "What is the difference between TCP and UDP?",
+      "relevant": [],
+      "kind": "hard_negative",
+      "variants": [
+        "difference between TCP and UDP",
+        "TCP vs UDP comparison",
+        "TCP UDP protocol differences"
+      ]
+    },
+    {
+      "question": "How do I write a Grafana alert rule?",
+      "relevant": [],
+      "kind": "hard_negative",
+      "variants": [
+        "How to write a Grafana alert rule",
+        "Grafana alert rule configuration tutorial",
+        "Grafana unified alerting create alert rule"
+      ]
+    },
+    {
+      "question": "What does cosign verify in a Kubernetes admission policy in general?",
+      "relevant": [],
+      "kind": "hard_negative",
+      "variants": [
+        "cosign verify Kubernetes admission policy",
+        "cosign admission controller verify image signature",
+        "cosign verify attestation Kubernetes admission"
+      ]
+    }
+  ]
+}

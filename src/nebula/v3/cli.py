@@ -65,6 +65,7 @@ from .event_history import pause_between_batches, prune_orphaned_event_history
 from .exporter import ExportError, export_engagement
 from .importer import import_2x_engagement
 from .knowledge_index import ChromaKnowledgeIndex
+from .knowledge_rerank import CrossEncoderReranker
 from .orchestration import (
     ModelSpecialist,
     SpecialistRole,
@@ -465,9 +466,18 @@ def serve(
     else:
         auth_token = token or secrets.token_urlsafe(32)
     root, store, artifacts = _services(data_dir, diagnostics_level=diagnostics_level)
-    knowledge_index = ChromaKnowledgeIndex(
-        Path(os.getenv("NEBULA_V3_KNOWLEDGE_INDEX_DIR", root / "knowledge-index"))
+    reranker = CrossEncoderReranker(
+        Path(os.getenv("NEBULA_V3_KNOWLEDGE_MODELS_DIR", root / "knowledge-models")),
+        # "off" keeps retrieval as it was, and nothing is downloaded.
+        enabled=os.getenv("NEBULA_V3_KNOWLEDGE_RERANKER", "on").strip().casefold()
+        not in {"0", "false", "no", "off"},
     )
+    knowledge_index = ChromaKnowledgeIndex(
+        Path(os.getenv("NEBULA_V3_KNOWLEDGE_INDEX_DIR", root / "knowledge-index")),
+        reranker=reranker,
+    )
+    # A model already on disk is verified and loaded now, not on the first turn.
+    reranker.start_if_present()
     record_diagnostic(
         "info",
         "api",

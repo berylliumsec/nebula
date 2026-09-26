@@ -19,6 +19,7 @@ from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_
 
 from .diagnostics import record_caught_exception
 from .domain import KnowledgeSource, LibraryItem, NebulaModel
+from .knowledge_rerank import CrossEncoderReranker, RerankerStatus
 
 
 COLLECTION_NAME = "nebula-knowledge-v1"
@@ -53,6 +54,9 @@ class KnowledgeIndexStatus(NebulaModel):
     downloaded_bytes: int = 0
     total_bytes: int = DEFAULT_MODEL_BYTES
     detail: str | None = None
+    # The local relevance model that decides which retrieved chunks a
+    # request carries; absent where no reranker is configured.
+    reranker: RerankerStatus | None = None
 
 
 class _ModelStatusTracker:
@@ -188,6 +192,9 @@ class IndexedKnowledgeChunk:
     distance: float
     rank: int
     scope: Literal["engagement", "library"] = "engagement"
+    # Which of the queries found it at this distance, so a reranker can read
+    # the chunk with the search that matched it.
+    query_index: int = 0
 
 
 class KnowledgeIndex(Protocol):
@@ -238,7 +245,9 @@ class ChromaKnowledgeIndex:
         path: str | Path,
         *,
         embedding_function: Any | None = None,
+        reranker: CrossEncoderReranker | None = None,
     ) -> None:
+        self.reranker = reranker
         self.path = Path(path).expanduser().resolve()
         self.path.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path.chmod(0o700)
@@ -297,7 +306,10 @@ class ChromaKnowledgeIndex:
 
     @property
     def status(self) -> KnowledgeIndexStatus:
-        return self._model_status.snapshot()
+        status = self._model_status.snapshot()
+        if self.reranker is not None:
+            status = status.model_copy(update={"reranker": self.reranker.status})
+        return status
 
     def upsert_source(
         self, source: KnowledgeSource, chunks: Sequence[dict[str, Any]]
@@ -337,6 +349,10 @@ class ChromaKnowledgeIndex:
             raise KnowledgeIndexError(
                 f"could not index knowledge source {source.id}"
             ) from exc
+        if self.reranker is not None:
+            # Knowledge now exists to be retrieved, so the model that judges
+            # its relevance is fetched now, like the embedding model was.
+            self.reranker.ensure_started()
 
     def delete_source(self, source_id: str) -> None:
         try:
@@ -382,6 +398,8 @@ class ChromaKnowledgeIndex:
             raise KnowledgeIndexError(
                 f"could not index Library item {item.id}"
             ) from exc
+        if self.reranker is not None:
+            self.reranker.ensure_started()
 
     def delete_library_item(self, item_id: str) -> None:
         try:
@@ -500,8 +518,10 @@ class ChromaKnowledgeIndex:
         scope: Literal["engagement", "library"],
         where: dict[str, str] | None = None,
     ) -> list[IndexedKnowledgeChunk]:
-        cleaned = [" ".join(query.split()).strip() for query in queries]
-        cleaned = [query for query in cleaned if query]
+        normalized = [" ".join(query.split()).strip() for query in queries]
+        # Each cleaned query's position among the queries the caller passed.
+        positions = [index for index, query in enumerate(normalized) if query]
+        cleaned = [normalized[index] for index in positions]
         if not cleaned or limit <= 0:
             return []
         try:
@@ -575,6 +595,9 @@ class ChromaKnowledgeIndex:
                     else 1.0,
                     rank=ordinal,
                     scope=scope,
+                    query_index=(
+                        positions[query_index] if query_index < len(positions) else 0
+                    ),
                 )
                 previous = candidates.get(candidate.id)
                 if previous is None or candidate.distance < previous.distance:
