@@ -422,8 +422,11 @@ bounded transformations:
   `_with_tool_history` advances the checkpoint and then replaces the oldest
   full results still whole with short receipts, retaining call IDs/batch
   identity and, where available, artifact references, until the request is at
-  a **watermark** below the target: `target − max(10% of the working input
-  capacity, 8,000 tokens)`, but never below half the target. A result once cleared stays
+  a **watermark** below the target. The headroom it clears is
+  `max(10% of the working input capacity, 8,000 tokens)`, at most half the
+  target, and never less than three of the turn's average steps (a routing
+  response with its calls and whole results, counted as sent), so each
+  crossing buys several steps before the next. A result once cleared stays
   cleared for the rest of the turn (Core recomputes this after a restart), so
   a request changes its earlier bytes only when it crosses the target again,
   not on every step. What the model looked up this turn (`workspace.read`,
@@ -434,6 +437,30 @@ bounded transformations:
   hard capacity permits. A receipt directs the agent to `tool_output.search` or
   `tool_output.read` for the full retained output. If no artifact reference
   exists, a necessary result may require another tool call.
+* **Small windows.** On a small window the rest of the request (instructions,
+  function declarations, conversation, checkpoint and notes) can fill the room
+  below the target by itself, and a crossing cannot clear the headroom. Advancing
+  the checkpoint at every such crossing changed the request from the current
+  message, which carries the checkpoint, ahead of its whole tool history, at
+  nearly every step (16 of 24 steps on a 12K window), and on the smallest
+  windows the newest result, the one the model is deciding on, was cleared too.
+  Without room for the headroom, a crossing therefore:
+  1. keeps the checkpoint where it is while clearing alone can bring the
+     request below the target (every earlier result, rather than one more each
+     step), so the request changes only from the first result it clears;
+  2. otherwise folds every step but the newest into the checkpoint, and must
+     then leave room for at least one more step;
+  3. otherwise lets the turn's requests run past the target to the input
+     capacity, extending each other (`chat.tool_history.capacity_ceiling`),
+     and cross there by the same rules, until a crossing finds room for the
+     headroom below the target again;
+  4. and when even the request at its smallest would clear the newest result,
+     or leaves no room below the capacity for one more step, the routing loop
+     compacts the conversation once (`step_room`, below).
+
+  With room for the headroom a crossing advances the checkpoint first, as
+  before, so the fold and the clearing are one change. A resumed turn finds
+  out again at its next crossing whether it has room.
 
 **Working notes.** Every provider turn with tools is offered `notes.write`,
 which replaces the conversation's working notes (markdown, at most 8 KiB): the
@@ -469,7 +496,10 @@ in the running turn, as it would between turns, rather than stopping the work:
 `_compact_mid_turn` reserves everything else the request carries (the
 instructions around the conversation, function declarations, the replayed
 results, the checkpoint, and the current working notes) plus the same headroom
-below the target that clearing leaves. It then compacts the canonical
+below the target that clearing leaves. With a calibration below 1 the headroom
+also covers what the request's function declarations and tool history count
+beyond it (JSON never counts below its estimate), and it lowers the target only
+as far as the current message needs. It then compacts the canonical
 conversation afresh into what is left (`_model_context` with
 `reuse_snapshot=False`; the input capacity is the goal when even the current
 message does not fit the target). The turn's ledger, checkpoint and replay are
@@ -481,6 +511,18 @@ steps and a resumed turn extend it and keep their prefix cache, and
 messages are now served by a snapshot is also offered `conversation.search`.
 Compaction usage is charged to the turn's goal like any other compaction. Each
 cause is tried once per step:
+
+* **No room for one more step** (`step_room`): even at its smallest (every
+  earlier result cleared, earlier reasoning let go, the steps folded) the
+  request would clear its newest result, the one the model is deciding on,
+  when the conversation before the current message holds a step's worth; or
+  it leaves no room below the input capacity for one more average step, so
+  the checkpoint would fold at every step, when that conversation holds a
+  step's worth more than the smallest memory the compactor writes (1,024
+  tokens). Tried once per turn, when the turn has not compacted mid-turn
+  already, sized by the request at its smallest; routing then starts the same
+  step again (see *Small windows* above). A compaction that comes back no
+  smaller is discarded (`chat.context.midturn_compaction_not_smaller`).
 
 * **Routing that no longer fits** (`context_full`): even with every result
   cleared, the request is over input capacity. After compaction routing starts
@@ -561,6 +603,9 @@ a switch that requires compaction needs an explicit confirmation fingerprint.
    crossing at which earlier routing responses stopped replaying their
    reasoning: responses let go then (`count`), responses replayed
    (`item_count`), and the watermark (`limit`).
+   `chat.tool_history.capacity_ceiling` records a turn whose requests begin to
+   run past the target to the input capacity (`limit`) because clearing, even
+   after folding, could not bring them below it.
 5. Correlate request/turn events with provider errors, retries, and restart
    recovery. Make no correctness claim from checkpoint counts alone; compare
    the answer against the relevant original evidence.

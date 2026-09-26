@@ -66,10 +66,18 @@ stateDiagram-v2
     Checkpoint --> Fit: fold older nonwaiting steps into bounded receipts + notes
     Fit --> Sticky: replay results already cleared this turn as receipts
     Sticky --> Send: request fits target
-    Sticky --> Cross: request crosses target
-    Cross --> Clear: advance checkpoint; still above watermark
-    Cross --> Send: advance reaches watermark
+    Sticky --> Send: running on (no room below target); request fits input capacity
+    Sticky --> Cross: request crosses target (or input capacity, when running on)
+    Cross --> Clear: room for headroom (>= 3 average steps); advance checkpoint; still above watermark
+    Cross --> Send: room for headroom; advance reaches watermark
     Clear --> Send: clear oldest whole outputs, then earlier reasoning, down to watermark
+    Cross --> Late: no room for headroom
+    Late --> Send: checkpoint stays; clearing alone brings request below target
+    Late --> FoldAll: clearing alone cannot; fold all but the newest step
+    FoldAll --> Send: room for one more step below target
+    FoldAll --> RunOn: no room below target
+    RunOn --> Send: requests run on to input capacity and cross there
+    RunOn --> Compact: no room below input capacity for one more step (once per turn)
     Clear --> Compact: still over input capacity
     Compact --> Sticky: conversation compacted; replay unchanged
     Compact --> Fold: nothing smaller
@@ -88,7 +96,13 @@ omitted while their covered ranges/count and an `omitted_steps` count remain.
 A checkpoint also carries the conversation's latest working notes. Clearing
 keeps result identity and available artifact references, and a cleared result
 stays cleared for the rest of the turn, so earlier request bytes change once
-per target crossing. Neither operation deletes the durable ledger. Waiting
+per target crossing, and a crossing clears room for at least three average
+steps. When the rest of the request leaves no such room below the target, a
+crossing keeps the checkpoint where it is while clearing alone brings the
+request below the target, folds every step but the newest when it cannot, and
+otherwise lets the requests run on to the input capacity; the conversation is
+compacted once before the newest result would be cleared. Neither operation
+deletes the durable ledger. Waiting
 approvals/callbacks remain outside the checkpoint. The newest result stays
 whole when hard capacity allows. When even a fully cleared history leaves the
 request over capacity, or the provider refuses a request clearing cannot fix,
