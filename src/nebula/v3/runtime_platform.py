@@ -64,6 +64,7 @@ from .tools import (
     register_artifact_retrieval_tools,
 )
 from .web_search import SearchRuntime, WebSearchTool, web_search_enabled
+from .working_notes import WriteNotesTool
 
 
 LOGGER = logging.getLogger(__name__)
@@ -210,6 +211,36 @@ def conversation_search_components(
     registry.register(
         ConversationSearchTool(store, session_id, text_of=text_of, dense=dense)
     )
+    broker = ToolBroker(
+        registry=registry,
+        policy_engine=PolicyEngine(),
+        runner=AnalysisOnlyRunner(),
+        ledger=StoreToolLedger(store),
+        workspace_resolver=lambda _engagement_id: workspace,
+    )
+    return RuntimeToolComponents(
+        broker=broker,
+        scope=scope,
+        workspace=workspace,
+        specs={spec.name: spec for spec in registry.specs()},
+        runtime_digest="",
+    )
+
+
+def notes_components(
+    store: NebulaStore, scope: ScopePolicy, workspace: Path
+) -> RuntimeToolComponents:
+    """``notes.write`` for any provider chat turn that has tools.
+
+    Like the dashboard, the components are built from the caller's resolved
+    scope and workspace and carry no runtime digest, so a turn recorded
+    before the tool existed still resumes against the runtime it recorded.
+    The tool is a trusted analysis tool: it writes one Core record and
+    produces no evidence.
+    """
+
+    registry = ToolRegistry()
+    registry.register(WriteNotesTool(store))
     broker = ToolBroker(
         registry=registry,
         policy_engine=PolicyEngine(),

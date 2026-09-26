@@ -3611,6 +3611,38 @@ class ChatBookmark(Entity):
     active: bool = True
 
 
+WORKING_NOTES_MAX_BYTES = 8 * 1024
+"""The largest working notes one conversation keeps, in UTF-8 bytes."""
+
+
+class ChatWorkingNotes(Entity):
+    """The notes a provider conversation's assistant keeps with ``notes.write``.
+
+    One record per conversation, replaced whole on every write. It is its own
+    record rather than conversation metadata because it changes during a turn,
+    and the conversation's revision is the lease the operator's settings
+    changes hold while a response runs. The notes are the assistant's own
+    derived memory: history data in a request, never instructions or
+    evidence.
+    """
+
+    entity_kind: ClassVar[str] = "chat_working_notes"
+    engagement_id: str
+    session_id: str = Field(min_length=1, max_length=200)
+    content: str = Field(default="", max_length=WORKING_NOTES_MAX_BYTES)
+    # The turn whose call wrote the current content.
+    turn_id: str | None = Field(default=None, max_length=200)
+
+    @field_validator("content")
+    @classmethod
+    def content_fits(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > WORKING_NOTES_MAX_BYTES:
+            raise ValueError(
+                f"working notes exceed {WORKING_NOTES_MAX_BYTES} UTF-8 bytes"
+            )
+        return value
+
+
 class ChatSession(Entity):
     """A durable engagement-scoped analyst conversation."""
 
@@ -4845,6 +4877,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     ChatGoal,
     ChatGoalUsageCharge,
     ChatBookmark,
+    ChatWorkingNotes,
     ChatQueue,
     ChatDecision,
     ChatReadCursor,

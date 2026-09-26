@@ -1161,7 +1161,11 @@ def test_provider_skill_resources_are_exposed_only_through_bounded_reader(
     )
 
     assert prepared.tools_enabled is True
-    assert set(prepared.tool_components.specs) == {"skill.read_resource"}
+    # Every turn with tools can also keep working notes.
+    assert set(prepared.tool_components.specs) == {
+        "skill.read_resource",
+        "notes.write",
+    }
     snapshot = prepared.turn.request_snapshot["skill_snapshots"][0]
     assert snapshot["resources"][0]["relative_path"] == "references/checklist.md"
     result = asyncio.run(
@@ -3590,6 +3594,7 @@ def test_model_question_uses_graph_without_command_or_browser_runtime(
         "model.get_evidence",
         "model.get_updates",
         "model.transact",
+        "notes.write",
     }
     resumed = service.prepare_resume(prepared.turn.id)
     assert (

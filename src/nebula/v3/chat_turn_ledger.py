@@ -7,33 +7,44 @@ import json
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .context import estimate_tokens
 from .database import ChatTurnCheckpointRow, ChatTurnStepEventRow, Database
 from .domain import ChatTurn, utc_now
+from .tool_activity import clipped, step_brief
 from .tool_results import without_results_api_key
 
 # The checkpoint advances in blocks: once this many steps, or this many
 # tokens of them, have left the recent window since the last advance.
 CHECKPOINT_STEP_INTERVAL = 16
 CHECKPOINT_TOKEN_TRIGGER = 24_000
-CHECKPOINT_TOKEN_LIMIT = 4_000
+# The receipts' byte bound. It grows with the model's input capacity, from
+# this floor to the ceiling: a 1M-token model can hold far more of a long
+# turn's index than a 32K one, and the floor is what every model had before.
 CHECKPOINT_BYTE_LIMIT = 16 * 1024
+CHECKPOINT_BYTE_CEILING = 64 * 1024
+# The share of input capacity the receipts may take, and the bytes one
+# estimated token stands for (``context.estimate_tokens`` counts 3).
+_CHECKPOINT_CAPACITY_SHARE = 0.03
+_BYTES_PER_TOKEN = 3
 RECENT_RESPONSE_GROUPS = 8
-CHECKPOINT_SCHEMA = "nebula.chat-turn-checkpoint/v2"
+CHECKPOINT_SCHEMA = "nebula.chat-turn-checkpoint/v3"
 _CHECKPOINT_STEP_FIELDS = [
     "number",
     "tool_index",
     "state",
+    "did",
     "summary",
     "artifacts",
     "failure",
 ]
+_RECEIPT_SUMMARY_CHARS = 200
 # A v1 checkpoint, written while failed and denied steps were replayed whole
 # on every request, never covered one of them.
 _V1_UNCOVERED_STATUSES = frozenset({"failed", "denied"})
@@ -59,7 +70,16 @@ def _canonical(value: Any) -> bytes:
 
 
 def _token_estimate(value: Any) -> int:
-    return max(1, (len(_canonical(value)) + 3) // 4)
+    """Tokens ``value`` costs as JSON, counted as every request estimate is."""
+
+    return estimate_tokens(_canonical(value).decode("utf-8"))
+
+
+def checkpoint_byte_limit(input_capacity: int) -> int:
+    """The receipts' byte bound for a model with ``input_capacity`` tokens."""
+
+    scaled = int(input_capacity * _CHECKPOINT_CAPACITY_SHARE) * _BYTES_PER_TOKEN
+    return max(CHECKPOINT_BYTE_LIMIT, min(CHECKPOINT_BYTE_CEILING, scaled))
 
 
 def _without_callback_key(entry: dict[str, Any]) -> dict[str, Any]:
@@ -583,7 +603,12 @@ class ChatTurnLedger:
         )
 
     def compacted_history(
-        self, turn: ChatTurn, *, advance: bool = False
+        self,
+        turn: ChatTurn,
+        *,
+        advance: bool = False,
+        byte_limit: int = CHECKPOINT_BYTE_LIMIT,
+        working_notes: Callable[[], dict[str, Any] | None] | None = None,
     ) -> tuple[TurnCheckpoint | None, list[dict[str, Any]]]:
         """The turn's checkpoint and the entries replayed whole after it.
 
@@ -596,6 +621,10 @@ class ChatTurnLedger:
         advances the checkpoint and every replayed entry stay byte-identical,
         so each request extends the one before it and a provider's prefix
         cache keeps serving all but the newest step.
+
+        A checkpoint that advances bounds its receipts by ``byte_limit`` and
+        carries the session's working notes as ``working_notes`` returns them
+        then: a folded ``notes.write`` call no longer replays its content.
         """
 
         history = self.history(turn)
@@ -625,13 +654,23 @@ class ChatTurnLedger:
             or _token_estimate(uncheckpointed) >= CHECKPOINT_TOKEN_TRIGGER
         )
         if should_checkpoint:
-            checkpoint = self._write_checkpoint(turn.id, fold)
+            checkpoint = self._write_checkpoint(
+                turn.id,
+                fold,
+                byte_limit=byte_limit,
+                notes=working_notes() if working_notes is not None else None,
+            )
         if checkpoint is None:
             return None, history
         return checkpoint, [entry for entry in history if not checkpoint.covers(entry)]
 
     def _write_checkpoint(
-        self, turn_id: str, entries: Iterable[dict[str, Any]]
+        self,
+        turn_id: str,
+        entries: Iterable[dict[str, Any]],
+        *,
+        byte_limit: int = CHECKPOINT_BYTE_LIMIT,
+        notes: dict[str, Any] | None = None,
     ) -> TurnCheckpoint:
         entries = list(entries)
         through_step = max(_step(item) for item in entries)
@@ -646,7 +685,12 @@ class ChatTurnLedger:
                 tools.index(tool),
                 str(item.get("status") or "complete")[:40],
             ]
-            result_summary = str(item.get("result_summary") or "")[:80]
+            # What the call acted on, beside what came of it: a receipt that
+            # says only "completed" cannot tell the model which file it read.
+            brief = step_brief(item.get("arguments"))
+            result_summary = clipped(
+                str(item.get("result_summary") or ""), _RECEIPT_SUMMARY_CHARS
+            )
             references = [
                 str(ref.get("artifact_id"))[:120]
                 for ref in item.get("artifacts") or []
@@ -659,11 +703,11 @@ class ChatTurnLedger:
                 del failure["problem"]
             # Trailing fields are left off; an empty placeholder keeps the
             # position of a later one.
-            trailing: list[Any] = [result_summary, references, failure]
+            trailing: list[Any] = [brief, result_summary, references, failure]
             while trailing and not trailing[-1]:
                 trailing.pop()
             receipt.extend(
-                value if value else ([] if index == 1 else "")
+                value if value else ([] if index == 2 else "")
                 for index, value in enumerate(trailing)
             )
             steps.append(receipt)
@@ -678,14 +722,15 @@ class ChatTurnLedger:
             "steps": steps,
             "integrity_sha256": digest,
             "note": (
-                "Full outputs remain available through their tool-call and "
-                "artifact references. A failure's arguments_sha256 identifies "
-                "the exact arguments that failed."
+                "Each receipt says what its step acted on and how it ended. "
+                "Full outputs remain readable with tool_output.read through "
+                "their artifact references. A failure's arguments_sha256 "
+                "identifies the exact arguments that failed."
             ),
         }
         # Over the bound, the oldest successful receipts go first: a failure
         # is what the model must not repeat blindly.
-        excess = len(_canonical(summary)) - CHECKPOINT_BYTE_LIMIT
+        excess = len(_canonical(summary)) - byte_limit
         if excess > 0:
             failed = len(_CHECKPOINT_STEP_FIELDS)
             order = [i for i, item in enumerate(steps) if len(item) < failed] + [
@@ -703,7 +748,12 @@ class ChatTurnLedger:
                 item for index, item in enumerate(steps) if index not in dropped
             ]
             summary["omitted_steps"] = len(dropped)
-        token_estimate = min(CHECKPOINT_TOKEN_LIMIT, _token_estimate(summary))
+        if notes and notes.get("content"):
+            # The notes are bounded by their own tool, outside the receipts'
+            # bound: dropping receipts to make room for them would trade one
+            # memory for the other.
+            summary["working_notes"] = dict(notes)
+        token_estimate = _token_estimate(summary)
         checkpoint = TurnCheckpoint(through_step, summary, digest, token_estimate)
         with self.database.session() as session:
             exists = session.scalar(

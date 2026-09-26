@@ -313,9 +313,10 @@ def _text_stream(text: str) -> httpx.Response:
 def test_context_rejection_after_a_tool_step_clears_results_and_retries(tmp_path):
     """ROUTE-13: a server smaller than its configured window rejects step 3.
 
-    The server holds one whole result. Routing step 3 and the synthesis each
-    carry two, are rejected with a 400, and are sent once more with the older
-    result cleared. No tool runs twice.
+    The server holds one whole result. Routing step 3 carries two, is
+    rejected with a 400, and is sent once more with the older result cleared.
+    That result stays cleared for the rest of the turn, so the synthesis is
+    not rejected again. No tool runs twice.
     """
 
     accepted: list[dict] = []
@@ -382,9 +383,10 @@ def test_context_rejection_after_a_tool_step_clears_results_and_retries(tmp_path
     assert done[-1]["message"]["content"] == ANSWER
     assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
     assert [call.arguments["value"] for call in broker.calls] == ["1", "2"]
-    # Routing step 3 and the synthesis were each rejected once, then retried.
-    # OpenAI-compatible automatic routing omits tool_choice on the wire.
-    assert [body.get("tool_choice") for body in rejected] == [None, "none"]
+    # Routing step 3 was rejected once and retried; the synthesis kept the
+    # result that retry cleared. OpenAI-compatible automatic routing omits
+    # tool_choice on the wire.
+    assert [body.get("tool_choice") for body in rejected] == [None]
     retried = [
         body
         for body in accepted
@@ -446,3 +448,64 @@ def test_context_rejection_with_nothing_left_to_clear_reads_the_current_turn(
         asyncio.run(service.complete(prepared))
     assert len(broker.calls) == 1
     assert store.get(ChatTurn, "turn").status == ChatTurnStatus.FAILED
+
+
+def _extends(earlier: ModelRequest, later: ModelRequest) -> bool:
+    """Whether ``later`` is ``earlier`` plus newer steps: a prefix cache hit."""
+
+    return (
+        later.instructions == earlier.instructions
+        and later.messages == earlier.messages
+        and later.tool_results[: len(earlier.tool_results)] == earlier.tool_results
+    )
+
+
+def test_cleared_results_stay_cleared_so_the_prefix_changes_once_per_crossing(
+    tmp_path,
+):
+    """F3: past its target a turn cleared one more result on nearly every step.
+
+    Clearing the fewest results that fit left each request just under the
+    target, so the next step crossed it again and changed an earlier result
+    (and advanced the checkpoint), missing the provider's prefix cache on
+    almost every request. A crossing now clears down to a watermark well
+    below the target, and a result once cleared stays cleared, so earlier
+    bytes change once per crossing.
+    """
+
+    broker = ScanBroker()
+    provider = LongTurnProvider(calls=40)
+    store, service, prepared = _long_turn(tmp_path, provider, broker)
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == ANSWER
+    assert len(broker.calls) == 40
+    routing = [
+        request
+        for request in _turn_requests(provider)
+        if request.tool_choice == ToolChoice.AUTO
+    ]
+    assert len(routing) == 41
+    changes = 0
+    cleared_before: set[str] = set()
+    for earlier, later in zip(routing, routing[1:]):
+        cleared = {result.call_id for result in later.tool_results if _cleared(result)}
+        replayed = {result.call_id for result in later.tool_results}
+        # A result once cleared is never replayed whole again.
+        assert not (cleared_before & replayed) - cleared
+        if not _extends(earlier, later):
+            changes += 1
+            # Only a crossing changes earlier bytes, and it takes the request
+            # well below the target.
+            limits = resolve_context_limits(
+                prepared.provider_profile,
+                model=later.model,
+                requested_output_tokens=later.max_output_tokens,
+                required_parameters={"tools"},
+            )
+            assert estimate_model_request(later) <= limits.target_input_tokens - 6_000
+        cleared_before |= cleared
+    # Each crossing buys several steps: the old behaviour changed the prefix
+    # on 33 of these 40 steps.
+    assert 1 <= changes <= len(routing) // 4
