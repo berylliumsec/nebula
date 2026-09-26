@@ -19,6 +19,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import re
 import threading
 from collections import OrderedDict
@@ -159,6 +160,7 @@ from .context import (
     ContextLimits,
     ContextSource,
     ContextStatus,
+    SUMMARY_FLOOR_TOKENS,
     ProviderRequestInput,
     calibrated_estimate,
     estimate_allowance,
@@ -169,6 +171,7 @@ from .context import (
     calibrated_request_estimate,
     estimate_tool_definitions,
     memory_text,
+    replay_wire_form,
     resolve_context_limits,
     source_digest,
     updated_calibration,
@@ -911,6 +914,24 @@ class PreparedChat:
     # (step, cause) pairs a mid-turn conversation compaction was attempted
     # for; each is tried once (``_compact_mid_turn``).
     midturn_compactions: set[tuple[int, str]] = field(default_factory=set)
+    # The turn's average replayed step, whole, in the provider's tokens, as
+    # of its latest request (``_step_tokens``): what a crossing leaves room
+    # for (``_clearing_headroom``).
+    tool_step_tokens: int = 0
+    # Clearing, even after the checkpoint folded every step but the newest,
+    # could not bring the turn's request below its target: a small window
+    # whose instructions, functions and conversation nearly fill it. The
+    # turn's requests then run on to the input capacity before a crossing
+    # clears, until one finds room below the target again
+    # (``_with_tool_history``). A resumed turn finds this out again.
+    runs_to_capacity: bool = False
+    # Even at its smallest the request left no room below the input capacity
+    # for one more step (``_with_tool_history``): the routing loop compacts
+    # the conversation once (``room_due``, then ``room_compacted``) rather
+    # than folding the checkpoint at every step and then clearing the newest
+    # result too.
+    room_due: bool = False
+    room_compacted: bool = False
 
 
 @dataclass
@@ -2261,6 +2282,29 @@ def _budgeted_reasoning(
                 result = result.model_copy(update={"reasoning_state": stamp or None})
         budgeted.append(result)
     return budgeted
+
+
+# A crossing clears enough for at least this many more steps of the turn's
+# average size (``_clearing_headroom``). Anthropic's context editing clears
+# "at least" a batch for the same reason: a clear that buys one step changes
+# the request's earlier bytes, and misses the provider's prefix cache, at
+# every step.
+CLEARING_HEADROOM_STEPS = 3
+
+
+def _step_tokens(request: ModelRequest, calibration: float | None) -> int:
+    """``request``'s average replayed step, whole, in the provider's tokens.
+
+    A step is one routing response with its calls and their results, as the
+    route is sent it (``replay_wire_form``), counted as a capacity check
+    counts tool history: never below Core's estimate.
+    """
+
+    responses = len(replay_wire_form(request))
+    if not responses:
+        return 0
+    history = estimate_model_request_parts(request).tool_results
+    return math.ceil(history * max(1.0, calibration or 1.0) / responses)
 
 
 _CHECKPOINT_HEADING = (
@@ -6940,13 +6984,40 @@ class ChatService:
         instructions = base.instructions or ""
         notes_block = working_notes_block(read_working_notes(self.store, session.id))
         conversation_tokens = estimate_messages(base.messages, instructions)
+        limits = self._request_limits(prepared.provider_profile, request)
+        # What the request adds beside the conversation: the rest of the
+        # request as it is, and the notes the rebuilt one carries.
+        reserved = max(0, estimate_model_request(request) - conversation_tokens) + (
+            estimate_tokens("\n\n" + notes_block) if notes_block else 0
+        )
         # The same headroom below the target that clearing leaves, so the
         # steps after the compaction add to the request before it crosses the
         # target again.
-        limits = self._request_limits(prepared.provider_profile, request)
         target, _capacity = self._estimate_limits(prepared, limits)
-        headroom = target - self._clearing_watermark(
-            target, self._working_allowance(prepared, limits)
+        headroom = self._clearing_headroom(
+            target, self._working_allowance(prepared, limits), prepared.tool_step_tokens
+        )
+        # The target is scaled to raw text by the calibration, but the
+        # request's function declarations and tool history (JSON) count
+        # their whole estimate against it (``calibrated_request_estimate``):
+        # with a calibration below 1 the conversation leaves room for the
+        # difference too, or the rebuilt request runs past its target.
+        factor = prepared.estimate_calibration or 1.0
+        if factor < 1:
+            parts = estimate_model_request_parts(request)
+            headroom += math.ceil(
+                (parts.tool_schemas + parts.tool_results) * (1 / factor - 1)
+            )
+        # The headroom lowers the target only as far as the current message:
+        # a turn whose steps are large for its window compacts everything
+        # before it and runs with the room that gives, rather than keeping
+        # a conversation the headroom could never have room for.
+        headroom = max(
+            0,
+            min(
+                headroom,
+                target - reserved - estimate_messages(base.messages[-1:], instructions),
+            ),
         )
         components = prepared.tool_components
         add_search = (
@@ -6992,10 +7063,7 @@ class ChatService:
                 reference=prepared.reference_material,
                 # What the request adds beside the conversation: the rest of
                 # the request as it is, and the notes the rebuilt one carries.
-                reserved_tokens=max(
-                    0, estimate_model_request(request) - conversation_tokens
-                )
-                + (estimate_tokens("\n\n" + notes_block) if notes_block else 0),
+                reserved_tokens=reserved,
                 target_headroom=headroom,
                 archive_reserved_tokens=(
                     estimate_tool_definitions(
@@ -7058,6 +7126,22 @@ class ChatService:
         prepared.context_usage = _added_usage(prepared.context_usage, usage)
         if estimate_messages(rebuilt, instructions) >= conversation_tokens:
             # The conversation is already as small as compaction makes it.
+            record_diagnostic(
+                "debug",
+                "chat",
+                "chat.context.midturn_compaction_not_smaller",
+                "A running tool turn's compacted conversation was no smaller "
+                "than the one it had; the turn kept its conversation.",
+                outcome="fallback",
+                stage="context",
+                metadata={
+                    "provider": prepared.provider_profile.id,
+                    "model_id": prepared.resolved_model,
+                    "session_id": session.id,
+                    "reason_code": cause,
+                    "step": turn.next_step,
+                },
+            )
             return None
         prepared.model_request = base.model_copy(update={"messages": rebuilt})
         prepared.session = refreshed_session or session
@@ -7606,7 +7690,30 @@ class ChatService:
                             "parallel_tool_calls": True,
                         }
                     )
-                    routing = self._with_tool_history(prepared, turn, routing)
+                    assembled = routing
+                    routing = self._with_tool_history(
+                        prepared, turn, assembled, compact_for_room=True
+                    )
+                    if prepared.room_due:
+                        # Even at its smallest the request leaves no room
+                        # below the capacity for one more step. The
+                        # conversation ahead of the tool history is compacted
+                        # once to make room, and routing starts this step
+                        # again; failing that, the turn goes on as it can.
+                        prepared.room_due = False
+                        prepared.room_compacted = True
+                        compacted = await self._compact_mid_turn(
+                            prepared,
+                            turn,
+                            routing,
+                            cause="step_room",
+                            offer_search=True,
+                        )
+                        if compacted is not None:
+                            turn = compacted
+                            components = prepared.tool_components or components
+                            continue
+                        routing = self._with_tool_history(prepared, turn, assembled)
                     routing = self._with_completion_hook_feedback(routing, turn)
                     if routing.tool_results and not self._fits_request_capacity(
                         prepared.provider_profile,
@@ -9186,24 +9293,34 @@ class ChatService:
         )
 
     @staticmethod
-    def _clearing_watermark(target: int, working: int) -> int:
-        """Where clearing takes a request that crossed its target.
+    def _clearing_headroom(target: int, working: int, step: int = 0) -> int:
+        """How far below the target a crossing clears, in the provider's tokens.
 
         Clearing to just under the target would clear one more result on
         nearly every later step, and every clear changes the request from
         that result on, so the provider's prefix cache would miss each time.
         Clearing a block below the target leaves room for the next several
         steps (Anthropic's context editing clears "at least" a batch for the
-        same reason). A small window keeps at least half its target. Both are
-        in one unit: the provider's tokens for clearing (``working`` is then
-        ``ContextLimits.working_input_capacity``), raw estimated tokens for
-        mid-turn compaction's headroom (``working`` is ``_working_allowance``).
+        same reason): a tenth of the working input capacity
+        (``ContextLimits.working_input_capacity``) or 8,000 tokens, at most
+        half the target, and never less than ``CLEARING_HEADROOM_STEPS`` of
+        the turn's average ``step``. On a small window half the target was
+        about one step of file reads, so a turn cleared at every step. All
+        three are in one unit: the provider's tokens for clearing, raw
+        estimated tokens for mid-turn compaction's headroom (``working`` is
+        then ``_working_allowance``).
         """
 
-        return max(target // 2, target - max(working // 10, 8_000))
+        block = min(target - target // 2, max(working // 10, 8_000))
+        return max(block, CLEARING_HEADROOM_STEPS * step)
 
     def _with_tool_history(
-        self, prepared: PreparedChat, turn: ChatTurn, request: ModelRequest
+        self,
+        prepared: PreparedChat,
+        turn: ChatTurn,
+        request: ModelRequest,
+        *,
+        compact_for_room: bool = False,
     ) -> ModelRequest:
         """``request`` carrying the turn's results, the oldest cut to fit the window.
 
@@ -9220,10 +9337,23 @@ class ChatService:
         newest step, so the provider's prefix cache serves the rest. Clearing
         keeps that property: a cleared result stays cleared for the rest of
         the turn (``PreparedChat.cleared_tool_calls``), and a request that
-        crosses the target clears down to a watermark well below it
-        (``_clearing_watermark``), so earlier bytes change once per crossing
-        rather than on every step. A request over its target advances the
-        checkpoint first; clearing is for what still does not fit.
+        crosses the target clears to a watermark far enough below it for
+        several more steps (``_clearing_headroom``), so earlier bytes change
+        once per crossing rather than on every step. A crossing with room for
+        that advances the checkpoint first, in the same change. One without
+        it keeps the checkpoint where it is while clearing can bring the
+        request below its target, so the request changes from the first
+        result cleared rather than ahead of its tool history; it folds every
+        step but the newest when clearing cannot; and when even that leaves
+        no room below the target, the turn's requests run on to the input
+        capacity before clearing (``PreparedChat.runs_to_capacity``) until a
+        crossing finds room below the target again.
+
+        With ``compact_for_room`` (the routing loop), a request that even at
+        its smallest leaves no room below the capacity for one more step is
+        returned at its smallest, for the loop to compact the conversation
+        once by (``PreparedChat.room_due``), before the newest result would
+        be cleared too.
         """
 
         limits = self._request_limits(prepared.provider_profile, request)
@@ -9238,6 +9368,8 @@ class ChatService:
             return calibrated_request_estimate(candidate, calibration, hard=hard)
 
         sticky = prepared.cleared_tool_calls
+        # Responses whose replayed reasoning this turn has let go.
+        thoughtless = prepared.reasoning_dropped
 
         def replayed(
             checkpoint: TurnCheckpoint | None, entries: list[dict[str, Any]]
@@ -9255,13 +9387,11 @@ class ChatService:
                 }
             )
 
-        # Responses whose replayed reasoning this turn has let go.
-        thoughtless = prepared.reasoning_dropped
-
         def cleared(
             fitted: ModelRequest,
             receipts: list[ModelToolResult],
             call_ids: set[str],
+            dropped: Collection[str] = thoughtless,
         ) -> ModelRequest:
             whole = fitted.tool_results
             results = (
@@ -9273,7 +9403,7 @@ class ChatService:
                 else list(whole)
             )
             return fitted.model_copy(
-                update={"tool_results": _budgeted_reasoning(results, thoughtless)}
+                update={"tool_results": _budgeted_reasoning(results, dropped)}
             )
 
         def receipts_for(entries: list[dict[str, Any]]) -> list[ModelToolResult]:
@@ -9287,77 +9417,244 @@ class ChatService:
             return fitted
         receipts = receipts_for(replay_entries)
         current = cleared(fitted, receipts, sticky)
+        prepared.tool_step_tokens = _step_tokens(fitted, calibration)
         if measured(current) <= target:
             return current
-        # The request crossed its target, so its earlier bytes change now
-        # whatever is done. It is taken down to the watermark in this one
-        # change: the checkpoint advances, then the oldest results still
-        # whole are cleared, the fewest that reach the watermark, and only
-        # when that is not enough every earlier response lets its replayed
-        # reasoning go. A model's thoughts are often its only note of what a
-        # cleared result held: dropped first, a DeepSeek chain turn re-read
-        # its files (73 tool calls where 39 had done).
-        watermark = self._clearing_watermark(target, limits.working_input_capacity)
-        advanced, advanced_entries = self._compacted_turn_history(
-            turn, limits, advance=True
+        short = prepared.runs_to_capacity
+        if short and measured(current, hard=True) <= capacity:
+            # The target leaves no room for more steps: the request runs on
+            # to the capacity, extending the one before it.
+            return current
+        headroom = self._clearing_headroom(
+            target, limits.working_input_capacity, prepared.tool_step_tokens
         )
-        if advanced is not None and advanced != checkpoint:
-            checkpoint, replay_entries = advanced, advanced_entries
-            fitted = replayed(checkpoint, replay_entries)
-            receipts = receipts_for(replay_entries)
-            current = cleared(fitted, receipts, sticky)
-            if not fitted.tool_results or measured(current) <= watermark:
-                return current
-        whole = fitted.tool_results
-        # A receipt is never larger than its result, so bisection finds the
-        # fewest to clear. What the model fetched to answer from (a file,
-        # an earlier output, the archived conversation) is cleared last: a
-        # cleared lookup reads as an unanswered one.
-        candidates = [
-            result.call_id
-            for retrieval in (False, True)
-            for result in whole[:-1]
-            if result.call_id not in sticky
-            and (result.name in RETRIEVAL_TOOL_NAMES) == retrieval
-        ]
 
-        def clearing(count: int) -> ModelRequest:
-            return cleared(fitted, receipts, sticky | set(candidates[:count]))
-
-        low, high = 0, len(candidates)
-        while low < high:
-            middle = (low + high) // 2
-            if measured(clearing(middle)) <= watermark:
-                high = middle
-            else:
-                low = middle + 1
-        newly = set(candidates[:low])
-        if measured(clearing(low)) > watermark:
-            # Every earlier result is a receipt and the request is still
-            # above the watermark: earlier reasoning goes too.
+        def ladder(
+            fitted: ModelRequest, receipts: list[ModelToolResult]
+        ) -> tuple[
+            list[str],
+            set[str],
+            Callable[..., ModelRequest],
+            Callable[[int, bool], tuple[int, bool] | None],
+        ]:
+            whole = fitted.tool_results
+            # A receipt is never larger than its result, so bisection finds
+            # the fewest to clear. What the model fetched to answer from (a
+            # file, an earlier output, the archived conversation) is cleared
+            # last: a cleared lookup reads as an unanswered one.
+            candidates = [
+                result.call_id
+                for retrieval in (False, True)
+                for result in whole[:-1]
+                if result.call_id not in sticky
+                and (result.name in RETRIEVAL_TOOL_NAMES) == retrieval
+            ]
             earlier = _earlier_groups(whole) - thoughtless
-            if earlier:
-                thoughtless.update(earlier)
-                record_diagnostic(
-                    "debug",
-                    "chat",
-                    "chat.tool_history.reasoning_dropped",
-                    "Earlier routing responses were replayed without their "
-                    "reasoning so the request fits the model's context window.",
-                    outcome="success",
-                    stage="chat",
-                    # The responses let go now, those replayed, and the
-                    # watermark.
-                    metadata={
-                        "provider": prepared.provider_profile.id,
-                        "model_id": prepared.resolved_model,
-                        "count": len(earlier),
-                        "item_count": len(
-                            {_reasoning_group(result) for result in whole}
-                        ),
-                        "limit": watermark,
-                    },
+
+            def clearing(
+                count: int, dropped: Collection[str] = thoughtless
+            ) -> ModelRequest:
+                return cleared(
+                    fitted, receipts, sticky | set(candidates[:count]), dropped
                 )
+
+            def plan(watermark: int, hard: bool) -> tuple[int, bool] | None:
+                """The fewest results to clear, and whether earlier reasoning
+                goes too, that take the request to ``watermark``; None when
+                nothing does."""
+
+                low, high = 0, len(candidates)
+                while low < high:
+                    middle = (low + high) // 2
+                    if measured(clearing(middle), hard=hard) <= watermark:
+                        high = middle
+                    else:
+                        low = middle + 1
+                if measured(clearing(low), hard=hard) <= watermark:
+                    return low, False
+                if earlier and (
+                    measured(clearing(low, thoughtless | earlier), hard=hard)
+                    <= watermark
+                ):
+                    return low, True
+                return None
+
+            return candidates, earlier, clearing, plan
+
+        # The request crossed its target (or, running on past it, its
+        # capacity), so its bytes change now, in this one change. The oldest
+        # results still whole are cleared, the fewest that reach the
+        # watermark, and only when that is not enough every earlier response
+        # lets its replayed reasoning go. A model's thoughts are often its
+        # only note of what a cleared result held: dropped first, a DeepSeek
+        # chain turn re-read its files (73 tool calls where 39 had done).
+        #
+        # With room below the target for the headroom, the checkpoint
+        # advances first, folding the steps that left the recent window in
+        # the same change. Without it (a small window whose instructions,
+        # functions and conversation nearly fill the target), advancing at
+        # every crossing changed the request from the current message, which
+        # carries the checkpoint, at every step. The checkpoint then stays
+        # where it is while clearing can bring the request below the target:
+        # the request changes only from the first result it clears. When it
+        # cannot, the checkpoint folds every step but the newest, and must
+        # leave room for one more step; when even that leaves none, the
+        # turn's requests run on past the target to the input capacity,
+        # extending each other, and cross there instead.
+        def choose(
+            current: ModelRequest,
+            candidates: list[str],
+            clearing: Callable[..., ModelRequest],
+            plan: Callable[[int, bool], tuple[int, bool] | None],
+            *,
+            folded: bool,
+        ) -> tuple[tuple[int, bool], int, bool] | None:
+            """What to clear, toward which watermark, and whether the turn
+            runs on to its capacity; None when nothing brings it there."""
+
+            def enough(
+                ceiling: int, floor: int, hard: bool
+            ) -> tuple[tuple[int, bool], int] | None:
+                # The headroom below ``ceiling``; short of it, every earlier
+                # result if that brings the request below ``floor``, rather
+                # than one more at each step: each clear sends every whole
+                # result after it again.
+                chosen = plan(ceiling - headroom, hard)
+                if chosen is not None:
+                    return chosen, ceiling - headroom
+                chosen = plan(floor, hard)
+                if chosen is None:
+                    return None
+                if measured(clearing(len(candidates)), hard=hard) <= floor:
+                    chosen = (len(candidates), False)
+                return chosen, floor
+
+            # Short of the headroom, anything below the target will do while
+            # the checkpoint stays; once it has folded, room for one more
+            # step, or it would fold at every step.
+            step = prepared.tool_step_tokens if folded else 0
+            if short:
+                # Running on to the capacity: back below the target only
+                # with the headroom.
+                chosen = plan(target - headroom, False)
+                found = (chosen, target - headroom) if chosen is not None else None
+            else:
+                found = enough(target, target - step, False)
+            if found is not None:
+                return found[0], found[1], False
+            if not short:
+                if not folded:
+                    return None
+                if measured(current, hard=True) <= capacity:
+                    return (0, False), capacity, True
+            found = enough(capacity, capacity - step, True)
+            if found is not None:
+                return found[0], found[1], True
+            return None
+
+        candidates, earlier, clearing, plan = ladder(fitted, receipts)
+        if not short and plan(target - headroom, False) is not None:
+            advanced, advanced_entries = self._compacted_turn_history(
+                turn, limits, advance=True
+            )
+            if advanced is not None and advanced != checkpoint:
+                checkpoint, replay_entries = advanced, advanced_entries
+                fitted = replayed(checkpoint, replay_entries)
+                receipts = receipts_for(replay_entries)
+                current = cleared(fitted, receipts, sticky)
+                if not fitted.tool_results or measured(current) <= target - headroom:
+                    return current
+                candidates, earlier, clearing, plan = ladder(fitted, receipts)
+        decided = choose(current, candidates, clearing, plan, folded=False)
+        if decided is None:
+            advanced, advanced_entries = self._compacted_turn_history(
+                turn, limits, advance=True, recent_groups=1
+            )
+            if advanced is not None and advanced != checkpoint:
+                checkpoint, replay_entries = advanced, advanced_entries
+                fitted = replayed(checkpoint, replay_entries)
+                receipts = receipts_for(replay_entries)
+                current = cleared(fitted, receipts, sticky)
+                if not fitted.tool_results:
+                    return current
+                candidates, earlier, clearing, plan = ladder(fitted, receipts)
+            decided = choose(current, candidates, clearing, plan, folded=True)
+        # Nothing smaller: every earlier result cleared, and its reasoning.
+        chosen, watermark, runs_on = decided or (
+            (len(candidates), bool(earlier)),
+            capacity if short else target,
+            short,
+        )
+        low, drop = chosen
+        dropped = thoughtless | earlier if drop else thoughtless
+        smallest = clearing(low, dropped)
+        at_smallest = measured(smallest, hard=True)
+        compactable = calibrated_estimate(
+            estimate_messages(smallest.messages[:-1]), calibration
+        )
+        if (
+            compact_for_room
+            and not prepared.room_compacted
+            and not prepared.midturn_compactions
+            and (
+                # The newest result, the one the model is deciding on, would
+                # be cleared too: worth a compaction whenever the
+                # conversation holds a step's worth.
+                (at_smallest > capacity and compactable >= prepared.tool_step_tokens)
+                # No room below the capacity for one more step, so the
+                # checkpoint would fold at every step: worth one only when
+                # the conversation holds a step's worth more than the
+                # smallest memory the compactor writes (a few short turns
+                # came back no smaller, at the cost of a call).
+                or (
+                    at_smallest > capacity - prepared.tool_step_tokens
+                    and compactable >= prepared.tool_step_tokens + SUMMARY_FLOOR_TOKENS
+                )
+            )
+        ):
+            # The routing loop compacts the conversation ahead of the tool
+            # history once; this is the request to size it by.
+            prepared.room_due = True
+            return smallest
+        if runs_on and not short:
+            record_diagnostic(
+                "debug",
+                "chat",
+                "chat.tool_history.capacity_ceiling",
+                "A tool turn's requests run past the target to the model's "
+                "input capacity: clearing could not bring them below it.",
+                outcome="fallback",
+                stage="chat",
+                metadata={
+                    "provider": prepared.provider_profile.id,
+                    "model_id": prepared.resolved_model,
+                    "limit": capacity,
+                    "item_count": len(fitted.tool_results),
+                },
+            )
+        prepared.runs_to_capacity = runs_on
+        whole = fitted.tool_results
+        newly = set(candidates[:low])
+        if drop:
+            thoughtless.update(earlier)
+            record_diagnostic(
+                "debug",
+                "chat",
+                "chat.tool_history.reasoning_dropped",
+                "Earlier routing responses were replayed without their "
+                "reasoning so the request fits the model's context window.",
+                outcome="success",
+                stage="chat",
+                # The responses let go now, those replayed, and the
+                # watermark.
+                metadata={
+                    "provider": prepared.provider_profile.id,
+                    "model_id": prepared.resolved_model,
+                    "count": len(earlier),
+                    "item_count": len({_reasoning_group(result) for result in whole}),
+                    "limit": watermark,
+                },
+            )
         if (
             measured(clearing(low), hard=True) > capacity
             and whole[-1].call_id not in sticky

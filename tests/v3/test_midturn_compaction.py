@@ -85,6 +85,16 @@ class ProbeBroker:
         )
 
 
+class TinyBroker(ProbeBroker):
+    """Answers every call with a result smaller than its receipt would be."""
+
+    async def execute(self, invocation, scope, *, approval=None):
+        del scope, approval
+        value = invocation.arguments["value"]
+        self.calls.append(value)
+        return ToolExecutionResult(output={"value": value})
+
+
 class TurnProvider(ScriptedProvider):
     """Calls ``safe_read`` ``calls`` times, then answers; compacts on request."""
 
@@ -375,9 +385,11 @@ def test_a_rejection_clearing_cannot_fix_compacts_the_conversation(tmp_path):
     for the retry instead; nothing runs again and the turn completes.
     """
 
-    broker = ProbeBroker()
-    provider = RejectingProvider(calls=4, limit=6_000)
-    store, service, prepared = _turn(tmp_path, provider, broker, history=10)
+    broker = TinyBroker()
+    # The request stays below its target, so no crossing compacts it first;
+    # the server counts more than Core does.
+    provider = RejectingProvider(calls=4, limit=4_800)
+    store, service, prepared = _turn(tmp_path, provider, broker, history=6)
 
     completion = asyncio.run(service.complete(prepared))
 
@@ -426,11 +438,12 @@ def test_the_answer_gets_room_when_the_synthesis_no_longer_fits(tmp_path, monkey
 
     broker = ProbeBroker()
     provider = TurnProvider(calls=1)
-    store, service, prepared = _turn(tmp_path, provider, broker, history=8)
+    # Routing stays below its target; only the answer outgrows the window.
+    store, service, prepared = _turn(tmp_path, provider, broker, history=6)
     monkeypatch.setattr(
         chat_module,
         "_CHAT_TOOL_RESULT_INSTRUCTIONS",
-        chat_module._CHAT_TOOL_RESULT_INSTRUCTIONS + " Summarise." * 600,
+        chat_module._CHAT_TOOL_RESULT_INSTRUCTIONS + " Summarise." * 1_000,
     )
 
     completion = asyncio.run(service.complete(prepared))
@@ -540,8 +553,9 @@ def test_replayed_reasoning_that_fills_the_window_folds_into_the_checkpoint(
     """F12: a route replaying each step's reasoning outgrew any clearing.
 
     Clearing replaces outputs, not the reasoning each replayed call carries,
-    and compacting a short conversation frees little. The replayed steps fold
-    into the checkpoint instead, so routing goes on and the answer fits.
+    and compacting a short conversation frees little. Earlier steps let their
+    reasoning go, or fold into the checkpoint, so routing goes on and the
+    answer fits.
     """
 
     broker = ProbeBroker()
@@ -557,14 +571,22 @@ def test_replayed_reasoning_that_fills_the_window_folds_into_the_checkpoint(
         assert estimate_model_request(request) <= _capacity(prepared, request)
     (synthesis,) = [r for r in requests if r.tool_choice == ToolChoice.NONE]
     replayed = {r.call_id for r in synthesis.tool_results}
-    block = str(synthesis.messages[-1].content).split(
-        "EARLIER TOOL HISTORY CHECKPOINT", 1
-    )[1]
-    covered = {
-        f"call-{step + 1}"
-        for first, last in json.loads(block.split("\n", 1)[1])["covered_steps"]
-        for step in range(first, last + 1)
-    }
+    _, _, block = str(synthesis.messages[-1].content).partition(
+        "EARLIER TOOL HISTORY CHECKPOINT"
+    )
+    covered = (
+        {
+            f"call-{step + 1}"
+            for first, last in json.loads(block.split("\n", 1)[1])["covered_steps"]
+            for step in range(first, last + 1)
+        }
+        if block
+        else set()
+    )
+    # Only the newest step still replays its reasoning.
+    assert [
+        bool((r.reasoning_state or {}).get("reasoning")) for r in synthesis.tool_results
+    ][:-1] == [False] * (len(synthesis.tool_results) - 1)
     # Every call is replayed or folded, none both, none lost.
     assert replayed | covered == {f"call-{step}" for step in range(1, 13)}
     assert not replayed & covered
@@ -654,9 +676,10 @@ def test_a_second_synthesis_asks_with_the_compacted_conversation(tmp_path):
     """After a rejection compacted the conversation, an answer that came back
     empty is asked for again with that conversation, not the refused one."""
 
-    broker = ProbeBroker()
-    provider = SynthesisRejectingProvider(limit=7_000)
-    store, service, prepared = _turn(tmp_path, provider, broker, history=10)
+    broker = TinyBroker()
+    # Routing stays below its target; the server refuses the answer.
+    provider = SynthesisRejectingProvider(limit=4_700)
+    store, service, prepared = _turn(tmp_path, provider, broker, history=6)
 
     completion = asyncio.run(service.complete(prepared))
 
