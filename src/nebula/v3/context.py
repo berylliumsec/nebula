@@ -1343,6 +1343,32 @@ def _fit_memory(memory: ContextMemory, token_budget: int) -> tuple[ContextMemory
     )
 
 
+def _composed_summary(lists: dict[str, list[ContextMemoryItem]]) -> str:
+    """A summary made from validated items, for an answer that has none.
+
+    The first operator request says what the work is and the latest current
+    state where it stands; without either, the first item of the first
+    non-empty list, in the order the memory ranks them. Every identifier in
+    it therefore passed its item's source checks.
+    """
+
+    parts: list[str] = []
+    if lists.get("user_requests"):
+        parts.append("The operator asked: " + lists["user_requests"][0].text)
+    if lists.get("current_state"):
+        parts.append("Where it stands: " + lists["current_state"][-1].text)
+    if not parts:
+        first = next(
+            (lists[name][0] for name in _MEMORY_LISTS if lists.get(name)), None
+        )
+        if first is not None:
+            parts.append(first.text)
+    text = " ".join(
+        part if part.endswith((".", "!", "?")) else part + "." for part in parts
+    )
+    return _excerpt(text, 1_200) or "Earlier work is recorded in the items below."
+
+
 def _item_count(memory: ContextMemory) -> int:
     return sum(len(getattr(memory, name)) for name in _MEMORY_LISTS)
 
@@ -2385,8 +2411,9 @@ class ContextCompactor:
         if summary is None:
             if not any(lists.values()):
                 return _CheckedMemory(None, problems, dropped)
-            summary = "(No summary was returned; the items below hold the memory.)"
-            dropped += 1
+            # The summary comes last, so an answer cut short loses it first:
+            # one is composed from the items that passed their checks.
+            summary = _composed_summary(lists)
         memory = ContextMemory.model_validate(
             {
                 "objective": (checks.objective or "").strip()[:10_000] or None,

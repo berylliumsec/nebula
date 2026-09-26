@@ -305,7 +305,10 @@ the project. An answer that fails any check, is not JSON, or was cut off by the
 output limit gets one repair request that names the problems (or asks for a
 shorter answer). After that, invalid items are dropped and counted, an
 unverified summary identifier becomes `[unverified]`, a cut-off answer keeps
-every complete item before the cut, and the rest is used.
+every complete item before the cut, and the rest is used. An answer with items
+but no summary (the summary is written last, so a cut-off answer loses it
+first) gets one composed from its first operator request and latest current
+state, or else its best-ranked item.
 
 **Degraded, not blocked.** If the provider call fails, or neither answer holds
 a usable memory, that group's memory is a deterministic extract of the original
