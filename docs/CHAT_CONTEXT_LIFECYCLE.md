@@ -770,6 +770,10 @@ naming an earlier turn's output), `conversation.search` and `notes.write` calls
 and the working notes' size, provider-reported input with cache reads and
 writes, the ratio of reported input to Core's estimate and Core's
 `estimate_calibration`, cost from Core's model catalog prices, and wall time.
+A re-read is a planted file fetched again by a tool that returns its contents:
+`workspace.read`, `workspace.search` scoped to that file, a `run_command`
+segment running `cat`, `sed`, `grep` or a similar reader, or a `tool_output.*`
+call naming it. A path only mentioned, as in `notes.write`, is not a read.
 Results are mean (min) across `--repeat` runs with a fixed seed.
 
 Run it only against a scratch Core. It creates projects and provider profiles

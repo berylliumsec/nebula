@@ -1,10 +1,10 @@
 {
-  "change_digest": "5afd6713cab290696610a64fc9c8ca30e8b15f52182656eae1c2b7c74b9f473d",
-  "reviewed_by": "Claude focused review for ctx-docs-final",
-  "reason": "This diff changes only Markdown documentation (docs/CHAT_CONTEXT_LIFECYCLE.md and docs/design/assistant-context-state-machine.md): it documents provider prompt caching, reference-material relevance (operator-help gating, the knowledge reranker, knowledge.search and its citations), corrects where knowledge.search is offered, and updates the header and code/test index after the context-management overhaul (#602-#627). No executable source, tests, UI assets, provider contracts, or runtime behavior change. Every cited symbol and constant was checked against origin/main; internal anchors were checked against headings.",
-  "exclusions": "Python, frontend, native, and Playwright runtime tests are all excluded because the change has no executable behavior. No browser, real-Core, LAN, physical-device, provider, or full-suite gate is claimed for this documentation update.",
+  "change_digest": "7996994257198114a0b84115963219b2ac55b76c870138cd0ed1ad41a1c58aaf",
+  "reviewed_by": "Claude focused review for eval-reread-count",
+  "reason": "The context retention eval counted a planted file as re-read whenever any tool's arguments mentioned its path, so notes.write calls listing the chain inflated s2's repeated_source_reads (60a4544: 19.8 per run vs 1.0 from file-reading tools). scripts/context_retention_eval.py now counts only workspace.read, workspace.search scoped to a planted file, run_command/process_io shell segments whose program reads files (cat, sed, head, grep, ...), and tool_output.* re-fetches naming a file; report fields are unchanged. docs/CHAT_CONTEXT_LIFECYCLE.md defines a re-read. tests/test_context_retention_eval.py covers tool_call_stats, including a new synthetic step list with notes.write calls naming planted paths (fails on origin/main: 12 source reads instead of 5). Replaying the recorded 60a4544 s2 tool calls through the new counter gives 0, 1, 0, 4, 0 (mean 1.0).",
+  "exclusions": "Only the eval harness script changes; it is not shipped in Core or the UI, so frontend, native and Playwright tests are excluded. tests/v3/test_operator_help.py imports only scenario generation (build_scenario, SCENARIOS, DEFAULT_SEED), which this diff does not touch; it passed locally (10) and is excluded. No real-Core eval run, provider, browser, LAN, device, or full-suite gate is claimed; the counter was checked by replaying the recorded 60a4544 report instead of spending on a new run.",
   "expected_tests": {
-    "python": 0,
+    "python": 35,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -14,7 +14,9 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
+  "python": [
+    "tests/test_context_retention_eval.py"
+  ],
   "frontend": [],
   "native": [],
   "playwright": []
