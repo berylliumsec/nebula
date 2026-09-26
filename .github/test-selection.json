@@ -1,13 +1,13 @@
 {
-  "change_digest": "aeac33ff8b5778495ab582a4468dfbace4805513e06bfc91a52ad5b7e88b2a3e",
-  "reviewed_by": "Claude focused review for ctx-ui-red-tests",
-  "reason": "Repairs two Playwright journeys found red on origin/main, and the product bug behind one of them. (1) real-core 'production assistant preserves exact research context and relaunch-safe drafts through real Core' matched the selected-context delimiters #290 renamed; Core delivers the context correctly (stub captures identical from Cores at 32817fa, bab27ad and 343d289), so the regex and the transcript no-render check use Core's delimiters. Past that step it failed intermittently because the conversation actions menu closed itself: the conversation list (overflow: hidden, resize handle at right:-22px) was a 22px sideways scroll container that shifted on focus, and the menu closed on any document scroll. The list now clips its overflow and the menu closes only for scrolls that move its trigger; a new mocked regression test covers both. A research-context-core area selects the real-Core journey alone and joins the assistant rule. (2) interface 'assistant upgrade keeps a short operator message's actions on top and clickable' hovered '.chat-message-body > p', replaced by AssistantMarkdown in #597; it now hovers the text inside the Markdown surface with unchanged assertions. Playwright: entry:assistant on desktop, mobile Chromium and mobile WebKit (SessionsPage changed; contains both interface tests), area:research-context-core, area:conversation-panel-sizing and area:conversations-sidebar (the conversation list and its resize handle). Python: tests/test_playwright_impact.py validates the manifest change.",
-  "exclusions": "Full suites are not approved and are excluded. No backend, native or frontend unit code changed (the SessionsPage change is an effect's scroll listener, covered by the new mocked Playwright test), so no Python context, Vitest or Rust tests are selected. mission-restart-recovery (matched by components-workbench.css) is excluded: the CSS change is scoped to .session-layout.chat .session-list. The repaired interface test also appears in whole-file mobile-layout/desktop-interface areas, not selected; entry:assistant covers the three required engines. Other real-core journeys are not selected.",
+  "change_digest": "91c253216d68eb826079116fe10c6890d68f74d1009b2b14780ed83057709b7a",
+  "reviewed_by": "Claude focused review for ctx-ui",
+  "reason": "Working context panel UI (approved Figma 'Working context memory' W1-W3/P1) consuming the PLAN \u00a75 context contract: calibrated meter line and copy, v2 saved-memory sections with section/source counts, partial-summary (degraded) and items-removed (salvaged) states, read-only Agent notes rendered with AssistantMarkdown, and reported/cached tokens on Last provider request. The inline JSX moved from SessionsPage into WorkingContextPanel; the client maps every new wire field as optional. Axe on the panel also required role=meter on the context bar and names for GFM task-list boxes in AssistantMarkdown. Frontend: the new component tests, ProviderRequestInputDetails, AssistantMarkdown, client mapping (new, missing and unknown fields) and the App saved-memory journey. Playwright: SessionsPage changed, so entry:assistant on desktop, mobile Chromium and mobile WebKit; the new working-context area (two mocked journeys: W1/W2 and W3, on desktop/mobile-chromium/mobile-webkit); conversation-details (drawer headings, desktop + narrow); and provider-request-breakdown-core, the real-Core production LAN journey whose copy and collapsed Last provider request row changed, on all eight assistant-real profiles. Python: tests/test_playwright_impact.py validates the manifest change (new area and rule).",
+  "exclusions": "Full suites are not approved and are excluded. No Core/Python source changed, so backend context tests are not selected (Streams A/B/C own them). real-core.spec.ts 'production assistant preserves exact research context...' had one regex updated for the new meter copy but is not selected: it fails on pristine origin/main at line 1230 (selected-context delivery) before reaching that step, and is only catalogued in whole-file real-core areas. 'assistant upgrade keeps a short operator message's actions on top and clickable' (inside entry:assistant) also fails on pristine origin/main (locator .chat-message-body > p never renders) and is not caused by this change. Native/Tauri, mission and other Playwright areas are unaffected. The scratch-Core compaction + notes.write journey is recorded in the PR body once Streams B and C merge.",
   "expected_tests": {
     "python": 33,
-    "frontend": 0,
+    "frontend": 143,
     "native": 0,
-    "playwright": 231
+    "playwright": 237
   },
   "python_versions": [
     "3.12"
@@ -17,14 +17,20 @@
   "python": [
     "tests/test_playwright_impact.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/WorkingContextPanel.test.tsx",
+    "ui/src/components/ProviderRequestInputDetails.test.tsx",
+    "ui/src/components/assistantMarkdown.test.tsx",
+    "ui/src/api/client.test.ts",
+    "ui/src/App.test.tsx"
+  ],
   "native": [],
   "playwright": [
     "entry:assistant/desktop",
     "entry:assistant/mobile-chromium",
     "entry:assistant/mobile-webkit",
-    "area:research-context-core",
-    "area:conversation-panel-sizing",
-    "area:conversations-sidebar"
+    "area:working-context",
+    "area:conversation-details",
+    "area:provider-request-breakdown-core"
   ]
 }
