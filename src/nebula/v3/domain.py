@@ -3382,6 +3382,9 @@ class ScopeImport(Entity):
 class HarnessDetailedUsage(NebulaModel):
     """Provider-neutral usage and timing exposed by local harnesses."""
 
+    # The whole prompt, cached parts included, as on ``ChatTokenUsage``.
+    # Claude Code rows recorded before that normalization count only the
+    # uncached remainder and stay valid as they are.
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     total_tokens: int = Field(default=0, ge=0)
@@ -3403,6 +3406,8 @@ class HarnessDetailedUsage(NebulaModel):
             input_tokens=self.input_tokens,
             output_tokens=self.output_tokens,
             total_tokens=self.total_tokens,
+            cached_input_tokens=self.cached_input_tokens,
+            cache_creation_input_tokens=self.cache_creation_input_tokens,
         )
 
 
