@@ -5168,6 +5168,125 @@ test("conversation switching between projects detaches the provider viewer witho
   await expect.poll(() => cancelRequests).toBe(1);
 });
 
+reloadTest("conversation switching follows a deep link into the conversation's own project and explains links that cannot open", async ({ page }) => {
+  test.setTimeout(90_000);
+  const project = (id: string, name: string, status: "active" | "archived") => ({ ...entity, id, name, description: "", status, tags: [], metadata: {} });
+  const projects = [
+    project("scratch-project", "Scratch Project", "active"),
+    project("project-b", "Project B", "active"),
+    project("project-old", "Old project", "archived"),
+  ];
+  const chat = (id: string, engagementId: string, title: string) => ({ ...entity, id, engagement_id: engagementId, title, backend: "provider", metadata: {} });
+  const chats: Record<string, ReturnType<typeof chat>> = {
+    "chat-in-b": chat("chat-in-b", "project-b", "Linked from Project B"),
+    "chat-in-old": chat("chat-in-old", "project-old", "Linked from Old project"),
+    "chat-flaky": chat("chat-flaky", "project-b", "Linked after a retry"),
+  };
+  const lookups: string[] = [];
+  let releaseLookup = () => {};
+  let lookupGate: Promise<void> | undefined = new Promise(resolve => { releaseLookup = resolve; });
+  let flakyFailures = 1;
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    if (path.endsWith("/engagements") && request.method() === "GET") return route.fulfill({ json: projects });
+    const projectPath = /\/engagements\/(project-old)$/.exec(path);
+    if (projectPath) {
+      const stored = projects.find(item => item.id === projectPath[1])!;
+      if (request.method() === "PATCH") Object.assign(stored, { status: "active", revision: stored.revision + 1 });
+      return route.fulfill({ json: stored });
+    }
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") {
+      const engagementId = url.searchParams.get("engagement_id");
+      return route.fulfill({ json: Object.values(chats).filter(item => item.engagement_id === engagementId) });
+    }
+    const lookup = /\/chat-sessions\/([^/]+)$/.exec(path);
+    if (lookup && request.method() === "GET") {
+      const id = decodeURIComponent(lookup[1]);
+      lookups.push(id);
+      if (lookupGate) await lookupGate;
+      if (id === "chat-flaky" && flakyFailures-- > 0) return route.fulfill({ status: 503, json: { detail: "Nebula Core is restarting." } });
+      const found = chats[id];
+      return found ? route.fulfill({ json: found }) : route.fulfill({ status: 404, json: { detail: "chat session not found" } });
+    }
+    const messages = /\/chat\/sessions\/([^/]+)\/messages$/.exec(path);
+    if (messages) {
+      const found = chats[messages[1]];
+      return route.fulfill({ json: found ? [{ ...entity, id: `${found.id}-answer`, engagement_id: found.engagement_id, session_id: found.id, sequence: 1, role: "assistant", content: `${found.title} transcript`, citations: [], metadata: {} }] : [] });
+    }
+    if (/\/chat\/sessions\/[^/]+\/pending-turn$/.test(path)) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+  await page.addInitScript(() => localStorage.setItem("nebula.engagement", "scratch-project"));
+  const mobileViewport = (page.viewportSize()?.width ?? 1_000) <= 760;
+  const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+  const conversationTitle = page.locator(".conversation-toolbar-title, .mobile-conversation-title strong").filter({ visible: true });
+  const expectProject = async (name: string) => {
+    if (!mobileViewport) await expect(page.getByRole("button", { name: "Switch project" })).toContainText(name);
+  };
+
+  // A link built in Scratch Project names a Project B conversation.
+  await page.goto("/projects/scratch-project/workbench?view=chat&session=chat-in-b");
+  const opening = page.getByRole("status").filter({ hasText: "Opening conversation…" });
+  await expect(opening).toBeVisible();
+  await expect(composer).toHaveCount(0);
+  releaseLookup();
+  lookupGate = undefined;
+  await expect(page).toHaveURL(/\/projects\/project-b\/workbench\?view=chat&session=chat-in-b$/);
+  await expect(page.getByText("Linked from Project B transcript")).toBeVisible();
+  await expect(composer).toBeVisible();
+  await expectProject("Project B");
+  expect(await page.evaluate(() => localStorage.getItem("nebula.engagement"))).toBe("project-b");
+  // The URL now names the right project, so a reload needs no second lookup.
+  const lookupsBeforeReload = lookups.length;
+  await page.reload();
+  await expect(page.getByText("Linked from Project B transcript")).toBeVisible();
+  expect(lookups.length).toBe(lookupsBeforeReload);
+  // Conversation links built without a view open the conversation too.
+  await page.goto("/projects/scratch-project/workbench?session=chat-in-b");
+  await expect(page).toHaveURL(/\/projects\/project-b\/workbench\?session=chat-in-b$/);
+  await expect(page.getByText("Linked from Project B transcript")).toBeVisible();
+
+  // A deleted conversation explains itself instead of opening a blank chat,
+  // and the conversation that was open no longer claims the header.
+  await openWorkspace(page, "/projects/project-b/workbench?view=chat&session=chat-deleted", "Workbench");
+  const missing = page.getByRole("alert").filter({ hasText: "Conversation not found" });
+  await expect(missing).toBeVisible();
+  await expect(composer).toHaveCount(0);
+  await expect(conversationTitle).toHaveText("Conversation unavailable");
+  expect((await new AxeBuilder({ page }).include(".chat-link-state").analyze()).violations).toEqual([]);
+  const startNew = missing.getByRole("button", { name: "Start new chat" });
+  if (mobileViewport) expectTouchTarget((await startNew.boundingBox())?.height, "Start new chat");
+  await startNew.click();
+  await expect(composer).toBeVisible();
+  await expect(page).not.toHaveURL(/session=/);
+
+  // A conversation in an archived project offers to restore that project.
+  await openWorkspace(page, "/projects/project-b/workbench?view=chat&session=chat-in-old", "Workbench");
+  const archived = page.getByRole("alert").filter({ hasText: "Conversation is in an archived project" });
+  await expect(archived).toContainText("It belongs to Old project.");
+  await archived.getByRole("button", { name: "Restore project" }).click();
+  await expect(page).toHaveURL(/\/projects\/project-old\/workbench\?view=chat&session=chat-in-old$/);
+  await expect(page.getByText("Linked from Old project transcript")).toBeVisible();
+  await expectProject("Old project");
+
+  // A failed lookup is retried in place.
+  await openWorkspace(page, "/projects/project-old/workbench?view=chat&session=chat-flaky", "Workbench");
+  const failed = page.getByRole("alert").filter({ hasText: "Conversation could not be opened" });
+  await expect(failed).toContainText("Nebula Core is restarting.");
+  await expect(conversationTitle).toHaveText("Conversation unavailable");
+  await failed.getByRole("button", { name: "Try again" }).click();
+  await expect(page).toHaveURL(/\/projects\/project-b\/workbench\?view=chat&session=chat-flaky$/);
+  await expect(page.getByText("Linked after a retry transcript")).toBeVisible();
+
+  // On the Terminal view `session` names a terminal, never a conversation.
+  const lookupsBeforeTerminal = lookups.length;
+  await openWorkspace(page, "/projects/project-b/workbench?view=terminal&session=terminal-1", "Workbench");
+  await page.waitForTimeout(500);
+  expect(lookups.slice(lookupsBeforeTerminal)).toEqual([]);
+});
+
 test("assistant upgrade provider lifecycle hooks are selected and visible after the turn", async ({ page }) => {
   const provider = {
     ...entity,

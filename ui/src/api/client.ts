@@ -8895,6 +8895,17 @@ export class ApiClient {
     };
   }
 
+  /** One conversation by id, from any project; a deep link learns its project here. */
+  getChatSession(
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>(
+      `chat-sessions/${encodeURIComponent(sessionId)}`,
+      { signal },
+    ).then(mapChatSession);
+  }
+
   renameChatSession(
     sessionId: string,
     body: ChatSessionRenameRequest,

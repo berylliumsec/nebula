@@ -12,6 +12,7 @@
     {"name": "provider-reasoning", "patterns": ["src/nebula/v3/providers.py", "src/nebula/v3/chat.py", "ui/src/pages/SessionsPage.tsx"], "areas": ["provider-reasoning"]},
     {"name": "chat-subagents", "patterns": ["ui/src/components/chat-subagents/*", "ui/src/chat-subagents.css", "src/nebula/v3/chat_subagents.py"], "areas": ["chat-subagents"]},
     {"name": "subagent-sidebar", "patterns": ["ui/src/pages/conversationSidebar.ts"], "areas": ["subagent-sidebar"]},
+    {"name": "conversation-deep-link", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/pages/conversationLink*", "ui/src/components/ConversationLinkNotice*", "ui/src/resourceRoutes.ts"], "areas": ["conversation-deep-link", "conversation-deep-link-core"]},
     {"name": "conversation-details", "patterns": ["ui/src/components/ChatWorkspaceDrawer.tsx", "ui/src/components/ProviderGoalChildren.tsx"], "areas": ["conversation-details"]},
     {"name": "working-context", "patterns": ["ui/src/components/WorkingContextPanel*", "ui/src/components/ProviderRequestInputDetails*"], "areas": ["working-context", "provider-request-breakdown-core"]},
     {"name": "conversation-panel-sizing", "patterns": ["ui/src/components/useResizableSidePanel*", "ui/src/components/ChatWorkspaceDrawer.tsx"], "areas": ["conversation-panel-sizing"]},
@@ -74,6 +75,21 @@
     ],
     "mission-restart-recovery-core": [
       {"area":"mission-restart-recovery-core","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"production LAN mission ledger survives failure, retry, restart recovery, and relaunch through real Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "conversation-deep-link": [
+      {"area":"conversation-deep-link","project":"desktop","test_match":"tests/interface.spec.ts","grep":"conversation switching follows a deep link","runtime":"mock","shard":"1/1"},
+      {"area":"conversation-deep-link","project":"compact","test_match":"tests/interface.spec.ts","grep":"conversation switching follows a deep link","runtime":"mock","shard":"1/1"},
+      {"area":"conversation-deep-link","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"conversation switching follows a deep link","runtime":"mock","shard":"1/1"},
+      {"area":"conversation-deep-link","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"conversation switching follows a deep link","runtime":"mock","shard":"1/1"},
+      {"area":"conversation-deep-link","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"conversation switching follows a deep link","runtime":"mock","shard":"1/1"},
+      {"area":"conversation-deep-link","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"conversation switching follows a deep link","runtime":"mock","shard":"1/1"},
+      {"area":"conversation-deep-link","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"conversation switching follows a deep link","runtime":"mock","shard":"1/1"},
+      {"area":"conversation-deep-link","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"conversation switching follows a deep link","runtime":"mock","shard":"1/1"}
+    ],
+    "conversation-deep-link-core": [
+      {"area":"conversation-deep-link-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production LAN opens a conversation link in its own project","runtime":"real-core","shard":"1/1"},
+      {"area":"conversation-deep-link-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production LAN opens a conversation link in its own project","runtime":"real-core","shard":"1/1"},
+      {"area":"conversation-deep-link-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production LAN opens a conversation link in its own project","runtime":"real-core","shard":"1/1"}
     ],
     "subagent-sidebar": [
       {"area":"subagent-sidebar","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade nests subagents beneath a collapsed main conversation","runtime":"mock","shard":"1/1"},

@@ -99,7 +99,7 @@ import {
 import { ApiError, type ApiClient } from "../api/client";
 import { ChatPreviewCache } from "./chatPreviewCache";
 import { groupByAssistantId } from "./chatRenderGroups";
-import { Link, useSearchParams, type NavigateOptions } from "react-router-dom";
+import { Link, useNavigate, useSearchParams, type NavigateOptions } from "react-router-dom";
 import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime, providerDefaultModel } from "../api/runtimeDefaults";
 import {
@@ -167,6 +167,9 @@ import { WorkbenchBrowser } from "../components/WorkbenchBrowser";
 import { TabBar, Toolbar } from "../components/SurfacePrimitives";
 import { useWorkbenchDrafts } from "../state/WorkbenchDraftContext";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { projectSurface } from "../resourceRoutes";
+import { ConversationLinkNotice } from "../components/ConversationLinkNotice";
+import { conversationLinkFailure, conversationLinkTarget, type ConversationLinkState } from "./conversationLink";
 import { useChrome } from "../state/ChromeContext";
 import { settingCatalogEntry } from "../settingsCatalog";
 import { WebSearchResults } from "../components/WebSearchResults";
@@ -864,9 +867,10 @@ export function SessionsPage() {
   const requestedSessionId = searchParams.get("session") ?? "";
   // The URL is the only authority for the Workbench view, so every control on
   // screen was rendered from the location it writes back to. Deep links that
-  // omit `view` (a conversation or mission) keep the view the URL last named.
+  // omit `view` (a conversation or mission) keep the view the URL last named;
+  // loaded fresh, a link that names a conversation opens it.
   const requestedView = sessionViewFromParam(searchParams.get("view"));
-  const [lastRequestedView, setLastRequestedView] = useState<SessionView>(requestedView ?? "terminal");
+  const [lastRequestedView, setLastRequestedView] = useState<SessionView>(requestedView ?? (requestedSessionId ? "chat" : "terminal"));
   if (requestedView && requestedView !== lastRequestedView) setLastRequestedView(requestedView);
   const view = requestedView ?? lastRequestedView;
   const updateSearchParams = useCallback((update: (params: URLSearchParams) => void, options?: NavigateOptions) => {
@@ -918,11 +922,13 @@ export function SessionsPage() {
     api,
     activeOperator,
     approvals,
+    archivedEngagements,
     assets,
     coreState,
     createObservation,
     deleteObservation,
     engagement,
+    engagements,
     evidence,
     ingestKnowledgeUrlSource,
     knowledgeSources,
@@ -932,6 +938,7 @@ export function SessionsPage() {
     refreshProvider,
     reverifyProvider,
     resolveApproval,
+    setEngagementArchived,
     updateProvider,
     setupStatus,
     startMission,
@@ -971,6 +978,8 @@ export function SessionsPage() {
   }, []);
   const [executionRefresh, setExecutionRefresh] = useState(0);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  // The project whose conversation list has answered, successfully or not.
+  const [sessionListLoadedFor, setSessionListLoadedFor] = useState<string>();
   const [sessionActivity, setSessionActivity] = useState<Record<string, ChatSessionActivity["state"]>>({});
   const activeEngagementIdRef = useRef(engagement?.id);
   activeEngagementIdRef.current = engagement?.id;
@@ -988,6 +997,21 @@ export function SessionsPage() {
   const [archivingSessionId, setArchivingSessionId] = useState<string>();
   const [archivedGroupOpen, setArchivedGroupOpen] = useState(false);
   const [sessionId, setSessionId] = useState("");
+  const navigate = useNavigate();
+  // `session` names a terminal, not a conversation, on the Terminal view.
+  const linkedConversationId = requestedView === "terminal" ? "" : requestedSessionId;
+  const linkedConversationListed = Boolean(linkedConversationId) && sessions.some(session => session.id === linkedConversationId);
+  const [conversationLink, setConversationLink] = useState<ConversationLinkState>();
+  const [conversationLinkAttempt, setConversationLinkAttempt] = useState(0);
+  const [restoringLinkedProject, setRestoringLinkedProject] = useState(false);
+  const linkProjectsRef = useRef({ active: engagements, archived: archivedEngagements });
+  linkProjectsRef.current = { active: engagements, archived: archivedEngagements };
+  // Until Core places the linked conversation, show that instead of an empty
+  // chat that would start a different conversation.
+  const linkedConversationUnresolved = Boolean(linkedConversationId) && !linkedConversationListed && sessionId !== linkedConversationId;
+  const conversationLinkNotice: ConversationLinkState | undefined = !linkedConversationUnresolved ? undefined
+    : conversationLink?.sessionId === linkedConversationId ? conversationLink
+      : { sessionId: linkedConversationId, status: "resolving" };
   useEffect(() => {
     const selected = sessions.find(session => session.id === sessionId);
     const parent = selected?.isSubagent ? sessions.find(session => session.id === selected.parentSessionId) : undefined;
@@ -2194,12 +2218,14 @@ export function SessionsPage() {
       return;
     }
     const controller = new AbortController();
-    void api.listChatSessions(engagement.id, controller.signal)
+    const listedEngagementId = engagement.id;
+    void api.listChatSessions(listedEngagementId, controller.signal)
       .then((page) => setSessions(page.items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))))
       .catch((error) => {
         void logCaughtDiagnostic("interface.sessions_page.caught_failure_05", "A handled interface operation failed.", error, "sessions_page");
         if (!controller.signal.aborted) setChatError(error instanceof Error ? error.message : "Could not load conversations.");
-      });
+      })
+      .finally(() => { if (!controller.signal.aborted) setSessionListLoadedFor(listedEngagementId); });
     return () => controller.abort();
   }, [api, coreState, engagement]);
 
@@ -3585,6 +3611,60 @@ export function SessionsPage() {
     if (!requestedSessionId || requestedSessionId === sessionId || !api || !sessions.some((session) => session.id === requestedSessionId)) return;
     void selectSession(requestedSessionId, false);
   }, [api, requestedSessionId, sessionId, sessions]);
+
+  // A link can name a conversation from another project. Core knows its
+  // project, so the URL is corrected to that project instead of the link
+  // falling through to a blank chat in whichever project was open.
+  useEffect(() => {
+    if (!api || coreState !== "online" || !engagement || !linkedConversationId
+      || linkedConversationListed || sessionId === linkedConversationId
+      || sessionListLoadedFor !== engagement.id) return;
+    // Navigation commits in a transition: a conversation the operator just
+    // deleted or left for a new chat is not a link to resolve.
+    if (explicitNewConversationRef.current || latestSearchParams().get("session") !== linkedConversationId) return;
+    // The URL no longer names the open conversation, so its title and actions
+    // must not stay on screen. Resolution continues once it is detached.
+    if (sessionId) {
+      resetConversation(true);
+      return;
+    }
+    const requestedEngagementId = engagement.id;
+    const controller = new AbortController();
+    setConversationLink({ sessionId: linkedConversationId, status: "resolving" });
+    void api.getChatSession(linkedConversationId, controller.signal).then((linked) => {
+      if (controller.signal.aborted || activeEngagementIdRef.current !== requestedEngagementId) return;
+      const target = conversationLinkTarget(linked, requestedEngagementId, linkProjectsRef.current.active, linkProjectsRef.current.archived);
+      if (target.kind === "current") {
+        // Saved after this project's list was read.
+        setConversationLink(undefined);
+        void refreshSessions().catch((error) => { void logCaughtDiagnostic("interface.sessions_page.link_list_refresh", "The conversation list could not be refreshed for a linked conversation.", error, "sessions_page"); });
+        void selectSession(linked.id, false);
+      } else if (target.kind === "project") {
+        navigate(`${projectSurface(target.projectId, "workbench")}?${latestSearchParams()}`, { replace: true });
+      } else setConversationLink(target.state);
+    }).catch((error) => {
+      if (controller.signal.aborted) return; // diagnostic-expected: the link or project changed before Core answered
+      const failure = conversationLinkFailure(linkedConversationId, error);
+      if (failure.status === "failed") void logCaughtDiagnostic("interface.sessions_page.link_resolve_failed", "A linked conversation could not be resolved.", error, "sessions_page");
+      setConversationLink(failure);
+    });
+    return () => controller.abort();
+  }, [api, conversationLinkAttempt, coreState, engagement, linkedConversationId, linkedConversationListed, navigate, sessionId, sessionListLoadedFor]);
+
+  const restoreLinkedProject = async (projectId: string) => {
+    if (restoringLinkedProject) return;
+    setRestoringLinkedProject(true);
+    try {
+      await setEngagementArchived(projectId, false);
+      navigate(`${projectSurface(projectId, "workbench")}?${latestSearchParams()}`, { replace: true });
+    } catch (error) {
+      void logCaughtDiagnostic("interface.sessions_page.link_project_restore_failed", "The archived project of a linked conversation could not be restored.", error, "sessions_page");
+      const restoreError = error instanceof Error ? error.message : "Core could not save the change.";
+      setConversationLink(current => current?.status === "archived" ? { ...current, restoreError } : current);
+    } finally {
+      setRestoringLinkedProject(false);
+    }
+  };
 
   useEffect(() => {
     if (!api || !engagement || requestedSessionId || sessionId || conversationOpen || !sessions.length) return;
@@ -5189,7 +5269,8 @@ export function SessionsPage() {
             {fullScreen ? <Minimize2 size={18} aria-hidden="true" /> : <Maximize2 size={18} aria-hidden="true" />}
           </button>;
   const conversationTitle = sessions.find(session => session.id === sessionId)?.title
-    ?? (loadingHistory ? "Loading conversation…" : conversationOpen ? "New conversation" : "No conversation open");
+    ?? (conversationLinkNotice ? conversationLinkNotice.status === "resolving" ? "Opening conversation…" : "Conversation unavailable"
+      : loadingHistory ? "Loading conversation…" : conversationOpen ? "New conversation" : "No conversation open");
   const conversationActions = (
         <div className="session-toolbar-actions" role="toolbar" aria-label="Conversation actions">
           {view === "chat" && conversationOpen && transcriptSearchAction}
@@ -5268,7 +5349,17 @@ export function SessionsPage() {
     () => new Set(chatNavigation.bookmarks.filter(item => item.active).map(item => item.message_id)),
     [chatNavigation.bookmarks],
   );
-  const assistantPanel = (
+  const assistantPanel = conversationLinkNotice ? (
+            <div className="chat-panel">
+              <ConversationLinkNotice
+                state={conversationLinkNotice}
+                restoring={restoringLinkedProject}
+                onNewChat={newConversation}
+                onRetry={() => setConversationLinkAttempt(attempt => attempt + 1)}
+                onRestoreProject={(projectId) => void restoreLinkedProject(projectId)}
+              />
+            </div>
+  ) : (
             <div className="chat-panel">
               <ChatSearchPanel open={transcriptSearchOpen} onClose={closeTranscriptSearch} key={`search:${sessionId || "new"}`} search={chatNavigation.search} onSelect={(hit) => {
                 updateSearchParams(next => {next.set("session", hit.session_id); next.set("message", hit.message_id); next.set("view", view === "browser" ? "browser" : "chat");});
