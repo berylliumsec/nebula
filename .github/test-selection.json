@@ -1,5 +1,5 @@
 {
-  "change_digest": "495a8b07980ed67242daef5324c6ac53e645b2caf7e85a4610916b9ee8ed42e0",
+  "change_digest": "04d3f89e658ae3166a3735b1aa0c082304baba6236d5aea2928ed03cf0b98807",
   "reviewed_by": "Claude focused review for ctx-summary-compose",
   "reason": "context.py: when the compactor's answer has items but no summary, compose one from the first operator request and latest current state (or the best-ranked item) instead of storing a placeholder string, and no longer count it as a dropped item. Selected: the compactor tests (new composed-summary tests); every file that drives the compactor end to end: chat context assembly, background precompaction (stream P), missions (orchestration), chat leftovers, turn outcome history (repair replay) and deepseek/glm compat (compactor requests). Counts from pytest --collect-only.",
   "exclusions": "No frontend, native or Playwright tests: no UI or Rust change; the Working context panel renders the stored summary text unchanged. Provider adapters and tool-history code are untouched. No full suite.",
