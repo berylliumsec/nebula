@@ -678,6 +678,139 @@ def test_verified_routes_outrank_the_primary_route_window():
     assert limits.estimated is False
 
 
+def _routed(
+    route_window: int,
+    route_input: int,
+    *,
+    catalog_window: int = 1_000_000,
+    **options: int,
+) -> ProviderProfile:
+    """An OpenRouter profile with one verified route of the given limits."""
+
+    profile = _profile(**options)
+    profile.provider_type = "openrouter"
+    profile.is_local = False
+    profile.metadata["model_descriptors"] = [
+        {
+            "id": "author/model-a",
+            "context_window": catalog_window,
+            "max_output_tokens": 32_000,
+            "route_limits_verified": True,
+            "route_limits_checked_at": "2026-09-20T00:00:00+00:00",
+            "route_limits": [
+                {
+                    "provider_slug": "alpha",
+                    "context_window": route_window,
+                    "max_input_tokens": route_input,
+                    "max_output_tokens": 32_000,
+                    "status": 0,
+                    "supported_parameters": ["tools"],
+                }
+            ],
+        }
+    ]
+    return profile
+
+
+def test_binding_limit_names_a_configured_window_below_verified_routes():
+    # The case the capacity label got wrong: routes accept 1,000,000 tokens but
+    # the profile caps the window at 16,000, and ``source`` still reads catalog.
+    limits = resolve_context_limits(
+        _routed(1_000_000, 1_000_000, context_window=16_000, max_output_tokens=2_000),
+        model="author/model-a",
+    )
+
+    assert limits.context_window == 16_000
+    assert limits.source == "model_catalog"
+    assert limits.binding_limit == "configured"
+    assert limits.input_capacity == 14_000
+    assert limits.input_limit_binds is False
+
+
+def test_binding_limit_names_the_smallest_verified_route_and_its_input_limit():
+    limits = resolve_context_limits(
+        _routed(64_000, 50_000, max_output_tokens=8_000), model="author/model-a"
+    )
+
+    assert limits.context_window == 64_000
+    assert limits.binding_limit == "route"
+    # The route accepts 50,000 input tokens, below the 56,000 the window leaves.
+    assert limits.input_capacity == 50_000
+    assert limits.input_limit_binds is True
+
+    # A configured window equal to the route's does not narrow anything.
+    equal = resolve_context_limits(
+        _routed(64_000, 64_000, context_window=64_000, max_output_tokens=8_000),
+        model="author/model-a",
+    )
+    assert equal.binding_limit == "route"
+    assert equal.input_limit_binds is False
+
+
+def test_binding_limit_names_a_catalog_window_below_every_route():
+    limits = resolve_context_limits(
+        _routed(200_000, 200_000, catalog_window=128_000), model="author/model-a"
+    )
+
+    assert limits.context_window == 128_000
+    assert limits.binding_limit == "model"
+
+
+def test_binding_limit_for_catalog_known_configured_and_fallback_windows():
+    catalog = _profile(context_window=100_000)
+    catalog.metadata["model_descriptors"] = [
+        {"id": "model-a", "context_window": 200_000, "max_input_tokens": 60_000}
+    ]
+    capped = resolve_context_limits(catalog, model="model-a")
+    assert (capped.source, capped.binding_limit) == ("model_catalog", "configured")
+    # The model's own input limit, not the window, sets the input capacity.
+    assert capped.input_capacity == 60_000
+    assert capped.input_limit_binds is True
+
+    catalog.metadata["options"] = {}
+    uncapped = resolve_context_limits(catalog, model="model-a")
+    assert (uncapped.source, uncapped.binding_limit) == ("model_catalog", "model")
+
+    hosted = _profile(context_window=64_000)
+    hosted.provider_type = "anthropic"
+    hosted.is_local = False
+    known = resolve_context_limits(hosted, model="claude-opus-5")
+    assert (known.source, known.binding_limit) == ("known_model", "configured")
+    hosted.metadata["options"] = {}
+    published = resolve_context_limits(hosted, model="claude-opus-5")
+    assert (published.source, published.binding_limit) == ("known_model", "model")
+
+    configured = resolve_context_limits(_profile(context_window=16_000))
+    assert (configured.source, configured.binding_limit) == (
+        "configured",
+        "configured",
+    )
+    fallback = resolve_context_limits(_profile())
+    assert (fallback.source, fallback.binding_limit) == ("fallback", "fallback")
+
+
+def test_binding_limit_for_unverified_openrouter_ceilings():
+    profile = _profile(context_window=200_000, max_output_tokens=32_000)
+    profile.provider_type = "openrouter"
+    profile.metadata["model_descriptors"] = [
+        {"id": "author/model-a", "context_window": 200_000, "max_output_tokens": 32_000}
+    ]
+    # Neither the catalog nor the configured window survives the safe floor.
+    floor = resolve_context_limits(profile, model="author/model-a")
+    assert (floor.context_window, floor.binding_limit) == (8_192, "fallback")
+
+    profile.metadata["model_descriptors"][0]["primary_route_context_window"] = 131_072
+    primary = resolve_context_limits(profile, model="author/model-a")
+    assert (primary.context_window, primary.binding_limit) == (131_072, "route")
+
+    profile.metadata["options"] = {"context_window": 64_000}
+    configured = resolve_context_limits(profile, model="author/model-a")
+    assert (configured.context_window, configured.binding_limit) == (
+        64_000,
+        "configured",
+    )
+
+
 def test_token_estimation_and_security_identifier_retrieval_are_deterministic():
     assert estimate_tokens("hello") == 2
     assert estimate_tokens("你好", message_count=1) >= 10

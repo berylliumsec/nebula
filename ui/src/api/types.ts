@@ -1943,6 +1943,8 @@ export interface ContextMemory {
  */
 export type ContextSnapshotQuality = "complete" | "salvaged" | "degraded";
 
+export type ContextBindingLimit = "model" | "configured" | "route" | "fallback";
+
 /** The notes the assistant keeps for a conversation with its notes tool. */
 export interface ContextWorkingNotes {
   content: string;
@@ -1989,6 +1991,16 @@ export interface ContextStatus {
   eligibleRouteCount?: number;
   routeContextWindow?: number;
   routeInputLimit?: number;
+  /**
+   * Which limit sets `contextWindow`: the model's own window, the profile's
+   * configured window, the smallest usable provider route, or the safe floor.
+   * Absent for a runtime-managed context or from an older Core.
+   */
+  bindingLimit?: ContextBindingLimit;
+  /** Input the request may use before Core's target fraction applies. */
+  inputCapacity?: number;
+  /** True when a published input limit, not window less reply, set `inputCapacity`. */
+  inputLimitBinds: boolean;
   estimatedInputTokens: number;
   /** Factor learned from provider-reported usage and applied to the estimate. */
   estimateCalibration?: number;
