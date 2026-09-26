@@ -1183,6 +1183,8 @@ def _added_usage(left: ChatTokenUsage, right: ChatTokenUsage) -> ChatTokenUsage:
         output_tokens=left.output_tokens + right.output_tokens,
         total_tokens=left.total_tokens + right.total_tokens,
         cached_input_tokens=left.cached_input_tokens + right.cached_input_tokens,
+        cache_creation_input_tokens=left.cache_creation_input_tokens
+        + right.cache_creation_input_tokens,
     )
 
 

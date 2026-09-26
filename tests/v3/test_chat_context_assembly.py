@@ -19,6 +19,7 @@ from nebula.v3.context import (
     estimate_allowance,
     estimate_messages,
     estimate_model_request,
+    estimate_tool_definitions,
     resolve_context_limits,
     updated_calibration,
 )
@@ -34,9 +35,18 @@ from nebula.v3.domain import (
     ProviderCapabilityVerification,
     ProviderProfile,
     ProviderVerificationStatus,
+    RiskClass,
+    ScopePolicy,
 )
 from nebula.v3.providers import ModelRequest, ModelResponse, ModelUsage
+from nebula.v3.runtime_platform import RuntimeToolComponents
 from nebula.v3.storage import NebulaStore
+from nebula.v3.tool_catalog import (
+    catalog_components,
+    catalog_instructions,
+    deferrable_specs,
+)
+from nebula.v3.tools import ToolSpec
 from tests.v3.test_chat import FakeProvider, _profile
 
 MEMORY_HEADING = "EARLIER CONVERSATION, COMPACTED BY NEBULA"
@@ -572,3 +582,64 @@ def test_compaction_is_guided_by_the_goal_not_the_latest_message(tmp_path):
         json.loads(compaction.messages[0].content)["objective"]
         == "Map every exposed admin interface"
     )
+
+
+def test_the_reserve_covers_the_largest_catalog_picks_routing_can_send(tmp_path):
+    def spec(name: str, source: str | None, fields: int) -> ToolSpec:
+        return ToolSpec(
+            name=name,
+            description=f"{name} does one bounded thing. " * 4,
+            input_schema={
+                "type": "object",
+                "properties": {
+                    f"field_{index}": {"type": "string", "description": "A value."}
+                    for index in range(fields)
+                },
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ,
+            source_id=source,
+        )
+
+    specs = {
+        item.name: item
+        for item in (
+            spec("safe_read", None, 2),
+            *(
+                spec(f"mcp.remote.tool_{index}", "mcp:remote", index)
+                for index in range(8)
+            ),
+        )
+    }
+    components = RuntimeToolComponents(
+        broker=None,
+        scope=ScopePolicy(engagement_id="eng-assembly"),
+        workspace=tmp_path,
+        specs=specs,
+    )
+    deferred = deferrable_specs(specs)
+    assert len(deferred) == 8
+
+    reserve = ChatService._tool_request_reserve(components, deferred, (), None)
+
+    # Whatever the ranker picks, routing adds no more than was reserved.
+    catalog = catalog_components(components, deferred=deferred)
+    assert catalog is not None
+    sent = {
+        **{name: item for name, item in specs.items() if name not in deferred},
+        **catalog.specs,
+    }
+    tools = estimate_tool_definitions(ChatService._routing_tools(sent.values()))
+    prefix = chat_module.estimate_tokens(
+        chat_module._routing_instructions(sent, None) + "\n\n"
+    )
+    for picks in (
+        {"preloaded": ["mcp.remote.tool_7", "mcp.remote.tool_6"], "suggested": []},
+        {
+            "preloaded": ["mcp.remote.tool_0"],
+            "suggested": [f"mcp.remote.tool_{index}" for index in range(1, 6)],
+        },
+    ):
+        added = catalog_instructions({"deferred": sorted(deferred), **picks}, specs)
+        assert tools + prefix + chat_module.estimate_tokens(added) <= reserve
