@@ -18,10 +18,16 @@ redacts secrets, exactly as automatic attachment does for that provider.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from collections.abc import Callable
 from typing import Any
 
-from .domain import RiskClass
+from pydantic import ValidationError
+
+from .diagnostics import record_caught_exception
+from .domain import ChatCitation, RiskClass
+from .tool_results import fit_model_result
 from .tools import (
     IdempotencyBehavior,
     InvalidToolArguments,
@@ -35,6 +41,8 @@ MAX_MATCHES = 5
 # About six kilobytes of excerpts per call: every result stays in the turn's
 # replayed history.
 SEARCH_TOKEN_BUDGET = 2_048
+# Room kept beside the excerpts for the result's closing fields.
+_DETAIL_RESERVE = 400
 
 KNOWLEDGE_SEARCH_ROUTING_INSTRUCTIONS = (
     "\n\nProject knowledge: when the reference material attached to the "
@@ -138,19 +146,74 @@ class KnowledgeSearchTool(InvocationAnalysisTool):
             }
             for match in list(result.matches)[:MAX_MATCHES]
         ]
+        # Only what fits the model-delivery bound is returned: a result over
+        # it would reach the model as a size notice with no excerpt at all.
+        output, omitted = fit_model_result(
+            {"tool": KNOWLEDGE_SEARCH_TOOL_NAME, "query": query},
+            "matches",
+            matches,
+            reserve=_DETAIL_RESERVE,
+        )
+        delivered = output["matches"]
         return {
-            "tool": KNOWLEDGE_SEARCH_TOOL_NAME,
-            "query": query,
-            "result_count": len(matches),
-            "matches": matches,
+            **output,
+            "result_count": len(delivered),
             "detail": (
-                f"{len(matches)} excerpt(s) from the project's knowledge, most "
+                f"{len(delivered)} excerpt(s) from the project's knowledge, most "
                 "relevant first; a weak one matched only loosely and may not "
-                "answer. Cite what you use as [source_id:chunk_id]."
-                if matches
+                "answer."
+                + (f" {omitted} more did not fit; narrow the query." if omitted else "")
+                + " Cite what you use as [source_id:chunk_id]."
+                if delivered
                 else "The project has no document matching this query."
             ),
         }
+
+
+def searched_citations(provider_result: Any) -> list[ChatCitation]:
+    """The citations of the excerpts one ``knowledge.search`` result delivered.
+
+    Read from the result as the model received it, so an excerpt the model
+    never saw is never cited, and the text is the redacted text it saw.
+    """
+
+    if not isinstance(provider_result, str):
+        return []
+    try:
+        decoded = json.loads(provider_result)
+    except json.JSONDecodeError:
+        # diagnostic-expected: a size notice or legacy text carries no excerpt to cite
+        return []
+    if (
+        not isinstance(decoded, dict)
+        or decoded.get("tool") != KNOWLEDGE_SEARCH_TOOL_NAME
+    ):
+        return []
+    citations: list[ChatCitation] = []
+    for match in decoded.get("matches") or []:
+        if not isinstance(match, dict):
+            continue
+        try:
+            citations.append(
+                ChatCitation(
+                    source_id=str(match["source_id"]),
+                    name=str(match["name"]),
+                    citation=match.get("citation"),
+                    artifact_id=match.get("artifact_id"),
+                    chunk_id=str(match["chunk_id"]),
+                    page=match.get("page"),
+                    excerpt=re.sub(r"\s+", " ", str(match.get("text") or ""))[:320],
+                )
+            )
+        except (KeyError, ValidationError) as exc:
+            record_caught_exception(
+                "chat",
+                "chat.knowledge_search.citation_skipped",
+                "A knowledge.search excerpt could not be recorded as a citation.",
+                exc,
+                stage="citations",
+            )
+    return citations
 
 
 __all__ = [
@@ -158,4 +221,5 @@ __all__ = [
     "KNOWLEDGE_SEARCH_TOOL_NAME",
     "KnowledgeSearchTool",
     "knowledge_search_spec",
+    "searched_citations",
 ]
