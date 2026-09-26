@@ -110,9 +110,10 @@ excerpts, which are known only when a turn is assembled. The last provider
 request has a separate recorded estimate, with the provider's
 `reported_input_tokens` and `reported_cached_input_tokens`.
 
-When the estimate exceeds the 75% target, `_model_context` (having first
-waited for a background compaction of the conversation that is already running;
-see [Background pre-compaction](#background-pre-compaction)):
+When the estimate exceeds the 75% target, `_model_context` does the steps
+below. Before summarizing anew, it waits for a background compaction of the
+conversation that is already running (see
+[Background pre-compaction](#background-pre-compaction)).
 
 1. Refuses to proceed only if the current user message, required instructions
    and tool reserve exceed hard input capacity. A conversation with nothing
@@ -184,9 +185,15 @@ ready snapshot would still serve the next turn.
 * The conversation keeps being sent whole while it fits the target. The
   snapshot waits, and the turn that crosses the target reuses it through step 2
   below, without a model call.
-* A turn that needs a snapshot while one is being compacted waits for it and
-  reuses it. If the background compaction has not started yet, the turn
-  cancels it and compacts for itself.
+* A turn the current snapshot still serves never waits. A turn that needs a
+  new snapshot while one is being compacted waits for it and reuses it. If
+  the background compaction has not started yet, the turn cancels it and
+  compacts for itself.
+* The snapshot is not free. The first background boundary is set when the
+  conversation passes 60% of the target, so it can serve a turn or two fewer
+  than a compaction at the crossing turn would have. When turns follow each
+  other within seconds, a turn can arrive while the next background
+  compaction is still running and wait for the rest of it.
 * Nothing here can fail or delay the turn that triggered it. A failure records
   `chat.context.precompaction_failed`, and the next turn compacts for itself.
   Core shutdown cancels a running background compaction before anything is

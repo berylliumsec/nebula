@@ -33,7 +33,7 @@ stateDiagram-v2
     Stored --> Precompact: answer saved and estimate >= 60% of target (background)
     Precompact --> Ready: snapshot for the boundary the crossing turn would choose
     Precompact --> Stored: below threshold, snapshot still serves, or failed (next turn compacts)
-    Compact --> Precompact: background compaction running; the turn waits for it
+    Compact --> Precompact: no snapshot serves and a background compaction is running; the turn waits for it
 ```
 
 `Stored` is durable; `Request` is a temporary projection. A new user turn
