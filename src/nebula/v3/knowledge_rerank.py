@@ -18,20 +18,29 @@ background and never holds up a turn.
 
 The gate leans toward recall, because leaving out the document that answers a
 question costs an operator more than an extra chunk. The best-scoring chunk is
-attached unless the cross-encoder confidently rejects it; any further chunk
-must clear a stricter line. Each chunk is scored against the operator's
-question and every search the retrieval planner proposed, keeping the best,
-so a paraphrase survives whichever wording the planner chose.
+attached unless the cross-encoder confidently rejects it, together with any
+chunk scoring nearly as well; any further chunk must clear a stricter line.
+Each chunk is scored against the operator's question and every search the
+retrieval planner proposed, keeping the best, so a paraphrase survives
+whichever wording the planner chose. A long chunk dilutes the one sentence
+that answers: "when does someone get woken up about failures?" is answered by
+"paging alerts fire when the error rate stays above 2 percent" inside an
+1,800-character deployment guide, which scored -4.4 as a whole. So a few
+sentence-sized windows of the candidates, those sharing words with the question
+or a planned search, are scored as well and lift their chunk.
 
 Calibration: a labelled set of 50 questions over six project documents
 (``tests/v3/fixtures/knowledge_relevance_calibration.json``): questions
 sharing words with their answer, paraphrases sharing none, questions about
 Nebula itself or general knowledge, and questions that share vocabulary with a
 document that cannot answer them. With the lines below, every lexical question
-and 14 of 15 paraphrases kept their document, and 11 of 13 unrelated questions
-attached nothing, where today's retrieval attaches every chunk that fits to
+and every paraphrase kept its document, and every unrelated question attached
+nothing, where retrieval without the gate attaches every chunk that fits to
 all of them. Questions sharing vocabulary with a document still attach its
-best chunk or two (12 chunks for 8 such questions, against 56 today).
+best chunk or two (17 chunks for 8 such questions, against 56 without the
+gate). Choosing the lines on 49 questions and testing on the 50th, in turn,
+keeps 14 of 15 paraphrases: only the woken-up question needs the near-best
+margin, and no other question in the set shows how wide it must be.
 """
 
 from __future__ import annotations
@@ -40,6 +49,7 @@ import hashlib
 import importlib
 import logging
 import os
+import re
 import tempfile
 import threading
 import time
@@ -63,32 +73,33 @@ RERANKER_REVISION = "b5c6e9da73abc3711f593f705371cdbe9e0fe422"
 RERANKER_BASE_URL = "https://huggingface.co"
 
 # The best-scoring chunk is attached unless it scores below this: only a
-# confident rejection leaves a request without project knowledge. (A planner
-# wording seen on a real Core put a right answer at -3.08.)
-BEST_THRESHOLD = -3.1
-# Every further chunk must score at least this to be attached as well. Scores
-# are the best over the question and the planner's searches, which lifts
-# unrelated chunks too: at -2.5 a TLS question attached all seven chunks of
-# the calibration set; at -1.5 recall is unchanged and extra chunks halve.
-RELEVANCE_THRESHOLD = -1.5
-# A chunk the embedding model already placed this close to the question, and
-# that the cross-encoder does not firmly reject, is a paraphrase worth keeping.
-RESCUE_SIMILARITY = 0.40
-RESCUE_THRESHOLD = -4.0
-# The chunk the embedding model ranks nearest is attached at a lower bar still,
-# so a paraphrase the cross-encoder under-reads keeps its best evidence.
-NEAREST_SIMILARITY = 0.35
-NEAREST_THRESHOLD = -4.2
+# confident rejection leaves a request without project knowledge.
+BEST_THRESHOLD = -2.4
+# A chunk scoring within this of the best is attached with it: the model cannot
+# tell such a near tie apart. The alerting paraphrase ranked the answering
+# chunk 0.7 below a chunk that routes alerts without saying when they fire.
+NEAR_BEST_MARGIN = 0.8
+# Every other chunk must score at least this to be attached as well. Scores
+# are the best over the question, the planner's searches and a chunk's
+# windows, which lifts unrelated chunks too, so this line sits well above
+# the best chunk's.
+RELEVANCE_THRESHOLD = -0.8
 # Scoring costs roughly 0.05 s per full-size chunk on a laptop CPU, so only the
-# best few candidates of the existing ranking are read, and re-reading short
-# chunks against the planner's searches stops after this many pairs (the
-# ranking puts the chunks those searches found first). Worst case: 20 pairs,
-# about a second.
+# best few candidates of the existing ranking are read, and re-reading chunks
+# against the planner's searches stops after this many pairs (the ranking puts
+# the chunks those searches found first).
 MAX_RERANK_CANDIDATES = 8
 MAX_RETRY_PAIRS = 12
+# Windows are about a sentence long and cost a fifth of a chunk to score. Those
+# sharing the most words with the question or a planned search are read, up to
+# this many pairs. Worst case: 20 chunk and 16 window pairs, about a second.
+WINDOW_CHARACTERS = 160
+MAX_WINDOW_PAIRS = 16
 MAX_SEQUENCE_TOKENS = 512
 # The question is capped so the chunk always keeps most of the sequence.
 MAX_QUERY_CHARACTERS = 1_000
+# A line this short (a heading) is read together with the window after it.
+_SHORT_LINE_CHARACTERS = 60
 RETRY_AFTER_SECONDS = 600.0
 
 
@@ -136,14 +147,9 @@ class Scorer(Protocol):
 
 @dataclass(frozen=True)
 class RerankCandidate:
-    """A retrieved chunk as the relevance gate reads it.
-
-    ``similarity`` is the embedding cosine similarity, when the chunk came
-    from vector search.
-    """
+    """A retrieved chunk as the relevance gate reads it."""
 
     text: str
-    similarity: float | None = None
 
 
 def has_content(query: str) -> bool:
@@ -154,6 +160,93 @@ def has_content(query: str) -> bool:
     """
 
     return bool(terms(query))
+
+
+def passage_windows(text: str) -> list[str]:
+    """``text`` cut into windows of about a sentence, or ``[]`` if it is one.
+
+    Paragraphs longer than ``WINDOW_CHARACTERS`` are cut at sentence ends into
+    windows of at most that length (a single longer sentence stays whole); a
+    short line such as a heading joins the window after it.
+    """
+
+    parts: list[str] = []
+    for paragraph in re.split(r"\n\s*\n", text):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        if len(paragraph) <= WINDOW_CHARACTERS:
+            parts.append(paragraph)
+            continue
+        current = ""
+        for sentence in re.split(r"(?<=[.!?;])\s+", paragraph):
+            if current and len(current) + len(sentence) + 1 > WINDOW_CHARACTERS:
+                parts.append(current)
+                current = sentence
+            else:
+                current = f"{current} {sentence}".strip()
+        if current:
+            parts.append(current)
+    windows: list[str] = []
+    for part in parts:
+        if windows and len(windows[-1]) < _SHORT_LINE_CHARACTERS:
+            windows[-1] = f"{windows[-1]}\n{part}"
+        else:
+            windows.append(part)
+    return windows if len(windows) > 1 else []
+
+
+def _stems(text: str) -> set[str]:
+    # A five-letter prefix is a crude stem, but it lets "alerting" meet
+    # "alerts" and "rollback" meet "rolled back" without a language model.
+    return {term[:5] for term in terms(text)}
+
+
+def _window_targets(
+    searches: Sequence[str], candidates: Sequence[RerankCandidate]
+) -> list[tuple[str, str, list[int]]]:
+    """``(search, window, candidate indexes)`` to score, most promising first.
+
+    A window is promising for a search when they share word stems; ties keep
+    the retrieval ranking, then the window's place in its chunk. A window
+    repeated in overlapping chunks is scored once for all of them.
+    """
+
+    windows: dict[str, list[int]] = {}
+    for index, item in enumerate(candidates):
+        for window in passage_windows(item.text):
+            owners = windows.setdefault(window, [])
+            if index not in owners:
+                owners.append(index)
+    if not windows:
+        return []
+    window_stems = {window: _stems(window) for window in windows}
+    ranked: list[tuple[int, int, int, int, str, str]] = []
+    for search_order, search in enumerate(searches):
+        stems = _stems(search)
+        for window_order, (window, owners) in enumerate(windows.items()):
+            ranked.append(
+                (
+                    -len(stems & window_stems[window]),
+                    owners[0],
+                    window_order,
+                    search_order,
+                    search,
+                    window,
+                )
+            )
+    ranked.sort(key=lambda item: item[:4])
+    return [
+        (search, window, windows[window])
+        for *_, search, window in ranked[:MAX_WINDOW_PAIRS]
+    ]
+
+
+def _checked(scores: Sequence[float], expected: int) -> list[float]:
+    values = list(scores)
+    if len(values) != expected:
+        raise RerankerError("the reranker returned an unexpected number of scores")
+    return values
 
 
 def candidate_scores(
@@ -168,15 +261,18 @@ def candidate_scores(
     Every chunk is scored against the operator's question; one that falls
     short of ``RELEVANCE_THRESHOLD`` is scored again against every ``planned``
     search (candidates in order, up to ``MAX_RETRY_PAIRS``) and keeps its best
-    score, so a paraphrase survives whichever wording the planner chose.
+    score, so a paraphrase survives whichever wording the planner chose. Then
+    up to ``MAX_WINDOW_PAIRS`` sentence-sized windows of the candidates are
+    scored against the question or a search they share words with, and a
+    chunk keeps its best window's score when that is higher.
     """
 
     if not candidates:
         return []
     question = query[:MAX_QUERY_CHARACTERS]
-    scores = list(scorer([(question, item.text) for item in candidates]))
-    if len(scores) != len(candidates):
-        raise RerankerError("the reranker returned an unexpected number of scores")
+    scores = _checked(
+        scorer([(question, item.text) for item in candidates]), len(candidates)
+    )
     searches = list(
         dict.fromkeys(
             item[:MAX_QUERY_CHARACTERS]
@@ -189,13 +285,20 @@ def candidate_scores(
         targets = [(index, search) for index in retry for search in searches][
             :MAX_RETRY_PAIRS
         ]
-        second = list(
-            scorer([(search, candidates[index].text) for index, search in targets])
+        second = _checked(
+            scorer([(search, candidates[index].text) for index, search in targets]),
+            len(targets),
         )
-        if len(second) != len(targets):
-            raise RerankerError("the reranker returned an unexpected number of scores")
         for (index, _), score in zip(targets, second, strict=True):
             scores[index] = max(scores[index], score)
+    windows = _window_targets([question, *searches], candidates)
+    if windows:
+        third = _checked(
+            scorer([(search, window) for search, window, _ in windows]), len(windows)
+        )
+        for (_, _, owners), score in zip(windows, third, strict=True):
+            for index in owners:
+                scores[index] = max(scores[index], score)
     return scores
 
 
@@ -218,44 +321,23 @@ def relevant_candidates(
 ) -> list[tuple[int, float]]:
     """``(index, score)`` of the candidates to attach unasked, best first.
 
-    Scores come from ``candidate_scores``. Attached are:
-
-    * the best-scoring chunk, unless it scores below ``BEST_THRESHOLD``;
-    * every chunk at ``RELEVANCE_THRESHOLD``;
-    * a chunk within ``RESCUE_SIMILARITY`` of the question by embedding that
-      scores at least ``RESCUE_THRESHOLD``;
-    * the chunk nearest by embedding, at ``NEAREST_SIMILARITY``, when it
-      scores at least ``NEAREST_THRESHOLD``.
+    Scores come from ``candidate_scores``. Unless the best chunk scores below
+    ``BEST_THRESHOLD``, it is attached with every chunk within
+    ``NEAR_BEST_MARGIN`` of it; any chunk at ``RELEVANCE_THRESHOLD`` is
+    attached regardless.
     """
 
     scores = candidate_scores(query, candidates, scorer, planned=planned)
     if not scores:
         return []
-    kept = {
-        index
-        for index, score in enumerate(scores)
-        if score >= RELEVANCE_THRESHOLD
-        or (
-            candidates[index].similarity is not None
-            and float(candidates[index].similarity or 0.0) >= RESCUE_SIMILARITY
-            and score >= RESCUE_THRESHOLD
+    kept = {index for index, score in enumerate(scores) if score >= RELEVANCE_THRESHOLD}
+    best = max(scores)
+    if best >= BEST_THRESHOLD:
+        kept.update(
+            index
+            for index, score in enumerate(scores)
+            if score >= best - NEAR_BEST_MARGIN
         )
-    }
-    best = max(range(len(scores)), key=lambda index: (scores[index], -index))
-    if scores[best] >= BEST_THRESHOLD:
-        kept.add(best)
-    similar = [
-        index for index, item in enumerate(candidates) if item.similarity is not None
-    ]
-    if similar:
-        nearest = max(
-            similar, key=lambda index: (candidates[index].similarity or 0.0, -index)
-        )
-        if (
-            float(candidates[nearest].similarity or 0.0) >= NEAREST_SIMILARITY
-            and scores[nearest] >= NEAREST_THRESHOLD
-        ):
-            kept.add(nearest)
     return sorted(
         ((index, scores[index]) for index in kept),
         key=lambda item: (-item[1], item[0]),
@@ -560,14 +642,14 @@ class CrossEncoderReranker:
 __all__ = [
     "BEST_THRESHOLD",
     "MAX_RERANK_CANDIDATES",
-    "NEAREST_SIMILARITY",
-    "NEAREST_THRESHOLD",
+    "MAX_RETRY_PAIRS",
+    "MAX_WINDOW_PAIRS",
+    "NEAR_BEST_MARGIN",
     "RELEVANCE_THRESHOLD",
     "RERANKER_FILES",
     "RERANKER_MODEL",
     "RERANKER_REVISION",
-    "RESCUE_SIMILARITY",
-    "RESCUE_THRESHOLD",
+    "WINDOW_CHARACTERS",
     "CrossEncoderReranker",
     "ModelFile",
     "RerankCandidate",
@@ -576,6 +658,7 @@ __all__ = [
     "Scorer",
     "candidate_scores",
     "has_content",
+    "passage_windows",
     "relevance_label",
     "relevant_candidates",
 ]

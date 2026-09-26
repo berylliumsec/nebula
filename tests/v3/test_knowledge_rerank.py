@@ -23,16 +23,17 @@ from nebula.v3.domain import Engagement
 from nebula.v3.knowledge_index import ChromaKnowledgeIndex
 from nebula.v3.knowledge_rerank import (
     BEST_THRESHOLD,
-    NEAREST_SIMILARITY,
-    NEAREST_THRESHOLD,
+    MAX_WINDOW_PAIRS,
+    NEAR_BEST_MARGIN,
     RELEVANCE_THRESHOLD,
-    RESCUE_SIMILARITY,
-    RESCUE_THRESHOLD,
+    WINDOW_CHARACTERS,
     CrossEncoderReranker,
     ModelFile,
     RerankCandidate,
     RerankerError,
+    candidate_scores,
     has_content,
+    passage_windows,
     relevant_candidates,
 )
 from nebula.v3.storage import NebulaStore
@@ -82,55 +83,138 @@ def test_the_best_chunk_is_kept_unless_confidently_unrelated():
     assert relevant_candidates("q", candidates, rejected) == []
 
 
-def test_further_chunks_need_the_strict_line_or_embedding_support():
+def test_further_chunks_need_the_strict_line_or_a_near_tie_with_the_best():
     candidates = [
         RerankCandidate("strong"),
         RerankCandidate("at the line"),
         RerankCandidate("just below"),
-        RerankCandidate("close paraphrase", similarity=RESCUE_SIMILARITY),
-        RerankCandidate("not close enough", similarity=RESCUE_SIMILARITY - 0.01),
-        RerankCandidate("close but rejected", similarity=RESCUE_SIMILARITY + 0.01),
     ]
     scorer = TableScorer(
         {
             ("q", "strong"): 4.0,
             ("q", "at the line"): RELEVANCE_THRESHOLD,
             ("q", "just below"): RELEVANCE_THRESHOLD - 0.01,
-            ("q", "close paraphrase"): RESCUE_THRESHOLD,
-            ("q", "not close enough"): RESCUE_THRESHOLD + 1.0,
-            # Below the rescue line, and nearest by embedding yet below that
-            # bar too.
-            ("q", "close but rejected"): NEAREST_THRESHOLD - 0.01,
         }
     )
 
-    kept = relevant_candidates("q", candidates, scorer)
+    assert relevant_candidates("q", candidates, scorer) == [
+        (0, 4.0),
+        (1, RELEVANCE_THRESHOLD),
+    ]
 
-    assert kept == [(0, 4.0), (1, RELEVANCE_THRESHOLD), (3, RESCUE_THRESHOLD)]
 
-
-def test_the_nearest_chunk_by_embedding_keeps_a_lower_bar():
+def test_a_near_tie_with_a_kept_best_chunk_is_attached_with_it():
+    best = BEST_THRESHOLD + 0.4
     candidates = [
-        RerankCandidate("cross-encoder favourite", similarity=0.10),
-        RerankCandidate("embedding nearest", similarity=NEAREST_SIMILARITY),
-        RerankCandidate("far", similarity=0.05),
+        RerankCandidate("routes alerts"),
+        RerankCandidate("says when alerts fire"),
+        RerankCandidate("further off"),
     ]
     scorer = TableScorer(
         {
-            ("q", "cross-encoder favourite"): -3.5,
-            ("q", "embedding nearest"): NEAREST_THRESHOLD,
-            ("q", "far"): -9.0,
+            ("q", "routes alerts"): best,
+            ("q", "says when alerts fire"): best - NEAR_BEST_MARGIN,
+            ("q", "further off"): best - NEAR_BEST_MARGIN - 0.01,
         }
     )
-    too_low = TableScorer(
+    rejected = TableScorer(
         {
-            ("q", "cross-encoder favourite"): -3.5,
-            ("q", "embedding nearest"): NEAREST_THRESHOLD - 0.01,
+            ("q", "routes alerts"): BEST_THRESHOLD - 0.01,
+            ("q", "says when alerts fire"): BEST_THRESHOLD - 0.02,
         }
     )
 
-    assert relevant_candidates("q", candidates, scorer) == [(1, NEAREST_THRESHOLD)]
-    assert relevant_candidates("q", candidates, too_low) == []
+    assert relevant_candidates("q", candidates, scorer) == [
+        (0, best),
+        (1, best - NEAR_BEST_MARGIN),
+    ]
+    # A near tie with a rejected best chunk is rejected with it.
+    assert relevant_candidates("q", candidates, rejected) == []
+
+
+GUIDE = (
+    "# Deployment guide\n\n"
+    "## Overview\n"
+    "Releases are cut from the main branch every Thursday and promoted on "
+    "Monday after the change advisory board approves them. Hotfixes may skip "
+    "the board with approval from the duty manager.\n\n"
+    "## Observability\n"
+    "Service logs ship to the Loki cluster and are retained for 14 days. The "
+    "orders dashboard shows request rate, error rate and latency per endpoint; "
+    "paging alerts fire when the error rate stays above 2 percent for ten "
+    "minutes.\n\n"
+    "## Contacts\n"
+    "The orders team owns the services."
+)
+
+
+def test_a_long_chunk_is_cut_into_sentence_sized_windows():
+    windows = passage_windows(GUIDE)
+
+    assert all(len(window) <= WINDOW_CHARACTERS + 60 for window in windows)
+    # Headings are read with the text after them; sentences stay whole.
+    assert windows[0].startswith("# Deployment guide\n## Overview\nReleases")
+    assert any(
+        window.endswith(
+            "paging alerts fire when the error rate stays above 2 percent for "
+            "ten minutes."
+        )
+        for window in windows
+    )
+    assert windows[-1] == "## Contacts\nThe orders team owns the services."
+    # A chunk that is already one window is not read twice.
+    assert passage_windows("One short paragraph.") == []
+    assert passage_windows("# Heading\n\nOne short paragraph.") == []
+
+
+def test_a_long_chunk_is_judged_by_the_window_that_answers():
+    window = next(item for item in passage_windows(GUIDE) if "paging" in item)
+    scorer = TableScorer(
+        {
+            ("When does someone get woken up about failures?", GUIDE): -4.4,
+            ("incident paging thresholds", window): -0.5,
+        }
+    )
+
+    kept = relevant_candidates(
+        "When does someone get woken up about failures?",
+        [RerankCandidate(GUIDE)],
+        scorer,
+        planned=["incident paging thresholds"],
+    )
+
+    assert kept == [(0, -0.5)]
+    # The window sharing words with a search is read first.
+    assert scorer.calls[-1][0] == ("incident paging thresholds", window)
+
+
+def test_window_reads_are_bounded_and_go_to_shared_words_first():
+    question = "Who handles a rollback?"
+    answer = "Rollback needs the data team."
+    chunks = [
+        RerankCandidate(
+            "\n\n".join(
+                [
+                    f"Section {chunk}.{part} lists the storage quota of every "
+                    "tenant in the cluster."
+                    for part in range(8)
+                ]
+                + [answer]
+            )
+        )
+        for chunk in range(3)
+    ]
+    scorer = TableScorer({(question, answer): 1.0})
+
+    scores = candidate_scores(question, chunks, scorer)
+
+    windows = scorer.calls[-1]
+    assert len(windows) == MAX_WINDOW_PAIRS
+    # The window sharing a word with the question is read first although it
+    # comes last in its chunk, and once for every chunk holding it.
+    assert windows[0] == (question, answer)
+    assert windows.count((question, answer)) == 1
+    assert scores == [1.0, 1.0, 1.0]
 
 
 def test_a_short_chunk_is_read_again_with_every_planned_search():
@@ -552,6 +636,7 @@ def test_the_pinned_model_meets_its_calibration():  # pragma: no cover - local o
         )
 
     outcome: dict[str, list[bool]] = {}
+    irrelevant = 0
     for item in calibration["questions"]:
         question, relevant, kind = item["question"], set(item["relevant"]), item["kind"]
         vectors = embed([question, *item["variants"]])
@@ -564,10 +649,7 @@ def test_the_pinned_model_meets_its_calibration():  # pragma: no cover - local o
         )
         # Retrieval hands the gate its candidates nearest first.
         order = [index for _, index in scored]
-        candidates = [
-            RerankCandidate(text=chunks[index][1], similarity=similarity)
-            for similarity, index in scored
-        ]
+        candidates = [RerankCandidate(text=chunks[index][1]) for _, index in scored]
         kept = (
             relevant_candidates(
                 question, candidates, reranker.score, planned=item["variants"]
@@ -576,10 +658,16 @@ def test_the_pinned_model_meets_its_calibration():  # pragma: no cover - local o
             else []
         )
         names = {chunks[order[index]][0] for index, _ in kept}
+        irrelevant += sum(
+            1 for index, _ in kept if chunks[order[index]][0] not in relevant
+        )
         outcome.setdefault(kind, []).append(
             bool(names & relevant) if relevant else not names
         )
-    print({kind: f"{sum(values)}/{len(values)}" for kind, values in outcome.items()})
+    print(
+        {kind: f"{sum(values)}/{len(values)}" for kind, values in outcome.items()},
+        f"irrelevant chunks attached: {irrelevant}",
+    )
     assert all(outcome["lexical"])
-    assert sum(outcome["paraphrase"]) >= 14
-    assert sum(outcome["unrelated"]) >= 11
+    assert all(outcome["paraphrase"])
+    assert sum(outcome["unrelated"]) >= 12

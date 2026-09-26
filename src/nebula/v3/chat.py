@@ -766,9 +766,6 @@ class _RetrievedChunk:
     local_only: bool
     score: float
     ordinal: int
-    # Embedding similarity, when vector search found the chunk: what the
-    # relevance gate reads besides the text (``knowledge_rerank``).
-    similarity: float | None = None
     relevance: str | None = None
 
 
@@ -14660,9 +14657,7 @@ class ChatService:
             reranker.ensure_started()
             return candidates
         pool = candidates[:MAX_RERANK_CANDIDATES]
-        reads = [
-            RerankCandidate(text=item.text, similarity=item.similarity) for item in pool
-        ]
+        reads = [RerankCandidate(text=item.text) for item in pool]
         try:
             if gate:
                 kept = relevant_candidates(
@@ -14772,8 +14767,6 @@ class ChatService:
                     local_only=self._source_is_local_only(source),
                     score=semantic_score + lexical_bonus,
                     ordinal=match.rank,
-                    # Chroma's cosine distance is 1 - similarity.
-                    similarity=1.0 - match.distance,
                 )
             )
         return candidates

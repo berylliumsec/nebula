@@ -283,9 +283,12 @@ Nearest-neighbour search always returns something, so retrieved chunks pass a lo
 relevance check before they are attached. A small cross-encoder
 (`mixedbread-ai/mxbai-rerank-xsmall-v1`, quantised ONNX, about 96 MB, Apache-2.0)
 scores the best eight candidates against the operator's question and every search
-the planner proposed. The check leans toward keeping the answer: the best-scoring
-chunk is attached unless the model confidently rejects it, and further chunks must
-clear a stricter line. A question about Nebula itself, or "thanks", no longer
+the planner proposed. Because one answering sentence is easily lost in a long chunk,
+up to sixteen sentence-sized windows of the candidates, those sharing words with the
+question or a search, are scored too, and a chunk keeps its best window's score. The
+check leans toward keeping the answer: the best-scoring chunk is attached unless the
+model confidently rejects it, together with any chunk scoring nearly as well, and
+further chunks must clear a stricter line. A question about Nebula itself, or "thanks", no longer
 carries the project's runbooks, and a message with no subject of its own ("ok,
 continue") skips knowledge planning and retrieval entirely. The model runs through
 onnxruntime on the Core host, so project text never leaves it for scoring. It is
@@ -296,8 +299,9 @@ repository commit and verified by SHA-256 before it is loaded, and stored under
 ready, or when `NEBULA_V3_KNOWLEDGE_RERANKER=off`, retrieval attaches the nearest
 chunks as before. On the labelled calibration set in
 `tests/v3/fixtures/knowledge_relevance_calibration.json`, every question sharing
-words with its answer and 14 of 15 paraphrases kept their document, and 11 of 13
-unrelated questions attached nothing.
+words with its answer and every paraphrase kept its document, and every unrelated
+question attached nothing (with the lines chosen on the other questions in turn, 14
+of 15 paraphrases).
 
 Tool-enabled provider turns in a Project with ready knowledge are also offered
 `knowledge.search`, the same search a managed harness has through its gateway: when
@@ -307,9 +311,11 @@ turn and may reach its model (a local model, or a cloud model with sensitive-dat
 permission and the knowledge confirmation), not per message, so the tool list stays
 stable for prompt caching. A search the model asked for is ranked by the relevance
 model and each excerpt is labelled strong, possible or weak rather than filtered, so
-the model judges a loose match itself; the harness gateway's search does the same. A
-cloud model's searches exclude local-only sources and redact secrets, results carry
-source and chunk ids for citation, and the search is a read that needs no approval.
+the model judges a loose match itself; the harness gateway's search does the same.
+Excerpts a search returned join the answer's citations, provider and harness turns
+alike, except a weak one the answer does not refer to by chunk id. A cloud model's
+searches exclude local-only sources and redact secrets, results carry source and
+chunk ids for citation, and the search is a read that needs no approval.
 
 ## Context compaction
 

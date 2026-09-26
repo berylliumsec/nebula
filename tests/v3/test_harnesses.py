@@ -29,7 +29,12 @@ from nebula.v3.browser_tools import (
     AUTONOMOUS_BROWSER_TOOLS,
     BrowserAutomationToolPlatform,
 )
-from nebula.v3.chat import ChatService, ChatConfigurationError
+from nebula.v3.chat import (
+    ChatConfigurationError,
+    ChatService,
+    HarnessKnowledgeMatch,
+    HarnessKnowledgeSearchResult,
+)
 from nebula.v3.credentials import CredentialCreateRequest, CredentialStore
 from nebula.v3.diagnostics import DiagnosticManager
 from nebula.v3.domain import (
@@ -38,6 +43,7 @@ from nebula.v3.domain import (
     ApprovalStatus,
     AutomationProjectPolicy,
     ChatBackend,
+    ChatCitation,
     ChatMessage,
     ChatContentBlock,
     ChatSession,
@@ -2209,6 +2215,94 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
         assert messages[-1].citations[0].source_id == source.id
         runtime._active.pop(session.id)
         await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
+def test_harness_answers_cite_weak_search_results_only_when_they_use_them(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        store.create(
+            KnowledgeSource(
+                id="knowledge-a",
+                engagement_id=engagement.id,
+                name="runbook.md",
+                source_type="text/markdown",
+                metadata={"chunks": [{"id": "chunk-a", "text": "Runbook."}]},
+            )
+        )
+
+        def match(chunk_id: str, relevance: str) -> HarnessKnowledgeMatch:
+            return HarnessKnowledgeMatch(
+                text=f"Excerpt {chunk_id}.",
+                citation=ChatCitation(
+                    source_id="knowledge-a",
+                    name="runbook.md",
+                    chunk_id=chunk_id,
+                    excerpt=f"Excerpt {chunk_id}.",
+                ),
+                local_only=False,
+                relevance=relevance,
+            )
+
+        results = {
+            "paging": [match("chunk-strong", "strong"), match("chunk-weak", "weak")],
+            "loose": [match("chunk-loose", "weak")],
+            "rollback": [match("chunk-loose", "possible")],
+        }
+        runtime.bind_knowledge_retriever(
+            lambda engagement_id, query, allow_local_only, token_budget: (
+                HarnessKnowledgeSearchResult(matches=results[query])
+            )
+        )
+
+        async def answer(prompt: str, queries: list[str], text: str) -> list[str]:
+            chat, _, harness_turn = runtime.prepare_chat(
+                engagement_id=engagement.id,
+                profile_id=profile.id,
+                model=None,
+                prompt=prompt,
+                chat_session_id=None,
+                harness_session_id=None,
+                mcp_server_ids=[],
+            )
+            session = store.get(HarnessSession, harness_turn.harness_session_id)
+            runtime._active[session.id] = SimpleNamespace(
+                turn_id=harness_turn.id, connection=None, task=None
+            )
+            for query in queries:
+                response = await runtime._gateway_call(
+                    session, "knowledge.search", {"query": query}
+                )
+                assert "weak excerpt" in response["structuredContent"]["detail"]
+            runtime._complete_owner(
+                store.get(HarnessTurn, harness_turn.id),
+                text,
+                ChatTokenUsage(input_tokens=1, output_tokens=1, total_tokens=2),
+            )
+            runtime._active.pop(session.id)
+            await runtime.close_session(session.id)
+            messages = [
+                item
+                for item in store.list_entities(
+                    ChatMessage, engagement_id=engagement.id, limit=100
+                )
+                if item.session_id == chat.id and item.role == "assistant"
+            ]
+            return [citation.chunk_id for citation in messages[-1].citations]
+
+        # A weak result the answer does not use is not cited.
+        assert await answer("When do pages fire?", ["paging"], "Above 2%.") == [
+            "chunk-strong"
+        ]
+        # One it refers to is.
+        assert await answer(
+            "When do pages fire?", ["paging"], "Above 2% [knowledge-a:chunk-weak]."
+        ) == ["chunk-strong", "chunk-weak"]
+        # A later search that ranks it higher cites it without a reference.
+        assert await answer(
+            "Who rolls back?", ["loose", "rollback"], "The data team."
+        ) == ["chunk-loose"]
 
     asyncio.run(scenario())
 
