@@ -10,7 +10,7 @@ import json
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, Field
@@ -39,6 +39,7 @@ from .providers import (
     ModelProvider,
     ModelRequest,
     ProviderError,
+    ToolDefinition,
     json_schema_instruction,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
@@ -66,6 +67,18 @@ COMPACTOR_MIN_OUTPUT_TOKENS = 32
 # request; reserved together with the objective before segments are budgeted.
 COMPACTOR_PROMPT_OVERHEAD_TOKENS = 64
 CONTEXT_PROMPT_VERSION = "nebula-context-v1"
+# Core estimates tokens from bytes, which no tokenizer matches: English prose
+# runs nearer four bytes a token than three, CJK text nearer one. A chat scales
+# its estimate by what the provider reported for the conversation's earlier
+# requests to the same model. Samples below the minimum are mostly framing, and
+# the bounds keep one odd sample (an image, a cache quirk) from swinging it far.
+ESTIMATE_CALIBRATION_MIN = 0.6
+ESTIMATE_CALIBRATION_MAX = 1.5
+ESTIMATE_CALIBRATION_MIN_REPORTED_TOKENS = 1_000
+ESTIMATE_CALIBRATION_WEIGHT = 0.5
+# A hard capacity check never trusts the calibration below this share of the
+# raw estimate: too low a factor must not let a request overfill the window.
+ESTIMATE_CALIBRATION_HARD_FLOOR = 0.8
 
 _HOSTED_MODEL_PREFIX = re.compile(
     r"^(?:(?:us|eu|apac|au|jp|global)\.)?"
@@ -133,6 +146,14 @@ class ContextStatus(BaseModel):
     route_input_limit: int | None = Field(default=None, ge=1)
     route_limits_required: bool = False
     estimated_input_tokens: int = Field(default=0, ge=0)
+    # The factor ``estimated_input_tokens`` was scaled by, from the provider's
+    # reported usage for this conversation and model; None when uncalibrated.
+    estimate_calibration: float | None = Field(
+        default=None, ge=ESTIMATE_CALIBRATION_MIN, le=ESTIMATE_CALIBRATION_MAX
+    )
+    # Tool definitions and routing instructions the latest turn budgeted
+    # beside the conversation; included in ``estimated_input_tokens``.
+    reserved_input_tokens: int = Field(default=0, ge=0)
     last_provider_request: ProviderRequestInput | None = None
     compacted_through: int = Field(default=0, ge=0)
     source_references: list[ContextSourceReference] = Field(default_factory=list)
@@ -151,6 +172,9 @@ class ProviderRequestInput(BaseModel):
     other: int = Field(ge=0)
     estimated_total: int = Field(ge=0)
     reported_input_tokens: int | None = Field(default=None, ge=0)
+    # The part of ``reported_input_tokens`` the provider served from its
+    # prompt cache, when it reports one.
+    reported_cached_input_tokens: int | None = Field(default=None, ge=0)
     attempt: int = Field(default=1, ge=1)
 
 
@@ -486,6 +510,80 @@ def estimate_messages(messages: Iterable[ModelMessage], instructions: str = "") 
     return total
 
 
+def estimate_tool_definitions(tools: Sequence[ToolDefinition]) -> int:
+    """Estimate the function declarations one provider request carries."""
+
+    if not tools:
+        return 0
+    return estimate_tokens(
+        json.dumps(
+            [tool.model_dump(mode="json") for tool in tools],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        )
+    )
+
+
+def calibrated_estimate(
+    estimate: int, calibration: float | None, *, hard: bool = False
+) -> int:
+    """``estimate`` in the provider's reported tokens.
+
+    ``hard`` is for a capacity check, which never scales below
+    ``ESTIMATE_CALIBRATION_HARD_FLOOR`` of the raw estimate.
+    """
+
+    if calibration is None:
+        return estimate
+    factor = max(calibration, ESTIMATE_CALIBRATION_HARD_FLOOR) if hard else calibration
+    return math.ceil(estimate * factor)
+
+
+def estimate_allowance(
+    limit: int, calibration: float | None, *, hard: bool = False
+) -> int:
+    """The raw estimate that fits within ``limit`` provider tokens.
+
+    The inverse of ``calibrated_estimate``: comparing a raw estimate with the
+    allowance decides exactly what comparing its calibrated value with
+    ``limit`` would.
+    """
+
+    if calibration is None:
+        return limit
+    factor = max(calibration, ESTIMATE_CALIBRATION_HARD_FLOOR) if hard else calibration
+    return math.floor(limit / factor)
+
+
+def updated_calibration(
+    previous: float | None, *, estimated: int, reported: int | None
+) -> float | None:
+    """The calibration after one provider request, or ``previous`` unchanged.
+
+    ``reported`` must be the request's whole prompt, cached tokens included.
+    """
+
+    if reported is None or reported < ESTIMATE_CALIBRATION_MIN_REPORTED_TOKENS:
+        return previous
+    if estimated <= 0:
+        return previous
+
+    def bounded(value: float) -> float:
+        return min(ESTIMATE_CALIBRATION_MAX, max(ESTIMATE_CALIBRATION_MIN, value))
+
+    sample = bounded(reported / estimated)
+    if previous is None:
+        return round(sample, 4)
+    return round(
+        bounded(
+            ESTIMATE_CALIBRATION_WEIGHT * sample
+            + (1 - ESTIMATE_CALIBRATION_WEIGHT) * previous
+        ),
+        4,
+    )
+
+
 def estimate_model_request_parts(request: ModelRequest) -> ProviderRequestInput:
     """Attribute a provider-neutral estimate without retaining prompt content."""
 
@@ -496,11 +594,7 @@ def estimate_model_request_parts(request: ModelRequest) -> ProviderRequestInput:
 
     instructions = estimate_tokens(request.instructions or "")
     conversation = estimate_messages(request.messages) - estimate_tokens("")
-    tool_schemas = (
-        encoded([tool.model_dump(mode="json") for tool in request.tools])
-        if request.tools
-        else 0
-    )
+    tool_schemas = estimate_tool_definitions(request.tools)
     # Image bytes are transported as image parts, not as textual JSON. Count
     # their model-facing budget once, after the textual result envelope.
     tool_results = (
@@ -578,6 +672,24 @@ def memory_text(memory: ContextMemory) -> str:
     if memory.artifact_ids:
         lines.append("Artifact IDs: " + ", ".join(memory.artifact_ids))
     return "\n".join(lines)
+
+
+def source_digest(sources: Sequence[ContextSource]) -> str:
+    """The content hash a snapshot records for exactly these canonical sources."""
+
+    canonical = json.dumps(
+        [
+            {
+                "reference": source.reference.model_dump(mode="json"),
+                "content": source.content,
+            }
+            for source in sources
+        ],
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class ContextCompactor:
@@ -667,19 +779,7 @@ class ContextCompactor:
                 "context compaction requires canonical sources"
             )
         self._validate_canonical_sources(owner_type, owner_id, sources)
-        canonical = json.dumps(
-            [
-                {
-                    "reference": source.reference.model_dump(mode="json"),
-                    "content": source.content,
-                }
-                for source in sources
-            ],
-            sort_keys=True,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        source_sha256 = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        source_sha256 = source_digest(sources)
         previous = self.snapshots(owner_type, owner_id, engagement_id)
         for snapshot in reversed(previous):
             if (

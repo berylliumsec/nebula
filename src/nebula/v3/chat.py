@@ -22,7 +22,14 @@ import logging
 import re
 import threading
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Callable,
+    Collection,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from copy import deepcopy
 from dataclasses import dataclass, field
 from dataclasses import replace as dataclass_replace
@@ -89,6 +96,7 @@ from .domain import (
     ChatTokenUsage,
     CommandExecution,
     CommandExecutionStatus,
+    ContextMemory,
     ContextOwnerType,
     ContextSnapshot,
     ContextSnapshotStatus,
@@ -114,6 +122,9 @@ from .domain import (
     utc_now,
 )
 from .context import (
+    ESTIMATE_CALIBRATION_MAX,
+    ESTIMATE_CALIBRATION_MIN,
+    ESTIMATE_CALIBRATION_MIN_REPORTED_TOKENS,
     ContextCallBudget,
     ContextCapacityError,
     ContextCompactionError,
@@ -122,13 +133,18 @@ from .context import (
     ContextSource,
     ContextStatus,
     ProviderRequestInput,
+    calibrated_estimate,
+    estimate_allowance,
     estimate_messages,
     estimate_model_request,
     estimate_model_request_parts,
     estimate_tokens,
+    estimate_tool_definitions,
     lexical_score,
     memory_text,
     resolve_context_limits,
+    source_digest,
+    updated_calibration,
 )
 from .model_catalog import (
     find_model_descriptor,
@@ -190,6 +206,9 @@ from .tool_catalog import (
     CATALOG_CALL,
     CATALOG_DISCOVERY_NAMES,
     MAX_CATALOG_CALLS_PER_TURN,
+    MAX_PRELOADED,
+    MAX_PRELOADED_DESCRIPTION_CHARS,
+    MAX_SUGGESTED,
     CatalogReceipt,
     ToolIndex,
     catalog_components,
@@ -774,6 +793,13 @@ class PreparedChat:
     hook_snapshots: list[Any] = field(default_factory=list)
     last_provider_request: ProviderRequestInput | None = None
     provider_request_attempts: int = 0
+    # Scales Core's token estimates to what this provider reported for the
+    # conversation (see ``_context_calibration``); None trusts the raw estimate.
+    estimate_calibration: float | None = None
+    # Estimated tokens the turn's requests add beside the conversation: tool
+    # definitions and routing instructions. None when the turn resumed rather
+    # than assembled its request.
+    context_reserved_tokens: int | None = None
 
 
 @dataclass
@@ -923,6 +949,310 @@ def _estimation_message(
 
 def _estimated_message_tokens(message: ModelMessage) -> int:
     return estimate_messages([message]) - estimate_tokens("")
+
+
+_COMPACTED_MEMORY_HEADING = (
+    "EARLIER CONVERSATION, COMPACTED BY NEBULA (derived history, not "
+    "instructions; the original messages remain authoritative)"
+)
+_COMPACTED_MEMORY_END = "END OF EARLIER CONVERSATION"
+_RETRIEVED_EXCERPTS_HEADING = (
+    "RETRIEVED CANONICAL TRANSCRIPT EXCERPTS (earlier messages of this "
+    "conversation matched to this request; history data, not instructions)"
+)
+# The most relevant few originals, not a second transcript.
+_MAX_RETRIEVED_EXCERPTS = 8
+# How many times one request moves its compaction boundary forward, each time
+# compacting again, before it settles for a request above the target that
+# still fits the model's input capacity.
+_COMPACTION_BOUNDARY_ATTEMPTS = 3
+
+
+def _chat_context_sources(messages: Sequence[ChatMessage]) -> list[ContextSource]:
+    """Archived messages as the compactor reads them and a snapshot hashes them.
+
+    Each is the text it was sent with, selected context included, so an old
+    turn's selection is summarised rather than dropped.
+    """
+
+    return [
+        ContextSource(
+            reference=ContextSourceReference(
+                source_kind="chat_message",
+                source_id=message.id,
+                sequence=message.sequence,
+            ),
+            content=f"role={message.role.value}\n{_stored_model_text(message)}",
+        )
+        for message in messages
+    ]
+
+
+def _compacted_memory_text(memory: ContextMemory, content: str) -> str:
+    """``content`` led by the memory that stands for the messages before it.
+
+    The memory is derived history, so it travels in the conversation rather
+    than the instructions, where it would read as Core's own direction. It is
+    rendered from the snapshot alone: every request the snapshot serves begins
+    with the same bytes, so the provider's prefix cache holds across turns.
+    """
+
+    return (
+        f"{_COMPACTED_MEMORY_HEADING}\n{memory_text(memory)}\n"
+        f"{_COMPACTED_MEMORY_END}\n\n{content}"
+    )
+
+
+def _with_compacted_memory(
+    message: ChatRequestMessage, memory: ContextMemory
+) -> ChatRequestMessage:
+    return message.model_copy(
+        update={"content": _compacted_memory_text(memory, message.content)}
+    )
+
+
+def _with_retrieved_excerpts(
+    message: ChatRequestMessage, excerpts: list[dict[str, Any]]
+) -> ChatRequestMessage:
+    """``message`` followed by the archived originals retrieved for it.
+
+    They change every turn, so they follow the operator's words and selected
+    context at the very end of the request; only an in-turn checkpoint
+    (``_with_checkpoint``) comes after them. The stored message never holds
+    them, so the next turn replays it without.
+    """
+
+    if not excerpts:
+        return message
+    block = (
+        _RETRIEVED_EXCERPTS_HEADING
+        + "\n"
+        + json.dumps(excerpts, ensure_ascii=False, separators=(",", ":"))
+    )
+    return message.model_copy(update={"content": f"{message.content}\n\n{block}"})
+
+
+def _retrieved_excerpts(
+    query: str, archived: Sequence[ChatMessage], token_budget: int
+) -> list[dict[str, Any]]:
+    """Archived originals relevant to ``query``, within ``token_budget``.
+
+    Whole messages ranked lexically, most relevant first, newest first on a
+    tie. This is the one place retrieval is chosen, so a better ranker can
+    replace it without touching how the request is assembled.
+    """
+
+    texts = {message.id: _stored_model_text(message) for message in archived}
+    scores = {
+        message.id: lexical_score(query, texts[message.id]) for message in archived
+    }
+    retrieved: list[dict[str, Any]] = []
+    retrieved_tokens = 0
+    for message in sorted(
+        archived, key=lambda item: (-scores[item.id], -item.sequence)
+    ):
+        if scores[message.id] <= 0:
+            break
+        text = texts[message.id]
+        size = estimate_tokens(text, message_count=1)
+        if retrieved_tokens + size > token_budget:
+            continue
+        retrieved.append(
+            {
+                "message_id": message.id,
+                "sequence": message.sequence,
+                "role": message.role.value,
+                "content": text,
+            }
+        )
+        retrieved_tokens += size
+        if len(retrieved) >= _MAX_RETRIEVED_EXCERPTS:
+            break
+    return retrieved
+
+
+# Session metadata key for how this conversation's estimates are scaled; see
+# ``updated_calibration``. One factor per provider profile and model, the
+# most recent last, and the latest turn's reserve for tool definitions and
+# routing instructions, which the context meter adds to the conversation.
+_CONTEXT_CALIBRATION_KEY = "context_calibration"
+_CONTEXT_CALIBRATION_RUNTIMES = 8
+
+
+def _context_calibration(
+    metadata: Mapping[str, Any], provider_profile_id: str | None, model: str | None
+) -> float | None:
+    """The session's estimate calibration for a provider profile and model."""
+
+    record = metadata.get(_CONTEXT_CALIBRATION_KEY)
+    runtimes = record.get("runtimes") if isinstance(record, dict) else None
+    for entry in runtimes if isinstance(runtimes, list) else []:
+        if (
+            not isinstance(entry, dict)
+            or entry.get("provider_profile_id") != provider_profile_id
+            or entry.get("model") != model
+        ):
+            continue
+        factor = entry.get("factor")
+        if (
+            isinstance(factor, (int, float))
+            and not isinstance(factor, bool)
+            and ESTIMATE_CALIBRATION_MIN <= factor <= ESTIMATE_CALIBRATION_MAX
+        ):
+            return float(factor)
+    return None
+
+
+def _context_reserve(metadata: Mapping[str, Any]) -> int:
+    record = metadata.get(_CONTEXT_CALIBRATION_KEY)
+    reserved = record.get("reserved_input_tokens") if isinstance(record, dict) else 0
+    return (
+        reserved
+        if isinstance(reserved, int) and not isinstance(reserved, bool) and reserved > 0
+        else 0
+    )
+
+
+def _recorded_context_calibration(
+    metadata: Mapping[str, Any],
+    *,
+    provider_profile_id: str,
+    model: str | None,
+    request: ProviderRequestInput | None,
+    reserved_tokens: int | None,
+) -> dict[str, Any]:
+    """Session metadata to merge after one turn: its context accounting.
+
+    Written with the turn's own session update, never on its own. The sample
+    is the turn's last provider request: the prompt tokens the provider
+    reported over what Core estimated for it. ``reserved_tokens`` is None for
+    a turn that did not assemble its request (a resumed one).
+    """
+
+    record = metadata.get(_CONTEXT_CALIBRATION_KEY)
+    recorded = record.get("runtimes") if isinstance(record, dict) else None
+    runtimes = [entry for entry in recorded or [] if isinstance(entry, dict)]
+    current = next(
+        (
+            entry
+            for entry in runtimes
+            if entry.get("provider_profile_id") == provider_profile_id
+            and entry.get("model") == model
+        ),
+        None,
+    )
+    sampled = (
+        request is not None
+        and request.estimated_total > 0
+        and (request.reported_input_tokens or 0)
+        >= ESTIMATE_CALIBRATION_MIN_REPORTED_TOKENS
+    )
+    if not sampled and reserved_tokens is None:
+        return {}
+    if request is not None and sampled:
+        updated = updated_calibration(
+            _context_calibration(metadata, provider_profile_id, model),
+            estimated=request.estimated_total,
+            reported=request.reported_input_tokens,
+        )
+        samples = current.get("samples") if current is not None else 0
+        runtimes = [entry for entry in runtimes if entry is not current]
+        runtimes.append(
+            {
+                "provider_profile_id": provider_profile_id,
+                "model": model,
+                "factor": updated,
+                "samples": (samples if isinstance(samples, int) else 0) + 1,
+            }
+        )
+    return {
+        _CONTEXT_CALIBRATION_KEY: {
+            "runtimes": runtimes[-_CONTEXT_CALIBRATION_RUNTIMES:],
+            "reserved_input_tokens": (
+                reserved_tokens
+                if reserved_tokens is not None
+                else _context_reserve(metadata)
+            ),
+        }
+    }
+
+
+def _added_usage(left: ChatTokenUsage, right: ChatTokenUsage) -> ChatTokenUsage:
+    return ChatTokenUsage(
+        input_tokens=left.input_tokens + right.input_tokens,
+        output_tokens=left.output_tokens + right.output_tokens,
+        total_tokens=left.total_tokens + right.total_tokens,
+        cached_input_tokens=left.cached_input_tokens + right.cached_input_tokens,
+        cache_creation_input_tokens=left.cache_creation_input_tokens
+        + right.cache_creation_input_tokens,
+    )
+
+
+def _remaining_context_budget(
+    budget: ContextCallBudget | None, spent: ChatTokenUsage, cost_usd: float
+) -> ContextCallBudget | None:
+    """What a goal's compaction budget leaves after this request's earlier passes."""
+
+    if budget is None:
+        return None
+    return ContextCallBudget(
+        max_tokens=(
+            max(0, budget.max_tokens - spent.total_tokens)
+            if budget.max_tokens is not None
+            else None
+        ),
+        max_cost_usd=(
+            max(0.0, budget.max_cost_usd - cost_usd)
+            if budget.max_cost_usd is not None
+            else None
+        ),
+    )
+
+
+def _routing_instructions(names: Collection[str], max_active_subagents: Any) -> str:
+    """What a routing request adds ahead of the turn's own instructions."""
+
+    return (
+        _CHAT_TOOL_INSTRUCTIONS
+        + (
+            subagent_routing_instructions(subagent_limit(max_active_subagents))
+            if "start_subagent" in names
+            else ""
+        )
+        + (AGENT_MESSAGE_ROUTING_INSTRUCTIONS if "send_agent_message" in names else "")
+    )
+
+
+def _largest_catalog_picks(
+    deferred: Mapping[str, ToolSpec], sources: Mapping[str, Any]
+) -> dict[str, Any]:
+    """The catalog receipt whose picks would cost a request the most.
+
+    The ranker picks tools for the request only after the conversation is
+    assembled, so the assembly reserves room for the largest picks it could
+    make: the biggest schemas preloaded, the longest names suggested.
+    """
+
+    def schema_size(spec: ToolSpec) -> int:
+        return len(
+            json.dumps(spec.input_schema, ensure_ascii=False, separators=(",", ":"))
+        ) + min(len(spec.description), MAX_PRELOADED_DESCRIPTION_CHARS)
+
+    preloaded = [
+        spec.name
+        for spec in sorted(
+            deferred.values(), key=lambda item: (-schema_size(item), item.name)
+        )[:MAX_PRELOADED]
+    ]
+    suggested = sorted(
+        (name for name in deferred if name not in preloaded),
+        key=lambda name: (-len(name), name),
+    )[:MAX_SUGGESTED]
+    receipt = CatalogReceipt(
+        deferred=sorted(deferred), preloaded=preloaded, suggested=suggested
+    )
+    receipt.sources = picked_sources(receipt, deferred, sources)
+    return receipt.model_dump(mode="json")
 
 
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{2,}")
@@ -5052,6 +5382,24 @@ class ChatService:
                 engagement_chunks, trusted_operator_help=False
             )
             base_instructions = instructions
+            # What the turn's requests add beside the conversation counts
+            # toward the target too, or a tool-heavy turn is assembled to the
+            # target and then sent well over it.
+            reserved_tokens = (
+                self._tool_request_reserve(
+                    tool_components,
+                    deferred_specs,
+                    catalog_profiles,
+                    request.max_active_subagents if subagents_enabled else None,
+                )
+                if tool_components is not None
+                else estimate_tokens(_NO_TOOL_PREFIX)
+            )
+            calibration = (
+                _context_calibration(session.metadata, profile.id, selected_model)
+                if session is not None
+                else None
+            )
 
             compaction_budget = ContextCallBudget(
                 max_tokens=(
@@ -5078,6 +5426,12 @@ class ChatService:
                     instructions=instructions,
                     budget=compaction_budget,
                     required_parameters={"tools"} if switch_tools_enabled else set(),
+                    reserved_tokens=reserved_tokens,
+                    calibration=calibration,
+                    # The goal is what the conversation is for; without one,
+                    # the latest message (often "thanks") is no guide to what
+                    # later turns served by the same memory will ask.
+                    objective=goal.objective if goal is not None else None,
                 )
             except ContextCapacityError as exc:
                 if goal is not None and exc.usage.total_tokens > 0:
@@ -5167,7 +5521,7 @@ class ChatService:
             )
             if goal is not None:
                 model_request = self._fit_goal_request_budget(goal.id, model_request)
-            self._ensure_request_capacity(profile, model_request)
+            self._ensure_request_capacity(profile, model_request, calibration)
         except BaseException:  # diagnostic-expected: re-raised below
             if ranking is not None:
                 # The turn failed before it needed the ranking.
@@ -5347,6 +5701,8 @@ class ChatService:
             base_instructions=base_instructions,
             required_parameters={"tools"} if switch_tools_enabled else set(),
             hook_snapshots=hook_snapshots,
+            estimate_calibration=calibration,
+            context_reserved_tokens=reserved_tokens,
         )
         if turn is not None:
             self._persist_turn_inputs(prepared)
@@ -5500,7 +5856,10 @@ class ChatService:
     ) -> None:
         if prepared.last_provider_request is not None:
             prepared.last_provider_request = prepared.last_provider_request.model_copy(
-                update={"reported_input_tokens": response.usage.input_tokens}
+                update={
+                    "reported_input_tokens": response.usage.input_tokens,
+                    "reported_cached_input_tokens": response.usage.cached_input_tokens,
+                }
             )
 
     async def _complete_final_answer_with_recovery(
@@ -5615,7 +5974,9 @@ class ChatService:
                     }
                 )
                 retry = self._fit_turn_goal_request(prepared, retry)
-                self._ensure_request_capacity(prepared.provider_profile, retry)
+                self._ensure_request_capacity(
+                    prepared.provider_profile, retry, prepared.estimate_calibration
+                )
                 response = await self._complete_final_answer_with_recovery(
                     prepared, retry
                 )
@@ -5865,6 +6226,9 @@ class ChatService:
         instead; nothing runs again.
         """
 
+        # The provider counted more than Core's calibrated estimate, so the
+        # rest of the turn trusts only the raw one.
+        prepared.estimate_calibration = None
         # prepared.turn lags the routing loop by a step; the guard below needs
         # the turn as it is.
         turn = self._refresh_turn(prepared.turn) if prepared.turn is not None else None
@@ -5948,6 +6312,14 @@ class ChatService:
                 # retry compacts at the fresh boundary rather than resend the
                 # longest tail an older snapshot would allow.
                 reuse_snapshot=False,
+                # The retry below adds these to the instructions and messages.
+                reserved_tokens=estimate_tool_definitions(failed_request.tools)
+                + estimate_tokens(
+                    _CHAT_TOOL_INSTRUCTIONS + "\n\n"
+                    if failed_request.tools
+                    else _NO_TOOL_PREFIX
+                ),
+                objective=goal.objective if goal is not None else None,
             )
         except (ContextCapacityError, ContextCompactionError) as exc:
             raise ChatConfigurationError(
@@ -6456,28 +6828,9 @@ class ChatService:
                         yield delivered
                     routing = prepared.model_request.model_copy(
                         update={
-                            "instructions": _CHAT_TOOL_INSTRUCTIONS
-                            + (
-                                subagent_routing_instructions(
-                                    subagent_limit(
-                                        turn.request_snapshot.get(
-                                            "max_active_subagents"
-                                        )
-                                    )
-                                )
-                                if any(
-                                    spec.name == "start_subagent"
-                                    for spec in available_specs
-                                )
-                                else ""
-                            )
-                            + (
-                                AGENT_MESSAGE_ROUTING_INSTRUCTIONS
-                                if any(
-                                    spec.name == "send_agent_message"
-                                    for spec in available_specs
-                                )
-                                else ""
+                            "instructions": _routing_instructions(
+                                available_names,
+                                turn.request_snapshot.get("max_active_subagents"),
                             )
                             + "\n\n"
                             + (prepared.model_request.instructions or "")
@@ -6494,7 +6847,9 @@ class ChatService:
                     routing = self._with_tool_history(prepared, turn, routing)
                     routing = self._with_completion_hook_feedback(routing, turn)
                     if routing.tool_results and not self._fits_request_capacity(
-                        prepared.provider_profile, routing
+                        prepared.provider_profile,
+                        routing,
+                        prepared.estimate_calibration,
                     ):
                         # Even with its older results cleared the turn no
                         # longer fits a routing request. It answers from what
@@ -6520,7 +6875,11 @@ class ChatService:
                         )
                         break
                     routing = self._fit_turn_goal_request(prepared, routing)
-                    self._ensure_request_capacity(prepared.provider_profile, routing)
+                    self._ensure_request_capacity(
+                        prepared.provider_profile,
+                        routing,
+                        prepared.estimate_calibration,
+                    )
                     requested_at = utc_now()
                     response = await self._complete_routing_step(prepared, routing)
                     responded_at = utc_now()
@@ -7086,7 +7445,11 @@ class ChatService:
             final_request = self._with_tool_history(prepared, turn, final_request)
             final_request = self._with_completion_hook_feedback(final_request, turn)
             final_request = self._fit_turn_goal_request(prepared, final_request)
-            self._ensure_request_capacity(prepared.provider_profile, final_request)
+            self._ensure_request_capacity(
+                prepared.provider_profile,
+                final_request,
+                prepared.estimate_calibration,
+            )
             completed = False
             routing_thoughts = self.turn_reasoning(turn)
             recovery_attempts = 0
@@ -7384,6 +7747,46 @@ class ChatService:
         return False
 
     @classmethod
+    def _tool_request_reserve(
+        cls,
+        components: RuntimeToolComponents | AutomationToolComponents,
+        deferred: Mapping[str, ToolSpec],
+        catalog_profiles: Sequence[McpServerProfile],
+        max_active_subagents: int | None,
+    ) -> int:
+        """Estimated tokens a tool turn's requests add beside the conversation.
+
+        Routing and synthesis declare every function that is not on demand, in
+        the same conversion ``_routing_tools`` makes, and routing prefixes its
+        instructions and names the on-demand picks. The picks are ranked while
+        the conversation is assembled, so the largest possible ones are
+        reserved (``_largest_catalog_picks``).
+        """
+
+        specs = {
+            name: spec
+            for name, spec in components.specs.items()
+            if name not in deferred
+        }
+        if deferred:
+            catalog = catalog_components(components, deferred=deferred)
+            if catalog is not None:
+                specs.update(catalog.specs)
+        reserve = estimate_tool_definitions(
+            cls._routing_tools(specs.values())
+        ) + estimate_tokens(_routing_instructions(specs, max_active_subagents) + "\n\n")
+        if deferred:
+            reserve += estimate_tokens(
+                catalog_instructions(
+                    _largest_catalog_picks(
+                        deferred, mcp_catalog_sources(catalog_profiles)
+                    ),
+                    deferred,
+                )
+            )
+        return reserve
+
+    @classmethod
     def _routing_tools(cls, specs: Iterable[Any]) -> list[ToolDefinition]:
         """The functions a routing step declares, in their stable order."""
 
@@ -7446,17 +7849,28 @@ class ChatService:
 
     @classmethod
     def _fits_request_capacity(
-        cls, profile: ProviderProfile, request: ModelRequest
+        cls,
+        profile: ProviderProfile,
+        request: ModelRequest,
+        calibration: float | None = None,
     ) -> bool:
         limits = cls._request_limits(profile, request)
-        return estimate_model_request(request) <= limits.input_capacity
+        return (
+            calibrated_estimate(estimate_model_request(request), calibration, hard=True)
+            <= limits.input_capacity
+        )
 
     @classmethod
     def _ensure_request_capacity(
-        cls, profile: ProviderProfile, request: ModelRequest
+        cls,
+        profile: ProviderProfile,
+        request: ModelRequest,
+        calibration: float | None = None,
     ) -> None:
         limits = cls._request_limits(profile, request)
-        estimated = estimate_model_request(request)
+        estimated = calibrated_estimate(
+            estimate_model_request(request), calibration, hard=True
+        )
         if estimated > limits.input_capacity:
             raise ChatConfigurationError(
                 "the complete provider request exceeds the selected model context "
@@ -7656,7 +8070,9 @@ class ChatService:
             max_output_tokens = min(desired, limits.max_output_tokens, available)
         retry = retry.model_copy(update={"max_output_tokens": max_output_tokens})
         retry = self._fit_turn_goal_request(prepared, retry)
-        self._ensure_request_capacity(prepared.provider_profile, retry)
+        self._ensure_request_capacity(
+            prepared.provider_profile, retry, prepared.estimate_calibration
+        )
         return retry
 
     def _fit_goal_request_budget(
@@ -7760,6 +8176,26 @@ class ChatService:
             for result in history
         ]
 
+    @staticmethod
+    def _estimate_limits(
+        prepared: PreparedChat, limits: ContextLimits
+    ) -> tuple[int, int]:
+        """The target and hard input capacity in raw estimated tokens.
+
+        Each is what the turn's calibration (``PreparedChat.estimate_calibration``)
+        lets an uncalibrated ``estimate_model_request`` reach, so a request is
+        compared as the provider would count it.
+        """
+
+        return (
+            estimate_allowance(
+                limits.target_input_tokens, prepared.estimate_calibration
+            ),
+            estimate_allowance(
+                limits.input_capacity, prepared.estimate_calibration, hard=True
+            ),
+        )
+
     def _with_tool_history(
         self, prepared: PreparedChat, turn: ChatTurn, request: ModelRequest
     ) -> ModelRequest:
@@ -7799,8 +8235,9 @@ class ChatService:
 
         checkpoint, replay_entries = self.turn_ledger.compacted_history(turn)
         fitted = replayed(checkpoint, replay_entries)
-        limits = self._request_limits(prepared.provider_profile, fitted)
-        target = limits.target_input_tokens
+        target, capacity = self._estimate_limits(
+            prepared, self._request_limits(prepared.provider_profile, fitted)
+        )
         if fitted.tool_results and estimate_model_request(fitted) > target:
             advanced, advanced_entries = self.turn_ledger.compacted_history(
                 turn, advance=True
@@ -7831,7 +8268,7 @@ class ChatService:
                 low = middle + 1
         count = low
         if count == len(whole) and (
-            estimate_model_request(clearing(count - 1)) <= limits.input_capacity
+            estimate_model_request(clearing(count - 1)) <= capacity
         ):
             count -= 1
         if count:
@@ -9737,6 +10174,9 @@ class ChatService:
                 turn=turn,
                 inputs_persisted=True,
                 hook_snapshots=hook_snapshots,
+                estimate_calibration=_context_calibration(
+                    session.metadata, profile.id, turn.model
+                ),
             )
         if not profile.tools_verified_for(turn.model):
             raise ChatConfigurationError(
@@ -9956,6 +10396,9 @@ class ChatService:
             turn=turn,
             inputs_persisted=True,
             hook_snapshots=hook_snapshots,
+            estimate_calibration=_context_calibration(
+                session.metadata, profile.id, turn.model
+            ),
         )
 
     async def _run_native_hooks(
@@ -11358,11 +11801,19 @@ class ChatService:
         return session, retained, retracted
 
     def context_status(
-        self, session_id: str, *, images_supported: bool | None = None
+        self,
+        session_id: str,
+        *,
+        images_supported: bool | None = None,
+        runtime: tuple[str, str | None] | None = None,
     ) -> ContextStatus:
         """Estimate the conversation's active context as the model receives it.
 
-        ``images_supported`` sizes stored images for a model other than the
+        The estimate adds what the latest turn reserved beside the conversation
+        (tool definitions and routing instructions) and is scaled by the
+        conversation's calibration for the provider and model, as the turn's
+        own compaction decision is. ``images_supported`` and ``runtime``
+        (provider profile id, model) size it for a runtime other than the
         conversation's own, as a runtime switch preflight does.
         """
 
@@ -11372,6 +11823,11 @@ class ChatService:
         profile = self.store.get(ProviderProfile, session.provider_profile_id)
         if images_supported is None:
             images_supported = profile.capabilities.vision
+        calibration = _context_calibration(
+            session.metadata,
+            *(runtime or (session.provider_profile_id, session.model)),
+        )
+        reserved = _context_reserve(session.metadata)
         messages = self._session_messages(session)
         last_provider_request = next(
             (
@@ -11400,7 +11856,10 @@ class ChatService:
             # diagnostic-expected: an unusable AGENTS.md is reported when a turn starts
             project_text = ""
         base_instructions = _CHAT_INSTRUCTIONS + project_text
-        estimated = estimate_messages(estimated_forms.values(), base_instructions)
+        estimated = calibrated_estimate(
+            estimate_messages(estimated_forms.values(), base_instructions) + reserved,
+            calibration,
+        )
         active_estimated = estimated
         latest = ContextCompactor(self.store).latest(
             ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
@@ -11419,17 +11878,25 @@ class ChatService:
                 for message in messages
                 if message.sequence > latest.compacted_through
             ]
-            uncompacted_tokens = sum(
-                _estimated_message_tokens(estimated_forms[message.id])
-                for message in uncompacted
-            )
             through = latest.compacted_through
             if latest.memory is not None:
-                active_estimated = (
-                    estimate_tokens(
-                        base_instructions + "\n\n" + memory_text(latest.memory)
-                    )
-                    + uncompacted_tokens
+                # The memory leads the first message after the boundary, as
+                # _model_context sends it (or the next one, when none is).
+                first = uncompacted[0] if uncompacted else None
+                forms = [
+                    _estimation_message(
+                        first.role if first else ChatRole.USER,
+                        _compacted_memory_text(
+                            latest.memory, _stored_model_text(first) if first else ""
+                        ),
+                        first.content_blocks if first else [],
+                        images_supported=images_supported,
+                    ),
+                    *(estimated_forms[message.id] for message in uncompacted[1:]),
+                ]
+                active_estimated = calibrated_estimate(
+                    estimate_messages(forms, base_instructions) + reserved,
+                    calibration,
                 )
             # A turn keeps the snapshot while everything after its boundary
             # still fits beside its memory (see _model_context).
@@ -11453,6 +11920,8 @@ class ChatService:
             route_input_limit=limits.route_input_limit,
             route_limits_required=limits.route_limits_required,
             estimated_input_tokens=active_estimated,
+            estimate_calibration=calibration,
+            reserved_input_tokens=reserved,
             last_provider_request=(
                 ProviderRequestInput.model_validate(last_provider_request)
                 if last_provider_request is not None
@@ -11544,7 +12013,9 @@ class ChatService:
         # Size stored images the way the target model will receive them: the
         # image reserve for a vision model, a text placeholder otherwise.
         active_tokens = self.context_status(
-            session.id, images_supported=profile.capabilities.vision
+            session.id,
+            images_supported=profile.capabilities.vision,
+            runtime=(profile.id, request.model),
         ).estimated_input_tokens
         requires_confirmation = active_tokens > limits.target_input_tokens
         confirmation = (
@@ -11721,6 +12192,9 @@ class ChatService:
         budget: ContextCallBudget | None = None,
         required_parameters: set[str] | None = None,
         reuse_snapshot: bool = True,
+        reserved_tokens: int = 0,
+        calibration: float | None = None,
+        objective: str | None = None,
     ) -> tuple[
         list[ChatRequestMessage],
         str,
@@ -11728,6 +12202,26 @@ class ChatService:
         ContextSnapshot | None,
         ChatSession | None,
     ]:
+        """The conversation one provider request carries, compacted to fit.
+
+        ``instructions`` come back unchanged. Once older messages are archived,
+        the snapshot's memory leads the first message sent verbatim and the
+        originals retrieved for this request follow the current message: both
+        are history, not instructions, and the memory is byte-identical on
+        every turn the same snapshot serves, so provider prefix caches hold.
+
+        ``reserved_tokens`` is what the request adds beside the instructions
+        and messages (tool definitions, routing instructions, catalog picks);
+        ``calibration`` scales Core's estimate to the provider's own count
+        (see ``updated_calibration``). ``objective`` guides the compactor.
+
+        No message is left out: each is either sent verbatim or covered by the
+        snapshot that is sent. Over the target, the excerpts go first, then
+        the compaction boundary moves forward and the archive is compacted
+        again, a bounded number of times. A request still above the target is
+        sent when it fits the input capacity.
+        """
+
         limits = resolve_context_limits(
             profile,
             model=model,
@@ -11735,6 +12229,17 @@ class ChatService:
             required_parameters=required_parameters,
         )
         images_supported = profile.capabilities.vision
+        # Estimates stay raw byte counts: the limits are converted once into
+        # what they allow of them, net of what the request adds beside the
+        # conversation.
+        target = (
+            estimate_allowance(limits.target_input_tokens, calibration)
+            - reserved_tokens
+        )
+        capacity = (
+            estimate_allowance(limits.input_capacity, calibration, hard=True)
+            - reserved_tokens
+        )
 
         def estimated_form(message: ChatRequestMessage) -> ModelMessage:
             # Size each message as it will be sent: images count toward the
@@ -11747,99 +12252,74 @@ class ChatService:
                 images_supported=images_supported,
             )
 
-        estimated = estimate_messages(
-            [estimated_form(message) for message in messages], instructions
-        )
-        if estimated <= limits.target_input_tokens:
+        def estimate(assembled: Sequence[ChatRequestMessage]) -> int:
+            return estimate_messages(
+                [estimated_form(message) for message in assembled], instructions
+            )
+
+        if estimate(messages) <= target:
             return messages, instructions, ChatTokenUsage(), None, session
 
         current = messages[-1]
-        mandatory = estimate_messages([estimated_form(current)], instructions)
-        if mandatory > limits.input_capacity:
+        if estimate([current]) > capacity:
             raise ContextCapacityError(
                 "the current message and required instructions exceed the model context window"
             )
         if session is None or not stored_messages:
+            # Nothing is durable yet, so nothing can be archived: the request
+            # goes as it is while it fits the input capacity.
+            if estimate(messages) <= capacity:
+                return messages, instructions, ChatTokenUsage(), None, session
             raise ContextCapacityError(
                 "chat context exceeds the model window and has no durable history to compact"
             )
+        # When the instructions, tools and current message alone exceed the
+        # target, no compaction can reach it; compacting again on every turn
+        # to chase it would only spend. The capacity is the goal instead.
+        goal = target if estimate([current]) <= target else capacity
+        excerpt_budget = max(0, goal) // 5
 
-        # Keep a recent, complete, user-led tail. The remaining space is reserved
-        # for derived memory, retrieved originals, instructions, and headroom.
-        tail_budget = max(
-            _estimated_message_tokens(estimated_form(current)),
-            limits.target_input_tokens * 2 // 5,
-        )
-        tail: list[ChatRequestMessage] = []
-        tail_tokens = 0
-        for message in reversed(messages):
-            size = _estimated_message_tokens(estimated_form(message))
-            if tail and tail_tokens + size > tail_budget:
-                break
-            tail.append(message)
-            tail_tokens += size
-        tail.reverse()
-        while tail and tail[0].role == ChatRole.ASSISTANT:
-            tail.pop(0)
-        if not tail:
-            tail = [current]
-        archived_count = len(messages) - len(tail)
-        # A durable request appends one user message, so every archived item must
-        # already exist in the canonical transcript.
-        archived = stored_messages[: min(archived_count, len(stored_messages))]
-        if not archived:
-            raise ContextCapacityError(
-                "chat context cannot be compacted without omitting the current turn"
-            )
-        # Compaction and retrieval read what each message was sent with, so
-        # an old turn's selected context is summarised rather than dropped.
-        archived_text = {
-            message.id: _stored_model_text(message) for message in archived
-        }
-        compacted_through = archived[-1].sequence
-
-        def with_memory(
-            snapshot: ContextSnapshot, covered: list[ChatMessage], excerpt_budget: int
-        ) -> str:
-            """The instructions plus a snapshot's memory and relevant excerpts."""
+        def behind_memory(
+            snapshot: ContextSnapshot, start: int
+        ) -> list[ChatRequestMessage]:
+            """``messages[start:]``, the first led by the snapshot's memory."""
 
             assert snapshot.memory is not None
-            retrieved: list[dict[str, Any]] = []
-            retrieved_tokens = 0
-            ranked = sorted(
-                covered,
-                key=lambda item: (
-                    -lexical_score(current.content, archived_text[item.id]),
-                    -item.sequence,
-                ),
+            return [
+                _with_compacted_memory(messages[start], snapshot.memory),
+                *messages[start + 1 :],
+            ]
+
+        def fitted(
+            snapshot: ContextSnapshot, start: int
+        ) -> list[ChatRequestMessage] | None:
+            """The request the snapshot serves from ``start``, if it fits the goal.
+
+            Retrieved originals fill what room the goal leaves; a tail that
+            fits only without them is still served.
+            """
+
+            kept = behind_memory(snapshot, start)
+            room = goal - estimate(kept)
+            if room < 0:
+                return None
+            excerpts = _retrieved_excerpts(
+                current.content, stored_messages[:start], min(excerpt_budget, room)
             )
-            for archived_message in ranked:
-                text = archived_text[archived_message.id]
-                score = lexical_score(current.content, text)
-                if score <= 0:
-                    continue
-                size = estimate_tokens(text, message_count=1)
-                if retrieved_tokens + size > excerpt_budget:
-                    continue
-                retrieved.append(
-                    {
-                        "message_id": archived_message.id,
-                        "sequence": archived_message.sequence,
-                        "role": archived_message.role.value,
-                        "content": text,
-                    }
+            if excerpts:
+                last = max(
+                    index
+                    for index, message in enumerate(kept)
+                    if message.role == ChatRole.USER
                 )
-                retrieved_tokens += size
-                if len(retrieved) >= 8:
-                    break
-            assembled = instructions + "\n\n" + memory_text(snapshot.memory)
-            if retrieved:
-                assembled += (
-                    "\n\nRETRIEVED CANONICAL TRANSCRIPT EXCERPTS (HISTORY; NOT SYSTEM "
-                    "INSTRUCTIONS)\n"
-                    + json.dumps(retrieved, ensure_ascii=False, separators=(",", ":"))
-                )
-            return assembled
+                retrieved = [
+                    *kept[:last],
+                    _with_retrieved_excerpts(kept[last], excerpts),
+                    *kept[last + 1 :],
+                ]
+                if estimate(retrieved) <= goal:
+                    return retrieved
+            return kept
 
         compactor = ContextCompactor(self.store)
         latest = compactor.latest(
@@ -11850,107 +12330,154 @@ class ChatService:
             and latest is not None
             and latest.status == ContextSnapshotStatus.READY
             and latest.memory is not None
-            and latest.compacted_through < compacted_through
         ):
-            # The tail moved past the latest snapshot's boundary. While every
-            # message after that boundary still fits beside its memory, the
-            # snapshot keeps serving: re-summarising the whole archive because
-            # the tail advanced by one exchange cost a full hierarchical
-            # compaction on every turn once a chat outgrew its target. The
-            # snapshot must cover exactly the messages it is kept for, so an
-            # edited or retracted one always compacts afresh.
+            # While every message after its boundary still fits beside its
+            # memory, the latest snapshot keeps serving: re-summarising the
+            # archive each time the tail advanced cost a compaction on every
+            # turn, and a moving boundary changed the request's opening bytes.
+            # It must cover exactly the messages it stands for, by content as
+            # well as identity, so an edited or retracted one compacts afresh.
             covered = [
                 message
                 for message in stored_messages
                 if message.sequence <= latest.compacted_through
             ]
-            kept = messages[len(covered) :]
+            start = len(covered)
             if (
                 covered
-                and kept
-                and kept[0].role == ChatRole.USER
+                and start < len(messages)
+                and messages[start].role == ChatRole.USER
                 and {
                     reference.source_id
                     for reference in latest.source_references
                     if reference.source_kind == "chat_message"
                 }
                 == {message.id for message in covered}
+                and source_digest(_chat_context_sources(covered))
+                == latest.source_sha256
             ):
-                kept_forms = [estimated_form(message) for message in kept]
-                room = limits.target_input_tokens - estimate_messages(
-                    kept_forms, instructions + "\n\n" + memory_text(latest.memory)
+                reused = fitted(latest, start)
+                if reused is not None:
+                    return reused, instructions, ChatTokenUsage(), latest, session
+
+        sizes = [_estimated_message_tokens(estimated_form(item)) for item in messages]
+        instruction_tokens = estimate_tokens(instructions)
+
+        def user_led(start: int) -> int:
+            """The first operator message from ``start``; the current one at the latest.
+
+            A durable request appends one message, so everything before it
+            that is archived is already canonical.
+            """
+
+            while start < len(messages) - 1 and messages[start].role != ChatRole.USER:
+                start += 1
+            return min(start, len(stored_messages))
+
+        # Keep a recent, complete, user-led tail. The rest of the target is for
+        # the memory, retrieved originals, and headroom.
+        tail_budget = max(sizes[-1], max(0, goal - instruction_tokens) * 2 // 5)
+        start = len(messages) - 1
+        tail_tokens = sizes[-1]
+        while start > 0 and tail_tokens + sizes[start - 1] <= tail_budget:
+            start -= 1
+            tail_tokens += sizes[start]
+        start = user_led(start)
+
+        usage = ChatTokenUsage()
+        cost = 0.0
+        served: tuple[ContextSnapshot, int] | None = None
+        for _ in range(_COMPACTION_BOUNDARY_ATTEMPTS):
+            archived = stored_messages[:start]
+            if not archived:
+                # The whole conversation is the recent tail: the target is out
+                # of reach, and there is nothing to archive.
+                if estimate(messages) <= capacity:
+                    return messages, instructions, usage, None, session
+                raise ContextCapacityError(
+                    "chat context cannot be compacted without omitting the current turn",
+                    usage=usage,
                 )
-                # Excerpts fill what room is left; a tail that fits only
-                # without them is still served by the snapshot.
-                budgets = (min(limits.target_input_tokens // 5, room), 0)
-                for excerpt_budget in budgets if room >= 0 else ():
-                    reused = with_memory(latest, covered, excerpt_budget)
-                    if (
-                        estimate_messages(kept_forms, reused)
-                        <= limits.target_input_tokens
-                    ):
-                        return kept, reused, ChatTokenUsage(), latest, session
-        created = False
-        if (
-            latest is None
-            or latest.status != ContextSnapshotStatus.READY
-            or latest.compacted_through != compacted_through
-        ):
-            result = await compactor.compact(
-                owner_type=ContextOwnerType.CHAT_SESSION,
-                owner_id=session.id,
-                engagement_id=session.engagement_id,
-                provider_profile=profile,
-                provider=provider,
-                model=model,
-                compacted_through=compacted_through,
-                sources=[
-                    ContextSource(
-                        reference=ContextSourceReference(
-                            source_kind="chat_message",
-                            source_id=message.id,
-                            sequence=message.sequence,
-                        ),
-                        content=f"role={message.role.value}\n{archived_text[message.id]}",
-                    )
-                    for message in archived
-                ],
-                objective=current.content,
-                budget=budget,
-            )
-            latest = result.snapshot
-            created = result.created
+            try:
+                result = await compactor.compact(
+                    owner_type=ContextOwnerType.CHAT_SESSION,
+                    owner_id=session.id,
+                    engagement_id=session.engagement_id,
+                    provider_profile=profile,
+                    provider=provider,
+                    model=model,
+                    compacted_through=archived[-1].sequence,
+                    sources=_chat_context_sources(archived),
+                    objective=objective,
+                    budget=_remaining_context_budget(budget, usage, cost),
+                )
+            except ContextCompactionError as exc:  # diagnostic-expected: re-raised, or recorded below when the previous boundary serves instead
+                usage = _added_usage(usage, exc.usage)
+                exc.usage = usage
+                if served is None or estimate(behind_memory(*served)) > capacity:
+                    raise
+                record_caught_exception(
+                    "chat",
+                    "chat.context.boundary_compaction_failed",
+                    "Compacting past a later boundary failed; the request kept "
+                    "the boundary already compacted.",
+                    exc,
+                    stage="context",
+                    metadata={"session_id": session.id},
+                )
+                break
+            snapshot = result.snapshot
+            if result.created:
+                usage = _added_usage(usage, snapshot.usage)
+                cost += snapshot.cost_usd
             session = self.store.get(ChatSession, session.id)
-        if latest.memory is None:
-            raise ContextCompactionError("latest context snapshot has no memory")
-
-        context_instructions = with_memory(
-            latest, archived, limits.target_input_tokens // 5
-        )
-
-        # Tighten the recent tail until the complete assembled input fits the
-        # target. Never remove the current user message.
-        while (
-            len(tail) > 1
-            and estimate_messages(
-                [estimated_form(message) for message in tail],
-                context_instructions,
+            if snapshot.memory is None:
+                raise ContextCompactionError(
+                    "latest context snapshot has no memory", usage=usage
+                )
+            served = (snapshot, start)
+            request_messages = fitted(snapshot, start)
+            if request_messages is not None:
+                return request_messages, instructions, usage, snapshot, session
+            # Over the goal beside this memory. The messages it leaves no
+            # room for are archived and summarised too, never just dropped.
+            memory_tokens = estimate(behind_memory(snapshot, start)) - estimate(
+                messages[start:]
             )
-            > limits.target_input_tokens
-        ):
-            tail.pop(0)
-            while tail and tail[0].role == ChatRole.ASSISTANT:
-                tail.pop(0)
-        final_estimate = estimate_messages(
-            [estimated_form(message) for message in tail],
-            context_instructions,
-        )
-        if final_estimate > limits.target_input_tokens:
+            room = goal - instruction_tokens - memory_tokens
+            later = start
+            tail_tokens = sum(sizes[later:])
+            while later < len(messages) - 1 and tail_tokens > room:
+                tail_tokens -= sizes[later]
+                later += 1
+            later = user_led(later)
+            if later <= start:
+                break
+            start = later
+        assert served is not None
+        snapshot, start = served
+        request_messages = behind_memory(snapshot, start)
+        if estimate(request_messages) > capacity:
             raise ContextCapacityError(
-                "compacted chat context cannot meet the model input target"
+                "compacted chat context cannot fit the model input capacity",
+                usage=usage,
             )
-        usage = latest.usage if created else ChatTokenUsage()
-        return tail, context_instructions, usage, latest, session
+        record_diagnostic(
+            "warning",
+            "chat",
+            "chat.context.over_target",
+            "The compacted conversation stayed above the model's input target; "
+            "it was sent within the model's input capacity.",
+            outcome="fallback",
+            stage="context",
+            metadata={
+                "provider": profile.id,
+                "model_id": model,
+                "session_id": session.id,
+                "compacted_through": snapshot.compacted_through,
+            },
+        )
+        return request_messages, instructions, usage, snapshot, session
 
     def _enforce_engagement_privacy(
         self, engagement: Engagement, provider: ModelProvider
@@ -12930,6 +13457,9 @@ class ChatService:
                             else {}
                         ),
                         **self._assistant_settings(prepared),
+                        **self._turn_context_calibration(
+                            prepared, prepared.pending_session.metadata
+                        ),
                         "message_count": messages[-1].sequence,
                         "last_sequence": messages[-1].sequence,
                     }
@@ -12981,6 +13511,9 @@ class ChatService:
                                 if prepared.turn is None
                                 else {}
                             ),
+                            **self._turn_context_calibration(
+                                prepared, latest_session.metadata
+                            ),
                             "message_count": messages[-1].sequence,
                             "last_sequence": messages[-1].sequence,
                         }
@@ -13009,6 +13542,20 @@ class ChatService:
             return
         entities.extend(messages)
         self.store.create_many(entities)
+
+    @staticmethod
+    def _turn_context_calibration(
+        prepared: PreparedChat, metadata: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """The turn's context accounting, for the session write that settles it."""
+
+        return _recorded_context_calibration(
+            metadata,
+            provider_profile_id=prepared.provider_profile.id,
+            model=prepared.model_request.model,
+            request=prepared.last_provider_request,
+            reserved_tokens=prepared.context_reserved_tokens,
+        )
 
     @staticmethod
     def _session_id(prepared: PreparedChat) -> str | None:

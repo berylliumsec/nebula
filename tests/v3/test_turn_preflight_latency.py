@@ -459,8 +459,8 @@ def test_a_covering_snapshot_serves_turns_until_the_tail_outgrows_it(tmp_path):
             service, session, profile, provider, f"Follow-up {index}: {FOLLOW_UP}"
         )
         calls.append(compacted)
-        # Every message after the snapshot's boundary is sent as it is,
-        # beside the unchanged memory, and the whole input still fits.
+        # Every message after the snapshot's boundary is sent as it is, the
+        # first led by the unchanged memory, and the whole input still fits.
         assert prepared.context_snapshot.id == snapshot.id
         assert prepared.context_usage.total_tokens == 0
         after = [
@@ -469,7 +469,10 @@ def test_a_covering_snapshot_serves_turns_until_the_tail_outgrows_it(tmp_path):
             if message.sequence > snapshot.compacted_through
         ]
         sent = prepared.model_request.messages
-        assert [message.content for message in sent] == after[: len(sent)]
+        assert [message.content for message in sent] == [
+            chat_module._compacted_memory_text(snapshot.memory, after[0]),
+            *after[1 : len(sent)],
+        ]
         assert sent[-1].content.startswith(f"Follow-up {index}")
         assert (
             chat_module.estimate_messages(sent, prepared.model_request.instructions)

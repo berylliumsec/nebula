@@ -292,9 +292,11 @@ def test_image_history_counts_toward_compaction(tmp_path):
     assert store.list_entities(ContextSnapshot, limit=10)
     limits = resolve_context_limits(profile, model="model-a")
     assert estimate_model_request(prepared.model_request) <= limits.input_capacity
-    assert prepared.model_request.messages[-1].content == (
-        "Compare the three screenshots."
-    )
+    # Only the current message fits beside the images, so the memory of the
+    # archived ones leads it.
+    current = prepared.model_request.messages[-1].content
+    assert current.startswith("EARLIER CONVERSATION, COMPACTED BY NEBULA")
+    assert current.endswith("Compare the three screenshots.")
 
 
 def test_switch_preflight_estimates_history_images_for_the_target_model(tmp_path):
