@@ -1,7 +1,7 @@
 {
   "name": "nebula-ui",
   "private": true,
-  "version": "3.0.0-alpha.20",
+  "version": "3.0.0-alpha.21",
   "type": "module",
   "scripts": {
     "dev": "vite",

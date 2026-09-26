@@ -1,28 +1,23 @@
 {
-  "change_digest": "618ebfbcff85823c72a4f525f18dfe34edb7270fc9dfc8e81850ecd45eb69094",
-  "reviewed_by": "Codex focused review of deployed subagent transcript overflow and fenced-code rendering",
-  "reason": "The live service serves an older build than merged user-message Markdown. This diff scopes operator timestamp styling so it cannot hide nested code headers, removes extra Markdown block spacing, and gives mobile code controls usable touch size. Eight Markdown component cases check exact labeled/unlabeled code, copy, safety, and disabled user execution. The eight selected subagent browser profiles check code headers and controls, ordered text, long-path containment, internal code scrolling, spacing, navigation, and reload. One real-Core edit case checks fenced-code rendering, exact durable source, and reload.",
-  "exclusions": "No full-suite approval was given. Python and native code are unchanged. The browser matrix uses emulated mobile devices; no physical device is available. Formatting uses no origin-sensitive browser API, so real-Core persistence uses loopback. Unrelated chat features and backend suites are excluded.",
+  "change_digest": "6a098363855c69d59f86e9f57246f354a6b971ba52ce6f6d536bf84130a9fc15",
+  "reviewed_by": "Codex release review for Nebula 3.0.0-alpha.21",
+  "reason": "The release commit synchronizes version metadata and adds release notes. Three collected Python cases check every version source, the release version CLI contract, and source build metadata. The protected tag workflow supplies focused package, installation, and impacted browser gates for the accumulated changes since alpha.20.",
+  "exclusions": "No application behavior changes in this commit, so frontend, native, and PR Playwright selections are empty. Unrelated Python tests and full suites are excluded. The tag preparation workflow must review and run a focused release-impact selection against the prior successful release; physical-device and provider-diverse manual gates remain separate.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 8,
+    "python": 3,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/assistantMarkdown.test.tsx"
+  "python_versions": ["3.12"],
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
+    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract",
+    "tests/v3/test_version.py::test_source_build_metadata_is_explicit_and_complete"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:subagent-sidebar/desktop",
-    "entry:subagent-sidebar/compact",
-    "entry:subagent-sidebar/mobile-chromium-small",
-    "entry:subagent-sidebar/mobile-chromium-ledger-390",
-    "entry:subagent-sidebar/mobile-chromium-wide",
-    "entry:subagent-sidebar/mobile-webkit-small",
-    "entry:subagent-sidebar/mobile-webkit",
-    "entry:subagent-sidebar/mobile-webkit-wide",
-    "entry:chat-edit-in-place/assistant-real-desktop"
-  ]
+  "playwright": []
 }
