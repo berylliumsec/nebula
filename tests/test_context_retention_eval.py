@@ -308,6 +308,53 @@ def test_tool_call_stats_counts_rereads_and_receipt_refetches():
     assert later["receipt_refetches"] == 1
 
 
+def test_only_file_reading_tools_count_as_source_reads():
+    files = ["chain/a.txt", "chain/b.txt", "chain/c.txt"]
+    notes = {
+        "name": "notes.write",
+        "arguments": {
+            "content": "Read chain/a.txt -> chain/b.txt -> chain/c.txt; next chain/c.txt"
+        },
+    }
+    stats = tool_call_stats(
+        [
+            {"name": "workspace.read", "arguments": {"path": "chain/a.txt"}},
+            notes,
+            {"name": "workspace.read", "arguments": {"path": "chain/b.txt"}},
+            notes,
+            {
+                "name": "workspace.search",
+                "arguments": {"query": "KEY", "path": "chain"},
+            },
+            {
+                "name": "workspace.search",
+                "arguments": {"query": "KEY", "path": "chain"},
+            },
+            {
+                "name": "run_command",
+                "arguments": {"command": "echo chain/a.txt >> log"},
+            },
+            {
+                "name": "run_command",
+                "arguments": {"command": 'cd . && grep -E "^(KEY|NEXT): " chain/b.txt'},
+            },
+            {
+                "name": "workspace.search",
+                "arguments": {"query": "KEY", "path": "chain/c.txt"},
+            },
+            {"name": "tool_output.search", "arguments": {"query": "chain/c.txt"}},
+        ],
+        files,
+    )
+
+    assert stats["by_name"]["notes.write"] == 2
+    assert stats["source_reads"] == 5
+    assert stats["repeated_source_reads"] == 2
+    assert stats["read_markers"] == ["chain/a.txt#1", "chain/b.txt#1", "chain/c.txt#1"]
+    notes_only = tool_call_stats([notes, notes], files, stats["read_markers"])
+    assert notes_only["source_reads"] == notes_only["repeated_source_reads"] == 0
+
+
 def test_pricing_counts_cached_input_at_its_own_rate():
     usage = {
         "input_tokens": 1_000_000,

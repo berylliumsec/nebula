@@ -76,7 +76,40 @@ MAX_CONSECUTIVE_FAILED_TURNS = 3
 # Frames after which a turn waits for the operator; the eval cannot answer them.
 _BLOCKING_FRAMES = {"approval_required", "callback_required"}
 _SOURCE_READ_TOOLS = {"workspace.read"}
+_SOURCE_SEARCH_TOOLS = {"workspace.search"}
 _RECEIPT_READ_TOOLS = {"tool_output.read", "tool_output.search"}
+# Command runtime tools and the argument that carries the shell text.
+_COMMAND_TOOLS = {"run_command": "command", "process_io": "input"}
+# Programs whose output carries a file's contents back to the model.
+_FILE_READ_PROGRAMS = frozenset(
+    {
+        "awk",
+        "bat",
+        "cat",
+        "cut",
+        "diff",
+        "egrep",
+        "fgrep",
+        "grep",
+        "head",
+        "jq",
+        "less",
+        "more",
+        "nl",
+        "rg",
+        "sed",
+        "sort",
+        "strings",
+        "tac",
+        "tail",
+        "uniq",
+        "xxd",
+    }
+)
+# Words that can precede the program a shell segment actually runs.
+_SHELL_PREFIXES = frozenset(
+    {"!", "{", "command", "do", "elif", "else", "exec", "if", "nohup", "then", "time"}
+)
 
 # ---------------------------------------------------------------------------
 # Deterministic scenario generation
@@ -789,13 +822,55 @@ def score_turn(scenario: Scenario, turn: TurnSpec, answer: str) -> list[dict[str
 def _source_keys(
     name: str, arguments: dict[str, Any], files: Iterable[str]
 ) -> list[str]:
-    """Which planted files a tool call reads."""
+    """Which planted files a tool call reads.
 
+    Only tools that return file contents count: workspace reads, searches
+    scoped to a planted file, command runtime segments that run a file-reading
+    program, and receipt re-fetches that name a file. A path merely mentioned
+    elsewhere, such as in ``notes.write``, is not a read.
+    """
+
+    path = str(arguments.get("path") or "").strip().lstrip("./")
     if name in _SOURCE_READ_TOOLS:
-        path = str(arguments.get("path") or "").strip().lstrip("./")
         return [path] if path else []
-    text = json.dumps(arguments, sort_keys=True)
-    return [path for path in files if path in text]
+    if name in _SOURCE_SEARCH_TOOLS:
+        # A directory search returns matching lines, not a planted file.
+        return [path] if path in files else []
+    if name in _COMMAND_TOOLS:
+        return _command_reads(str(arguments.get(_COMMAND_TOOLS[name]) or ""), files)
+    if name in _RECEIPT_READ_TOOLS:
+        text = json.dumps(arguments, sort_keys=True)
+        return [path for path in files if path in text]
+    return []
+
+
+def _command_reads(command: str, files: Iterable[str]) -> list[str]:
+    """Planted files named by shell segments that run a file-reading program."""
+
+    lexer = shlex.shlex(command.replace("\n", ";"), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:  # unbalanced quotes
+        tokens = command.split()
+    segments: list[list[str]] = [[]]
+    for token in tokens:
+        # Operators (; && || | & ( ) and redirections) start a new segment.
+        if token[0] in lexer.punctuation_chars:
+            segments.append([])
+        else:
+            segments[-1].append(token.strip("`"))
+    reads: list[str] = []
+    for words in segments:
+        while words and (words[0] in _SHELL_PREFIXES or "=" in words[0]):
+            words.pop(0)
+        if words and words[0].rsplit("/", 1)[-1] in _FILE_READ_PROGRAMS:
+            reads += [
+                path
+                for path in files
+                if path not in reads and any(path in word for word in words[1:])
+            ]
+    return reads
 
 
 def tool_call_stats(
