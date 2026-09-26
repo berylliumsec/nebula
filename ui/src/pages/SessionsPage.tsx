@@ -5008,16 +5008,22 @@ export function SessionsPage() {
       sessionActionsButtonRef.current?.focus();
     };
     const closeOnViewportChange = () => setSessionActionsId(undefined);
+    // The menu is placed beside its trigger, so only a scroll that moves the
+    // trigger displaces it; a streaming transcript scrolling must not close it.
+    const closeOnTriggerScroll = (event: Event) => {
+      const trigger = sessionActionsButtonRef.current;
+      if (!trigger || !(event.target instanceof Node) || event.target === document || event.target.contains(trigger)) closeOnViewportChange();
+    };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     document.addEventListener("keydown", closeOnEscape);
-    document.addEventListener("scroll", closeOnViewportChange, true);
+    document.addEventListener("scroll", closeOnTriggerScroll, true);
     window.addEventListener("resize", closeOnViewportChange);
     // The first item an operator can act on, whichever actions this conversation offers.
     requestAnimationFrame(() => sessionActionsMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled):not([hidden])')?.focus());
     return () => {
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
-      document.removeEventListener("scroll", closeOnViewportChange, true);
+      document.removeEventListener("scroll", closeOnTriggerScroll, true);
       window.removeEventListener("resize", closeOnViewportChange);
     };
   }, [sessionActionsId]);
