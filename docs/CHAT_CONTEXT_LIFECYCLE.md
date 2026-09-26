@@ -191,7 +191,9 @@ allowance together are unioned mechanically (no call, nothing lost), and only
 memories that must be compressed are rolled up by the model. A model roll-up
 that keeps fewer than half the items the trimmed union would keep is replaced
 by that union. If no two memories fit one roll-up request, they are unioned
-and trimmed to the allowance.
+and trimmed to the allowance. Trimming drops the oldest items of whichever list
+is longest for its importance, so references, attempts and facts give way
+before decisions, and operator requests, constraints and corrections last.
 
 **Validation and repair.** Every list item must cite only the sources of its
 request, and every strong identifier in its text (URL, CVE, UUID, IPv4 address

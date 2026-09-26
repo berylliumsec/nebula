@@ -171,6 +171,21 @@ _MEMORY_SECTIONS = (
     ("Open questions:", "open_questions"),
 )
 _MEMORY_LISTS = tuple(name for _, name in _MEMORY_SECTIONS)
+# How much each list resists trimming: a list is trimmed while it holds the
+# most items for its weight, so what the operator asked for and must not
+# forget (requests, constraints, corrections, decisions) outlasts references,
+# attempts and facts the originals still hold.
+_TRIM_WEIGHTS = {
+    "user_requests": 4.0,
+    "constraints": 4.0,
+    "corrections": 4.0,
+    "decisions": 3.0,
+    "current_state": 2.0,
+    "open_questions": 2.0,
+    "confirmed_facts": 2.0,
+    "attempts": 2.0,
+    "references": 1.5,
+}
 # What a derived memory says when the model returned nothing usable for the
 # history it covers; the extract below it is deterministic.
 EXTRACTIVE_MEMORY_SUMMARY = (
@@ -1085,9 +1100,10 @@ def _truncated_json_object(text: str) -> Any:
 def _fit_memory(memory: ContextMemory, token_budget: int) -> tuple[ContextMemory, int]:
     """``memory`` trimmed until its rendered text fits ``token_budget``.
 
-    The oldest items of the longest list go first, except the first operator
-    request, which usually states the task; the summary is shortened only when
-    no item is left to drop. Returns the number of items removed.
+    The list holding the most items for its weight loses its oldest item first
+    (never the first operator request, which usually states the task); the
+    summary is shortened only when no item is left to drop. Returns the number
+    of parts removed, a shortened summary counting as one.
     """
 
     budget = token_budget * 3
@@ -1108,7 +1124,10 @@ def _fit_memory(memory: ContextMemory, token_budget: int) -> tuple[ContextMemory
         candidates = [name for name in _MEMORY_LISTS if items[name]]
         if not candidates:
             break
-        name = max(candidates, key=lambda candidate: len(items[candidate]))
+        name = max(
+            candidates,
+            key=lambda candidate: len(items[candidate]) / _TRIM_WEIGHTS[candidate],
+        )
         index = 1 if name == "user_requests" and len(items[name]) > 1 else 0
         items[name].pop(index)
         total -= sizes[name].pop(index)
@@ -1121,6 +1140,7 @@ def _fit_memory(memory: ContextMemory, token_budget: int) -> tuple[ContextMemory
         keep = max(200, len(summary.encode("utf-8")) - excess)
         summary = summary.encode("utf-8")[:keep].decode("utf-8", "ignore").rstrip()
         summary = (summary or memory.summary[:200]) + "…"
+        dropped += 1
     return (
         ContextMemory.model_validate(
             {
@@ -1146,7 +1166,9 @@ def _merged_memory(
     """A deterministic union of ``memories`` within ``token_budget``.
 
     Items keep their own citations; an item repeated with the same text keeps
-    one entry citing every source. Later items survive trimming first.
+    one entry citing every source. Later items survive trimming first. Returns
+    the number of parts trimmed, shortened summaries counting as one, so zero
+    means nothing was lost.
     """
 
     summaries: list[str] = []
@@ -1165,11 +1187,13 @@ def _merged_memory(
         kept.insert(0, text)
         used += size
     summary = ("…\n\n" if len(kept) < len(summaries) else "") + "\n\n".join(kept)
+    shortened = len(kept) < len(summaries)
     if len(summary.encode("utf-8")) > summary_bytes:
         summary = (
             summary.encode("utf-8")[:summary_bytes].decode("utf-8", "ignore").rstrip()
             + "…"
         )
+        shortened = True
     merged: dict[str, Any] = {
         "objective": next(
             (memory.objective for memory in reversed(memories) if memory.objective),
@@ -1194,7 +1218,8 @@ def _merged_memory(
                 value for memory in memories for value in getattr(memory, name)
             )
         )
-    return _fit_memory(ContextMemory.model_validate(merged), token_budget)
+    memory, trimmed = _fit_memory(ContextMemory.model_validate(merged), token_budget)
+    return memory, trimmed + int(shortened)
 
 
 class ContextCompactor:

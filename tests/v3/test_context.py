@@ -2025,3 +2025,38 @@ def test_a_roll_up_that_loses_the_history_is_replaced_by_the_union(tmp_path):
     assert snapshot.dropped_items > 0
     limits = resolve_context_limits(profile, model="model-a")
     assert estimate_tokens(memory_text(memory)) <= limits.max_output_tokens
+
+
+def test_trimming_keeps_what_the_operator_asked_for_longest():
+    from nebula.v3.context import _fit_memory
+
+    def items(label: str, count: int) -> list[ContextMemoryItem]:
+        return [
+            ContextMemoryItem(
+                text=f"{label} {index}: " + "detail " * 12,
+                sources=[
+                    ContextSourceReference(
+                        source_kind="chat_message", source_id="message-1", sequence=1
+                    )
+                ],
+            )
+            for index in range(count)
+        ]
+
+    memory = ContextMemory(
+        summary="Work so far.",
+        user_requests=items("request", 6),
+        constraints=items("constraint", 4),
+        references=items("reference", 8),
+        attempts=items("attempt", 6),
+    )
+
+    fitted, dropped = _fit_memory(memory, 400)
+
+    assert dropped > 0
+    assert estimate_tokens(memory_text(fitted)) <= 400
+    # References and attempts give way first; every constraint survives and
+    # the first request (the task) is never the one dropped.
+    assert len(fitted.constraints) == 4
+    assert fitted.user_requests[0].text.startswith("request 0:")
+    assert len(fitted.references) < 8
