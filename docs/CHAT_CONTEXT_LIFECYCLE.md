@@ -344,8 +344,9 @@ bounded transformations:
 
 * **Deterministic checkpoint.** The most recent provider response groups stay
   whole: at most eight, and only as many whole groups, newest first, as fit a
-  quarter of the model's input capacity (at least 2,000 estimated tokens), but
-  never fewer than the newest group. The token bound matters when a model
+  quarter of the model's working input capacity (at least 2,000 estimated
+  tokens), but never fewer than the newest group. The token bound matters
+  when a model
   batches several calls per response: counted in groups alone, five-call
   batches kept about forty steps out of every checkpoint, and they were
   cleared in place instead of folding into receipts. Older completed,

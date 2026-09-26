@@ -586,8 +586,13 @@ def test_a_large_window_clears_tool_results_at_the_working_ceiling(
     )
     assert (limits.binding_limit, limits.target_input_tokens) == ("ceiling", 12_000)
     assert limits.input_capacity > 900_000
-    # Results were cleared to stay near the ceiling, far below the window.
-    assert any(_cleared(r) for req in routing for r in req.tool_results)
+    # Results were folded into the checkpoint (the recent window is bounded
+    # by the working capacity too) or cleared, to stay near the ceiling, far
+    # below the window.
+    assert any(
+        _checkpointed(req) or any(_cleared(r) for r in req.tool_results)
+        for req in routing
+    )
     assert max(estimate_model_request(req) for req in routing) < 2 * 12_000
 
 
