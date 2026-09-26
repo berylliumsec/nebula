@@ -524,6 +524,10 @@ def test_a_new_turn_starts_with_the_notes_and_the_context_api_shows_them(
         "updated_at": notes.updated_at.isoformat(),
     }
     assert "WORKING NOTES" not in (noted.model_request.instructions or "")
+    # The assembly left room for the notes, and the meter counts them.
+    assert noted.context_reserved_tokens == plain.context_reserved_tokens + (
+        estimate_tokens("\n\n" + block)
+    )
     status = service.context_status(session.id)
     assert status.working_notes is not None
     assert status.working_notes.model_dump() == {
