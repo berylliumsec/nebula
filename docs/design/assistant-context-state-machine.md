@@ -30,6 +30,10 @@ stateDiagram-v2
     Direct --> Request: active messages + instructions
     Failed --> [*]: actionable error; originals retained
     Request --> Stored: answer saved as canonical message
+    Stored --> Precompact: answer saved and estimate >= 60% of target (background)
+    Precompact --> Ready: snapshot for the boundary the crossing turn would choose
+    Precompact --> Stored: below threshold, snapshot still serves, or failed (next turn compacts)
+    Compact --> Precompact: background compaction running; the turn waits for it
 ```
 
 `Stored` is durable; `Request` is a temporary projection. A new user turn
@@ -44,6 +48,10 @@ retrieved originals, follow the current message's own text; the
 instructions carry none of them. No canonical message is left out: moving the
 boundary compacts the messages it passes rather than dropping them. Pending
 approvals/recovery block a new user turn before this diagram begins.
+`Precompact` runs in the background after a saved answer, never inside a
+turn. Its snapshot waits until a turn crosses the target and reuses it; a turn
+that needs one while it runs waits for it, and one that arrives before it
+starts cancels it and compacts for itself.
 
 ## Continuing one provider turn
 
@@ -94,7 +102,7 @@ the model made this turn are cleared after its other results.
 
 | State | Authority and visible meaning | Valid next action |
 | --- | --- | --- |
-| `not_needed` | Core estimates saved conversation below the target; no snapshot required | Continue |
+| `not_needed` | Core estimates saved conversation below the target; it is sent whole, so no snapshot is reported even if one was prepared in the background | Continue |
 | `stale` | Active estimate needs compaction or an existing snapshot no longer fits | Send/continue and let Core reassemble; inspect limits if it fails |
 | `ready` | A sourced snapshot is available for the active projection; `quality` says whether it is complete, salvaged, or a degraded extract | Inspect saved memory or original transcript; continue |
 | `failed` | Latest required compaction failed on budget or capacity; original messages remain | Retry after resolving the budget or capacity error |

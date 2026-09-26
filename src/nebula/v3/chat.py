@@ -1096,15 +1096,21 @@ def _recent_tail_start(
     goal: int,
     instruction_tokens: int,
     stored: int,
+    growth: int = 0,
 ) -> int:
     """Where a request's recent, complete, user-led tail begins.
 
     The tail keeps two fifths of what the goal leaves after the instructions
     (at least the current message); the rest of the goal is for the memory,
     retrieved originals and headroom. Everything before it is archived.
+    ``growth`` is what the conversation is expected to add before the
+    request this boundary is for: that much less is kept now, so the tail
+    then is the one a compaction at that point would keep.
     """
 
-    tail_budget = max(sizes[-1], max(0, goal - instruction_tokens) * 2 // 5)
+    tail_budget = max(
+        sizes[-1], max(0, goal - instruction_tokens) * 2 // 5 - max(0, growth)
+    )
     start = len(sizes) - 1
     tail_tokens = sizes[-1]
     while start > 0 and tail_tokens + sizes[start - 1] <= tail_budget:
@@ -13611,8 +13617,8 @@ class ChatService:
 
         The estimate is the context meter's (conversation, instructions and
         the latest turn's tool reserve, calibrated). The boundary is the one
-        ``_model_context`` would choose with the next operator message
-        assumed as long as the last one.
+        ``_model_context`` would choose for the turn that crosses the target,
+        with each operator message assumed as long as the last one.
         """
 
         session = self.store.get(ChatSession, session_id)
@@ -13703,12 +13709,16 @@ class ChatService:
                     <= goal_tokens
                 ):
                     return None, "snapshot_serves"
+        # The snapshot first serves the turn that crosses the target, so the
+        # boundary is the one that turn would choose: what the conversation
+        # adds until then becomes that turn's tail, so less is kept now.
         start = _recent_tail_start(
             [*sizes, next_size],
             [*(message.role for message in messages), ChatRole.USER],
             goal=goal_tokens,
             instruction_tokens=estimate_tokens(instructions),
             stored=len(messages),
+            growth=goal_tokens - estimate_messages(forms, instructions) - next_size,
         )
         archived = messages[:start]
         if not archived:

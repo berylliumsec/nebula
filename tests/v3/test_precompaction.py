@@ -296,11 +296,12 @@ def test_a_goal_pays_for_its_background_compaction_and_one_it_cannot_afford_is_s
     before = asyncio.run(scenario())
 
     [snapshot] = _snapshots(store)
-    [compaction] = _compactions(provider)
+    compactions = _compactions(provider)
+    assert compactions
     # The goal is what the next turn continues, so it guides the memory ...
-    assert json.loads(compaction.messages[0].content)["objective"] == (
-        "Summarise the harbor rollout"
-    )
+    assert {
+        json.loads(request.messages[0].content)["objective"] for request in compactions
+    } == {"Summarise the harbor rollout"}
     # ... and pays for it, like a compaction its turn needed.
     assert snapshot.usage.total_tokens > 0
     assert (
