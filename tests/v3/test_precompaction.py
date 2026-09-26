@@ -368,3 +368,41 @@ def test_core_shutdown_cancels_a_background_compaction_and_persists_nothing(
     # Nothing half-done is stored: the next turn after a restart compacts
     # for itself.
     assert _snapshots(store) == []
+
+
+def test_a_turn_the_current_snapshot_still_serves_does_not_wait_for_the_next(
+    tmp_path,
+):
+    store, service, session, profile, provider = _chat(tmp_path, share=0.8)
+
+    async def scenario():
+        await _turn(service, session, profile, "Noted?")
+        await _background(service, session.id)
+        [first] = _snapshots(store)
+        # A long message crosses the target and is served by that snapshot;
+        # another as long would not fit beside it, so the next one is being
+        # prepared in the background, and stays unfinished here.
+        crossing, _ = await _turn(
+            service, session, profile, _long_question(profile, 0.45)
+        )
+        assert crossing.context_snapshot.id == first.id
+        provider.gate = asyncio.Event()
+        provider.entered = asyncio.Event()
+        running = service._precompactions.get(session.id)
+        assert running is not None
+        await asyncio.wait_for(provider.entered.wait(), 5)
+        # A short reply still fits beside the first snapshot: it is sent
+        # without waiting for the compaction still running.
+        short, _ = await asyncio.wait_for(
+            _turn(service, session, profile, "Thanks, go on."), 5
+        )
+        assert not running.task.done()
+        provider.gate.set()
+        await _background(service, session.id)
+        return first, short
+
+    first, short = asyncio.run(scenario())
+
+    assert short.context_snapshot is not None
+    assert short.context_snapshot.id == first.id
+    assert len(_snapshots(store)) == 2

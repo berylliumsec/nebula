@@ -13270,33 +13270,38 @@ class ChatService:
                     return retrieved
             return kept
 
-        if reuse_snapshot:
-            # A background compaction may be preparing the snapshot this
-            # request needs: waiting for it is shorter than compacting again.
-            await self._settle_precompaction(session.id)
         compactor = ContextCompactor(self.store)
-        latest = compactor.latest(
-            ContextOwnerType.CHAT_SESSION, session.id, session.engagement_id
-        )
-        if (
-            reuse_snapshot
-            and latest is not None
-            and latest.status == ContextSnapshotStatus.READY
-            and latest.memory is not None
+        owner = session
+
+        async def served_by_latest() -> (
+            tuple[list[ChatRequestMessage], ContextSnapshot] | None
         ):
-            # While every message after its boundary still fits beside its
-            # memory, the latest snapshot keeps serving: re-summarising the
-            # archive each time the tail advanced cost a compaction on every
-            # turn, and a moving boundary changed the request's opening bytes.
-            # It must cover exactly the messages it stands for, by content as
-            # well as identity, so an edited or retracted one compacts afresh.
+            """The request the latest snapshot serves, if it still does.
+
+            While every message after its boundary still fits beside its
+            memory, the latest snapshot keeps serving: re-summarising the
+            archive each time the tail advanced cost a compaction on every
+            turn, and a moving boundary changed the request's opening bytes.
+            It must cover exactly the messages it stands for, by content as
+            well as identity, so an edited or retracted one compacts afresh.
+            """
+
+            latest = compactor.latest(
+                ContextOwnerType.CHAT_SESSION, owner.id, owner.engagement_id
+            )
+            if (
+                latest is None
+                or latest.status != ContextSnapshotStatus.READY
+                or latest.memory is None
+            ):
+                return None
             covered = [
                 message
                 for message in stored_messages
                 if message.sequence <= latest.compacted_through
             ]
             start = len(covered)
-            if (
+            if not (
                 covered
                 and start < len(messages)
                 and messages[start].role == ChatRole.USER
@@ -13309,9 +13314,20 @@ class ChatService:
                 and source_digest(_chat_context_sources(covered))
                 == latest.source_sha256
             ):
-                reused = await fitted(latest, start)
-                if reused is not None:
-                    return reused, instructions, ChatTokenUsage(), latest, session
+                return None
+            reused = await fitted(latest, start)
+            return (reused, latest) if reused is not None else None
+
+        if reuse_snapshot:
+            served_now = await served_by_latest()
+            if served_now is None and await self._settle_precompaction(session.id):
+                # A background compaction was preparing the snapshot this
+                # request needs: waiting for it was shorter than compacting
+                # again.
+                served_now = await served_by_latest()
+            if served_now is not None:
+                reused, latest = served_now
+                return reused, instructions, ChatTokenUsage(), latest, session
 
         sizes = [_estimated_message_tokens(estimated_form(item)) for item in messages]
         roles = [message.role for message in messages]
@@ -13492,12 +13508,13 @@ class ChatService:
 
         state.task.add_done_callback(finished)
 
-    async def _settle_precompaction(self, session_id: str) -> None:
-        """Let a turn that needs a snapshot use the background compaction.
+    async def _settle_precompaction(self, session_id: str) -> bool:
+        """Let a turn that needs a new snapshot use the background compaction.
 
         One still waiting for a slot is cancelled (nothing was spent) and the
         turn compacts for itself; one already compacting is waited for, so
-        its snapshot is reused instead of being computed twice.
+        its snapshot is reused instead of being computed twice. True when the
+        turn waited for one.
         """
 
         running = self._precompactions.get(session_id)
@@ -13508,13 +13525,14 @@ class ChatService:
             or task.done()
             or task.get_loop() is not asyncio.get_running_loop()
         ):
-            return
+            return False
         if not running.started:
             task.cancel()
-            return
+            return False
         # asyncio.wait neither raises the compaction's outcome here nor
         # cancels it when this turn is stopped.
         await asyncio.wait({task})
+        return True
 
     async def _precompact(
         self,
