@@ -300,7 +300,12 @@ def test_bedrock_synthesis_declares_tools_without_a_tool_choice(monkeypatch, mod
     asyncio.run(provider.complete(_synthesis(model)))
 
     sent = bedrock.calls[0]
-    assert [tool["toolSpec"]["name"] for tool in sent["toolConfig"]["tools"]] == [
+    # A Claude model's tools also end with a cache point.
+    assert [
+        tool["toolSpec"]["name"]
+        for tool in sent["toolConfig"]["tools"]
+        if "cachePoint" not in tool
+    ] == [
         "lookup_asset",
         "finish_response",
     ]
@@ -357,7 +362,7 @@ def test_bedrock_declares_replayed_tools_when_history_arrives_without_tools(
         for message in sent["messages"]
         for block in message["content"]
     )
-    tools = sent["toolConfig"]["tools"]
+    tools = [tool for tool in sent["toolConfig"]["tools"] if "cachePoint" not in tool]
     assert [tool["toolSpec"]["name"] for tool in tools] == [
         "lookup_asset",
         "tool_output_search",

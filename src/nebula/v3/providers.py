@@ -635,6 +635,9 @@ class ModelUsage(BaseModel):
     # The part of ``input_tokens`` the route served from its prompt cache,
     # when it says; zero otherwise.
     cached_input_tokens: int = 0
+    # The part of ``input_tokens`` the route wrote to its prompt cache, when
+    # it says (Claude routes bill it above the uncached rate); zero otherwise.
+    cache_creation_input_tokens: int = 0
 
 
 # The validation context key under which an adapter hands its request to the
@@ -2181,16 +2184,20 @@ def _openai_usage(usage: Any) -> ModelUsage:
     prompt = _token_count(usage.get("prompt_tokens"))
     completion = _token_count(usage.get("completion_tokens"))
     details = usage.get("prompt_tokens_details")
+    details = details if isinstance(details, dict) else {}
     # OpenAI and OpenRouter report cache hits in the prompt details, DeepSeek
-    # in a field of its own.
-    cached = (
-        _token_count(details.get("cached_tokens")) if isinstance(details, dict) else 0
-    ) or _token_count(usage.get("prompt_cache_hit_tokens"))
+    # in a field of its own. OpenRouter reports a Claude route's cache writes
+    # there too; ``prompt_tokens`` already counts both.
+    cached = _token_count(details.get("cached_tokens")) or _token_count(
+        usage.get("prompt_cache_hit_tokens")
+    )
+    written = _token_count(details.get("cache_write_tokens"))
     return ModelUsage(
         input_tokens=prompt,
         output_tokens=completion,
         total_tokens=_token_count(usage.get("total_tokens")) or prompt + completion,
         cached_input_tokens=min(cached, prompt) if prompt else cached,
+        cache_creation_input_tokens=min(written, prompt) if prompt else written,
     )
 
 
@@ -2966,6 +2973,383 @@ def _openai_strict_schema(schema: Any) -> bool:
     return True
 
 
+# Provider prompt caching. OpenAI, DeepSeek, Gemini 2.5+, Grok and most other
+# routes reuse a repeated prompt prefix on their own. Claude reuses one only
+# up to an explicit breakpoint, at most four a request, natively, on Bedrock
+# and through OpenRouter, so those adapters mark where reusable prefixes end.
+# A marker changes no prompt bytes, and a prefix below the model's minimum is
+# served uncached rather than refused. Chat keeps the prefix stable between
+# requests; the breakpoints are what let Claude routes charge the cache-read
+# rate for it. ``options.prompt_caching: false`` on a profile switches the
+# markers off for an endpoint that refuses them.
+_CACHE_BREAKPOINTS = 4
+_EPHEMERAL_CACHE = {"type": "ephemeral"}
+_BEDROCK_CACHE_POINT = {"cachePoint": {"type": "default"}}
+# OpenAI documents no maximum length for ``prompt_cache_key``; a longer
+# session id is hashed to one that is safely short.
+_PROMPT_CACHE_KEY_MAX = 64
+
+
+def _prompt_caching(config: ProviderConfig) -> bool:
+    return config.options.get("prompt_caching", True) is not False
+
+
+def _anthropic_caches(config: ProviderConfig, model: str) -> bool:
+    """Every Claude model on the Messages API takes ``cache_control``.
+
+    Another model behind an Anthropic-compatible endpoint (DeepSeek, Z.ai)
+    caches on its own terms and is not sent it.
+    """
+
+    return _prompt_caching(config) and "claude" in _model_name(model)
+
+
+def _prompt_cache_key(config: ProviderConfig, request: ModelRequest) -> str | None:
+    """OpenAI's cache routing key: the chat session, whose requests share prefixes.
+
+    Only OpenAI itself is sent it; a strict OpenAI-compatible server answers
+    400 to a field it does not know.
+    """
+
+    if config.flavor != ProviderFlavor.OPENAI or not _prompt_caching(config):
+        return None
+    key = request.metadata.get("chat_session_id")
+    if not key:
+        return None
+    if len(key) > _PROMPT_CACHE_KEY_MAX:
+        return hashlib.sha256(key.encode()).hexdigest()
+    return key
+
+
+def _one_shot(request: ModelRequest) -> bool:
+    """A request nothing will send again as its prefix: one message, no tools.
+
+    Compaction, naming and other utility calls are sent once. Marking their
+    message would pay Claude's cache-write premium on tokens no later request
+    reads, so only their instructions (shared with every such call) are marked.
+    """
+
+    conversation = [message for message in request.messages if message.role != "system"]
+    return len(conversation) <= 1 and not request.tools and not request.tool_results
+
+
+def _cache_anchors(
+    roles: list[str],
+    conversation_end: int,
+    markable: Callable[[int], bool],
+    limit: int,
+) -> list[int]:
+    """Messages whose last block ends a prefix worth caching, most useful first.
+
+    ``roles`` are the payload's messages, the conversation (history and the
+    current operator message) first and then this turn's tool replay from
+    ``conversation_end``. In order:
+
+    1. The newest message: the step or turn after this one re-sends
+       everything up to here. Claude also looks for an earlier cached prefix
+       up to 20 blocks back from a breakpoint, which is how the previous
+       step's breakpoint is read.
+    2. The operator message before the current one. It stays put while the
+       current message gains a tool-history checkpoint and older tool results
+       are cleared to receipts, so those rewrites no longer re-bill the whole
+       conversation, and the next turn reads it back.
+    3. The current operator message, ahead of the tool replay, when a
+       breakpoint is still free.
+    """
+
+    anchors: list[int] = []
+    newest = next(
+        (index for index in reversed(range(len(roles))) if markable(index)), None
+    )
+    if newest is not None:
+        anchors.append(newest)
+    current = conversation_end - 1
+    earlier = next(
+        (
+            index
+            for index in reversed(range(max(current, 0)))
+            if roles[index] == "user" and markable(index)
+        ),
+        None,
+    )
+    if earlier is not None:
+        anchors.append(earlier)
+    if 0 <= current < len(roles) and roles[current] == "user" and markable(current):
+        anchors.append(current)
+    return list(dict.fromkeys(anchors))[: max(limit, 0)]
+
+
+def _anthropic_cache_block(block: Any) -> bool:
+    """Whether a Messages content block can carry ``cache_control``.
+
+    Thinking blocks cannot, and an empty text block is refused with one.
+    """
+
+    if not isinstance(block, dict):
+        return False
+    kind = block.get("type")
+    if kind in {"thinking", "redacted_thinking"}:
+        return False
+    return kind != "text" or bool(block.get("text"))
+
+
+def _anthropic_cache_markable(message: dict[str, Any]) -> bool:
+    content = message.get("content")
+    if isinstance(content, str):
+        return bool(content)
+    return isinstance(content, list) and any(
+        _anthropic_cache_block(block) for block in content
+    )
+
+
+def _mark_anthropic_message(message: dict[str, Any]) -> None:
+    """Put a breakpoint on the message's last block that can carry one."""
+
+    content = message["content"]
+    if isinstance(content, str):
+        message["content"] = [
+            {"type": "text", "text": content, "cache_control": dict(_EPHEMERAL_CACHE)}
+        ]
+        return
+    index = next(
+        index
+        for index in reversed(range(len(content)))
+        if _anthropic_cache_block(content[index])
+    )
+    # A copy: thinking and tool blocks can be shared with the replay state.
+    message["content"] = [
+        *content[:index],
+        {**content[index], "cache_control": dict(_EPHEMERAL_CACHE)},
+        *content[index + 1 :],
+    ]
+
+
+def _mark_anthropic_cache(
+    payload: dict[str, Any], request: ModelRequest, conversation_end: int
+) -> None:
+    """Messages API breakpoints: tools, system, then the conversation anchors.
+
+    The last tool definition caches the tools alone, which still pays off
+    when the instructions change between turns; the system block caches tools
+    and instructions together.
+    """
+
+    used = 0
+    tools = payload.get("tools")
+    if tools:
+        tools[-1] = {**tools[-1], "cache_control": dict(_EPHEMERAL_CACHE)}
+        used += 1
+    system = payload.get("system")
+    if isinstance(system, str) and system:
+        payload["system"] = [
+            {"type": "text", "text": system, "cache_control": dict(_EPHEMERAL_CACHE)}
+        ]
+        used += 1
+    if _one_shot(request):
+        return
+    messages = payload["messages"]
+    for index in _cache_anchors(
+        [str(message.get("role")) for message in messages],
+        conversation_end,
+        lambda index: _anthropic_cache_markable(messages[index]),
+        _CACHE_BREAKPOINTS - used,
+    ):
+        _mark_anthropic_message(messages[index])
+
+
+def _bedrock_caches(config: ProviderConfig, model: str) -> bool:
+    """Whether Converse takes ``cachePoint`` blocks for this model.
+
+    Claude 4 and later take them in tools, system and messages. Amazon Nova
+    takes them only in system and messages, caches at most 20K tokens, and
+    already caches every text prompt implicitly at the cache-read rate, so it
+    is left to that. Other families reject the block.
+    """
+
+    if not _prompt_caching(config):
+        return False
+    claude = _claude_model(model)
+    return claude is not None and claude[1] is not None and claude[1] >= (4, 0)
+
+
+def _mark_bedrock_cache(
+    kwargs: dict[str, Any], request: ModelRequest, conversation_end: int
+) -> None:
+    """Converse cache points in the positions the Messages API gets them.
+
+    A cache point is a block of its own after the content it closes. Marked
+    before adjacent same-role messages merge, so each stays at the end of the
+    message it was chosen for.
+    """
+
+    used = 0
+    tool_config = kwargs.get("toolConfig")
+    if isinstance(tool_config, dict) and tool_config.get("tools"):
+        tool_config["tools"] = [*tool_config["tools"], dict(_BEDROCK_CACHE_POINT)]
+        used += 1
+    if kwargs.get("system"):
+        kwargs["system"] = [*kwargs["system"], dict(_BEDROCK_CACHE_POINT)]
+        used += 1
+    if _one_shot(request):
+        return
+    messages = kwargs["messages"]
+    for index in _cache_anchors(
+        [str(message.get("role")) for message in messages],
+        conversation_end,
+        lambda index: any(
+            block != {"text": ""} for block in messages[index]["content"]
+        ),
+        _CACHE_BREAKPOINTS - used,
+    ):
+        messages[index] = {
+            **messages[index],
+            "content": [*messages[index]["content"], dict(_BEDROCK_CACHE_POINT)],
+        }
+
+
+def _openrouter_caches(config: ProviderConfig, model: str) -> bool:
+    """Claude through OpenRouter, which passes ``cache_control`` on to it.
+
+    Gemini 2.5 and later cache implicitly with no write or storage charge,
+    where an explicit breakpoint would add both; every other upstream caches
+    on its own. A generic OpenAI-compatible server is never sent the field.
+    """
+
+    return (
+        config.flavor == ProviderFlavor.OPENROUTER
+        and _prompt_caching(config)
+        and model.casefold().lstrip("~").startswith("anthropic/")
+    )
+
+
+def _openrouter_cache_markable(message: dict[str, Any]) -> bool:
+    # OpenRouter documents breakpoints in system and user content. Tool
+    # results reach Claude as user content, and a breakpoint on a tool
+    # message's text part is honoured (a later step reads through it).
+    if message.get("role") not in {"system", "user", "tool"}:
+        return False
+    content = message.get("content")
+    if isinstance(content, str):
+        return bool(content)
+    return isinstance(content, list) and any(
+        isinstance(part, dict) and part.get("type") == "text" and part.get("text")
+        for part in content
+    )
+
+
+def _mark_openrouter_message(message: dict[str, Any]) -> None:
+    content = message["content"]
+    if isinstance(content, str):
+        message["content"] = [
+            {"type": "text", "text": content, "cache_control": dict(_EPHEMERAL_CACHE)}
+        ]
+        return
+    index = next(
+        index
+        for index in reversed(range(len(content)))
+        if isinstance(content[index], dict)
+        and content[index].get("type") == "text"
+        and content[index].get("text")
+    )
+    message["content"] = [
+        *content[:index],
+        {**content[index], "cache_control": dict(_EPHEMERAL_CACHE)},
+        *content[index + 1 :],
+    ]
+
+
+def _mark_openrouter_cache(
+    payload: dict[str, Any], request: ModelRequest, conversation_end: int
+) -> None:
+    """Chat Completions content-part breakpoints for Claude on OpenRouter.
+
+    OpenRouter documents none on tool definitions; the system breakpoint
+    covers them, since Claude renders tools ahead of the system prompt.
+    """
+
+    messages = payload["messages"]
+    used = 0
+    leading = 0
+    while leading < len(messages) and messages[leading].get("role") == "system":
+        leading += 1
+    if leading and _openrouter_cache_markable(messages[leading - 1]):
+        _mark_openrouter_message(messages[leading - 1])
+        used += 1
+    if _one_shot(request):
+        return
+    for index in _cache_anchors(
+        [str(message.get("role")) for message in messages],
+        conversation_end,
+        lambda index: index >= leading and _openrouter_cache_markable(messages[index]),
+        _CACHE_BREAKPOINTS - used,
+    ):
+        _mark_openrouter_message(messages[index])
+
+
+def _anthropic_usage(usage: Any) -> ModelUsage:
+    """Messages API usage with ``input_tokens`` meaning the whole prompt.
+
+    Anthropic reports cache reads and writes beside ``input_tokens``, which
+    then counts only the uncached remainder. Chat budgets, goals, context
+    calibration and cost estimates read ``input_tokens`` as the prompt size,
+    as OpenAI and OpenRouter report it, so the three are summed.
+    """
+
+    values = usage if isinstance(usage, dict) else {}
+    read = _token_count(values.get("cache_read_input_tokens"))
+    written = _token_count(values.get("cache_creation_input_tokens"))
+    prompt = _token_count(values.get("input_tokens")) + read + written
+    output = _token_count(values.get("output_tokens"))
+    return ModelUsage(
+        input_tokens=prompt,
+        output_tokens=output,
+        total_tokens=prompt + output,
+        cached_input_tokens=read,
+        cache_creation_input_tokens=written,
+    )
+
+
+def _bedrock_usage(usage: Any) -> ModelUsage:
+    """Converse usage, normalized as :func:`_anthropic_usage` is.
+
+    With caching, ``inputTokens`` counts only tokens neither read from nor
+    written to the cache (AWS: total input = inputTokens +
+    cacheReadInputTokens + cacheWriteInputTokens).
+    """
+
+    values = usage if isinstance(usage, dict) else {}
+    read = _token_count(values.get("cacheReadInputTokens"))
+    written = _token_count(values.get("cacheWriteInputTokens"))
+    prompt = _token_count(values.get("inputTokens")) + read + written
+    output = _token_count(values.get("outputTokens"))
+    return ModelUsage(
+        input_tokens=prompt,
+        output_tokens=output,
+        total_tokens=max(_token_count(values.get("totalTokens")), prompt + output),
+        cached_input_tokens=read,
+        cache_creation_input_tokens=written,
+    )
+
+
+def _responses_usage(usage: Any) -> ModelUsage:
+    """Responses usage; ``input_tokens`` already includes cached tokens."""
+
+    values = usage if isinstance(usage, dict) else {}
+    prompt = _token_count(values.get("input_tokens"))
+    output = _token_count(values.get("output_tokens"))
+    details = values.get("input_tokens_details")
+    details = details if isinstance(details, dict) else {}
+    read = _token_count(details.get("cached_tokens"))
+    written = _token_count(details.get("cache_write_tokens"))
+    return ModelUsage(
+        input_tokens=prompt,
+        output_tokens=output,
+        total_tokens=_token_count(values.get("total_tokens")) or prompt + output,
+        cached_input_tokens=min(read, prompt) if prompt else read,
+        cache_creation_input_tokens=min(written, prompt) if prompt else written,
+    )
+
+
 class OpenAIResponsesProvider(ModelProvider):
     """OpenAI Responses API adapter.
 
@@ -3071,6 +3455,9 @@ class OpenAIResponsesProvider(ModelProvider):
             }
         if request.metadata:
             payload["metadata"] = request.metadata
+        cache_key = _prompt_cache_key(self.config, request)
+        if cache_key:
+            payload["prompt_cache_key"] = cache_key
         return payload
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
@@ -3177,7 +3564,6 @@ class OpenAIResponsesProvider(ModelProvider):
         if refused and not "".join(text_parts).strip():
             raise ProviderRefusalError("refusal")
         incomplete = data.get("incomplete_details")
-        usage = data.get("usage") or {}
         return _adapter_response(
             request,
             provider_id=self.config.id,
@@ -3185,14 +3571,7 @@ class OpenAIResponsesProvider(ModelProvider):
             text="\n\n".join(text_parts),
             reasoning="\n\n".join(part for part in summaries if part.strip()),
             tool_calls=calls,
-            usage=ModelUsage(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                total_tokens=usage.get(
-                    "total_tokens",
-                    usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
-                ),
-            ),
+            usage=_responses_usage(data.get("usage")),
             # "incomplete" alone hides the output limit chat's recovery acts on.
             finish_reason=(
                 incomplete.get("reason") if isinstance(incomplete, dict) else None
@@ -3647,6 +4026,7 @@ class OpenAICompatibleProvider(ModelProvider):
             "model": model,
             "messages": [_openai_chat_message(message) for message in request.messages],
         }
+        conversation_end = len(payload["messages"])
         # Each routing response goes back as the one message that issued its
         # calls; its reasoning is attached per flavor once the payload is built.
         replayed: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
@@ -3697,6 +4077,7 @@ class OpenAICompatibleProvider(ModelProvider):
             )
         if instructions:
             payload["messages"].insert(0, {"role": "system", "content": instructions})
+            conversation_end += 1
         openrouter = self.config.flavor == ProviderFlavor.OPENROUTER
         if request.max_output_tokens:
             # OpenAI's reasoning families answer 400 to max_tokens ("use
@@ -3832,6 +4213,11 @@ class OpenAICompatibleProvider(ModelProvider):
         _replay_reasoning(payload, replayed, self.config.flavor, model)
         if self.config.flavor == ProviderFlavor.MISTRAL or _MISTRAL_MODEL.search(model):
             _mistral_tool_call_ids(payload["messages"])
+        if _openrouter_caches(self.config, model):
+            _mark_openrouter_cache(payload, request, conversation_end)
+        cache_key = _prompt_cache_key(self.config, request)
+        if cache_key:
+            payload["prompt_cache_key"] = cache_key
         return payload
 
     async def complete(self, request: ModelRequest) -> ModelResponse:
@@ -4684,6 +5070,7 @@ class AnthropicProvider(ModelProvider):
                 if message.role != "system"
             ],
         }
+        conversation_end = len(payload["messages"])
         for batch, state in _replayed_batches(request, self.config.id, model):
             # Thinking goes back unchanged ahead of the calls it led to, and
             # all of a batch's results in one user message: split results
@@ -4783,6 +5170,8 @@ class AnthropicProvider(ModelProvider):
                 for name in _replayed_wire_names(request, wire_names)
             ]
             payload["tool_choice"] = {"type": "none"}
+        if _anthropic_caches(self.config, model):
+            _mark_anthropic_cache(payload, request, conversation_end)
         async with self._client(
             self._headers(), timeout=_native_http_timeout(self.config)
         ) as client:
@@ -4843,7 +5232,6 @@ class AnthropicProvider(ModelProvider):
             calls = []
             if not "".join(text_parts).strip():
                 raise _anthropic_refusal(data)
-        usage = data.get("usage") or {}
         return _adapter_response(
             request,
             provider_id=self.config.id,
@@ -4851,12 +5239,7 @@ class AnthropicProvider(ModelProvider):
             text="".join(text_parts),
             reasoning="\n\n".join(thoughts),
             tool_calls=calls,
-            usage=ModelUsage(
-                input_tokens=usage.get("input_tokens", 0),
-                output_tokens=usage.get("output_tokens", 0),
-                total_tokens=usage.get("input_tokens", 0)
-                + usage.get("output_tokens", 0),
-            ),
+            usage=_anthropic_usage(data.get("usage")),
             finish_reason=data.get("stop_reason"),
             provider_request_id=data.get("id"),
             raw=data,
@@ -5281,6 +5664,8 @@ class GeminiProvider(ModelProvider):
                 input_tokens=usage.get("promptTokenCount", 0),
                 output_tokens=usage.get("candidatesTokenCount", 0),
                 total_tokens=usage.get("totalTokenCount", 0),
+                # Implicit cache hits, already part of promptTokenCount.
+                cached_input_tokens=_token_count(usage.get("cachedContentTokenCount")),
             ),
             finish_reason=candidate.get("finishReason"),
             provider_request_id=data.get("responseId"),
@@ -5437,6 +5822,7 @@ class BedrockProvider(ModelProvider):
                 if msg.role != "system"
             ],
         }
+        conversation_end = len(kwargs["messages"])
         for batch, _state in _replayed_batches(request, self.config.id, model):
             # One assistant message with the batch's calls, then one user
             # message with all of their results.
@@ -5486,7 +5872,6 @@ class BedrockProvider(ModelProvider):
                     },
                 ]
             )
-        kwargs["messages"] = _bedrock_alternating(kwargs["messages"])
         systems = [str(m.content) for m in request.messages if m.role == "system"]
         if request.instructions:
             systems.append(request.instructions)
@@ -5570,6 +5955,9 @@ class BedrockProvider(ModelProvider):
             inference["temperature"] = request.temperature
         if inference:
             kwargs["inferenceConfig"] = inference
+        if _bedrock_caches(self.config, model):
+            _mark_bedrock_cache(kwargs, request, conversation_end)
+        kwargs["messages"] = _bedrock_alternating(kwargs["messages"])
 
         def invoke(read_timeout: float) -> dict[str, Any]:
             # botocore would otherwise resend a whole generation up to five
@@ -5661,11 +6049,7 @@ class BedrockProvider(ModelProvider):
             text="".join(block.get("text", "") for block in blocks),
             reasoning="\n\n".join(thoughts),
             tool_calls=calls,
-            usage=ModelUsage(
-                input_tokens=usage.get("inputTokens", 0),
-                output_tokens=usage.get("outputTokens", 0),
-                total_tokens=usage.get("totalTokens", 0),
-            ),
+            usage=_bedrock_usage(usage),
             finish_reason=data.get("stopReason"),
             provider_request_id=(data.get("ResponseMetadata") or {}).get("RequestId"),
             raw=data,

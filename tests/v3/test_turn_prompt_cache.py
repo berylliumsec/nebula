@@ -169,7 +169,11 @@ def _routing(index: int) -> ModelResponse:
             )
         ],
         usage=ModelUsage(
-            input_tokens=100, output_tokens=5, total_tokens=105, cached_input_tokens=90
+            input_tokens=100,
+            output_tokens=5,
+            total_tokens=105,
+            cached_input_tokens=90,
+            cache_creation_input_tokens=6,
         ),
         finish_reason="tool_calls",
         reasoning_state=_state(index),
@@ -344,8 +348,9 @@ def test_routing_requests_extend_each_other_between_checkpoint_advances(tmp_path
             assert message["reasoning"] == _state(index)["reasoning"]
     # Nothing writes the unread checkpoint pointer onto the turn any more.
     assert turn.checkpoint_through_step == 0
-    # The provider's cache hits are counted with the turn's usage.
+    # The provider's cache hits and writes are counted with the turn's usage.
     assert turn.usage.cached_input_tokens == 90 * STEPS
+    assert turn.usage.cache_creation_input_tokens == 6 * STEPS
 
 
 def test_failed_steps_fold_outside_the_recent_window(tmp_path):

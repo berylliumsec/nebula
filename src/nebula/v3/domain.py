@@ -3321,11 +3321,15 @@ class ChatCitation(NebulaModel):
 
 
 class ChatTokenUsage(NebulaModel):
+    # The whole prompt, cached parts included: provider adapters normalize
+    # routes that count cache reads and writes apart (Anthropic, Bedrock).
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     total_tokens: int = Field(default=0, ge=0)
     # The part of ``input_tokens`` the provider served from its prompt cache.
     cached_input_tokens: int = Field(default=0, ge=0)
+    # The part of ``input_tokens`` the provider wrote to its prompt cache.
+    cache_creation_input_tokens: int = Field(default=0, ge=0)
 
 
 class ScopeImportCandidate(NebulaModel):
