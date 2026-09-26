@@ -1,10 +1,10 @@
 {
-  "change_digest": "04d3f89e658ae3166a3735b1aa0c082304baba6236d5aea2928ed03cf0b98807",
-  "reviewed_by": "Claude focused review for ctx-summary-compose",
-  "reason": "context.py: when the compactor's answer has items but no summary, compose one from the first operator request and latest current state (or the best-ranked item) instead of storing a placeholder string, and no longer count it as a dropped item. Selected: the compactor tests (new composed-summary tests); every file that drives the compactor end to end: chat context assembly, background precompaction (stream P), missions (orchestration), chat leftovers, turn outcome history (repair replay) and deepseek/glm compat (compactor requests). Counts from pytest --collect-only.",
-  "exclusions": "No frontend, native or Playwright tests: no UI or Rust change; the Working context panel renders the stored summary text unchanged. Provider adapters and tool-history code are untouched. No full suite.",
+  "change_digest": "9074a4029a6f4314620cdd3da37f04bdcebddeac6719d8c9e5d4175392da4bc1",
+  "reviewed_by": "Claude focused review for ctx-knowledge-rerank",
+  "reason": "Stream Y: project-knowledge relevance. New knowledge_rerank.py (pinned local cross-encoder mxbai-rerank-xsmall-v1: HTTPS download by commit with size+SHA-256 verification, background preparation, onnxruntime scoring, calibrated relevance gate with a paraphrase rescue route and a no-subject pre-gate); ChatService._retrieve gates the top candidates through it (fallback: unchanged ranking), prepare_async skips planning for subject-less messages and runs retrieval in a worker thread; ChromaKnowledgeIndex carries the reranker, reports it in index status, starts it after indexing, and records which query matched each chunk; the CLI wires it with NEBULA_V3_KNOWLEDGE_MODELS_DIR / NEBULA_V3_KNOWLEDGE_RERANKER. Selected: the new reranker tests (gate boundaries, variant retry, download/verification/HTTPS/retry, chat and harness integration, fallback), the knowledge index and ingestion tests (status contract updated), chat and reference-material tests (retrieval paths and the no-subject gate), conversation.search tests (share ChromaKnowledgeIndex.embed), turn preflight latency and chat queue (knowledge retrieval during preparation), and the harness knowledge tests (harness_knowledge_search/context). Counts from pytest --collect-only.",
+  "exclusions": "No frontend, native or Playwright tests: no UI, Rust or visible layout change (the index-status response gains an optional reranker object the UI ignores). The real-model calibration test (test_the_pinned_model_meets_its_calibration) is skipped unless NEBULA_TEST_RERANKER_DIR holds the pinned files, so CI never downloads the model; it was run locally (lexical 14/14, paraphrase 12/15, unrelated 13/13, hard negatives 4/8). Operator help retrieval, missions and conversation.search ranking are unchanged. Real-Core evidence is in the PR body. No full suite.",
   "expected_tests": {
-    "python": 208,
+    "python": 184,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -15,13 +15,19 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_context.py",
-    "tests/v3/test_chat_context_assembly.py",
-    "tests/v3/test_orchestration.py",
-    "tests/v3/test_chat_leftovers.py",
-    "tests/v3/test_turn_outcome_history.py",
-    "tests/v3/test_deepseek_glm_compat.py",
-    "tests/v3/test_precompaction.py"
+    "tests/v3/test_knowledge_rerank.py",
+    "tests/v3/test_knowledge_index.py",
+    "tests/v3/test_knowledge.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_reference_material.py",
+    "tests/v3/test_conversation_search.py",
+    "tests/v3/test_turn_preflight_latency.py",
+    "tests/v3/test_chat_queue.py",
+    "tests/v3/test_harnesses.py::test_harness_gateway_queries_scoped_knowledge_with_citations",
+    "tests/v3/test_harnesses.py::test_harness_enables_available_knowledge_runtime_before_sources_exist",
+    "tests/v3/test_harnesses.py::test_remote_harness_knowledge_search_excludes_local_only_sources",
+    "tests/v3/test_harnesses.py::test_harness_chat_enables_direct_knowledge_with_privacy_confirmation",
+    "tests/v3/test_harnesses.py::test_disabled_nebula_knowledge_does_not_suppress_installed_skills"
   ],
   "frontend": [],
   "native": [],
