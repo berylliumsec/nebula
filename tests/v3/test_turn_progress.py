@@ -520,3 +520,50 @@ def test_without_a_goal_the_turn_request_guides_the_memory(tmp_path):
     assert provider.compactions
     prompt = json.loads(str(provider.compactions[0].messages[0].content))
     assert prompt["objective"] == "Use the safe tool once."
+
+
+def test_a_deeper_fold_carries_memory_of_the_block_it_folds(tmp_path):
+    """A route that no longer fits folds all but its newest step at once.
+
+    The steps it folds are summarised first, so the checkpoint that takes
+    them carries their memory, not only the steps the default window folds.
+    """
+
+    from tests.v3.test_midturn_compaction import (
+        ANSWER as MIDTURN_ANSWER,
+        ProbeBroker,
+        ThinkingProvider,
+        _turn,
+        _turn_requests as _midturn_requests,
+    )
+
+    broker = ProbeBroker()
+    provider = ThinkingProvider(calls=12)
+    store, service, prepared = _turn(tmp_path, provider, broker, history=2)
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == MIDTURN_ANSWER
+    (synthesis,) = [
+        request
+        for request in _midturn_requests(provider)
+        if request.tool_choice == ToolChoice.NONE
+    ]
+    checkpoint = _checkpoint(synthesis)
+    assert checkpoint is not None
+    folded = {
+        step
+        for first, last in checkpoint["covered_steps"]
+        for step in range(first, last + 1)
+    }
+    progress = checkpoint["progress"]
+    covered = {
+        step
+        for first, last in progress["covered_steps"]
+        for step in range(first, last + 1)
+    }
+    assert covered <= folded
+    # Steps inside the default recent window (the last eight) were folded by
+    # the deeper fold, and the memory covers them too.
+    assert max(covered) >= 12 - 8
+    assert provider.compactions

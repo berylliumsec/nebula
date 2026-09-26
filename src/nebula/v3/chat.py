@@ -7406,7 +7406,11 @@ class ChatService:
                             components = prepared.tool_components or components
                             continue
                         # The replayed steps themselves are what no longer
-                        # fit: all but the newest fold into the checkpoint.
+                        # fit: all but the newest fold into the checkpoint,
+                        # which carries their progress memory.
+                        await self._refresh_turn_progress(
+                            prepared, turn, recent_groups=1
+                        )
                         if self._fold_deeper(
                             prepared,
                             turn,
@@ -8030,6 +8034,7 @@ class ChatService:
             for keep in (1, 0):
                 if fits_capacity(final_request):
                     break
+                await self._refresh_turn_progress(prepared, turn, recent_groups=keep)
                 if self._fold_deeper(
                     prepared,
                     turn,
@@ -8958,7 +8963,11 @@ class ChatService:
         return None
 
     async def _refresh_turn_progress(
-        self, prepared: PreparedChat, turn: ChatTurn
+        self,
+        prepared: PreparedChat,
+        turn: ChatTurn,
+        *,
+        recent_groups: int = RECENT_RESPONSE_GROUPS,
     ) -> None:
         """Summarise a long turn's folded steps before its next request is built.
 
@@ -8967,7 +8976,9 @@ class ChatService:
         or else the turn's request; the next checkpoint the request advances
         carries it, so the memory changes only when the checkpoint does. It is
         charged to the goal like conversation compaction. A failure leaves the
-        checkpoint with its receipts alone and the turn going.
+        checkpoint with its receipts alone and the turn going. Before a deeper
+        fold (``_fold_deeper``), ``recent_groups`` is that fold's window, so the
+        block it moves into the checkpoint at once is summarised first.
         """
 
         limits = resolve_context_limits(
@@ -8975,7 +8986,9 @@ class ChatService:
             model=prepared.resolved_model,
             requested_output_tokens=prepared.model_request.max_output_tokens,
         )
-        sources = self.turn_progress.due(turn, digest_trigger(limits.input_capacity))
+        sources = self.turn_progress.due(
+            turn, digest_trigger(limits.input_capacity), recent_groups
+        )
         if not sources:
             return
         goal_id = turn.goal_id or self.subagents.child_goal_id(turn)

@@ -30,7 +30,7 @@ from .context import (
     estimate_tokens,
     fit_memory,
 )
-from .chat_turn_ledger import ChatTurnLedger
+from .chat_turn_ledger import RECENT_RESPONSE_GROUPS, ChatTurnLedger
 from .domain import (
     ChatTurn,
     ContextMemory,
@@ -315,7 +315,10 @@ class TurnProgress:
         return snapshot
 
     def due(
-        self, turn: ChatTurn, trigger: int = DIGEST_TOKEN_TRIGGER
+        self,
+        turn: ChatTurn,
+        trigger: int = DIGEST_TOKEN_TRIGGER,
+        recent_groups: int = RECENT_RESPONSE_GROUPS,
     ) -> list[ContextSource]:
         """The sources of a refresh the turn needs now, or ``[]``.
 
@@ -323,10 +326,12 @@ class TurnProgress:
         less those the last attempt already covered, reaches ``trigger``
         (``digest_trigger``). The sources are every foldable step, so the
         memory stays one account of the whole turn; the previous memory
-        stands for those it covers.
+        stands for those it covers. ``recent_groups`` is the recent window a
+        deeper fold keeps (``ChatService._fold_deeper``), so the memory also
+        covers the steps such a fold moves into the checkpoint at once.
         """
 
-        foldable = self.ledger.foldable(turn)
+        foldable = self.ledger.foldable(turn, recent_groups)
         if not foldable:
             return []
         self.latest(turn)
