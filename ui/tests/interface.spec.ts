@@ -11716,6 +11716,191 @@ test("stabilization continue as mission moves to the conversation actions menu",
   await expect(item).toBeFocused();
 });
 
+// The Working context readout in Conversation details (Figma "Working context
+// memory", frames W1–W3 and P1). Core's context status is mocked per state.
+function workingContextStatus(state: "complete" | "degraded") {
+  const reference = (sequence: number) => ({ source_kind: "chat_message", source_id: `ctx-message-${sequence}`, sequence });
+  const cited = (text: string) => ({ text, sources: [reference(3)] });
+  const sources = Array.from({ length: 23 }, (_, index) => reference(index + 1));
+  const degraded = state === "degraded";
+  return {
+    owner_type: "chat_session",
+    owner_id: "ctx-chat",
+    status: "ready",
+    context_window: 128000,
+    max_output_tokens: 8000,
+    target_input_tokens: 91500,
+    capacity_source: "model_catalog",
+    estimated_input_tokens: 71240,
+    estimate_calibration: 1.12,
+    quality: state,
+    last_provider_request: {
+      instructions: 4200, conversation: 58000, tool_schemas: 6100, tool_results: 0, other: 0,
+      estimated_total: 68300, reported_input_tokens: 68912, reported_cached_input_tokens: 42036, attempt: 1,
+    },
+    compacted_through: 42,
+    source_references: sources,
+    working_notes: {
+      content: [
+        "## Findings",
+        "- 10.20.0.14:443 accepts TLS 1.0",
+        "- 10.20.0.22:8443 self-signed, expires 2026-10-02",
+        "- Evidence: `/home/op/scans/tls-2026-09-26/listeners/10.20.0.22-8443-certificate-chain-with-intermediates.pem`",
+        "## Todo",
+        "- [x] Sweep 10.20.0.0/24",
+        "- [x] TLS on .14, .22 … .29",
+        "- [ ] TLS on .31:8443, .33:443",
+        "- [ ] Ask whether .40 is in scope",
+      ].join("\n"),
+      revision: 6,
+      updated_at: new Date(Date.now() - 2 * 60_000).toISOString(),
+      turn_id: "ctx-turn-9",
+    },
+    snapshot: {
+      ...entity,
+      id: "ctx-snapshot",
+      owner_type: "chat_session",
+      owner_id: "ctx-chat",
+      version: 3,
+      status: "ready",
+      compacted_through: 42,
+      quality: state,
+      dropped_items: 0,
+      memory: degraded ? {
+        summary: "Automatic summarisation failed; earlier messages remain searchable.",
+        user_requests: [cited("Map the exposed services on 10.20.0.0/24 and check TLS on each open port.")],
+        references: [cited("10.20.0.0/24"), cited("10.20.0.31:8443")],
+      } : {
+        summary: "Reviewing exposed services on the lab range and testing TLS on every open listener; sweep finished, TLS checks two-thirds done.",
+        user_requests: [cited("Map the exposed services on 10.20.0.0/24 and check TLS on each open port."), cited("Skip hosts outside the lab VLAN.")],
+        current_state: [cited("TLS checked on 12 of 17 listeners. Next: 10.20.0.31:8443, then 10.20.0.33:443.")],
+        decisions: [cited("Use testssl.sh rather than sslyze for the remaining hosts.")],
+        constraints: [cited("Read-only scanning; no exploitation.")],
+        confirmed_facts: [cited("10.20.0.14:443 still accepts TLS 1.0.")],
+        attempts: [cited("sslyze against 10.20.0.22 timed out twice; testssl.sh succeeded.")],
+        corrections: [],
+        references: [cited("/home/op/scans/tls-2026-09-26.json — combined TLS results")],
+        open_questions: [cited("Is 10.20.0.40 in scope?")],
+      },
+      source_references: sources,
+      provider_profile_id: "provider-a",
+      model: "model-a",
+      prompt_version: "nebula-context-v2",
+      usage: { input_tokens: 900, output_tokens: 300, total_tokens: 1200 },
+      cost_usd: 0,
+    },
+  };
+}
+
+async function openWorkingContext(page: Page, state: "complete" | "degraded") {
+  await installReasoningProvider(page);
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{ ...entity, id: "ctx-chat", engagement_id: "scratch-project", title: "Lab TLS review", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/ctx-chat/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/ctx-chat/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else if (path.endsWith("/chat/sessions/ctx-chat/context")) {
+      await route.fulfill({ json: workingContextStatus(state) });
+    } else await route.fallback();
+  });
+  await page.goto("/?view=chat&session=ctx-chat&drawer=context");
+  const drawer = page.getByRole("complementary", { name: "Session inspector" })
+    .or(page.getByRole("dialog", { name: "Conversation details" }));
+  await expect(drawer).toBeVisible();
+  await expect(drawer.getByRole("heading", { name: "Working context" })).toBeVisible();
+  return drawer;
+}
+
+async function expectWorkingContextUsable(page: Page, drawer: Locator, phone: boolean) {
+  // Disclosure rows are touch targets in the details sheet.
+  if (phone) {
+    for (const height of await drawer.locator(".session-memory > summary").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().height))) {
+      expectTouchTarget(height, "disclosure row height");
+    }
+  }
+  const overflow = await drawer.evaluate(element => element.scrollWidth - element.clientWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+  expect(await page.locator("body").evaluate(body => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
+  expect((await new AxeBuilder({ page }).include(".session-inspector").analyze()).violations).toEqual([]);
+}
+
+test("working context panel summarises the calibrated meter and saved conversation memory", async ({ page }, testInfo) => {
+  const drawer = await openWorkingContext(page, "complete");
+  const phone = (page.viewportSize()?.width ?? 1440) <= 760;
+
+  // W1: one status line, the bar, and collapsed disclosures that say what they hold.
+  const status = drawer.locator(".session-context-summary");
+  await expect(status.locator("strong")).toHaveText(/^ready$/i);
+  await expect(status.getByText("71,240 of 91,500 target input tokens · calibrated from provider usage · exact model catalog")).toBeVisible();
+  await expect(drawer.getByLabel("78 percent of target input used")).toBeVisible();
+  await expect(drawer.getByText("Compacted through message 42. The original messages are unchanged and searchable.")).toBeVisible();
+  await expect(drawer.getByText("The meter estimates the next request: conversation, instructions and tool definitions, corrected by the input tokens the provider reported last time.")).toBeVisible();
+  await expect(drawer.getByText(/excludes tools/)).toHaveCount(0);
+  const memory = drawer.locator("details", { has: page.locator("summary", { hasText: "Inspect saved memory" }) });
+  const notes = drawer.locator("details", { has: page.locator("summary", { hasText: "Agent notes" }) });
+  const lastRequest = drawer.locator("details", { has: page.locator("summary", { hasText: "Last provider request" }) });
+  await expect(memory.locator("summary")).toHaveText("Inspect saved memory · 9 sections, 23 sources");
+  await expect(notes.locator("summary")).toHaveText("Agent notes · updated 2 min ago");
+  await expect(lastRequest.locator("summary")).toHaveText("Last provider request · 68,912 reported · 61% cached");
+  for (const disclosure of [memory, notes, lastRequest]) await expect(disclosure).not.toHaveAttribute("open", "");
+  await expectWorkingContextUsable(page, drawer, phone);
+
+  // A keyboard opens the saved memory from its visibly focused row.
+  if (!testInfo.project.name.includes("webkit")) {
+    await memory.locator("summary").focus();
+    const focusStyle = await memory.locator("summary").evaluate(element => {
+      const style = getComputedStyle(element);
+      return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth) };
+    });
+    expect(focusStyle.style).toBe("solid");
+    expect(focusStyle.width).toBeGreaterThanOrEqual(2);
+    await page.keyboard.press("Enter");
+  } else await memory.locator("summary").click();
+  await expect(memory).toHaveAttribute("open", "");
+
+  // W2: the v2 sections in the compactor's order; empty ones stay hidden.
+  await expect(memory.locator("section > strong")).toHaveText([
+    "Summary", "Operator requests", "Current state and next steps", "Decisions", "Constraints",
+    "Confirmed facts", "Attempts", "References", "Open questions",
+  ]);
+  await expect(memory.getByText("Corrections")).toHaveCount(0);
+  await expect(memory.getByText("TLS checked on 12 of 17 listeners. Next: 10.20.0.31:8443, then 10.20.0.33:443.")).toBeVisible();
+  await expect(memory.getByText("23 source references · private reasoning is not stored")).toBeVisible();
+  await expect(notes).not.toHaveAttribute("open", "");
+  await expectWorkingContextUsable(page, drawer, phone);
+});
+
+test("working context panel explains a partial summary and shows the assistant's notes read-only", async ({ page }) => {
+  const drawer = await openWorkingContext(page, "degraded");
+  const phone = (page.viewportSize()?.width ?? 1440) <= 760;
+
+  // W3: the text says the summary is partial; the orange dot only repeats it.
+  const status = drawer.locator(".session-context-summary");
+  await expect(status.locator("strong")).toHaveText(/^ready · partial summary$/i);
+  await expect(status.locator(".status-dot")).toHaveClass(/\bpartial\b/);
+  await expect(status.getByText("The automatic summary failed, so Nebula kept every operator request and exact identifier from the older messages. The assistant can still search the originals. The summary is rebuilt at the next compaction.")).toBeVisible();
+  await expect(drawer.getByLabel("78 percent of target input used")).toBeVisible();
+  const memory = drawer.locator("details", { has: page.locator("summary", { hasText: "Inspect saved memory" }) });
+  await expect(memory.locator("summary")).toHaveText("Inspect saved memory · requests and identifiers only");
+
+  // Agent notes: collapsed until asked for, Markdown like the transcript, and not editable here.
+  const notes = drawer.locator("details", { has: page.locator("summary", { hasText: "Agent notes" }) });
+  await expect(notes).not.toHaveAttribute("open", "");
+  await notes.locator("summary").click();
+  await expect(notes).toHaveAttribute("open", "");
+  await expect(notes.getByRole("heading", { name: "Findings" })).toBeVisible();
+  await expect(notes.getByRole("heading", { name: "Todo" })).toBeVisible();
+  await expect(notes.getByRole("checkbox")).toHaveCount(4);
+  for (const checkbox of await notes.getByRole("checkbox").all()) await expect(checkbox).toBeDisabled();
+  await expect(notes.getByRole("textbox")).toHaveCount(0);
+  await expect(notes.getByText("Kept by the assistant for this conversation · revision 6 · read-only here")).toBeVisible();
+  await expect(memory).not.toHaveAttribute("open", "");
+  await expectWorkingContextUsable(page, drawer, phone);
+});
+
 test("stabilization the Agent view floats over the conversation, minimizes and has no dock", async ({ page }, testInfo) => {
   await installReasoningProvider(page);
   await installPublishedResults(page);

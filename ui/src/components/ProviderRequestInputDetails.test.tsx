@@ -22,3 +22,21 @@ it("shows content-free request estimates and provider-reported usage", async () 
   expect(screen.queryByText(/Other:/)).not.toBeInTheDocument();
   expect(screen.getByText(/attempt 2/)).toBeVisible();
 });
+
+it("leads with the provider's reported tokens and prompt-cache share", () => {
+  const request = {
+    instructions: 1200, conversation: 700, toolSchemas: 500, toolResults: 300, other: 0,
+    estimatedTotal: 2700, attempt: 1,
+  };
+  const { rerender } = render(<ProviderRequestInputDetails request={{ ...request, reportedInputTokens: 68_912, reportedCachedInputTokens: 42_036 }} />);
+  expect(screen.getByText("Last provider request").closest("summary")).toHaveTextContent(/^Last provider request · 68,912 reported · 61% cached$/);
+
+  // A provider that reports no cache figure is not shown as a 0% hit rate.
+  rerender(<ProviderRequestInputDetails request={{ ...request, reportedInputTokens: 2510 }} />);
+  expect(screen.getByText("Last provider request").closest("summary")).toHaveTextContent(/^Last provider request · 2,510 reported$/);
+  rerender(<ProviderRequestInputDetails request={{ ...request, reportedInputTokens: 2510, reportedCachedInputTokens: 0 }} />);
+  expect(screen.getByText("Last provider request").closest("summary")).toHaveTextContent(/^Last provider request · 2,510 reported$/);
+
+  rerender(<ProviderRequestInputDetails request={request} />);
+  expect(screen.getByText("Last provider request").closest("summary")).toHaveTextContent(/^Last provider request$/);
+});

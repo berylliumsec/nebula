@@ -31,6 +31,16 @@ describe("exact assistant Markdown", () => {
     expect(malformed.unmatchedStart).toBe(3);
   });
 
+  it("names read-only task-list boxes by their state", () => {
+    render(<AssistantMarkdown content={"- [x] Sweep 10.20.0.0/24\n- [ ] Ask whether .40 is in scope"} durable={false} runnableLanguages={new Set()} onRun={vi.fn()} />);
+    const done = screen.getByRole("checkbox", { name: "Done" });
+    const todo = screen.getByRole("checkbox", { name: "To do" });
+    expect(done).toBeChecked();
+    expect(done).toBeDisabled();
+    expect(todo).not.toBeChecked();
+    expect(todo).toBeDisabled();
+  });
+
   it("blocks raw HTML, images, and unsafe link protocols", () => {
     const onRun = vi.fn();
     const { container } = render(

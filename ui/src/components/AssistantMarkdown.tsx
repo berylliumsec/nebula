@@ -223,6 +223,11 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
       return <code className={className} {...properties}>{children}</code>;
     },
     img: () => null,
+    // GFM task-list boxes are read-only state; name it so the box is not an
+    // unlabelled control to a screen reader.
+    input: ({ node: _node, ...properties }) => properties.type === "checkbox"
+      ? <input {...properties} aria-label={properties.checked ? "Done" : "To do"} />
+      : <input {...properties} />,
     a: ({ node: _node, href, children, ...properties }) => {
       const safe = href ? safeUrl(href) : "";
       return <a {...properties} href={safe || undefined} rel="noopener noreferrer" onClick={(event) => openSafeLink(event, safe)}>{children}</a>;
