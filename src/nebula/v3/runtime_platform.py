@@ -15,12 +15,15 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Literal, Protocol, cast
 
 from .artifacts import ArtifactStore
+from .context_retrieval import DenseEncoder
+from .conversation_search import ConversationSearchTool
 from .diagnostics import gather_diagnostic, record_caught_exception
 from .domain import (
     Approval,
     AutomationApprovalPolicy,
     AutomationProjectPolicy,
     ChatGoal,
+    ChatMessage,
     Engagement,
     McpServerProfile,
     RunnerIsolation,
@@ -176,6 +179,43 @@ def dashboard_components(
         ledger=StoreToolLedger(store),
         workspace_resolver=lambda _engagement_id: workspace,
         evidence_recorder=StoreToolEvidenceRecorder(store, artifact_store),
+    )
+    return RuntimeToolComponents(
+        broker=broker,
+        scope=scope,
+        workspace=workspace,
+        specs={spec.name: spec for spec in registry.specs()},
+        runtime_digest="",
+    )
+
+
+def conversation_search_components(
+    store: NebulaStore,
+    scope: ScopePolicy,
+    workspace: Path,
+    *,
+    session_id: str,
+    text_of: Callable[[ChatMessage], str],
+    dense: Callable[[], DenseEncoder | None] | None = None,
+) -> RuntimeToolComponents:
+    """Searching one compacted conversation's archived messages.
+
+    Offered only while older messages are served by a derived memory, so the
+    model can recover their exact wording. Built from the caller's resolved
+    scope and workspace with no runtime digest of its own, like the dashboard
+    components above. A read-only analysis tool records no evidence.
+    """
+
+    registry = ToolRegistry()
+    registry.register(
+        ConversationSearchTool(store, session_id, text_of=text_of, dense=dense)
+    )
+    broker = ToolBroker(
+        registry=registry,
+        policy_engine=PolicyEngine(),
+        runner=AnalysisOnlyRunner(),
+        ledger=StoreToolLedger(store),
+        workspace_resolver=lambda _engagement_id: workspace,
     )
     return RuntimeToolComponents(
         broker=broker,

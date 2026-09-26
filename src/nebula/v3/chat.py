@@ -68,7 +68,8 @@ from .provider_scheduler import ProviderAdmission, ProviderScheduler
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .browser_companion_tools import attached_session, companion_components
 from .application_model.tools import standalone_components
-from .runtime_platform import dashboard_components
+from .conversation_search import conversation_search_spec
+from .runtime_platform import conversation_search_components, dashboard_components
 from .structured_results import goal_snapshot_instruction
 from .application_model.workflow import BROWSER_MODEL_WORKFLOW
 from .browser_companion import BrowserCompanion
@@ -140,11 +141,19 @@ from .context import (
     estimate_model_request_parts,
     estimate_tokens,
     estimate_tool_definitions,
-    lexical_score,
     memory_text,
     resolve_context_limits,
     source_digest,
     updated_calibration,
+)
+from .context_retrieval import (
+    DenseEncoder,
+    VectorCache,
+    archived_messages,
+    chunk_messages,
+    rank_chunks,
+    select_excerpts,
+    turn_query,
 )
 from .model_catalog import (
     find_model_descriptor,
@@ -1033,42 +1042,39 @@ def _with_retrieved_excerpts(
 
 
 def _retrieved_excerpts(
-    query: str, archived: Sequence[ChatMessage], token_budget: int
+    query: str,
+    archived: Sequence[ChatMessage],
+    token_budget: int,
+    *,
+    earlier: Sequence[ChatRequestMessage] = (),
+    dense: DenseEncoder | None = None,
 ) -> list[dict[str, Any]]:
-    """Archived originals relevant to ``query``, within ``token_budget``.
+    """Passages of the archived originals relevant to ``query``, within budget.
 
-    Whole messages ranked lexically, most relevant first, newest first on a
-    tie. This is the one place retrieval is chosen, so a better ranker can
-    replace it without touching how the request is assembled.
+    Paragraph-aligned passages ranked by BM25 with an exact-identifier boost,
+    fused with the local embedding model's ranking when ``dense`` is given
+    (see ``context_retrieval``), and returned in transcript order. Passages,
+    not whole messages, fill the budget, so the one relevant paragraph of a
+    long message fits. ``earlier`` is the kept tail before the current
+    message: a follow-up with little content of its own ("yes, do that") is
+    matched through the requests before it. This is the one place retrieval
+    is chosen, so a better ranker can replace it without touching how the
+    request is assembled.
     """
 
-    texts = {message.id: _stored_model_text(message) for message in archived}
-    scores = {
-        message.id: lexical_score(query, texts[message.id]) for message in archived
-    }
-    retrieved: list[dict[str, Any]] = []
-    retrieved_tokens = 0
-    for message in sorted(
-        archived, key=lambda item: (-scores[item.id], -item.sequence)
-    ):
-        if scores[message.id] <= 0:
-            break
-        text = texts[message.id]
-        size = estimate_tokens(text, message_count=1)
-        if retrieved_tokens + size > token_budget:
-            continue
-        retrieved.append(
-            {
-                "message_id": message.id,
-                "sequence": message.sequence,
-                "role": message.role.value,
-                "content": text,
-            }
+    if token_budget <= 0 or not archived:
+        return []
+    ranked = rank_chunks(
+        chunk_messages(archived_messages(archived, _stored_model_text)),
+        turn_query(query, [(item.role.value, item.content) for item in earlier]),
+        dense=dense,
+    )
+    return [
+        chunk.payload()
+        for chunk in select_excerpts(
+            ranked, token_budget=token_budget, limit=_MAX_RETRIEVED_EXCERPTS
         )
-        retrieved_tokens += size
-        if len(retrieved) >= _MAX_RETRIEVED_EXCERPTS:
-            break
-    return retrieved
+    ]
 
 
 # Session metadata key for how this conversation's estimates are scaled; see
@@ -2102,6 +2108,8 @@ class ChatService:
         self.operator_id = operator_id or (lambda: "system")
         self.knowledge_index = knowledge_index
         self._embedding_warmup: threading.Thread | None = None
+        # Embedded passages of archived conversation, reused across turns.
+        self._conversation_vectors = VectorCache()
         self.artifact_store = artifact_store
         self.workspace_resolver = workspace_resolver or self._workspace_unavailable
         self.managed_skill_root = managed_skill_root
@@ -5395,6 +5403,14 @@ class ChatService:
                 if tool_components is not None
                 else estimate_tokens(_NO_TOOL_PREFIX)
             )
+            # A compacted tool turn also declares conversation.search.
+            archive_reserved_tokens = (
+                estimate_tool_definitions(
+                    self._routing_tools([conversation_search_spec()])
+                )
+                if tool_components is not None
+                else 0
+            )
             calibration = (
                 _context_calibration(session.metadata, profile.id, selected_model)
                 if session is not None
@@ -5427,6 +5443,7 @@ class ChatService:
                     budget=compaction_budget,
                     required_parameters={"tools"} if switch_tools_enabled else set(),
                     reserved_tokens=reserved_tokens,
+                    archive_reserved_tokens=archive_reserved_tokens,
                     calibration=calibration,
                     # The goal is what the conversation is for; without one,
                     # the latest message (often "thanks") is no guide to what
@@ -5528,9 +5545,20 @@ class ChatService:
                 ranking.cancel()
                 await asyncio.gather(ranking, return_exceptions=True)
             raise
+        # Older messages left this request for a derived memory, so the model
+        # can look up their original wording on demand.
+        conversation_search = (
+            tools_enabled and context_snapshot is not None and session is not None
+        )
         if tools_enabled:
             # Resolved with the runtime capabilities above.
             assert tool_components is not None and engagement_id is not None
+            if conversation_search:
+                assert session is not None
+                tool_components = combine_tool_components(
+                    tool_components,
+                    self._conversation_search_components(tool_components, session.id),
+                )
             if ranking is not None:
                 tool_suggestions, catalog_receipt, ranked_sources = await ranking
                 # The model is told which server each pick comes from and what
@@ -5616,6 +5644,7 @@ class ChatService:
                     ),
                     "tool_suggestions": tool_suggestions,
                     "tool_catalog": tool_catalog,
+                    "conversation_search": conversation_search,
                     "automation_runtime_digest": getattr(
                         tool_components, "runtime_digest", None
                     ),
@@ -5702,7 +5731,8 @@ class ChatService:
             required_parameters={"tools"} if switch_tools_enabled else set(),
             hook_snapshots=hook_snapshots,
             estimate_calibration=calibration,
-            context_reserved_tokens=reserved_tokens,
+            context_reserved_tokens=reserved_tokens
+            + (archive_reserved_tokens if conversation_search else 0),
         )
         if turn is not None:
             self._persist_turn_inputs(prepared)
@@ -10345,6 +10375,13 @@ class ChatService:
                         resumed_goal,
                     ),
                 )
+            if components is not None and turn.request_snapshot.get(
+                "conversation_search"
+            ):
+                components = combine_tool_components(
+                    components,
+                    self._conversation_search_components(components, turn.session_id),
+                )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
             deferred = catalog_snapshot(turn.request_snapshot).get("deferred")
@@ -12193,6 +12230,7 @@ class ChatService:
         required_parameters: set[str] | None = None,
         reuse_snapshot: bool = True,
         reserved_tokens: int = 0,
+        archive_reserved_tokens: int = 0,
         calibration: float | None = None,
         objective: str | None = None,
     ) -> tuple[
@@ -12211,7 +12249,9 @@ class ChatService:
         every turn the same snapshot serves, so provider prefix caches hold.
 
         ``reserved_tokens`` is what the request adds beside the instructions
-        and messages (tool definitions, routing instructions, catalog picks);
+        and messages (tool definitions, routing instructions, catalog picks),
+        and ``archive_reserved_tokens`` what it adds once older messages are
+        archived (the ``conversation.search`` definition a tool turn gets);
         ``calibration`` scales Core's estimate to the provider's own count
         (see ``updated_calibration``). ``objective`` guides the compactor.
 
@@ -12259,6 +12299,8 @@ class ChatService:
 
         if estimate(messages) <= target:
             return messages, instructions, ChatTokenUsage(), None, session
+        target -= archive_reserved_tokens
+        capacity -= archive_reserved_tokens
 
         current = messages[-1]
         if estimate([current]) > capacity:
@@ -12290,7 +12332,9 @@ class ChatService:
                 *messages[start + 1 :],
             ]
 
-        def fitted(
+        dense = self._conversation_dense()
+
+        async def fitted(
             snapshot: ContextSnapshot, start: int
         ) -> list[ChatRequestMessage] | None:
             """The request the snapshot serves from ``start``, if it fits the goal.
@@ -12303,8 +12347,15 @@ class ChatService:
             room = goal - estimate(kept)
             if room < 0:
                 return None
-            excerpts = _retrieved_excerpts(
-                current.content, stored_messages[:start], min(excerpt_budget, room)
+            # Chunking, ranking and any embedding are CPU work: off the event
+            # loop that streams every other conversation.
+            excerpts = await asyncio.to_thread(
+                _retrieved_excerpts,
+                current.content,
+                stored_messages[:start],
+                min(excerpt_budget, room),
+                earlier=messages[start:-1],
+                dense=dense,
             )
             if excerpts:
                 last = max(
@@ -12356,7 +12407,7 @@ class ChatService:
                 and source_digest(_chat_context_sources(covered))
                 == latest.source_sha256
             ):
-                reused = fitted(latest, start)
+                reused = await fitted(latest, start)
                 if reused is not None:
                     return reused, instructions, ChatTokenUsage(), latest, session
 
@@ -12436,7 +12487,7 @@ class ChatService:
                     "latest context snapshot has no memory", usage=usage
                 )
             served = (snapshot, start)
-            request_messages = fitted(snapshot, start)
+            request_messages = await fitted(snapshot, start)
             if request_messages is not None:
                 return request_messages, instructions, usage, snapshot, session
             # Over the goal beside this memory. The messages it leaves no
@@ -12478,6 +12529,36 @@ class ChatService:
             },
         )
         return request_messages, instructions, usage, snapshot, session
+
+    def _conversation_dense(self) -> DenseEncoder | None:
+        """The local embedding model for conversation retrieval, once ready.
+
+        Never starts a download or load of its own: until the on-demand tool
+        catalog or a knowledge upload has prepared the model, retrieval ranks
+        lexically.
+        """
+
+        index = self.knowledge_index
+        encode = getattr(index, "embed", None)
+        if index is None or not callable(encode) or index.status.state != "ready":
+            return None
+        return DenseEncoder(
+            encode=encode, model=index.status.model, cache=self._conversation_vectors
+        )
+
+    def _conversation_search_components(
+        self,
+        components: RuntimeToolComponents | AutomationToolComponents,
+        session_id: str,
+    ) -> RuntimeToolComponents:
+        return conversation_search_components(
+            self.store,
+            components.scope,
+            Path(components.workspace),
+            session_id=session_id,
+            text_of=_stored_model_text,
+            dense=self._conversation_dense,
+        )
 
     def _enforce_engagement_privacy(
         self, engagement: Engagement, provider: ModelProvider
