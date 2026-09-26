@@ -5803,6 +5803,10 @@ class ChatService:
                 input_tokens=usage.input_tokens + current.usage.input_tokens,
                 output_tokens=usage.output_tokens + current.usage.output_tokens,
                 total_tokens=usage.total_tokens + current.usage.total_tokens,
+                cached_input_tokens=usage.cached_input_tokens
+                + current.usage.cached_input_tokens,
+                cache_creation_input_tokens=usage.cache_creation_input_tokens
+                + current.usage.cache_creation_input_tokens,
             )
             current_problem = _final_answer_problem(current)
         if prepared.turn is not None:
@@ -8574,6 +8578,8 @@ class ChatService:
             total_tokens=turn.usage.total_tokens + response.usage.total_tokens,
             cached_input_tokens=turn.usage.cached_input_tokens
             + response.usage.cached_input_tokens,
+            cache_creation_input_tokens=turn.usage.cache_creation_input_tokens
+            + response.usage.cache_creation_input_tokens,
         )
         reasoning_changes, reasoning_parts = self._reasoning_changes(
             turn, response.reasoning

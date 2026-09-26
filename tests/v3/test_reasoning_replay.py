@@ -280,11 +280,18 @@ def _text_stream(text: str) -> httpx.Response:
     )
 
 
+def _text(content: Any) -> Any:
+    # A Claude route's cache breakpoint turns a string into one text part.
+    if isinstance(content, list):
+        return "".join(part.get("text", "") for part in content)
+    return content
+
+
 def _after_question(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     index = max(
         position
         for position, message in enumerate(messages)
-        if message.get("role") == "user" and message.get("content") == QUESTION
+        if message.get("role") == "user" and _text(message.get("content")) == QUESTION
     )
     return messages[index + 1 :]
 
