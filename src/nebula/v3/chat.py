@@ -75,6 +75,7 @@ from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .browser_companion_tools import attached_session, companion_components
 from .application_model.tools import standalone_components
 from .conversation_search import CONVERSATION_SEARCH_TOOL_NAME, conversation_search_spec
+from .search_allowance import SEARCH_ALLOWANCE_TOOLS, turn_search_allowance_spent
 from .knowledge_search import (
     KNOWLEDGE_SEARCH_ROUTING_INSTRUCTIONS,
     KNOWLEDGE_SEARCH_TOOL_NAME,
@@ -7916,15 +7917,30 @@ class ChatService:
                     # alphanumerics).
                     issued_call_id = call.id
                     call = call.model_copy(update={"id": f"nbc{turn.next_step:06d}"})
-                if refusal is not None:
+                # A search past the turn's allowance does not run: Core answers
+                # it with an ordinary result that tells the model to answer
+                # from what it has. Counted from the turn's own ledger, so a
+                # resumed turn keeps its count (see search_allowance).
+                spent = (
+                    turn_search_allowance_spent(
+                        self._turn_history(turn),
+                        call.name,
+                        str(call.arguments.get("query") or ""),
+                        response_group=routed.replay.get("response_group"),
+                    )
+                    if refusal is None and call.name in SEARCH_ALLOWANCE_TOOLS
+                    else None
+                )
+                if refusal is not None or spent is not None:
                     turn, refused_events = self._refused_tool_step(
                         turn,
                         known_spec,
                         call,
                         provider_call,
-                        refusal,
+                        refusal or "",
                         issued_call_id,
                         replay=routed.replay,
+                        result=spent,
                     )
                     for refused_event in refused_events:
                         yield refused_event
@@ -9927,35 +9943,47 @@ class ChatService:
         issued_call_id: str | None,
         *,
         replay: dict[str, Any] | None = None,
+        result: dict[str, Any] | None = None,
     ) -> tuple[ChatTurn, list[tuple[str, dict[str, Any]]]]:
         """Answer a call Core will not run with an error the model can act on.
 
         The broker never sees the call and it spends no budget. The model
         reads the error as that call's result and routes again. The call stays
         part of the response that issued it when that response is replayed.
+        With ``result`` the answer is that ordinary result instead of an
+        error: nothing failed, the call is simply not needed (a spent search
+        allowance).
         """
 
         step = turn.next_step
         durable_call_id = str(
             uuid5(NAMESPACE_URL, f"nebula:{turn.id}:chat:{turn.id}:step:{step}")
         )
-        safe_detail = str(
-            json.loads(self._bounded_tool_error("failed", detail))["detail"]
-        )
-        failure = (
-            tool_failure(
-                spec,
-                call.arguments,
-                InvalidToolArguments(detail),
-                phase="before_execution",
-                call_id=durable_call_id,
+        if result is not None:
+            status = "complete"
+            provider_result = serialize_model_result(result)
+            summary = str(result.get("detail") or "")
+        else:
+            status = "failed"
+            safe_detail = str(
+                json.loads(self._bounded_tool_error("failed", detail))["detail"]
             )
-            if spec is not None
-            else unavailable_tool_failure(call.name, detail, call_id=durable_call_id)
-        )
-        failure["detail"] = safe_detail
-        provider_result = serialize_model_result(failure)
-        summary = safe_detail
+            failure = (
+                tool_failure(
+                    spec,
+                    call.arguments,
+                    InvalidToolArguments(detail),
+                    phase="before_execution",
+                    call_id=durable_call_id,
+                )
+                if spec is not None
+                else unavailable_tool_failure(
+                    call.name, detail, call_id=durable_call_id
+                )
+            )
+            failure["detail"] = safe_detail
+            provider_result = serialize_model_result(failure)
+            summary = safe_detail
         display_name = spec.display_name if spec is not None else None
         entry: dict[str, Any] = {
             "step": step,
@@ -9964,8 +9992,10 @@ class ChatService:
             "name": call.name,
             "arguments": call.arguments,
             "budget_class": _REFUSED_BUDGET_CLASS,
-            "status": "failed",
+            "status": status,
             "provider_result": provider_result,
+            # Core wrote this answer itself, so it is replayed as written.
+            **({"trusted_result": True} if result is not None else {}),
             "result_summary": summary,
             **({"display_name": display_name} if display_name else {}),
             **({"provider_call": provider_call} if provider_call is not None else {}),
@@ -9990,7 +10020,7 @@ class ChatService:
                 {
                     "type": "tool_completed",
                     **common,
-                    "status": "failed",
+                    "status": status,
                     "summary": summary,
                     "evidence_ids": [],
                     "result_artifact_id": None,
