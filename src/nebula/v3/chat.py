@@ -63,13 +63,26 @@ from .chat_turn_headers import (
     engagement_turn_headers,
     session_turn_headers,
 )
-from .chat_turn_ledger import ChatTurnLedger, TurnCheckpoint
+from .chat_turn_ledger import ChatTurnLedger, TurnCheckpoint, checkpoint_byte_limit
 from .provider_scheduler import ProviderAdmission, ProviderScheduler
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .browser_companion_tools import attached_session, companion_components
 from .application_model.tools import standalone_components
 from .conversation_search import conversation_search_spec
-from .runtime_platform import conversation_search_components, dashboard_components
+from .runtime_platform import (
+    conversation_search_components,
+    dashboard_components,
+    notes_components,
+)
+from .tool_activity import step_brief, tool_activity_block
+from .working_notes import (
+    NOTES_ROUTING_INSTRUCTIONS,
+    NOTES_WRITE_TOOL_NAME,
+    checkpoint_notes,
+    read_working_notes,
+    working_notes_block,
+    working_notes_status,
+)
 from .structured_results import goal_snapshot_instruction
 from .application_model.workflow import BROWSER_MODEL_WORKFLOW
 from .browser_companion import BrowserCompanion
@@ -809,6 +822,11 @@ class PreparedChat:
     # definitions and routing instructions. None when the turn resumed rather
     # than assembled its request.
     context_reserved_tokens: int | None = None
+    # Provider call ids of results this turn replays as receipts. A result
+    # once cleared stays cleared for the rest of the turn, so a request
+    # changes an earlier result only when it crosses the target again. A
+    # turn resumed in a new process recomputes them.
+    cleared_tool_calls: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -897,6 +915,13 @@ def _stored_model_text(message: ChatMessage) -> str:
     context they selected for that turn in ``metadata.context_attachments``.
     Every later request, compaction and recovery rebuilds the same envelope the
     turn was first sent with, so the selection does not vanish after its turn.
+
+    An answer keeps the tool activity of the turn that produced it the same
+    way: the steps its ``metadata.tool_results`` recorded, with the ids that
+    reach their full output, follow its text. A later turn then knows what
+    already ran and can read an earlier result again instead of repeating the
+    call. The block is rendered from stored metadata alone, so it is the same
+    bytes on every later request.
     """
 
     if (
@@ -908,6 +933,13 @@ def _stored_model_text(message: ChatMessage) -> str:
         label = sender if isinstance(sender, str) and sender else "Peer agent"
         identity = f" ({sender_id})" if isinstance(sender_id, str) else ""
         return f"Peer agent message from {label}{identity}:\n\n{message.content}"
+    if message.role == ChatRole.ASSISTANT:
+        activity = tool_activity_block(message.metadata.get("tool_results"))
+        if not activity:
+            return message.content
+        return (
+            f"{message.content.rstrip()}\n\n{activity}" if message.content else activity
+        )
     raw = message.metadata.get("context_attachments")
     if message.role != ChatRole.USER or not isinstance(raw, list) or not raw:
         return message.content
@@ -1226,6 +1258,7 @@ def _routing_instructions(names: Collection[str], max_active_subagents: Any) -> 
             else ""
         )
         + (AGENT_MESSAGE_ROUTING_INSTRUCTIONS if "send_agent_message" in names else "")
+        + (NOTES_ROUTING_INSTRUCTIONS if NOTES_WRITE_TOOL_NAME in names else "")
     )
 
 
@@ -1976,6 +2009,19 @@ def _with_checkpoint(
             separators=(",", ":"),
         )
     )
+    return _with_trailing_block(messages, block)
+
+
+def _with_trailing_block(
+    messages: Sequence[ModelMessage], block: str
+) -> list[ModelMessage]:
+    """``messages`` with ``block`` joined to the last operator message.
+
+    Derived blocks (working notes, the tool-history checkpoint) ride at the
+    end of the request, after the conversation they describe, so everything
+    ahead of them keeps its cached prefix.
+    """
+
     if not messages or messages[-1].role != "user":
         return [*messages, ModelMessage(role="user", content=block)]
     last = messages[-1]
@@ -5273,6 +5319,18 @@ class ChatService:
                             goal,
                         ),
                     )
+                if tool_components is not None:
+                    # Any turn with tools can outgrow its window, so any can
+                    # keep working notes. They write only this conversation's
+                    # own record and add no runtime digest.
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        notes_components(
+                            self.store,
+                            tool_components.scope,
+                            Path(tool_components.workspace),
+                        ),
+                    )
             except Exception as exc:
                 record_caught_exception(
                     "chat",
@@ -5411,6 +5469,16 @@ class ChatService:
                 if tool_components is not None
                 else 0
             )
+            # The conversation's working notes join the operator's message
+            # once the conversation is assembled, so the assembly leaves room
+            # for them as it does for the tools.
+            notes_block = (
+                working_notes_block(read_working_notes(self.store, session.id))
+                if session is not None
+                else ""
+            )
+            if notes_block:
+                reserved_tokens += estimate_tokens("\n\n" + notes_block)
             calibration = (
                 _context_calibration(session.metadata, profile.id, selected_model)
                 if session is not None
@@ -5536,6 +5604,10 @@ class ChatService:
                     if value is not None
                 },
             )
+            if notes_block:
+                model_request = self._with_working_notes(
+                    profile, model_request, notes_block, calibration
+                )
             if goal is not None:
                 model_request = self._fit_goal_request_budget(goal.id, model_request)
             self._ensure_request_capacity(profile, model_request, calibration)
@@ -8226,6 +8298,75 @@ class ChatService:
             ),
         )
 
+    def _with_working_notes(
+        self,
+        profile: ProviderProfile,
+        request: ModelRequest,
+        block: str,
+        calibration: float | None = None,
+    ) -> ModelRequest:
+        """``request`` with the conversation's working notes (``block``).
+
+        The notes as the turn starts join the operator's message, after its
+        own content and any retrieved excerpts; the turn's checkpoint follows
+        them once it has one. They are the turn's one snapshot of the notes,
+        so every request of the turn repeats the same bytes; a notes.write
+        call during the turn is replayed as a call, and a checkpoint that
+        folds it carries the newer notes. Notes that would not fit the model
+        are left out rather than failing the turn.
+        """
+
+        noted = request.model_copy(
+            update={"messages": _with_trailing_block(request.messages, block)}
+        )
+        if self._fits_request_capacity(profile, noted, calibration):
+            return noted
+        record_diagnostic(
+            "warning",
+            "chat",
+            "chat.working_notes.omitted",
+            "The conversation's working notes were left out of a request "
+            "that could not hold them.",
+            outcome="fallback",
+            stage="chat",
+            safe_failure_cause="The working notes did not fit the model's input capacity.",
+            metadata={"provider": profile.id, "model_id": request.model},
+        )
+        return request
+
+    def _compacted_turn_history(
+        self, turn: ChatTurn, limits: ContextLimits, *, advance: bool = False
+    ) -> tuple[TurnCheckpoint | None, list[dict[str, Any]]]:
+        """The turn's checkpoint and replay, sized for the request's model.
+
+        A checkpoint written now bounds its receipts by the model's input
+        capacity and carries the conversation's working notes.
+        """
+
+        return self.turn_ledger.compacted_history(
+            turn,
+            advance=advance,
+            byte_limit=checkpoint_byte_limit(limits.input_capacity),
+            working_notes=lambda: checkpoint_notes(
+                read_working_notes(self.store, turn.session_id)
+            ),
+        )
+
+    @staticmethod
+    def _clearing_watermark(target: int, capacity: int) -> int:
+        """Where clearing takes a request that crossed its target.
+
+        Clearing to just under the target would clear one more result on
+        nearly every later step, and every clear changes the request from
+        that result on, so the provider's prefix cache would miss each time.
+        Clearing a block below the target leaves room for the next several
+        steps (Anthropic's context editing clears "at least" a batch for the
+        same reason). A small window keeps at least half its target. Both
+        are in the raw estimated tokens ``_estimate_limits`` returns.
+        """
+
+        return max(target // 2, target - max(capacity // 10, 8_000))
+
     def _with_tool_history(
         self, prepared: PreparedChat, turn: ChatTurn, request: ModelRequest
     ) -> ModelRequest:
@@ -8233,19 +8374,26 @@ class ChatService:
 
         Every step re-sends the results before it, so a long turn outgrows any
         finite window. Instead of failing with all its work unseen, the turn
-        replays its oldest results as receipts (``_cleared_tool_result``) until
-        the request fits the model's target input. Every call keeps a result,
-        so ids, batches and replayed reasoning are unchanged. The newest result
-        stays whole past the target while the request fits the capacity: it is
-        the one the model is deciding on.
+        replays its oldest results as receipts (``_cleared_tool_result``).
+        Every call keeps a result, so ids, batches and replayed reasoning are
+        unchanged. The newest result stays whole past the target while the
+        request fits the capacity: it is the one the model is deciding on.
 
         Steps that left the recent window are folded into the turn's
         checkpoint (``ChatTurnLedger.compacted_history``), which advances in
         blocks. Between advances the request is the previous one plus the
-        newest step, so the provider's prefix cache serves the rest. A
-        request over its target advances the checkpoint first; clearing is
-        for what still does not fit.
+        newest step, so the provider's prefix cache serves the rest. Clearing
+        keeps that property: a cleared result stays cleared for the rest of
+        the turn (``PreparedChat.cleared_tool_calls``), and a request that
+        crosses the target clears down to a watermark well below it
+        (``_clearing_watermark``), so earlier bytes change once per crossing
+        rather than on every step. A request over its target advances the
+        checkpoint first; clearing is for what still does not fit.
         """
+
+        limits = self._request_limits(prepared.provider_profile, request)
+        target, capacity = self._estimate_limits(prepared, limits)
+        sticky = prepared.cleared_tool_calls
 
         def replayed(
             checkpoint: TurnCheckpoint | None, entries: list[dict[str, Any]]
@@ -8263,45 +8411,77 @@ class ChatService:
                 }
             )
 
-        checkpoint, replay_entries = self.turn_ledger.compacted_history(turn)
-        fitted = replayed(checkpoint, replay_entries)
-        target, capacity = self._estimate_limits(
-            prepared, self._request_limits(prepared.provider_profile, fitted)
-        )
-        if fitted.tool_results and estimate_model_request(fitted) > target:
-            advanced, advanced_entries = self.turn_ledger.compacted_history(
-                turn, advance=True
+        def cleared(
+            fitted: ModelRequest,
+            receipts: list[ModelToolResult],
+            call_ids: set[str],
+        ) -> ModelRequest:
+            whole = fitted.tool_results
+            if not call_ids.intersection(result.call_id for result in whole):
+                return fitted
+            return fitted.model_copy(
+                update={
+                    "tool_results": [
+                        receipt if result.call_id in call_ids else result
+                        for result, receipt in zip(whole, receipts, strict=True)
+                    ]
+                }
             )
-            if advanced is not None and advanced != checkpoint:
-                checkpoint, replay_entries = advanced, advanced_entries
-                fitted = replayed(checkpoint, replay_entries)
-        whole = fitted.tool_results
-        if not whole or estimate_model_request(fitted) <= target:
+
+        def receipts_for(entries: list[dict[str, Any]]) -> list[ModelToolResult]:
+            return self._provider_tool_history(
+                turn, cleared=len(entries), entries=entries
+            )
+
+        checkpoint, replay_entries = self._compacted_turn_history(turn, limits)
+        fitted = replayed(checkpoint, replay_entries)
+        if not fitted.tool_results:
             return fitted
-        receipts = self._provider_tool_history(
-            turn, cleared=len(whole), entries=replay_entries
+        receipts = receipts_for(replay_entries)
+        current = cleared(fitted, receipts, sticky)
+        if estimate_model_request(current) <= target:
+            return current
+        # The request crossed its target, so its earlier bytes change now
+        # whatever is done. It is taken down to the watermark in this one
+        # change: the checkpoint advances, then the oldest results still
+        # whole are cleared, the fewest that reach the watermark.
+        watermark = self._clearing_watermark(target, capacity)
+        advanced, advanced_entries = self._compacted_turn_history(
+            turn, limits, advance=True
         )
+        if advanced is not None and advanced != checkpoint:
+            checkpoint, replay_entries = advanced, advanced_entries
+            fitted = replayed(checkpoint, replay_entries)
+            receipts = receipts_for(replay_entries)
+            current = cleared(fitted, receipts, sticky)
+            if not fitted.tool_results or estimate_model_request(current) <= watermark:
+                return current
+        whole = fitted.tool_results
+        # A receipt is never larger than its result, so bisection finds the
+        # fewest to clear.
+        candidates = [
+            result.call_id for result in whole[:-1] if result.call_id not in sticky
+        ]
 
         def clearing(count: int) -> ModelRequest:
-            return fitted.model_copy(
-                update={"tool_results": [*receipts[:count], *whole[count:]]}
-            )
+            return cleared(fitted, receipts, sticky | set(candidates[:count]))
 
-        # A receipt is never larger than its result, so the fewest results to
-        # clear can be found by bisection.
-        low, high = 0, len(whole)
+        low, high = 0, len(candidates)
         while low < high:
             middle = (low + high) // 2
-            if estimate_model_request(clearing(middle)) <= target:
+            if estimate_model_request(clearing(middle)) <= watermark:
                 high = middle
             else:
                 low = middle + 1
-        count = low
-        if count == len(whole) and (
-            estimate_model_request(clearing(count - 1)) <= capacity
+        newly = set(candidates[:low])
+        if (
+            estimate_model_request(clearing(low)) > capacity
+            and whole[-1].call_id not in sticky
         ):
-            count -= 1
-        if count:
+            # Even the newest result no longer fits whole.
+            newly.add(whole[-1].call_id)
+        if newly:
+            sticky.update(newly)
             record_diagnostic(
                 "debug",
                 "chat",
@@ -8310,14 +8490,21 @@ class ChatService:
                 "fits the model's context window.",
                 outcome="success",
                 stage="chat",
+                # Keys from the diagnostics allowlist: the results cleared
+                # now, all cleared in this request, those replayed, and the
+                # watermark.
                 metadata={
                     "provider": prepared.provider_profile.id,
                     "model_id": prepared.resolved_model,
-                    "cleared": count,
-                    "results": len(whole),
+                    "count": len(newly),
+                    "dropped_count": len(
+                        sticky.intersection(result.call_id for result in whole)
+                    ),
+                    "item_count": len(whole),
+                    "limit": watermark,
                 },
             )
-        return clearing(count)
+        return cleared(fitted, receipts, sticky)
 
     def _cleared_tool_history_retry(
         self, prepared: PreparedChat, turn: ChatTurn, failed_request: ModelRequest
@@ -8330,7 +8517,9 @@ class ChatService:
         None when clearing cannot make the request smaller.
         """
 
-        _, replay_entries = self.turn_ledger.compacted_history(turn)
+        _, replay_entries = self._compacted_turn_history(
+            turn, self._request_limits(prepared.provider_profile, failed_request)
+        )
         whole = self._replayed_tool_history(prepared, turn, entries=replay_entries)
         if [result.call_id for result in whole] != [
             result.call_id for result in failed_request.tool_results
@@ -8352,6 +8541,12 @@ class ChatService:
                 }
             )
             if estimate_model_request(retry) < rejected:
+                # The provider counts more than Core estimates for this
+                # request, so later steps keep these cleared too rather than
+                # being rejected once more each.
+                prepared.cleared_tool_calls.update(
+                    result.call_id for result in whole[:cleared]
+                )
                 record_diagnostic(
                     "warning",
                     "chat",
@@ -8367,8 +8562,8 @@ class ChatService:
                     metadata={
                         "provider": prepared.provider_profile.id,
                         "model_id": prepared.resolved_model,
-                        "cleared": cleared,
-                        "results": len(whole),
+                        "count": cleared,
+                        "item_count": len(whole),
                     },
                 )
                 return retry
@@ -10382,6 +10577,13 @@ class ChatService:
                     components,
                     self._conversation_search_components(components, turn.session_id),
                 )
+            if components is not None:
+                components = combine_tool_components(
+                    components,
+                    notes_components(
+                        self.store, components.scope, Path(components.workspace)
+                    ),
+                )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
             deferred = catalog_snapshot(turn.request_snapshot).get("deferred")
@@ -11969,6 +12171,9 @@ class ChatService:
             compaction_usage=latest.usage if latest else ChatTokenUsage(),
             compaction_cost_usd=latest.cost_usd if latest else 0.0,
             snapshot=latest,
+            working_notes=working_notes_status(
+                read_working_notes(self.store, session.id)
+            ),
         )
 
     def runtime_switch_preflight(
@@ -13495,6 +13700,9 @@ class ChatService:
                                     "capability": item.get("name"),
                                     "display_name": item.get("display_name"),
                                     "status": item.get("status"),
+                                    # What the call acted on, for the tool
+                                    # activity later turns are sent.
+                                    "brief": step_brief(item.get("arguments")),
                                     "summary": item.get("result_summary"),
                                     "evidence_ids": item.get("evidence_ids", []),
                                     "result_artifact_id": item.get(

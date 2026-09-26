@@ -126,6 +126,15 @@ class ContextLimits(BaseModel):
     route_limits_required: bool = False
 
 
+class WorkingNotesStatus(BaseModel):
+    """The conversation's working notes as the assistant last wrote them."""
+
+    content: str
+    revision: int = Field(ge=1)
+    updated_at: str
+    turn_id: str | None = None
+
+
 class ContextStatus(BaseModel):
     owner_type: ContextOwnerType
     owner_id: str
@@ -160,6 +169,8 @@ class ContextStatus(BaseModel):
     compaction_usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
     compaction_cost_usd: float = Field(default=0.0, ge=0)
     snapshot: ContextSnapshot | None = None
+    # None until the assistant first writes notes for the conversation.
+    working_notes: WorkingNotesStatus | None = None
 
 
 class ProviderRequestInput(BaseModel):
@@ -1503,4 +1514,5 @@ __all__ = [
     "lexical_score",
     "memory_text",
     "resolve_context_limits",
+    "WorkingNotesStatus",
 ]

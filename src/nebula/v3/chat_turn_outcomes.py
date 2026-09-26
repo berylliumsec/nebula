@@ -19,6 +19,7 @@ from typing import Any
 from .domain import ChatMessage, ChatTurn, ChatTurnStatus
 from .providers import ModelMessage
 from .redaction import redact_text
+from .tool_activity import step_brief
 
 TURN_OUTCOME_KIND = "turn_outcome"
 
@@ -143,6 +144,7 @@ def turn_outcome_metadata(
                 "capability": item.get("name"),
                 "display_name": item.get("display_name"),
                 "status": item.get("status"),
+                "brief": step_brief(item.get("arguments")),
                 "summary": item.get("result_summary"),
                 "evidence_ids": item.get("evidence_ids", []),
                 "result_artifact_id": item.get("result_artifact_id"),

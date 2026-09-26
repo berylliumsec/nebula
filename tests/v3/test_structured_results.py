@@ -599,11 +599,15 @@ def test_publishing_is_offered_to_a_goal_turn_and_to_nothing_else(
     assert set(inside.tool_components.specs) == {
         "skill.read_resource",
         DASHBOARD_PUBLISH_TOOL_NAME,
+        "notes.write",
     }
     # The goal turn is also told to show the operator where the work stands.
     assert DASHBOARD_PUBLISH_TOOL_NAME in (inside.model_request.instructions or "")
 
     # A conversation with the same runtime but no goal is not offered it.
     outside = prepare(session_id="session-plain")
-    assert set(outside.tool_components.specs) == {"skill.read_resource"}
+    assert set(outside.tool_components.specs) == {
+        "skill.read_resource",
+        "notes.write",
+    }
     assert DASHBOARD_PUBLISH_TOOL_NAME not in (outside.model_request.instructions or "")

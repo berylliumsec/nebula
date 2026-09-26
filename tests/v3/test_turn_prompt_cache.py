@@ -374,18 +374,28 @@ def test_failed_steps_fold_outside_the_recent_window(tmp_path):
     assert replayed_steps == list(range(STEPS - len(replayed_steps) - 1, STEPS - 1))
     block = str(last.messages[-1].content).split(HEADING, 1)[1]
     checkpoint = json.loads(block.split("\n", 1)[1])
-    assert checkpoint["schema"] == "nebula.chat-turn-checkpoint/v2"
+    assert checkpoint["schema"] == "nebula.chat-turn-checkpoint/v3"
     assert checkpoint["covered_steps"] == [[0, replayed_steps[0] - 1]]
-    assert checkpoint["step_fields"][-1] == "failure"
+    assert checkpoint["step_fields"] == [
+        "number",
+        "tool_index",
+        "state",
+        "did",
+        "summary",
+        "artifacts",
+        "failure",
+    ]
     receipts = {receipt[0]: receipt for receipt in checkpoint["steps"]}
     for step in range(replayed_steps[0]):
         receipt = receipts[step]
+        # Every receipt says what its call acted on.
+        assert receipt[3] == json.dumps({"value": str(step)}, separators=(",", ":"))
         if (step + 1) % FAIL_EVERY:
             assert receipt[2] == "complete"
-            assert len(receipt) < 6
+            assert len(receipt) < 7
             continue
         assert receipt[2] == "failed"
-        failure = receipt[5]
+        failure = receipt[6]
         assert (
             failure["arguments_sha256"]
             == hashlib.sha256(
@@ -496,7 +506,7 @@ def test_replay_stays_bounded_with_fifty_failed_steps(tmp_path):
     assert len(replay) < RECENT_RESPONSE_GROUPS + CHECKPOINT_STEP_INTERVAL
     assert max(sizes) < 24 * 1_000
     assert checkpoint is not None
-    facts = {receipt[0]: receipt[5] for receipt in checkpoint.summary["steps"]}
+    facts = {receipt[0]: receipt[6] for receipt in checkpoint.summary["steps"]}
     assert facts[0]["category"] == "permission_denied"
     assert facts[0]["retry_safe"] is False
     assert facts[1]["category"] == "invalid_arguments"
@@ -584,7 +594,7 @@ def test_a_v1_checkpoint_still_replays_the_failures_it_left_out(tmp_path):
         ledger.append(turn.id, _entry(step))
     checkpoint, replay = ledger.compacted_history(turn)
     assert checkpoint is not None
-    assert checkpoint.summary["schema"] == "nebula.chat-turn-checkpoint/v2"
+    assert checkpoint.summary["schema"] == "nebula.chat-turn-checkpoint/v3"
     assert [entry["step"] for entry in replay][:1] != [3]
     assert {3, 7} <= {receipt[0] for receipt in checkpoint.summary["steps"]}
 

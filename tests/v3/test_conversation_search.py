@@ -535,6 +535,8 @@ def test_a_compacted_tool_turn_is_offered_search_and_a_resume_keeps_it(
     assert set(compacted.tool_components.specs) == {
         "skill.read_resource",
         CONVERSATION_SEARCH_TOOL_NAME,
+        # Every turn with tools can also keep working notes.
+        "notes.write",
     }
     assert compacted.turn.request_snapshot["conversation_search"] is True
 
@@ -573,7 +575,7 @@ def test_a_compacted_tool_turn_is_offered_search_and_a_resume_keeps_it(
     # A conversation that still fits has nothing archived to search.
     short = prepare("short")
     assert short.context_snapshot is None
-    assert set(short.tool_components.specs) == {"skill.read_resource"}
+    assert set(short.tool_components.specs) == {"skill.read_resource", "notes.write"}
     assert short.turn.request_snapshot["conversation_search"] is False
     # The compacted request was sized with the search tool's definition.
     definition = chat_module.estimate_tool_definitions(

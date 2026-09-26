@@ -723,9 +723,14 @@ def test_prepare_records_the_jev_receipt_and_adds_catalog_tools(tmp_path, monkey
     catalog = prepared.turn.request_snapshot["tool_catalog"]
     assert catalog["ranker"] == "jev" and catalog["preloaded"] == [MCP_TOOL]
     assert catalog["source_hints"] == ["issue-tracker"]
-    assert {CATALOG_SEARCH, CATALOG_LOAD, CATALOG_CALL, MCP_TOOL, NOTES_TOOL} == set(
-        prepared.tool_components.specs
-    )
+    assert {
+        CATALOG_SEARCH,
+        CATALOG_LOAD,
+        CATALOG_CALL,
+        MCP_TOOL,
+        NOTES_TOOL,
+        "notes.write",
+    } == set(prepared.tool_components.specs)
     snapshot = prepared.turn.request_snapshot
     assert snapshot["mcp_server_ids"] == ["notes"]
     assert [item["id"] for item in snapshot["mcp_catalog_snapshot"]] == ["tracker"]

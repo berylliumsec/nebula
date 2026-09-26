@@ -49,6 +49,7 @@ from nebula.v3.tool_catalog import (
 from nebula.v3.tools import InvalidToolArguments, ToolInvocation
 from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
 from tests.v3.test_knowledge_index import SecurityEmbeddingFunction
+from nebula.v3.working_notes import NOTES_WRITE_TOOL_NAME
 from tests.v3.test_tool_suggestions import MCP_TOOL, NOTES_TOOL, _mcp_service, _spec
 
 CREDENTIAL_TOOL = "mcp.vault.rotate_password"
@@ -704,6 +705,7 @@ def test_prepare_defers_by_default_and_ranks_locally(tmp_path, monkeypatch):
         CATALOG_SEARCH,
         CATALOG_LOAD,
         CATALOG_CALL,
+        NOTES_WRITE_TOOL_NAME,
     }
     # The selected server was built with every other usable one, and only
     # the other one's tool is on demand.
@@ -767,7 +769,7 @@ def test_prepare_sends_only_selected_servers_when_on_demand_loading_is_off(
     assert service.tool_platform.calls == [["notes"]]
     assert prepared.turn.request_snapshot["tool_catalog"] is None
     assert prepared.turn.request_snapshot["mcp_catalog_snapshot"] == []
-    assert set(prepared.tool_components.specs) == {NOTES_TOOL}
+    assert set(prepared.tool_components.specs) == {NOTES_TOOL, NOTES_WRITE_TOOL_NAME}
 
 
 def test_on_demand_servers_never_turn_tools_on_for_a_plain_chat(tmp_path, monkeypatch):
@@ -834,7 +836,11 @@ def test_prepare_keeps_an_always_loaded_tool_in_the_function_list(
     # The pin covers the one on-demand tool and the selected server is sent
     # whole, so nothing is left to defer and the catalog tools are omitted.
     assert prepared.turn.request_snapshot["tool_catalog"] is None
-    assert set(prepared.tool_components.specs) == {MCP_TOOL, NOTES_TOOL}
+    assert set(prepared.tool_components.specs) == {
+        MCP_TOOL,
+        NOTES_TOOL,
+        NOTES_WRITE_TOOL_NAME,
+    }
 
 
 def test_scope_update_without_the_field_keeps_on_demand_loading(tmp_path):

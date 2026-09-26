@@ -33,9 +33,12 @@ stateDiagram-v2
 
 `Stored` is durable; `Request` is a temporary projection. A new user turn
 rebuilds from saved messages. Previous turn tool calls are not appended to that
-new request as a raw transcript. A snapshot is derived and must cite its
-covered canonical messages. In `Request`, the memory leads the first message
-kept verbatim and retrieved originals follow the current message; the
+new request as a raw transcript; each saved answer carries a bounded,
+deterministic tool-activity block with the ids that read its tools' output
+again, and the conversation's working notes follow the new operator message
+and any retrieved originals. A snapshot is derived and must cite its covered
+canonical messages. In `Request`, the memory leads the first message kept
+verbatim and retrieved originals follow the current message; the
 instructions carry neither. No canonical message is left out: moving the
 boundary compacts the messages it passes rather than dropping them. Pending
 approvals/recovery block a new user turn before this diagram begins.
@@ -48,21 +51,28 @@ stateDiagram-v2
     ToolStep --> Ledger: append step event; retain output/artifact
     Ledger --> Replay: reconstruct latest step projection
     Replay --> Recent: retain latest 8 response groups in full
-    Recent --> Checkpoint: 16 eligible steps or 24k estimated tokens or over target
+    Recent --> Checkpoint: 16 eligible steps or 24k estimated tokens
     Recent --> Fit: checkpoint does not advance
-    Checkpoint --> Fit: fold older nonwaiting steps into bounded receipts
-    Fit --> Clear: request still over target
-    Fit --> Send: request fits
-    Clear --> Send: replace oldest full outputs with receipts
+    Checkpoint --> Fit: fold older nonwaiting steps into bounded receipts + notes
+    Fit --> Sticky: replay results already cleared this turn as receipts
+    Sticky --> Send: request fits target
+    Sticky --> Cross: request crosses target
+    Cross --> Clear: advance checkpoint; still above watermark
+    Cross --> Send: advance reaches watermark
+    Clear --> Send: clear oldest whole outputs down to watermark
     Send --> ToolStep: model requests another tool
     Send --> [*]: model completes answer
 ```
 
-The checkpoint has a 16 KiB byte cap and can omit individual receipts while
-recording their covered ranges/count and an `omitted_steps` count. Clearing
-keeps result identity and available artifact references. Neither operation
-deletes the durable ledger. Waiting approvals/callbacks remain outside the
-checkpoint. The newest result stays whole when hard capacity allows.
+Receipts say what each step acted on and how it ended. Their byte bound is 3%
+of input capacity, between 16 KiB and 64 KiB; over it, individual receipts are
+omitted while their covered ranges/count and an `omitted_steps` count remain.
+A checkpoint also carries the conversation's latest working notes. Clearing
+keeps result identity and available artifact references, and a cleared result
+stays cleared for the rest of the turn, so earlier request bytes change once
+per target crossing. Neither operation deletes the durable ledger. Waiting
+approvals/callbacks remain outside the checkpoint. The newest result stays
+whole when hard capacity allows.
 
 ## Operator-visible states and recovery
 
