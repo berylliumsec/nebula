@@ -1,13 +1,13 @@
 {
-  "change_digest": "39bc21563ac9d9fc1d3c05f9ec084aea20a7f747eea0b4055cefc37d09b25c94",
-  "reviewed_by": "Claude focused review for ctx-capacity-source",
-  "reason": "Core now reports which limit binds the context window. resolve_context_limits records binding_limit (model | configured | route | fallback) and input_limit_binds; ContextStatus exposes binding_limit, input_capacity and input_limit_binds on the chat and mission context APIs (null for runtime-managed context); source/capacity_source keep their meaning (they are read by api.py and chat.py only to fill capacity_source). The Working context capacity label now uses binding_limit and input_capacity instead of inferring them. Python: test_context.py (five binding-limit unit tests: configured below verified routes, smallest route with and without its input limit, catalog window below every route, catalog/known/configured/fallback, unverified OpenRouter floor/primary route/configured) plus the files that resolve limits or serve the context API: test_chat_api.py (chat, mission and harness context payloads), test_model_output_budget.py and test_chat_context_assembly.py. Frontend: WorkingContextPanel (label cases for every binding and an older Core), client mapping, ProviderRequestInputDetails and the App saved-memory journey. Playwright: area:working-context and entry:assistant on desktop, mobile Chromium and mobile WebKit (SessionsPage renders the panel).",
-  "exclusions": "Full suites are not approved and are excluded. Rules for chat.py/api.py/context.py also map conversation-progress, provider-reasoning and core-api; they are not selected because the backend change only adds three fields to the context status payload and ContextLimits (no request, prompt, stream or storage behaviour changes), which the selected Python files cover. provider-request-breakdown-core is not selected: its local vLLM profile has no route limits and its label text is unchanged. The real-Core check (OpenRouter with verified routes, capped and uncapped, and an OpenAI-compatible profile, at a LAN origin with the production bundle) is recorded in the PR body. Native/Tauri tests are unaffected.",
+  "change_digest": "cf7151588e7ce608f29f7b89182e0f90045ea42ac0f527400462dbb8ee051f0b",
+  "reviewed_by": "Claude focused review for session-deeplink-project",
+  "reason": "SessionsPage now resolves a ?session= link that is not in the open project's conversation list: it reads GET chat-sessions/{id} (new ApiClient.getChatSession), replaces the URL with the owning project's workbench (the canonical project route selects it), and shows ConversationLinkNotice states (opening, not found, refused, unknown project, archived with Restore project, failed with Try again) instead of a blank chat. It also detaches a conversation left open when the URL moves to an unresolvable link, skips `session` on the Terminal view (terminal ids), and opens the chat for a view-less conversation link loaded fresh. Selected: the classifier and notice unit tests (conversationLink.test.ts, ConversationLinkNotice.test.tsx); the App-level suites that render SessionsPage through routing and deep links (App.test.tsx, App.projectBoundary.test.tsx, App.sendConsent.test.tsx, App.subagentChoice.test.tsx, chatDraftNavigation.test.tsx) and client.test.ts for the new client method; tests/test_playwright_impact.py because ui/playwright-impact.json gains the conversation-deep-link rule and areas. Playwright: entry:assistant/{desktop,mobile-chromium,mobile-webkit} as required for any SessionsPage change (78+73+72 tests, each including the new mocked journey); area:conversation-deep-link runs the new mocked journey on desktop, compact and the 320/390/430 Chromium and WebKit phone projects (8); area:conversation-deep-link-core runs the new real-Core LAN journey on assistant-real-desktop, -chromium-390 and -webkit-390 (3). Counts from vitest runs, pytest collection and playwright --list.",
+  "exclusions": "No Python product tests: Core is unchanged (the generic read-only GET /api/v1/chat-sessions/{id} already exists). No native tests: no Rust or desktop-shell change. Other SessionsPage-matched areas (conversation-progress, provider-reasoning, provider-thinking, chat-edit-in-place, research-context-core) are excluded: the change only adds link resolution before a conversation is selected and does not touch streaming, reasoning, editing or research context; the assistant entries cover the rest of the page. The new real-Core journey also passed locally on assistant-real-compact and the 320/430 phone projects; CI keeps 3 of the 8 to bound real-Core cost. No full suite.",
   "expected_tests": {
-    "python": 152,
-    "frontend": 139,
+    "python": 33,
+    "frontend": 146,
     "native": 0,
-    "playwright": 226
+    "playwright": 234
   },
   "python_versions": [
     "3.12"
@@ -15,22 +15,24 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_context.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_model_output_budget.py",
-    "tests/v3/test_chat_context_assembly.py"
+    "tests/test_playwright_impact.py"
   ],
   "frontend": [
-    "ui/src/components/WorkingContextPanel.test.tsx",
-    "ui/src/components/ProviderRequestInputDetails.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/App.test.tsx"
+    "ui/src/pages/conversationLink.test.ts",
+    "ui/src/components/ConversationLinkNotice.test.tsx",
+    "ui/src/App.test.tsx",
+    "ui/src/App.projectBoundary.test.tsx",
+    "ui/src/App.sendConsent.test.tsx",
+    "ui/src/App.subagentChoice.test.tsx",
+    "ui/src/pages/chatDraftNavigation.test.tsx",
+    "ui/src/api/client.test.ts"
   ],
   "native": [],
   "playwright": [
     "entry:assistant/desktop",
     "entry:assistant/mobile-chromium",
     "entry:assistant/mobile-webkit",
-    "area:working-context"
+    "area:conversation-deep-link",
+    "area:conversation-deep-link-core"
   ]
 }
