@@ -80,7 +80,7 @@ from .runtime_platform import (
     notes_components,
 )
 from .tool_activity import lookup_identifiers, step_brief, tool_activity_block
-from .turn_progress import TurnProgress
+from .turn_progress import TurnProgress, block_budget, digest_trigger
 from .working_notes import (
     NOTES_ROUTING_INSTRUCTIONS,
     NOTES_WRITE_TOOL_NAME,
@@ -8888,7 +8888,9 @@ class ChatService:
             working_notes=lambda: checkpoint_notes(
                 read_working_notes(self.store, turn.session_id)
             ),
-            progress=lambda steps: self.turn_progress.block(turn, steps),
+            progress=lambda steps: self.turn_progress.block(
+                turn, steps, block_budget(limits.input_capacity)
+            ),
         )
 
     def _fold_deeper(
@@ -8937,20 +8939,43 @@ class ChatService:
         )
         return True
 
+    @staticmethod
+    def _turn_request_text(prepared: PreparedChat) -> str | None:
+        """What the operator asked of this turn, bounded, for its progress memory.
+
+        It tells the compactor which findings matter (the keys a request asks
+        for, say); the compactor treats it as context, never as a request.
+        """
+
+        candidates: list[tuple[ChatRole, str]] = [
+            *((item.role, item.content) for item in reversed(prepared.new_messages)),
+            *((item.role, item.content) for item in reversed(prepared.stored_messages)),
+        ]
+        for role, content in candidates:
+            if role == ChatRole.USER and content.strip():
+                text = content.strip()
+                return text if len(text) <= 1_500 else text[:1_499] + "…"
+        return None
+
     async def _refresh_turn_progress(
         self, prepared: PreparedChat, turn: ChatTurn
     ) -> None:
         """Summarise a long turn's folded steps before its next request is built.
 
-        Once enough foldable output has accumulated
-        (``turn_progress.DIGEST_TOKEN_TRIGGER``), the turn's model turns it
-        into a cited progress memory; the next checkpoint the request advances
+        Once enough foldable output has accumulated (``digest_trigger``), the
+        turn's model turns it into a cited progress memory, guided by the goal
+        or else the turn's request; the next checkpoint the request advances
         carries it, so the memory changes only when the checkpoint does. It is
         charged to the goal like conversation compaction. A failure leaves the
         checkpoint with its receipts alone and the turn going.
         """
 
-        sources = self.turn_progress.due(turn)
+        limits = resolve_context_limits(
+            prepared.provider_profile,
+            model=prepared.resolved_model,
+            requested_output_tokens=prepared.model_request.max_output_tokens,
+        )
+        sources = self.turn_progress.due(turn, digest_trigger(limits.input_capacity))
         if not sources:
             return
         goal_id = turn.goal_id or self.subagents.child_goal_id(turn)
@@ -8968,7 +8993,11 @@ class ChatService:
                 profile=prepared.provider_profile,
                 provider=prepared.provider,
                 model=prepared.resolved_model,
-                objective=goal.objective if goal is not None else None,
+                objective=(
+                    goal.objective
+                    if goal is not None
+                    else self._turn_request_text(prepared)
+                ),
                 budget=ContextCallBudget(
                     max_tokens=(
                         max(0, goal.token_budget - goal.usage.total_tokens)

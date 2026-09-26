@@ -466,3 +466,57 @@ def test_a_long_output_keeps_its_head_and_tail():
     assert excerpt.endswith("db_host = 10.44.3.17:5432 TAIL")
     assert "characters omitted] …" in excerpt
     assert _excerpt("short", STEP_OUTPUT_EXCERPT_CHARS, 1_000) == "short"
+
+
+def test_a_small_window_refreshes_sooner_and_carries_a_bounded_memory():
+    from nebula.v3.turn_progress import block_budget, digest_trigger
+
+    assert digest_trigger(1_000_000) == DIGEST_TOKEN_TRIGGER
+    assert digest_trigger(13_952) == 3_488
+    assert block_budget(13_952) == 1_395
+    memory = ContextMemory(
+        summary="Keys were read.",
+        references=[
+            ContextMemoryItem(
+                text=f"Key {index}: KAPPA-{4700 + index}",
+                sources=[
+                    ContextSourceReference(source_kind="turn_step", source_id="0")
+                ],
+            )
+            for index in range(200)
+        ],
+    )
+    snapshot = ContextSnapshot(
+        engagement_id="project",
+        owner_type=ContextOwnerType.CHAT_TURN,
+        owner_id="turn",
+        status=ContextSnapshotStatus.READY,
+        compacted_through=0,
+        memory=memory,
+        source_references=[
+            ContextSourceReference(source_kind="turn_step", source_id="0")
+        ],
+        provider_profile_id="provider",
+        model="model-a",
+        prompt_version="nebula-context-v2",
+        source_sha256="0" * 64,
+    )
+
+    whole = progress_block(snapshot, {0})
+    bounded = progress_block(snapshot, {0}, max_tokens=400)
+
+    assert whole is not None and bounded is not None
+    assert len(whole["memory"]["references"]) == 200
+    assert 0 < len(bounded["memory"]["references"]) < 200
+    assert context_module.estimate_tokens(json.dumps(bounded["memory"])) < 600
+
+
+def test_without_a_goal_the_turn_request_guides_the_memory(tmp_path):
+    provider = DigestingProvider(calls=30)
+    store, service, prepared = _long_turn(tmp_path, provider, PlantedScanBroker())
+
+    asyncio.run(service.complete(prepared))
+
+    assert provider.compactions
+    prompt = json.loads(str(provider.compactions[0].messages[0].content))
+    assert prompt["objective"] == "Use the safe tool once."

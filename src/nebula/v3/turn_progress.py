@@ -28,6 +28,7 @@ from .context import (
     ContextCompactor,
     ContextSource,
     estimate_tokens,
+    fit_memory,
 )
 from .chat_turn_ledger import ChatTurnLedger
 from .domain import (
@@ -48,8 +49,15 @@ from .tool_results import sanitize_model_history_result
 # Output of folded steps not yet in the turn's progress memory, in estimated
 # tokens of their arguments and results, that starts a refresh. Below it the
 # checkpoint's receipts are enough, and a summary call is not worth its cost.
-# Replayed reasoning is left out: it is not what the model loses.
+# Replayed reasoning is left out: it is not what the model loses. A small
+# window starts sooner, at a quarter of its input capacity: on a 16K window
+# the eval's long turns failed before 8,000 tokens had folded.
 DIGEST_TOKEN_TRIGGER = 8_000
+_TRIGGER_CAPACITY_DIVISOR = 4
+# The share of input capacity the carried memory may take, at least this
+# many tokens: the checkpoint cannot be cleared to fit the window.
+_BLOCK_CAPACITY_DIVISOR = 10
+_BLOCK_MIN_TOKENS = 256
 # What one step contributes as a source: its brief, Core's summary, and the
 # output the model was sent, its head and tail when it is longer. A small
 # file or command output fits whole; a real run lost a value 1,500
@@ -212,13 +220,30 @@ def _memory_block(memory: ContextMemory) -> dict[str, Any]:
     return block
 
 
+def digest_trigger(input_capacity: int) -> int:
+    """Newly folded output, in estimated tokens, that starts a refresh."""
+
+    return max(
+        1, min(DIGEST_TOKEN_TRIGGER, input_capacity // _TRIGGER_CAPACITY_DIVISOR)
+    )
+
+
+def block_budget(input_capacity: int) -> int:
+    """Estimated tokens the carried memory may take for this model."""
+
+    return max(_BLOCK_MIN_TOKENS, input_capacity // _BLOCK_CAPACITY_DIVISOR)
+
+
 def progress_block(
-    snapshot: ContextSnapshot, folded_steps: set[int]
+    snapshot: ContextSnapshot,
+    folded_steps: set[int],
+    max_tokens: int | None = None,
 ) -> dict[str, Any] | None:
     """The checkpoint entry a progress memory renders as, or None.
 
     Only a memory of steps the checkpoint folds is carried: every step it
-    cites is then also a receipt in the same checkpoint.
+    cites is then also a receipt in the same checkpoint. With ``max_tokens``
+    the memory is first trimmed by importance to fit it.
     """
 
     if snapshot.status != ContextSnapshotStatus.READY or snapshot.memory is None:
@@ -226,11 +251,16 @@ def progress_block(
     covered = set(_cited_steps(snapshot.source_references))
     if not covered or not covered <= folded_steps:
         return None
+    memory = (
+        fit_memory(snapshot.memory, max_tokens)
+        if max_tokens is not None
+        else snapshot.memory
+    )
     return {
         "schema": PROGRESS_SCHEMA,
         "covered_steps": _step_ranges(covered),
         "quality": snapshot.quality.value,
-        "memory": _memory_block(snapshot.memory),
+        "memory": _memory_block(memory),
         "note": PROGRESS_NOTE,
     }
 
@@ -284,13 +314,16 @@ class TurnProgress:
         self._remember(turn.id, snapshot, covered)
         return snapshot
 
-    def due(self, turn: ChatTurn) -> list[ContextSource]:
+    def due(
+        self, turn: ChatTurn, trigger: int = DIGEST_TOKEN_TRIGGER
+    ) -> list[ContextSource]:
         """The sources of a refresh the turn needs now, or ``[]``.
 
-        A refresh is due once the steps a checkpoint may fold, less those the
-        last attempt already covered, reach ``DIGEST_TOKEN_TRIGGER``. The
-        sources are every foldable step, so the memory stays one account of
-        the whole turn; unchanged groups of them cost nothing to summarise.
+        A refresh is due once the output of the steps a checkpoint may fold,
+        less those the last attempt already covered, reaches ``trigger``
+        (``digest_trigger``). The sources are every foldable step, so the
+        memory stays one account of the whole turn; the previous memory
+        stands for those it covers.
         """
 
         foldable = self.ledger.foldable(turn)
@@ -300,7 +333,7 @@ class TurnProgress:
         with self._lock:
             _, attempted = self._state.get(turn.id, (None, frozenset()))
         new = [entry for entry in foldable if _step(entry) not in attempted]
-        if not new or _output_tokens(new) < DIGEST_TOKEN_TRIGGER:
+        if not new or _output_tokens(new) < trigger:
             return []
         return [
             step_source(entry)
@@ -347,15 +380,26 @@ class TurnProgress:
         finally:
             self._remember(turn.id, latest, attempted)
 
-    def block(self, turn: ChatTurn, folded_steps: set[int]) -> dict[str, Any] | None:
+    def block(
+        self,
+        turn: ChatTurn,
+        folded_steps: set[int],
+        max_tokens: int | None = None,
+    ) -> dict[str, Any] | None:
         """What a checkpoint folding ``folded_steps`` carries as ``progress``."""
 
         snapshot = self.latest(turn)
-        return progress_block(snapshot, folded_steps) if snapshot is not None else None
+        return (
+            progress_block(snapshot, folded_steps, max_tokens)
+            if snapshot is not None
+            else None
+        )
 
 
 __all__ = [
     "DIGEST_TOKEN_TRIGGER",
+    "block_budget",
+    "digest_trigger",
     "PROGRESS_NOTE",
     "PROGRESS_SCHEMA",
     "STEP_OUTPUT_EXCERPT_CHARS",

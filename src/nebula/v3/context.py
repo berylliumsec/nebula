@@ -1199,6 +1199,12 @@ def _fit_memory(memory: ContextMemory, token_budget: int) -> tuple[ContextMemory
     )
 
 
+def fit_memory(memory: ContextMemory, token_budget: int) -> ContextMemory:
+    """``memory`` trimmed by importance until its rendered text fits the budget."""
+
+    return _fit_memory(memory, token_budget)[0]
+
+
 def _item_count(memory: ContextMemory) -> int:
     return sum(len(getattr(memory, name)) for name in _MEMORY_LISTS)
 
@@ -2853,6 +2859,7 @@ __all__ = [
     "estimate_model_request_parts",
     "estimate_tokens",
     "EXTRACTIVE_MEMORY_SUMMARY",
+    "fit_memory",
     "known_model_limits",
     "lexical_score",
     "compactor_memory_schema",
