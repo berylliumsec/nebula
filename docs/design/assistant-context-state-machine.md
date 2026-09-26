@@ -20,8 +20,9 @@ stateDiagram-v2
     Compact --> Failed: current message and mandatory input exceed capacity
     Reuse --> Request: everything after its boundary fits
     Reuse --> Summarize: rest no longer fits beside its memory
-    Summarize --> Ready: validated sourced memory
-    Summarize --> Failed: model, validation, or budget error
+    Summarize --> Ready: validated memory (invalid items dropped; reused leaf segments)
+    Summarize --> Ready: model or validation failure gives a degraded extract
+    Summarize --> Failed: budget error or compaction cannot fit
     Ready --> Request: fits target
     Ready --> Summarize: over target without excerpts; boundary moves forward (max 3)
     Ready --> Request: still over target, within input capacity
@@ -80,8 +81,8 @@ whole when hard capacity allows.
 | --- | --- | --- |
 | `not_needed` | Core estimates saved conversation below the target; no snapshot required | Continue |
 | `stale` | Active estimate needs compaction or an existing snapshot no longer fits | Send/continue and let Core reassemble; inspect limits if it fails |
-| `ready` | A sourced snapshot is available for the active projection | Inspect saved memory or original transcript; continue |
-| `failed` | Latest required compaction failed; original messages remain | Retry after resolving model, budget, or capacity error |
+| `ready` | A sourced snapshot is available for the active projection; `quality` says whether it is complete, salvaged, or a degraded extract | Inspect saved memory or original transcript; continue |
+| `failed` | Latest required compaction failed on budget or capacity; original messages remain | Retry after resolving the budget or capacity error |
 | `runtime_managed` | External harness owns context and Core has no authoritative capacity | Inspect harness activity |
 | pending approval/recovery | Durable turn or uncertain effect, outside lossy memory | Resolve the decision/effect before starting another turn |
 

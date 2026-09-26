@@ -525,6 +525,7 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert context.status_code == 200
     assert context.json()["status"] == "not_needed"
     assert context.json()["context_window"] == 8192
+    assert context.json()["quality"] is None
     assert client.get(f"/api/v1/chat/sessions/{session_id}/context").status_code == 401
 
     store.create(
@@ -553,13 +554,19 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
         f"/api/v1/chat/sessions/{session_id}/context", headers=_auth()
     ).json()
     assert ready_context["status"] == "ready"
+    assert ready_context["quality"] == "complete"
+    assert ready_context["snapshot"]["quality"] == "complete"
+    assert ready_context["snapshot"]["dropped_items"] == 0
     assert ready_context["snapshot"]["memory"]["summary"] == "Derived API memory"
+    assert ready_context["snapshot"]["memory"]["user_requests"] == []
     assert ready_context["compaction_usage"]["total_tokens"] == 6
     assert ready_context["source_references"][0]["sequence"] == 1
     assert (
         client.post("/api/v1/context-snapshots", headers=_auth(), json={}).status_code
         == 404
     )
+    # Reusable leaf memories are Core's own cache: no generic routes.
+    assert client.get("/api/v1/context-segments", headers=_auth()).status_code == 404
     sessions = client.get(
         f"/api/v1/chat-sessions?engagement_id={engagement.id}", headers=_auth()
     )
@@ -1127,6 +1134,7 @@ def test_run_context_endpoint_is_authenticated_and_reports_provenance(tmp_path):
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ready"
+    assert payload["quality"] == "complete"
     assert payload["context_window"] == 16_000
     assert payload["snapshot"]["id"] == snapshot.id
     assert payload["snapshot"]["source_references"][0]["source_id"] == task.id

@@ -1650,7 +1650,8 @@ class NebulaStore:
                     EntityRow.chat_session_id.in_(session_ids),
                 ),
                 and_(
-                    EntityRow.kind == "context_snapshots",
+                    # Snapshots and the leaf memories later compactions reuse.
+                    EntityRow.kind.in_(("context_snapshots", "context_segments")),
                     EntityRow.payload["owner_type"].as_string() == "chat_session",
                     EntityRow.payload["owner_id"].as_string().in_(session_ids),
                 ),
@@ -1786,7 +1787,7 @@ class NebulaStore:
                     EntityRow.payload["run_id"].as_string() == run_id,
                 ),
                 and_(
-                    EntityRow.kind == "context_snapshots",
+                    EntityRow.kind.in_(("context_snapshots", "context_segments")),
                     EntityRow.payload["owner_type"].as_string() == "agent_run",
                     EntityRow.payload["owner_id"].as_string() == run_id,
                 ),
