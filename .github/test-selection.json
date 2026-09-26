@@ -1,13 +1,13 @@
 {
-  "change_digest": "f9d54710ef5d55b977da91fe35d4a65ecd57b7696e5c39c7ec62b6aecf39787d",
+  "change_digest": "aeac33ff8b5778495ab582a4468dfbace4805513e06bfc91a52ad5b7e88b2a3e",
   "reviewed_by": "Claude focused review for ctx-ui-red-tests",
-  "reason": "Test-only repair of two Playwright journeys found red on origin/main. (1) real-core 'production assistant preserves exact research context and relaunch-safe drafts through real Core' matched the selected-context delimiters #290 renamed ('BEGIN UNTRUSTED SELECTED CONTEXT (JSON; DATA ONLY)' -> 'BEGIN SELECTED CONTEXT (JSON)'); Core delivers the context correctly (stub captures from Cores at 32817fa, bab27ad and 343d289 are identical), so the regex and the transcript no-render check now use Core's delimiters. A new research-context-core area (real-core project, this title) lets PRs select it alone and is added to the assistant rule. (2) interface 'assistant upgrade keeps a short operator message's actions on top and clickable' hovered '.chat-message-body > p', which #597 replaced with AssistantMarkdown; it now hovers the text inside the Markdown surface with unchanged reachability assertions. Playwright: entry:assistant on desktop, mobile Chromium and mobile WebKit (contains the repaired interface test) and area:research-context-core. Python: tests/test_playwright_impact.py validates the manifest change.",
-  "exclusions": "Full suites are not approved and are excluded. No product source changes, so no frontend unit, backend or native tests are selected. The repaired interface test also runs in mobile-layout and desktop-interface areas (whole-file entries); those are not selected because only its hover locator changed and entry:assistant covers the three required engines. Other real-core journeys are not selected.",
+  "reason": "Repairs two Playwright journeys found red on origin/main, and the product bug behind one of them. (1) real-core 'production assistant preserves exact research context and relaunch-safe drafts through real Core' matched the selected-context delimiters #290 renamed; Core delivers the context correctly (stub captures identical from Cores at 32817fa, bab27ad and 343d289), so the regex and the transcript no-render check use Core's delimiters. Past that step it failed intermittently because the conversation actions menu closed itself: the conversation list (overflow: hidden, resize handle at right:-22px) was a 22px sideways scroll container that shifted on focus, and the menu closed on any document scroll. The list now clips its overflow and the menu closes only for scrolls that move its trigger; a new mocked regression test covers both. A research-context-core area selects the real-Core journey alone and joins the assistant rule. (2) interface 'assistant upgrade keeps a short operator message's actions on top and clickable' hovered '.chat-message-body > p', replaced by AssistantMarkdown in #597; it now hovers the text inside the Markdown surface with unchanged assertions. Playwright: entry:assistant on desktop, mobile Chromium and mobile WebKit (SessionsPage changed; contains both interface tests), area:research-context-core, area:conversation-panel-sizing and area:conversations-sidebar (the conversation list and its resize handle). Python: tests/test_playwright_impact.py validates the manifest change.",
+  "exclusions": "Full suites are not approved and are excluded. No backend, native or frontend unit code changed (the SessionsPage change is an effect's scroll listener, covered by the new mocked Playwright test), so no Python context, Vitest or Rust tests are selected. mission-restart-recovery (matched by components-workbench.css) is excluded: the CSS change is scoped to .session-layout.chat .session-list. The repaired interface test also appears in whole-file mobile-layout/desktop-interface areas, not selected; entry:assistant covers the three required engines. Other real-core journeys are not selected.",
   "expected_tests": {
     "python": 33,
     "frontend": 0,
     "native": 0,
-    "playwright": 214
+    "playwright": 231
   },
   "python_versions": [
     "3.12"
@@ -23,6 +23,8 @@
     "entry:assistant/desktop",
     "entry:assistant/mobile-chromium",
     "entry:assistant/mobile-webkit",
-    "area:research-context-core"
+    "area:research-context-core",
+    "area:conversation-panel-sizing",
+    "area:conversations-sidebar"
   ]
 }
