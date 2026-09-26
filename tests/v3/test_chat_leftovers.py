@@ -28,6 +28,7 @@ from nebula.v3.context import (
     ContextMemory,
     ContextSource,
     ContextSourceReference,
+    compactor_memory_schema,
 )
 from nebula.v3.domain import (
     ChatMessage,
@@ -191,7 +192,7 @@ def _request_memory(provider: ModelProvider, tmp_path: Path) -> ContextMemory:
         ),
         content="Operator: scan 10.0.0.0/24. Assistant: 3 hosts up.",
     )
-    memory, _usage = asyncio.run(
+    result = asyncio.run(
         compactor._request_memory(
             provider,
             "model-a",
@@ -203,10 +204,11 @@ def _request_memory(provider: ModelProvider, tmp_path: Path) -> ContextMemory:
             budget=None,
         )
     )
-    return memory
+    return result.memory
 
 
-SCHEMA_INSTRUCTION = json_schema_instruction(ContextMemory.model_json_schema())
+# The instructions carry the field guidance, so the schema is bare.
+SCHEMA_INSTRUCTION = json_schema_instruction(compactor_memory_schema())
 
 
 def test_compaction_without_structured_output_puts_the_schema_in_the_instructions(
@@ -231,7 +233,11 @@ def test_compaction_with_structured_output_keeps_the_schema_on_the_wire(tmp_path
     _request_memory(provider, tmp_path)
 
     [request] = provider.requests
-    assert request.response_schema == ContextMemory.model_json_schema()
+    assert request.response_schema == compactor_memory_schema()
+    # The model cites short source ids, and the objective is Core's to fill.
+    items = request.response_schema["$defs"]["ContextMemoryItem"]["properties"]
+    assert items["sources"]["items"] == {"type": "string"}
+    assert "objective" not in request.response_schema["properties"]
     assert SCHEMA_INSTRUCTION not in (request.instructions or "")
 
 

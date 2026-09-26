@@ -29,6 +29,7 @@ from nebula.v3.domain import (
     ChatGoalStatus,
     ChatRole,
     ChatSession,
+    ContextSnapshotQuality,
     Engagement,
     KnowledgeSource,
     NativeHookExecution,
@@ -3215,10 +3216,14 @@ def test_goal_budget_blocks_compaction_before_provider_spend(tmp_path, monkeypat
     assert store.get(ChatGoal, goal.id).usage.total_tokens == 0
 
 
-def test_goal_charges_failed_compactor_attempts(tmp_path, monkeypatch):
+def test_unusable_compactor_answers_degrade_and_the_chat_continues(
+    tmp_path, monkeypatch
+):
     class InvalidCompactorProvider(FakeProvider):
         async def complete(self, request: ModelRequest) -> ModelResponse:
             self.requests.append(request)
+            if request.metadata.get("operation") != "context_compaction":
+                return await super().complete(request)
             return ModelResponse(
                 provider_id=self.config.id,
                 model=request.model or "model-a",
@@ -3267,21 +3272,34 @@ def test_goal_charges_failed_compactor_attempts(tmp_path, monkeypatch):
     )
     provider = InvalidCompactorProvider(profile.id, local=True)
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
+    service = ChatService(store)
 
-    with pytest.raises(ChatCompactionError, match="valid sourced memory"):
-        ChatService(store).prepare(
-            ChatCompletionRequest(
-                session_id=session.id,
-                goal_id=goal.id,
-                provider_id=profile.id,
-                include_knowledge=False,
-                stream=True,
-                messages=[{"role": "user", "content": "Continue safely"}],
-            )
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            session_id=session.id,
+            goal_id=goal.id,
+            provider_id=profile.id,
+            include_knowledge=False,
+            stream=True,
+            messages=[{"role": "user", "content": "Continue safely"}],
         )
+    )
 
+    # The answer and its repair failed; the model is not asked again for
+    # later groups, and both calls are charged to the goal.
     assert len(provider.requests) == 2
     assert store.get(ChatGoal, goal.id).usage.total_tokens == 30
+    snapshot = prepared.context_snapshot
+    assert snapshot is not None
+    assert snapshot.quality == ContextSnapshotQuality.DEGRADED
+    assert snapshot.memory is not None
+    assert snapshot.memory.user_requests[0].text.startswith("Historical evidence 1:")
+    status = service.context_status(session.id)
+    assert status.status == "ready"
+    assert status.quality == ContextSnapshotQuality.DEGRADED
+    # The turn itself goes ahead on the extract.
+    response = asyncio.run(service.complete(prepared))
+    assert response.message.content == "Evidence-backed answer [source-a:chunk-a]."
 
 
 def test_pending_approval_blocks_new_turn_before_compaction_or_provider_spend(

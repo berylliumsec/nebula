@@ -585,6 +585,7 @@ CUSTOM_RESOURCES = {
     # The assistant's notes: written by notes.write, read through the
     # conversation's context route.
     "chat_working_notes",
+    "context_segments",
     "library_items",
     "operator_profiles",
     "runner_profiles",
@@ -10710,6 +10711,11 @@ def create_app(
             compaction_usage=latest.usage if latest else ChatTokenUsage(),
             compaction_cost_usd=latest.cost_usd if latest else 0.0,
             snapshot=latest,
+            quality=(
+                latest.quality
+                if latest is not None and latest.status == ContextSnapshotStatus.READY
+                else None
+            ),
         )
 
     if allow_internal_event_append:

@@ -212,10 +212,13 @@ def test_messages_between_the_boundary_and_the_tail_are_never_silently_dropped(
     # Long saved operator context and a large memory leave the first recent
     # tail no room beside them. Core used to compact, then drop the oldest
     # tail messages to fit, so they were neither sent nor summarised.
+    # The memory is as large as a compactor can write within its 1,024-token
+    # allowance on this 8,192-token window; a larger one no longer survives
+    # the roll-up, which bounds derived memory to that allowance.
     store, service, session, profile, provider = _chat(
         tmp_path,
         lambda provider_id: ReportingProvider(
-            provider_id, summary="Long derived summary. " * 200
+            provider_id, summary="Long derived summary. " * 170
         ),
         history=_history(20, repeat=45),
     )
@@ -226,7 +229,7 @@ def test_messages_between_the_boundary_and_the_tail_are_never_silently_dropped(
                 engagement_id=session.engagement_id,
                 session_id=session.id,
                 kind="question",
-                text=f"Open question {index}: " + ("which scope applies? " * 180),
+                text=f"Open question {index}: " + ("which scope applies? " * 189),
             )
         )
     canonical = service.session_messages(session.id)
@@ -557,8 +560,8 @@ def test_compaction_is_guided_by_the_goal_not_the_latest_message(tmp_path):
     )
 
     _send(service, session, profile, "thanks")
-    objective = json.loads(_compactions(provider)[0].messages[0].content)["objective"]
-    assert objective is None
+    # No goal: no objective is sent at all.
+    assert "objective" not in json.loads(_compactions(provider)[0].messages[0].content)
 
     goal = store.create(
         ChatGoal(

@@ -24,6 +24,7 @@ from .domain import (
     Artifact,
     ChatMessage,
     ChatSession,
+    ContextSegment,
     ContextSnapshot,
     Correlation,
     Engagement,
@@ -278,7 +279,7 @@ def _include_referenced_globals(
             elif isinstance(entity, HarnessSession):
                 harness_profile_ids.add(entity.harness_profile_id)
                 mcp_profile_ids.update(entity.mcp_server_ids)
-            elif isinstance(entity, ContextSnapshot):
+            elif isinstance(entity, (ContextSnapshot, ContextSegment)):
                 provider_ids.add(entity.provider_profile_id)
             elif isinstance(entity, ChatMessage):
                 if entity.provider_profile_id:

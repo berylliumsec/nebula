@@ -3416,6 +3416,20 @@ class ContextSnapshotStatus(StringEnum):
     FAILED = "failed"
 
 
+class ContextSnapshotQuality(StringEnum):
+    """How much of a ready snapshot's memory the compactor model produced."""
+
+    # Every item the model returned passed validation.
+    COMPLETE = "complete"
+    # The model's memory is used, but items that cited an unknown source,
+    # named an identifier their sources lack, or listed an unknown ID were
+    # dropped (counted in ``dropped_items``).
+    SALVAGED = "salvaged"
+    # The model returned nothing usable for at least part of the history, so
+    # that part is a deterministic extract of the originals, not a summary.
+    DEGRADED = "degraded"
+
+
 class ContextSourceReference(NebulaModel):
     """A provenance pointer into an authoritative transcript or mission ledger."""
 
@@ -3425,22 +3439,88 @@ class ContextSourceReference(NebulaModel):
 
 
 class ContextMemoryItem(NebulaModel):
-    text: str = Field(min_length=1, max_length=4_000)
-    sources: list[ContextSourceReference] = Field(min_length=1, max_length=64)
+    text: str = Field(
+        min_length=1,
+        max_length=4_000,
+        description=(
+            "One short, self-contained statement. Identifiers are copied exactly "
+            "as the cited sources write them."
+        ),
+    )
+    sources: list[ContextSourceReference] = Field(
+        min_length=1,
+        max_length=64,
+        description="The canonical_references of the sources that support it.",
+    )
 
 
 class ContextMemory(NebulaModel):
-    """Structured, derived working memory. It is never authoritative evidence."""
+    """Structured, derived working memory. It is never authoritative evidence.
 
-    objective: str | None = Field(default=None, max_length=10_000)
-    summary: str = Field(min_length=1, max_length=20_000)
-    confirmed_facts: list[ContextMemoryItem] = Field(default_factory=list)
-    decisions: list[ContextMemoryItem] = Field(default_factory=list)
-    constraints: list[ContextMemoryItem] = Field(default_factory=list)
-    corrections: list[ContextMemoryItem] = Field(default_factory=list)
-    open_questions: list[ContextMemoryItem] = Field(default_factory=list)
-    evidence_ids: list[str] = Field(default_factory=list)
-    artifact_ids: list[str] = Field(default_factory=list)
+    The field descriptions travel in the structured-output schema, so they are
+    part of the compactor prompt (see ``CONTEXT_PROMPT_VERSION``). Fields are
+    declared in the order the model writes them: the cited lists first, most
+    important first, and the free-text summary last, so an answer the output
+    limit cuts off loses the least.
+    """
+
+    user_requests: list[ContextMemoryItem] = Field(
+        default_factory=list,
+        description="Every distinct operator request or instruction, in order, "
+        "close to verbatim.",
+    )
+    current_state: list[ContextMemoryItem] = Field(
+        default_factory=list,
+        description="Where the work stands at the end: done, in progress, next step.",
+    )
+    corrections: list[ContextMemoryItem] = Field(
+        default_factory=list,
+        description="Statements later corrected or superseded, with the value "
+        "that now holds.",
+    )
+    constraints: list[ContextMemoryItem] = Field(
+        default_factory=list,
+        description="Requirements, limits, preferences and prohibitions that apply.",
+    )
+    decisions: list[ContextMemoryItem] = Field(
+        default_factory=list, description="Choices made, each with its reason."
+    )
+    confirmed_facts: list[ContextMemoryItem] = Field(
+        default_factory=list, description="Results the sources establish."
+    )
+    attempts: list[ContextMemoryItem] = Field(
+        default_factory=list,
+        description="Approaches tried and their outcomes, including failures, "
+        "exact errors and fixes.",
+    )
+    references: list[ContextMemoryItem] = Field(
+        default_factory=list,
+        description="Exact paths, URLs, hosts, ports, commands and IDs later work "
+        "may need, each with what it is.",
+    )
+    open_questions: list[ContextMemoryItem] = Field(
+        default_factory=list,
+        description="Questions and decisions still unresolved.",
+    )
+    evidence_ids: list[str] = Field(
+        default_factory=list, description="Evidence IDs the sources name."
+    )
+    artifact_ids: list[str] = Field(
+        default_factory=list, description="Artifact IDs the sources name."
+    )
+    summary: str = Field(
+        min_length=1,
+        max_length=20_000,
+        description=(
+            "A short narrative of the covered history, at most about 200 words. "
+            "Detail belongs in the cited lists."
+        ),
+    )
+    objective: str | None = Field(
+        default=None,
+        max_length=10_000,
+        description="The overall objective when supplied or clearly stated, else null.",
+    )
 
 
 class ContextSnapshot(Entity):
@@ -3462,6 +3542,13 @@ class ContextSnapshot(Entity):
     usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
     cost_usd: float = Field(default=0.0, ge=0)
     error: str | None = Field(default=None, max_length=1_000)
+    quality: ContextSnapshotQuality = ContextSnapshotQuality.COMPLETE
+    # Memory items (and IDs) removed because they failed validation.
+    dropped_items: int = Field(default=0, ge=0)
+    # Leaf source groups the archive was split into, and how many of their
+    # memories were reused from an earlier compaction of the same owner.
+    segment_count: int = Field(default=0, ge=0)
+    reused_segments: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def result_is_coherent(self) -> "ContextSnapshot":
@@ -3473,6 +3560,31 @@ class ContextSnapshot(Entity):
         elif not self.error:
             raise ValueError("failed context snapshots require an error")
         return self
+
+
+class ContextSegment(Entity):
+    """The derived memory of one leaf group of an owner's canonical sources.
+
+    Compaction splits an archive into source groups greedily from its start, so
+    an append-only archive keeps its earlier groups when it is compacted again.
+    A segment is keyed by a digest of the group's exact sources and of the
+    model, prompt, objective and output allowance that summarised it; a later
+    compaction of the same owner reuses it instead of summarising those sources
+    again. It is a cache, never evidence, and goes with its owner.
+    """
+
+    entity_kind: ClassVar[str] = "context_segments"
+    engagement_id: str
+    owner_type: ContextOwnerType
+    owner_id: str
+    digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    provider_profile_id: str
+    model: str
+    prompt_version: str = Field(min_length=1, max_length=100)
+    source_references: list[ContextSourceReference] = Field(min_length=1)
+    memory: ContextMemory
+    dropped_items: int = Field(default=0, ge=0)
+    usage: ChatTokenUsage = Field(default_factory=ChatTokenUsage)
 
 
 class HarnessTurn(Entity):
@@ -4897,6 +5009,7 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     HarnessTurn,
     HarnessInteraction,
     ContextSnapshot,
+    ContextSegment,
     OperatorExecution,
     GeneratedDraft,
     Report,
