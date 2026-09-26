@@ -106,16 +106,35 @@ carry: instructions and messages (the current message's reference block
 included), the conversation's working notes, and for
 a tool turn the function declarations (converted exactly as routing sends
 them), the routing instructions, and a reserve for the largest on-demand
-catalog picks the ranker could still add. Core estimates about three UTF-8 bytes per token. After each
+catalog picks the ranker could still add. Core estimates about three UTF-8
+bytes per token. A turn's replayed tool history is estimated in the shape
+adapters send it: each routing response once, with its prose and its
+reasoning's text once however many fields repeat it (OpenRouter sends a thought
+as both `reasoning` and `reasoning_details`; the route counts it once), each
+call with its result, and none of Core's bookkeeping (the route and model a
+reasoning state came from, the group and status repeated per call). On
+DeepSeek V4 via OpenRouter, Core had counted a request's replayed reasoning at
+941 tokens where the route billed 206; with the wire-form estimate the
+retention eval's long tool turn (s2) reports 0.91 of its estimate, up from
+0.81. After each
 turn whose last provider request reported at least 1,000 input tokens, the
 conversation records `reported / estimated` for that provider profile and
 model in `ChatSession.metadata.context_calibration`, smoothed (half the new
 sample, half the previous factor) and bounded to 0.6–1.5, in the same session
-write that saves the answer. Target decisions (compaction, in-turn clearing)
-scale the estimate by that factor; hard capacity checks never scale it below
-0.8 of the raw estimate, and after a provider context-length rejection the rest
-of the turn uses the raw estimate. The calibration assumes `input_tokens` is
-the provider's whole prompt, cached tokens included.
+write that saves the answer. Conversation compaction's trigger scales its
+whole estimate (the tool reserve included) by that factor. In-turn clearing and
+hard capacity checks count an assembled request with
+`calibrated_request_estimate`: its text (instructions, messages) scaled by the
+factor, never below 0.8 of its raw estimate for a capacity check, and its
+function declarations and replayed tool history never below their raw estimate
+(only up, with a factor above 1). That JSON is counted at three bytes a token
+or more (DeepSeek counted 0.94 and 1.02 of its estimate but 0.62 of prose;
+Claude on OpenRouter up to 1.16 of a tool turn), so a calibration learnt from
+text would let a tool-heavy request run past its target or overfill the
+window. Counting both the same way, a request that clears nothing is not then
+refused by the capacity check. After a provider context-length rejection the
+rest of the turn uses the raw estimate. The calibration assumes `input_tokens`
+is the provider's whole prompt, cached tokens included.
 
 The context endpoint's `estimated_input_tokens` (the Workbench meter) uses the
 same accounting: the latest turn's `reserved_input_tokens` for tools,
@@ -350,6 +369,25 @@ bounded transformations:
   stored `token_estimate` is the checkpoint's own estimate. The hash and
   coverage prove which durable steps were folded; **they do not mean their
   individual findings are present in the model request**.
+* **Replayed reasoning.** Each replayed routing response carries its reasoning
+  back to its route (thinking blocks, `reasoning_details`,
+  `reasoning_content`, encrypted reasoning items), and routes count it: a
+  DeepSeek turn's eight replayed thoughts cost 1,597 input tokens. The newest
+  response always keeps its reasoning (Anthropic and Bedrock reject a tool-use
+  step without its thinking). Earlier responses keep theirs until a request
+  crosses its target and clearing every earlier result still leaves it above
+  the watermark: then every earlier response lets its reasoning go, in the
+  same change. A model's thoughts are often its only note of what a cleared
+  result held (dropping them first made a DeepSeek chain turn re-read its
+  files: 73 tool calls where 39 had done). That is sticky for the rest of the
+  turn, as is the drop a refused context retry makes, so it changes the
+  request only at those events. A response that lets its reasoning go keeps
+  the stamp of the route and model that wrote it, so its calls' own replay
+  state still goes back: Gemini 3 validates the thought signature of every
+  step in the current turn (natively and as an OpenAI-compatible route's
+  `extra_content`). Folded steps carry none. The ledger keeps every thought;
+  adapters add their own placeholder where a route needs one (DeepSeek V4's
+  empty `reasoning_details`/`reasoning_content`).
 * **Older-result clearing.** If the checkpoint plus replay exceeds the target,
   `_with_tool_history` advances the checkpoint and then replaces the oldest
   full results still whole with short receipts, retaining call IDs/batch
@@ -489,7 +527,10 @@ a switch that requires compaction needs an explicit confirmation fingerprint.
    checkpoint is distinct from a missing durable result. `chat.tool_history.cleared`
    diagnostics record each clearing event: results cleared then (`count`),
    cleared in that request (`dropped_count`), replayed (`item_count`), and
-   the watermark (`limit`).
+   the watermark (`limit`). `chat.tool_history.reasoning_dropped` records the
+   crossing at which earlier routing responses stopped replaying their
+   reasoning: responses let go then (`count`), responses replayed
+   (`item_count`), and the watermark (`limit`).
 5. Correlate request/turn events with provider errors, retries, and restart
    recovery. Make no correctness claim from checkpoint counts alone; compare
    the answer against the relevant original evidence.

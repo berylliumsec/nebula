@@ -69,7 +69,7 @@ stateDiagram-v2
     Sticky --> Cross: request crosses target
     Cross --> Clear: advance checkpoint; still above watermark
     Cross --> Send: advance reaches watermark
-    Clear --> Send: clear oldest whole outputs down to watermark
+    Clear --> Send: clear oldest whole outputs, then earlier reasoning, down to watermark
     Clear --> Compact: still over input capacity
     Compact --> Sticky: conversation compacted; replay unchanged
     Compact --> Fold: nothing smaller

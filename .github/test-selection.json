@@ -1,13 +1,13 @@
 {
-  "change_digest": "d539b7a714a645d8f46c20f7d63340c94cd6d2d641820ab73e802e2517935926",
-  "reviewed_by": "Claude focused review for ctx-ceiling",
-  "reason": "Stream X (PLAN \u00a79): a 200,000-token working-context ceiling for large windows. resolve_context_limits sizes the working context from min(input_capacity, ceil(200,000/0.75)): target <= 200K, compacted target, compactor segment budgets and summary allowance, the in-turn clearing watermark and checkpoint receipts scale from that working input; hard capacity checks keep the real window. A configured options.context_window above the ceiling opts into a larger working context. Core reports binding_limit 'ceiling' plus window_limit; the Working context label and the provider dialog's Context window help text say so (copy only). Every consumer reads the shared limits: _model_context, _estimate_limits/_with_tool_history clearing, mid-turn compaction headroom, context status/meter, runtime-switch preflight, missions (orchestration target), precompaction (Stream P, merged as #619, reads target_input_tokens). Python: test_context.py (ceiling/opt-in/routes/compactor plan units), test_in_turn_context_pruning.py (clearing at the ceiling vs opt-in on a 1M catalog window), test_chat_context_assembly.py (context status), test_chat_api.py (API payloads), and the files that consume limits: test_midturn_compaction.py, test_model_output_budget.py, test_tool_history_memory.py, test_history_content_fidelity.py, test_chat_reference_material.py, test_conversation_search.py, test_turn_preflight_latency.py, test_orchestration.py, test_precompaction.py. Frontend: WorkingContextPanel label cases, client mapping, SettingsPage help text, App journeys. Playwright: area:working-context, a new area:provider-options (the provider dialog's Context window help, desktop/mobile Chromium/mobile WebKit) and entry:assistant on the three engines (SessionsPage renders the panel).",
-  "exclusions": "Full suites are not approved and are excluded. SettingsPage.tsx otherwise falls to the whole-file desktop-interface/mobile-layout fallback areas; only its Context window help copy changed, so the new focused provider-options area (added without a rule, selected explicitly) covers it. tests/v3/test_chat.py and tests/v3/test_api.py are large; their large-window and runtime-switch tests were run locally by -k (8 passed) and are not selected. Real-Core evidence (OpenRouter deepseek/deepseek-v4.1-flash, 1M routes: target 200,000 and binding 'ceiling'; 500K configured opt-in; 16K configured; runtime-switch preflight target 200,000; label at a LAN origin on the production bundle) is in the PR body. Native/Tauri unaffected.",
+  "change_digest": "56e5b2ae26b13e9568f5e6cf4f65bac0d39415acc666db44b1f03d17419b6ddd",
+  "reviewed_by": "Claude focused review for ctx-wire-estimates",
+  "reason": "Stream W changes how a provider request is estimated and what replayed reasoning it carries: context.replay_wire_form and estimate_model_request_parts (replayed tool history in adapter shape, reasoning text once, no bookkeeping); context.calibrated_request_estimate (text calibrated, JSON never below its estimate) used by ChatService._with_tool_history (target/watermark/newest checks), _fits_request_capacity, _ensure_request_capacity and the final-answer error; and the reasoning budget (_budgeted_reasoning keeping the route/model stamp, PreparedChat.reasoning_dropped, chat.tool_history.reasoning_dropped) in _with_tool_history, _cleared_tool_history_retry and _compacted_rejected_tool_request. Selected: the new test_replay_estimates.py; every adapter's reasoning and signature replay (test_reasoning_replay, test_prompt_caching, test_gemini_call_ids); in-turn replay, clearing, checkpoint and mid-turn fitting (test_turn_prompt_cache, test_in_turn_context_pruning, test_midturn_compaction, test_tool_history_memory, test_chat_tool_loop, test_routing_prose_answer, test_synthesis_tool_declarations, test_chat_routing_tolerance, test_tool_failures, test_chat_final_synthesis_recovery, test_restart_recovery_lifecycle, test_turn_outcome_history); estimates, calibration, capacity checks and context assembly (test_context, test_chat_context_assembly, test_api_stream_context, test_conversation_search, test_chat_reference_material, test_chat, test_chat_api, test_precompaction, test_turn_preflight_latency); goal budgets fit requests by the estimate (test_chat_goals). Counts from pytest --collect-only.",
+  "exclusions": "No frontend, native or Playwright tests: no ui/ or Rust changes and nothing visible (the Working context meter reads the same fields). Provider adapter payloads are unchanged, so provider-adapter request tests beyond reasoning/signature replay and prompt caching are excluded; harness chats and missions do not use the chat replay or these capacity checks. Real-Core evidence (scratch Core, adapter-boundary captures, OpenRouter deepseek/deepseek-v4.1-flash 9K/12K turns before and after, anthropic/claude-haiku-4.5 reasoning turn) and the retention eval s2 repeat 3 on main and on this branch are in the PR body. No full suite.",
   "expected_tests": {
-    "python": 243,
-    "frontend": 149,
+    "python": 507,
+    "frontend": 0,
     "native": 0,
-    "playwright": 223
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -15,33 +15,34 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_context.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_chat_context_assembly.py",
-    "tests/v3/test_chat_reference_material.py",
-    "tests/v3/test_conversation_search.py",
-    "tests/v3/test_history_content_fidelity.py",
+    "tests/v3/test_replay_estimates.py",
+    "tests/v3/test_reasoning_replay.py",
+    "tests/v3/test_turn_prompt_cache.py",
     "tests/v3/test_in_turn_context_pruning.py",
     "tests/v3/test_midturn_compaction.py",
-    "tests/v3/test_model_output_budget.py",
     "tests/v3/test_tool_history_memory.py",
-    "tests/v3/test_turn_preflight_latency.py",
-    "tests/v3/test_orchestration.py",
-    "tests/v3/test_precompaction.py"
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_context.py",
+    "tests/v3/test_chat_context_assembly.py",
+    "tests/v3/test_prompt_caching.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_chat_final_synthesis_recovery.py",
+    "tests/v3/test_chat_routing_tolerance.py",
+    "tests/v3/test_synthesis_tool_declarations.py",
+    "tests/v3/test_restart_recovery_lifecycle.py",
+    "tests/v3/test_conversation_search.py",
+    "tests/v3/test_chat_reference_material.py",
+    "tests/v3/test_api_stream_context.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_turn_outcome_history.py",
+    "tests/v3/test_gemini_call_ids.py",
+    "tests/v3/test_routing_prose_answer.py",
+    "tests/v3/test_tool_failures.py",
+    "tests/v3/test_precompaction.py",
+    "tests/v3/test_turn_preflight_latency.py"
   ],
-  "frontend": [
-    "ui/src/components/WorkingContextPanel.test.tsx",
-    "ui/src/components/ProviderRequestInputDetails.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/pages/SettingsPage.test.tsx",
-    "ui/src/App.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit",
-    "area:working-context",
-    "area:provider-options"
-  ]
+  "playwright": []
 }

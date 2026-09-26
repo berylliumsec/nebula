@@ -42,6 +42,7 @@ from .providers import (
     ModelMessage,
     ModelProvider,
     ModelRequest,
+    ModelToolResult,
     ProviderError,
     ToolDefinition,
     json_schema_instruction,
@@ -99,6 +100,7 @@ ESTIMATE_CALIBRATION_MIN_REPORTED_TOKENS = 1_000
 ESTIMATE_CALIBRATION_WEIGHT = 0.5
 # A hard capacity check never trusts the calibration below this share of the
 # raw estimate: too low a factor must not let a request overfill the window.
+# It relaxes only the text a request carries (``calibrated_request_estimate``).
 ESTIMATE_CALIBRATION_HARD_FLOOR = 0.8
 CONTEXT_PROMPT_VERSION = "nebula-context-v2"
 
@@ -882,6 +884,31 @@ def calibrated_estimate(
     return math.ceil(estimate * factor)
 
 
+def calibrated_request_estimate(
+    request: ModelRequest, calibration: float | None, *, hard: bool = False
+) -> int:
+    """``request`` in the provider's tokens, as ``calibrated_estimate`` counts
+    text.
+
+    Calibration measures how far Core's byte count misses the provider's,
+    and is learnt mostly from text. Function declarations and replayed tool
+    history are JSON, which providers count at three bytes a token or more:
+    DeepSeek counted 0.94 and 1.02 of their estimate where it counted 0.62
+    of prose, and Claude on OpenRouter counted up to 1.16 of a tool turn.
+    Scaled down with the text, a tool-heavy request would pass a target or a
+    capacity it overfills, so they only ever scale up. ``hard`` is for a
+    capacity check, whose text never scales below
+    ``ESTIMATE_CALIBRATION_HARD_FLOOR``.
+    """
+
+    parts = estimate_model_request_parts(request)
+    text = parts.instructions + parts.conversation + parts.other
+    structured = parts.tool_schemas + parts.tool_results
+    return calibrated_estimate(text, calibration, hard=hard) + math.ceil(
+        structured * max(1.0, calibration or 1.0)
+    )
+
+
 def estimate_allowance(
     limit: int, calibration: float | None, *, hard: bool = False
 ) -> int:
@@ -926,6 +953,99 @@ def updated_calibration(
     )
 
 
+# Bookkeeping a reasoning state carries for Core (which route and model wrote
+# it); adapters compare it and never send it.
+_REASONING_BOOKKEEPING = frozenset({"provider_id", "model"})
+
+
+def _reasoning_text(state: dict[str, Any]) -> str:
+    """The reasoning a state carries, each distinct text once.
+
+    A route gets the same thought in more than one field (OpenRouter's
+    ``reasoning`` and ``reasoning_details``) and renders it once: DeepSeek on
+    OpenRouter billed 1,597 tokens for eight replayed thoughts that Core had
+    counted twice over.
+    """
+
+    texts: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, str):
+            if value and value not in texts:
+                texts.append(value)
+        elif isinstance(value, dict):
+            for key, child in value.items():
+                if key not in _REASONING_BOOKKEEPING:
+                    walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(state)
+    return "\n".join(texts)
+
+
+def replay_wire_form(request: ModelRequest) -> list[dict[str, Any]]:
+    """The replayed tool loop in the shape every adapter sends it.
+
+    Each routing response goes back once, as the turn that issued its calls:
+    its prose and its reasoning once, whatever number of calls it made, then
+    each call's result. Reasoning written by another model is not sent, and
+    what a state records about its origin never is. Only this is counted, so
+    the estimate follows what the route receives rather than Core's own
+    bookkeeping (``ModelToolResult`` repeats the group and status per call).
+    """
+
+    batches: list[list[ModelToolResult]] = []
+    for result in request.tool_results:
+        if (
+            batches
+            and result.response_group is not None
+            and batches[-1][-1].response_group == result.response_group
+        ):
+            batches[-1].append(result)
+        else:
+            batches.append([result])
+    forms: list[dict[str, Any]] = []
+    for batch in batches:
+        state = next(
+            (result.reasoning_state for result in batch if result.reasoning_state),
+            None,
+        )
+        if state is not None and state.get("model") not in (None, request.model):
+            state = None
+        form: dict[str, Any] = {
+            "calls": [
+                {
+                    "id": result.call_id,
+                    "name": result.name,
+                    "arguments": result.arguments,
+                    **(
+                        {"metadata": result.provider_metadata}
+                        if result.provider_metadata
+                        else {}
+                    ),
+                }
+                for result in batch
+            ],
+            "results": [
+                {
+                    "id": result.call_id,
+                    "output": result.output,
+                    **({"error": True} if result.is_error else {}),
+                }
+                for result in batch
+            ],
+        }
+        if batch[0].response_text:
+            form["text"] = batch[0].response_text
+        reasoning = _reasoning_text(state) if state else ""
+        if reasoning:
+            form["reasoning"] = reasoning
+        forms.append(form)
+    return forms
+
+
 def estimate_model_request_parts(request: ModelRequest) -> ProviderRequestInput:
     """Attribute a provider-neutral estimate without retaining prompt content."""
 
@@ -939,16 +1059,7 @@ def estimate_model_request_parts(request: ModelRequest) -> ProviderRequestInput:
     tool_schemas = estimate_tool_definitions(request.tools)
     # Image bytes are transported as image parts, not as textual JSON. Count
     # their model-facing budget once, after the textual result envelope.
-    tool_results = (
-        encoded(
-            [
-                result.model_dump(mode="json", exclude={"attachments"})
-                for result in request.tool_results
-            ]
-        )
-        if request.tool_results
-        else 0
-    )
+    tool_results = encoded(replay_wire_form(request)) if request.tool_results else 0
     attachments = [
         ModelMessage(role="user", content=result.attachments)
         for result in request.tool_results
@@ -2802,6 +2913,8 @@ __all__ = [
     "default_output_tokens",
     "estimate_messages",
     "estimate_model_request",
+    "calibrated_request_estimate",
+    "replay_wire_form",
     "estimate_model_request_parts",
     "estimate_tokens",
     "EXTRACTIVE_MEMORY_SUMMARY",
