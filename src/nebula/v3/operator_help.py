@@ -219,14 +219,23 @@ def _contains_phrase(text: str, phrase: str) -> bool:
 
 
 def search_operator_help(
-    queries: list[str], *, limit: int = 4, observed_failure: bool = False
+    queries: list[str],
+    *,
+    limit: int = 4,
+    observed_failure: bool = False,
+    about: list[str] | None = None,
 ) -> tuple[OperatorHelpMatch, ...]:
     """Return only high-signal product-help matches in deterministic order.
 
-    An article must be what one of ``queries`` is about (``_MIN_TOPIC_SHARE``),
-    unless ``observed_failure``: the queries are Core's receipts of tool
-    steps that failed in this turn, not conversation, and the failure itself
-    is the reason to look for a recovery procedure. The best remaining match
+    ``queries`` rank the articles. ``about`` (``queries`` when omitted) is
+    what decides whether the search concerns operating Nebula at all: it must
+    carry a product or failure word, and an article must be what one of its
+    texts is about (``_MIN_TOPIC_SHARE``). A chat passes the operator's own
+    words, so a large selected document neither drowns a runbook question
+    nor, by mentioning a runner, turns an ordinary note into one. With
+    ``observed_failure`` the queries are Core's receipts of tool steps that
+    failed in this turn, not conversation, and the failure itself is the
+    reason to look for a recovery procedure. The best remaining match
     qualifies; the others must hold up against it (see
     ``_PHRASE_RELATIVE_FLOOR``), so a weakly related tail is not sent beside
     the runbook the question is about.
@@ -234,17 +243,20 @@ def search_operator_help(
 
     if limit < 1:
         return ()
+    about = queries if about is None else about
     query_text = " ".join(queries).casefold()
     raw_terms = set(_WORD.findall(query_text))
-    if not raw_terms & (_PRODUCT_MARKERS | _FAILURE_MARKERS):
+    if not set(_WORD.findall(" ".join(about).casefold())) & (
+        _PRODUCT_MARKERS | _FAILURE_MARKERS
+    ):
         return ()
     # Failure words decide whether recovery lookup is appropriate, but they are
     # intentionally excluded from ranking because nearly every runbook describes
     # a failure. Specific product nouns and observed identifiers choose the article.
     terms = raw_terms - _STOP_WORDS - _FAILURE_MARKERS
     messages = [
-        set(_WORD.findall(query.casefold())) - _STOP_WORDS - _FAILURE_MARKERS
-        for query in queries
+        set(_WORD.findall(text.casefold())) - _STOP_WORDS - _FAILURE_MARKERS
+        for text in about
     ]
     ranked: list[tuple[int, int, bool, OperatorHelpArticle]] = []
     for ordinal, article in enumerate(operator_help_articles()):

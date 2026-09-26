@@ -269,3 +269,64 @@ def test_chat_attaches_no_help_to_a_status_note_but_keeps_it_for_a_failed_step(
     ]
     final = [request for request in scripted.requests if not request.metadata]
     assert "nebula-help:diagnostics" in (final[-1].instructions or "")
+
+
+def _prepare_with_selection(tmp_path, question: str, selected: str):
+    import hashlib
+
+    from nebula.v3.chat import ChatCompletionRequest, ChatService
+    from nebula.v3.domain import Engagement
+    from nebula.v3.storage import NebulaStore
+    from tests.v3.test_chat import FakeProvider, _profile
+
+    store = NebulaStore(tmp_path / "selection.db")
+    engagement = store.create(Engagement(id="eng-selection", name="Selection"))
+    profile = store.create(_profile(local=True))
+    provider = FakeProvider(profile.id, local=True)
+    return ChatService(store, provider_factory=lambda _: provider).prepare(
+        ChatCompletionRequest(
+            engagement_id=engagement.id,
+            provider_id=profile.id,
+            include_knowledge=False,
+            messages=[{"role": "user", "content": question}],
+            context_attachments=[
+                {
+                    "source_kind": "document",
+                    "source_label": "Selected text",
+                    "text": selected,
+                    "sha256": hashlib.sha256(selected.encode("utf-8")).hexdigest(),
+                }
+            ],
+        )
+    )
+
+
+def test_selected_context_neither_hides_nor_invents_a_runbook_question(tmp_path):
+    # Whether a turn is about operating Nebula is decided by the operator's
+    # own words. A large selection used to dilute a runbook question below
+    # the topic share, and a selection that mentions a runner must not turn
+    # an ordinary note into one.
+    note = build_scenario("s1", DEFAULT_SEED).turns[0].content
+    selection = (note * 2)[:9_000]
+    question = (
+        "Nebula says no rootless container runner is available. "
+        "What should I check first?"
+    )
+
+    prepared = _prepare_with_selection(tmp_path / "question", question, selection)
+
+    assert [item.source_id for item in prepared.citations] == [
+        "nebula-help:runner-setup"
+    ]
+    current = prepared.model_request.messages[-1].content
+    assert isinstance(current, str) and "BEGIN SELECTED CONTEXT" in current
+
+    ordinary = _prepare_with_selection(
+        tmp_path / "note",
+        "Keep this for later.",
+        "Runner unavailable: the rootless docker runner was not detected on the "
+        "build host, so the podman machine took over.",
+    )
+
+    assert ordinary.citations == []
+    assert ordinary.reference_material == ""
