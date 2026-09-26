@@ -29,6 +29,7 @@ from nebula.v3.domain import (
 )
 from nebula.v3.providers import ModelRequest, ModelResponse, ToolCall
 from nebula.v3.storage import NebulaStore
+from nebula.v3.working_notes import WORKING_NOTES_HEADING, write_working_notes
 from tests.v3.test_chat import FakeProvider, _admitted_stream, _profile, _source
 from tests.v3.test_chat_context_assembly import _tool_profile
 from tests.v3.test_chat_tool_loop import _response
@@ -399,6 +400,13 @@ def test_excerpts_follow_the_reference_material_and_match_only_the_operator(
             text="The frostelk TLS listener answers on port 443.",
         )
     )
+    write_working_notes(
+        store,
+        engagement_id=session.engagement_id,
+        session_id=session.id,
+        content="- todo: confirm the copperwolf finding",
+        turn_id=None,
+    )
 
     prepared = service.prepare(
         ChatCompletionRequest(
@@ -417,15 +425,16 @@ def test_excerpts_follow_the_reference_material_and_match_only_the_operator(
     assert messages[0].content.startswith(MEMORY_HEADING)
     current = messages[-1].content
     assert isinstance(current, str)
-    # The operator's words, the turn's reference material, then the archived
-    # originals retrieved for them.
+    # The operator's words, the turn's reference material, the archived
+    # originals retrieved for them, then the conversation's working notes.
     assert current.startswith(
         "What did we find about copperwolf?\n\n" + prepared.reference_material
     )
     reference_at = current.index(HEADING)
     excerpts_at = current.index(EXCERPTS_HEADING)
-    assert reference_at < current.index("END REFERENCE DATA") < excerpts_at
-    excerpts = json.loads(current[excerpts_at:].split("\n", 1)[1])
+    notes_at = current.index(WORKING_NOTES_HEADING)
+    assert reference_at < current.index("END REFERENCE DATA") < excerpts_at < notes_at
+    excerpts = json.loads(current[excerpts_at:notes_at].split("\n", 1)[1])
     assert excerpts
     # Retrieval matched what the operator asked, not the attached document.
     for excerpt in excerpts:

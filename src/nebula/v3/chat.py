@@ -8391,7 +8391,8 @@ class ChatService:
         """``request`` with the conversation's working notes (``block``).
 
         The notes as the turn starts join the operator's message, after its
-        own content and any retrieved excerpts; the turn's checkpoint follows
+        own content, the turn's reference material and any retrieved
+        excerpts; the turn's checkpoint follows
         them once it has one. They are the turn's one snapshot of the notes,
         so every request of the turn repeats the same bytes; a notes.write
         call during the turn is replayed as a call, and a checkpoint that
