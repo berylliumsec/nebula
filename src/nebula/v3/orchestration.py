@@ -63,7 +63,8 @@ from .context import (
     memory_text,
     resolve_context_limits,
 )
-from .providers import ModelMessage, ModelProvider, ModelRequest
+from .model_pricing import combined_billed_cost
+from .providers import ModelMessage, ModelProvider, ModelRequest, usage_cost_usd
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .tool_results import sanitize_model_history_result
 from .tools import ApprovalRequired
@@ -460,16 +461,7 @@ class ModelSpecialist:
         summary = response.text.strip()
         if not summary:
             raise MissionError("model returned an empty analysis result")
-        input_rate = float(
-            self.provider.config.options.get("input_cost_per_million", 0)
-        )
-        output_rate = float(
-            self.provider.config.options.get("output_cost_per_million", 0)
-        )
-        cost = (
-            response.usage.input_tokens * input_rate
-            + response.usage.output_tokens * output_rate
-        ) / 1_000_000
+        cost = usage_cost_usd(self.provider.config, self.model, response.usage)
         return SpecialistResult(
             summary=summary,
             rationale=(
@@ -1821,6 +1813,11 @@ class MissionRuntime:
             input_tokens=left.input_tokens + right.input_tokens,
             output_tokens=left.output_tokens + right.output_tokens,
             total_tokens=left.total_tokens + right.total_tokens,
+            # Kept so the spend is priced as it was billed.
+            cached_input_tokens=left.cached_input_tokens + right.cached_input_tokens,
+            cache_creation_input_tokens=left.cache_creation_input_tokens
+            + right.cache_creation_input_tokens,
+            cost_usd=combined_billed_cost(left, right),
         )
 
     @staticmethod
@@ -1828,11 +1825,9 @@ class MissionRuntime:
         provider = getattr(specialist, "provider", None)
         if not isinstance(provider, ModelProvider):
             return 0.0
-        input_rate = float(provider.config.options.get("input_cost_per_million", 0))
-        output_rate = float(provider.config.options.get("output_cost_per_million", 0))
-        return (
-            usage.input_tokens * input_rate + usage.output_tokens * output_rate
-        ) / 1_000_000
+        return usage_cost_usd(
+            provider.config, getattr(specialist, "model", None), usage
+        )
 
     def _route_after_dispatch(self, state: MissionState) -> str:
         if state.get("waiting_approvals"):

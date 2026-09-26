@@ -225,7 +225,22 @@ cached tokens included (Anthropic and Bedrock report cache reads and writes
 beside a smaller `input_tokens`, which Core sums), `cached_input_tokens` is the
 part read from the cache, and `cache_creation_input_tokens` the part written to
 it. Goal budgets, calibration and cost estimates all read `input_tokens` that
-way. Cost estimates still charge cached tokens at the full input rate.
+way.
+
+Cost (compaction snapshots, mission specialists and their cost budgets) is what
+the route billed when it says so: OpenRouter's `usage.cost` prices the upstream
+endpoint that served the request (with the operator's own upstream key, the
+upstream's charge is added to OpenRouter's fee), and a sum of responses keeps
+it only while every part was billed. Otherwise one formula estimates it:
+uncached input, cache reads, cache writes and output, each at its own rate.
+Rates come from the profile's `input_cost_per_million`,
+`output_cost_per_million`, `cached_input_cost_per_million` and
+`cache_write_cost_per_million` options, else from the model's OpenRouter
+catalog prices. The listed price is the cheapest endpoint's and routing may pick
+a dearer one, so once capability verification has measured the model's
+endpoints each price is the highest any of them charges at any hour. An
+unpublished cache-read price is the input rate and an unpublished cache-write
+price 1.25 times it. A route with no prices costs nothing.
 
 ## Reference material relevance
 

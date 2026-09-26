@@ -3330,6 +3330,9 @@ class ChatTokenUsage(NebulaModel):
     cached_input_tokens: int = Field(default=0, ge=0)
     # The part of ``input_tokens`` the provider wrote to its prompt cache.
     cache_creation_input_tokens: int = Field(default=0, ge=0)
+    # What the route billed for these tokens in USD, when every response they
+    # came from said (OpenRouter); ``None`` when any part was not reported.
+    cost_usd: float | None = Field(default=None, ge=0)
 
 
 class ScopeImportCandidate(NebulaModel):

@@ -38,6 +38,7 @@ from .domain import (
 )
 from .known_model_limits import KNOWN_MODEL_LIMITS, KNOWN_MODEL_LIMITS_REVISION
 from .model_catalog import route_limits_verified as descriptor_routes_verified
+from .model_pricing import combined_billed_cost
 from .providers import (
     ModelMessage,
     ModelProvider,
@@ -46,6 +47,7 @@ from .providers import (
     ProviderError,
     ToolDefinition,
     json_schema_instruction,
+    usage_cost_usd,
 )
 from .storage import ConflictError, NebulaStore, NotFoundError
 
@@ -1589,7 +1591,7 @@ class ContextCompactor:
                 prompt_version=CONTEXT_PROMPT_VERSION,
                 source_sha256=source_sha256,
                 usage=progress.usage,
-                cost_usd=self._cost(provider, progress.usage),
+                cost_usd=self._cost(provider, progress.usage, model),
                 quality=quality,
                 dropped_items=progress.dropped,
                 segment_count=progress.segments,
@@ -1621,7 +1623,7 @@ class ContextCompactor:
                 prompt_version=CONTEXT_PROMPT_VERSION,
                 source_sha256=source_sha256,
                 usage=usage,
-                cost_usd=self._cost(provider, usage),
+                cost_usd=self._cost(provider, usage, model),
                 error=safe_error,
                 segment_count=progress.segments,
                 reused_segments=progress.reused,
@@ -2858,15 +2860,14 @@ class ContextCompactor:
             cached_input_tokens=left.cached_input_tokens + right.cached_input_tokens,
             cache_creation_input_tokens=left.cache_creation_input_tokens
             + right.cache_creation_input_tokens,
+            cost_usd=combined_billed_cost(left, right),
         )
 
     @staticmethod
-    def _cost(provider: ModelProvider, usage: ChatTokenUsage) -> float:
-        input_rate = float(provider.config.options.get("input_cost_per_million", 0))
-        output_rate = float(provider.config.options.get("output_cost_per_million", 0))
-        return (
-            usage.input_tokens * input_rate + usage.output_tokens * output_rate
-        ) / 1_000_000
+    def _cost(
+        provider: ModelProvider, usage: ChatTokenUsage, model: str | None
+    ) -> float:
+        return usage_cost_usd(provider.config, model, usage)
 
     @classmethod
     def _enforce_call_budget(
@@ -2896,6 +2897,8 @@ class ContextCompactor:
                 "insufficient mission token budget for context compaction",
                 usage=attempt_usage,
             )
+        # What was spent keeps the cache reads and writes it was billed for;
+        # the call to come is priced as if nothing in it were cached.
         projected = ChatTokenUsage(
             input_tokens=consumed.input_tokens + estimated_input,
             output_tokens=consumed.output_tokens + estimated_output,
@@ -2905,10 +2908,12 @@ class ContextCompactor:
                 + estimated_input
                 + estimated_output
             ),
+            cached_input_tokens=consumed.cached_input_tokens,
+            cache_creation_input_tokens=consumed.cache_creation_input_tokens,
         )
         if (
             budget.max_cost_usd is not None
-            and cls._cost(provider, projected) > budget.max_cost_usd
+            and cls._cost(provider, projected, request.model) > budget.max_cost_usd
         ):
             raise ContextCompactionError(
                 "insufficient mission cost budget for context compaction",

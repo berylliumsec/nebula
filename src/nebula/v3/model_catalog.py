@@ -106,6 +106,10 @@ class ModelRouteDescriptor(BaseModel):
     max_output_tokens: int = Field(ge=1)
     supported_parameters: list[str] = Field(default_factory=list)
     status: int = 0
+    # The endpoint's published per-token prices by billing unit, each the
+    # highest it charges at any hour (OpenRouter ``pricing`` and its
+    # time-of-day ``overrides``).
+    pricing: dict[str, str] = Field(default_factory=dict)
 
 
 def _positive_int(value: Any) -> int | None:
@@ -116,6 +120,36 @@ def _strings(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return list(dict.fromkeys(item for item in value if isinstance(item, str)))
+
+
+def _prices(raw: Any) -> dict[str, str]:
+    """Finite, non-negative decimal prices by unit; the rest is omitted."""
+
+    prices: dict[str, str] = {}
+    for unit, value in raw.items() if isinstance(raw, dict) else []:
+        if not isinstance(unit, str) or not isinstance(value, str) or len(value) > 100:
+            continue
+        try:
+            price = Decimal(value)
+        except (
+            InvalidOperation
+        ):  # diagnostic-expected: non-numeric catalog price is omitted
+            continue
+        if price.is_finite() and price >= 0:
+            prices[unit] = value
+    return prices
+
+
+def _peak_prices(raw: Any) -> dict[str, str]:
+    """An endpoint's prices, each at the highest of its time-of-day overrides."""
+
+    peak = _prices(raw)
+    overrides = raw.get("overrides") if isinstance(raw, dict) else None
+    for override in overrides if isinstance(overrides, list) else []:
+        for unit, value in _prices(override).items():
+            if unit not in peak or Decimal(value) > Decimal(peak[unit]):
+                peak[unit] = value
+    return peak
 
 
 def openrouter_models(payload: Any) -> list[ModelDescriptor]:
@@ -135,19 +169,7 @@ def openrouter_models(payload: Any) -> list[ModelDescriptor]:
         architecture = architecture if isinstance(architecture, dict) else {}
         top = item.get("top_provider")
         top = top if isinstance(top, dict) else {}
-        pricing = {}
-        raw_prices = item.get("pricing")
-        for unit, raw in raw_prices.items() if isinstance(raw_prices, dict) else []:
-            if not isinstance(raw, str) or len(raw) > 100:
-                continue
-            try:
-                price = Decimal(raw)
-            except (
-                InvalidOperation
-            ):  # diagnostic-expected: non-numeric catalog price is omitted
-                continue
-            if price.is_finite() and price >= 0:
-                pricing[unit] = raw
+        pricing = _prices(item.get("pricing"))
         name = item.get("name")
         description = item.get("description")
         canonical_slug = item.get("canonical_slug")
@@ -292,6 +314,7 @@ def openrouter_model_routes(payload: Any, *, model: str) -> list[ModelRouteDescr
                 max_output_tokens=max_output,
                 supported_parameters=_strings(item.get("supported_parameters")),
                 status=status,
+                pricing=_peak_prices(item.get("pricing")),
             )
         )
     return routes

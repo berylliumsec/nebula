@@ -46,6 +46,7 @@ from .providers import (
     ToolChoice,
     ToolDefinition,
     _GEMINI_SYNTHETIC_CALL_ID,
+    usage_cost_usd,
 )
 from .redaction import redact_text
 from .storage import NebulaStore
@@ -322,12 +323,12 @@ class BrokeredToolSpecialist:
                 context,
                 invocation,
                 model_call_id=model_call_id,
-                usage=(0, 0),
+                usage=ModelUsage(),
                 approval=approval,
             )
 
         response = await self._routing_response(context, allowed)
-        usage = (response.usage.input_tokens, response.usage.output_tokens)
+        usage = response.usage
         commentary = self._routing_commentary(response, context)
         # The whole response is classified before any of it reaches the broker.
         # A call Core will not run is answered with a failed observation the
@@ -347,7 +348,7 @@ class BrokeredToolSpecialist:
             if action.routing_error is not None:
                 executed.append(
                     self._routing_error_result(
-                        action, usage=usage if not executed else (0, 0)
+                        action, usage=usage if not executed else ModelUsage()
                     )
                 )
                 continue
@@ -391,7 +392,7 @@ class BrokeredToolSpecialist:
                     model_call_id=call.id,
                     # One routing call produced the batch, so its spend is
                     # charged once, to the first call that runs.
-                    usage=usage if not executed else (0, 0),
+                    usage=usage if not executed else ModelUsage(),
                 )
                 if action.provider_call_id is not None:
                     result.output["provider_call_id"] = action.provider_call_id
@@ -526,7 +527,7 @@ class BrokeredToolSpecialist:
         invocation: ToolInvocation,
         *,
         model_call_id: str,
-        usage: tuple[int, int],
+        usage: ModelUsage,
         approval: Approval | None = None,
     ) -> SpecialistResult:
         arguments = self._brokered_arguments(invocation.tool_name, invocation.arguments)
@@ -551,12 +552,8 @@ class BrokeredToolSpecialist:
             )
             raise SpecialistApprovalRequired(
                 exc.approval,
-                usage=ChatTokenUsage(
-                    input_tokens=usage[0],
-                    output_tokens=usage[1],
-                    total_tokens=usage[0] + usage[1],
-                ),
-                cost_usd=self._cost(*usage),
+                usage=ChatTokenUsage.model_validate(usage.model_dump()),
+                cost_usd=self._cost(usage),
             ) from exc
         except PolicyDenied as denial:
             record_caught_exception(
@@ -724,9 +721,9 @@ class BrokeredToolSpecialist:
             },
             evidence_ids=evidence_ids,
             reproducible_steps=reproducible,
-            input_tokens=usage[0],
-            output_tokens=usage[1],
-            cost_usd=self._cost(*usage),
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=self._cost(usage),
             tool_calls=(
                 0
                 if self.specs[invocation.tool_name].budget_class == "artifact_query"
@@ -793,7 +790,7 @@ class BrokeredToolSpecialist:
         self,
         context: SpecialistContext,
         arguments: dict[str, Any],
-        usage: tuple[int, int],
+        usage: ModelUsage,
     ) -> SpecialistResult:
         extra = sorted(set(arguments) - _FINISH_FIELDS)
         if extra:
@@ -886,9 +883,9 @@ class BrokeredToolSpecialist:
             evidence_ids=evidence_ids,
             reproducible_steps=reproducible_steps,
             candidate_finding_ids=candidate_finding_ids,
-            input_tokens=usage[0],
-            output_tokens=usage[1],
-            cost_usd=self._cost(*usage),
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=self._cost(usage),
         )
 
     def _routing_batch(
@@ -1111,7 +1108,7 @@ class BrokeredToolSpecialist:
         )
 
     def _routing_error_result(
-        self, action: _RoutingAction, *, usage: tuple[int, int]
+        self, action: _RoutingAction, *, usage: ModelUsage
     ) -> SpecialistResult:
         """A failed observation for a call Core answered without running it."""
 
@@ -1154,9 +1151,9 @@ class BrokeredToolSpecialist:
             ),
             outcome=SpecialistOutcome.CONTINUE,
             output=output,
-            input_tokens=usage[0],
-            output_tokens=usage[1],
-            cost_usd=self._cost(*usage),
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=self._cost(usage),
             tool_calls=0,
         )
 
@@ -1165,7 +1162,7 @@ class BrokeredToolSpecialist:
         context: SpecialistContext,
         response: Any,
         commentary: str,
-        usage: tuple[int, int],
+        usage: ModelUsage,
     ) -> SpecialistResult:
         """Ask again when a routing reply carried prose or nothing, not a call.
 
@@ -1194,9 +1191,9 @@ class BrokeredToolSpecialist:
                 "routing_error": "no_action",
                 "routing_feedback": _NO_ACTION_FEEDBACK,
             },
-            input_tokens=usage[0],
-            output_tokens=usage[1],
-            cost_usd=self._cost(*usage),
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cost_usd=self._cost(usage),
             tool_calls=0,
         )
         return self._routing_deviation_turn(
@@ -1207,7 +1204,7 @@ class BrokeredToolSpecialist:
         self,
         context: SpecialistContext,
         turn: SpecialistResult,
-        usage: tuple[int, int],
+        usage: ModelUsage,
     ) -> SpecialistResult:
         """Continue after a turn that ran nothing, or stop once it keeps happening."""
 
@@ -1660,14 +1657,8 @@ class BrokeredToolSpecialist:
             "agent_turn": str(context.turn_index),
         }
 
-    def _cost(self, input_tokens: int, output_tokens: int) -> float:
-        input_rate = float(
-            self.provider.config.options.get("input_cost_per_million", 0)
-        )
-        output_rate = float(
-            self.provider.config.options.get("output_cost_per_million", 0)
-        )
-        return (input_tokens * input_rate + output_tokens * output_rate) / 1_000_000
+    def _cost(self, usage: ModelUsage) -> float:
+        return usage_cost_usd(self.provider.config, self.model, usage)
 
 
 __all__ = [
