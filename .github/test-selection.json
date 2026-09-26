@@ -1,10 +1,10 @@
 {
-  "change_digest": "169629f8cf5eae73c4f87bc87250323b44ed3f83cec2b031d1367b9371f6741e",
+  "change_digest": "033bab68734989f5711f5db53b3321d0f435422b7f8f419a07d19f3af7147d56",
   "reviewed_by": "Claude focused review for ctx-search-budget",
-  "reason": "conversation.search gets a per-turn allowance (8 searches, or 3 empty in a row), counted from the turn ledger (conversation_search.turn_search_budget_spent over _turn_history, the same ledger count the catalog-discovery limit uses). Past it the routing loop answers the call itself through _refused_tool_step, which gains an ordinary-result mode: status complete, budget_class refused (no budget spent), trusted_result so the replay carries Core's text, and the existing routing-deviation limit then stops a model that keeps searching. Selected: the new test file; conversation.search tests; every file driving the sequential routing loop, refused steps and replay (tool loop, tool catalog incl. the discovery limit, mid-turn compaction, in-turn pruning, prompt cache, synthesis declarations, turn outcome history), restart recovery, tool-history memory (tool activity from stored results) and test_chat.py. Counts from pytest --collect-only.",
+  "reason": "conversation.search gets a per-turn allowance (8 searches, or 3 empty in a row, checked against the searches of earlier routing responses so one response's batch runs whole), counted from the turn ledger (conversation_search.turn_search_budget_spent over _turn_history, the same ledger count the catalog-discovery limit uses). Past it the routing loop answers the call itself through _refused_tool_step, which gains an ordinary-result mode: status complete, budget_class refused (no budget spent), trusted_result so the replay carries Core's text, and the existing routing-deviation limit then stops a model that keeps searching. Selected: the new test file; conversation.search tests; every file driving the sequential routing loop, refused steps and replay (tool loop, tool catalog incl. the discovery limit, mid-turn compaction, in-turn pruning, prompt cache, synthesis declarations, turn outcome history), restart recovery, tool-history memory (tool activity from stored results) and test_chat.py. Counts from pytest --collect-only.",
   "exclusions": "No frontend, native or Playwright tests: no UI change; the answered search renders in the existing tool card as a completed call with its detail. Harness and mission paths do not offer conversation.search. Real-Core evidence (s1 retention eval, 3 repeats per build, base 517a4a5 vs branch, port 18719) is in the PR body. No full suite.",
   "expected_tests": {
-    "python": 249,
+    "python": 250,
     "frontend": 0,
     "native": 0,
     "playwright": 0
