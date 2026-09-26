@@ -244,6 +244,22 @@ class ChatTurnLedger:
                 )
             )
 
+    def recorded_steps(self, turn: ChatTurn) -> set[int]:
+        """The step numbers the turn has recorded, read without their rows."""
+
+        with self.database.session() as session:
+            steps = set(
+                session.scalars(
+                    select(ChatTurnStepEventRow.step)
+                    .where(ChatTurnStepEventRow.turn_id == turn.id)
+                    .distinct()
+                )
+            )
+        if steps:
+            return steps
+        # A turn from before the ledger kept its steps on the turn itself.
+        return {_step(entry) for entry in turn.tool_history if isinstance(entry, dict)}
+
     def next_provider_group(self, turn_id: str) -> int:
         """Ordinal for the turn's next routing response, counted from 1.
 

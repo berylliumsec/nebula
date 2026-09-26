@@ -2602,8 +2602,8 @@ class ContextCompactor:
 
             turn = self.store.get(ChatTurn, owner_id)
             steps = {
-                str(int(entry.get("step", 0)))
-                for entry in ChatTurnLedger(self.store.database).history(turn)
+                str(step)
+                for step in ChatTurnLedger(self.store.database).recorded_steps(turn)
             }
             for source in sources:
                 reference = source.reference
