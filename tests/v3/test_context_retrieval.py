@@ -180,29 +180,47 @@ def test_a_question_the_archive_cannot_answer_does_not_echo_the_last_exchange():
     assert ranked == []
 
 
-def test_tail_query_weighs_the_current_message_above_earlier_turns():
-    query = turn_query(
-        "what about the redis cache?",
-        [
-            ("user", "old question about postgres"),
-            ("assistant", "an answer"),
-            ("user", "newer question about nginx"),
-            ("assistant", "latest assistant reply mentions kafka"),
-        ],
-    )
-
-    assert [(part.text, part.weight) for part in query] == [
-        ("what about the redis cache?", 1.0),
-        ("newer question about nginx", 0.5),
-        ("old question about postgres", 0.35),
-        ("latest assistant reply mentions kafka", 0.25),
+def test_tail_query_fades_as_the_current_message_speaks_for_itself():
+    earlier = [
+        ("user", "old question about postgres"),
+        ("assistant", "an answer"),
+        ("user", "newer question about nginx"),
+        ("assistant", "latest assistant reply mentions kafka"),
     ]
+
+    bare = turn_query("ok, go ahead", earlier)
+    assert [(part.text, part.weight, part.tail) for part in bare] == [
+        ("ok, go ahead", 1.0, False),
+        ("newer question about nginx", 0.5, True),
+        ("old question about postgres", 0.35, True),
+        ("latest assistant reply mentions kafka", 0.25, True),
+    ]
+    # Two content terms of its own: the tail counts half as much.
+    partial = turn_query("what about the redis cache?", earlier)
+    assert [round(part.weight, 3) for part in partial] == [1.0, 0.25, 0.175, 0.125]
+    # A precise question needs no help from the last exchange.
+    precise = turn_query("which redis cache eviction policy applies?", earlier)
+    assert [part.text for part in precise] == [
+        "which redis cache eviction policy applies?"
+    ]
+
     archive = [
         _message("redis", 1, "The redis cache is sized at 2 GB."),
         _message("nginx", 2, "The nginx upstream timeout is 30s."),
     ]
-    ranked = rank_chunks(chunk_messages(archive), query)
-    assert [item.chunk.message_id for item in ranked] == ["redis", "nginx"]
+    # The question's own match stands; a faded tail's weak one does not.
+    ranked = rank_chunks(chunk_messages(archive), partial)
+    assert [item.chunk.message_id for item in ranked] == ["redis"]
+
+
+def test_a_pasted_tail_contributes_only_its_opening():
+    paste = (
+        "Deploy log for payments-gw, for the record.\n"
+        + "kafka broker restarted\n" * 200
+    )
+    query = turn_query("yes", [("user", paste)])
+
+    assert query[1].text == paste[:1_000]
 
 
 def test_selection_respects_budget_limit_order_and_duplicates():
@@ -280,6 +298,28 @@ def test_dense_fusion_adds_a_paraphrase_the_keywords_miss_and_caches_vectors():
     assert len(dense.cache) == 3
     assert rank_chunks(chunks, query, dense=dense) == ranked
     assert len(encoder.calls) == 1
+
+
+def test_dense_query_leans_on_the_tail_only_for_a_contentless_request():
+    archive = [_message("rule", 1, "Never restart the production database by day.")]
+    tail = [("user", "The front-end build uses vite and ships to the CDN.")]
+
+    precise = _TopicEncoder()
+    rank_chunks(
+        chunk_messages(archive),
+        turn_query("which database restart rule", tail),
+        dense=DenseEncoder(encode=precise, model="topics", cache=VectorCache()),
+    )
+    bare = _TopicEncoder()
+    rank_chunks(
+        chunk_messages(archive),
+        turn_query("yes, do that", tail),
+        dense=DenseEncoder(encode=bare, model="topics", cache=VectorCache()),
+    )
+
+    assert precise.calls[0][0] == "which database restart rule"
+    assert tail[0][1] not in precise.calls[0]
+    assert bare.calls[0][0] == tail[0][1]
 
 
 def test_dense_embedding_is_bounded_per_call():

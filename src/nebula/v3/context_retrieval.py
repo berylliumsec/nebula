@@ -20,7 +20,8 @@ Design, in the order a query meets it:
   identifier's own rarity so a common port number cannot dominate.
 * **A tail-aware query.** "yes, do that" carries no content of its own; the
   operator's previous messages and the assistant's last reply in the kept tail
-  join the query at lower weights, and content-free parts drop out.
+  join the query at lower weights that fade as the current message says more,
+  and a passage found only through the tail must match rare words.
 * **Optional dense fusion.** When a local embedding model is ready, cosine
   similarity over a bounded candidate set is fused with the lexical ranking by
   reciprocal rank fusion. Any failure there leaves the lexical ranking.
@@ -43,8 +44,10 @@ from .context import _SECURITY_IDENTIFIER, estimate_tokens
 from .diagnostics import record_caught_exception
 
 # A passage small enough that several fit a modest excerpt budget, large
-# enough to carry a paragraph with its surrounding sentence or two.
-CHUNK_TOKENS = 400
+# enough to carry a paragraph with its surrounding sentence or two, and within
+# what a MiniLM-class embedding model reads (256 word pieces) so the dense
+# ranking sees all of it.
+CHUNK_TOKENS = 320
 MAX_EXCERPTS = 8
 BM25_K1 = 1.2
 BM25_B = 0.75
@@ -75,6 +78,13 @@ CURRENT_WEIGHT = 1.0
 # assistant's last reply, which often proposed it, counts for less.
 TAIL_OPERATOR_WEIGHTS = (0.5, 0.35)
 TAIL_ASSISTANT_WEIGHT = 0.25
+# The tail speaks for a request only as far as the request does not speak for
+# itself: its weights fade with each content term of the current message and
+# vanish at this many, so a precise question is not diluted by whatever the
+# last exchange was about. Only its opening counts: a short follow-up whole, a
+# pasted log or listing by what it says it is.
+TAIL_FADE_TERMS = 4
+TAIL_PART_CHARS = 1_000
 
 _TOKEN = re.compile(r"[^\W_][\w.:/@+-]*")
 _TOKEN_PARTS = re.compile(r"[._:/@+-]+")
@@ -351,20 +361,27 @@ def turn_query(
     ``earlier`` is the kept tail before the current message as ``(role,
     text)`` pairs, oldest first. The operator's two latest messages and the
     assistant's latest reply join at lower weights, so a follow-up such as
-    "yes, do that" still retrieves what "that" was about.
+    "yes, do that" still retrieves what "that" was about; they fade out as the
+    current message carries content of its own.
     """
 
     parts = [QueryPart(current[:QUERY_PART_CHARS], CURRENT_WEIGHT)]
-    operator = [text for role, text in reversed(earlier) if role == "user"]
-    for weight, text in zip(TAIL_OPERATOR_WEIGHTS, operator, strict=False):
-        parts.append(QueryPart(text[:QUERY_PART_CHARS], weight, tail=True))
-    assistant = next(
-        (text for role, text in reversed(earlier) if role == "assistant"), None
-    )
-    if assistant:
-        parts.append(
-            QueryPart(assistant[:QUERY_PART_CHARS], TAIL_ASSISTANT_WEIGHT, tail=True)
+    fade = max(0.0, 1.0 - len(set(terms(current))) / TAIL_FADE_TERMS)
+    if fade > 0:
+        operator = [text for role, text in reversed(earlier) if role == "user"]
+        for weight, text in zip(TAIL_OPERATOR_WEIGHTS, operator, strict=False):
+            parts.append(QueryPart(text[:TAIL_PART_CHARS], weight * fade, tail=True))
+        assistant = next(
+            (text for role, text in reversed(earlier) if role == "assistant"), None
         )
+        if assistant:
+            parts.append(
+                QueryPart(
+                    assistant[:TAIL_PART_CHARS],
+                    TAIL_ASSISTANT_WEIGHT * fade,
+                    tail=True,
+                )
+            )
     return tuple(part for part in parts if part.text.strip())
 
 

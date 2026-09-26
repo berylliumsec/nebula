@@ -217,7 +217,32 @@ def test_search_limit_and_empty_results(tmp_path):
 
     assert limited.output["result_count"] == 3
     assert unmatched.output["result_count"] == 0
-    assert "exact identifier" in unmatched.output["detail"]
+    assert "never said it" in unmatched.output["detail"]
+
+
+def test_search_output_is_bounded_whatever_the_limit(tmp_path):
+    store, scope, workspace, (session, _) = _search_fixture(tmp_path)
+    passage = "deploy window note: " + "deploy after the freeze lifts. " * 36
+    messages = [
+        _message(session, index, f"{index}: {passage}") for index in range(1, 15)
+    ]
+    store.create_many(messages)
+    store.create(_ready_snapshot(session, messages, through=14))
+    components = conversation_search_components(
+        store, scope, workspace, session_id=session.id, text_of=_stored_model_text
+    )
+
+    result = asyncio.run(
+        components.broker.execute(
+            _invocation(session.id, workspace, query="deploy window", limit=10), scope
+        )
+    )
+
+    output = result.output
+    assert 1 <= output["result_count"] < 10
+    assert output["omitted_results"] == 10 - output["result_count"]
+    assert sum(len(item["content"].encode()) for item in output["results"]) <= 6_000
+    assert "narrow the query" in output["detail"]
 
 
 def test_search_without_an_archive_says_everything_is_in_view(tmp_path):
