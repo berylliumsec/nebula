@@ -1,13 +1,13 @@
 {
-  "change_digest": "39bc21563ac9d9fc1d3c05f9ec084aea20a7f747eea0b4055cefc37d09b25c94",
-  "reviewed_by": "Claude focused review for ctx-capacity-source",
-  "reason": "Core now reports which limit binds the context window. resolve_context_limits records binding_limit (model | configured | route | fallback) and input_limit_binds; ContextStatus exposes binding_limit, input_capacity and input_limit_binds on the chat and mission context APIs (null for runtime-managed context); source/capacity_source keep their meaning (they are read by api.py and chat.py only to fill capacity_source). The Working context capacity label now uses binding_limit and input_capacity instead of inferring them. Python: test_context.py (five binding-limit unit tests: configured below verified routes, smallest route with and without its input limit, catalog window below every route, catalog/known/configured/fallback, unverified OpenRouter floor/primary route/configured) plus the files that resolve limits or serve the context API: test_chat_api.py (chat, mission and harness context payloads), test_model_output_budget.py and test_chat_context_assembly.py. Frontend: WorkingContextPanel (label cases for every binding and an older Core), client mapping, ProviderRequestInputDetails and the App saved-memory journey. Playwright: area:working-context and entry:assistant on desktop, mobile Chromium and mobile WebKit (SessionsPage renders the panel).",
-  "exclusions": "Full suites are not approved and are excluded. Rules for chat.py/api.py/context.py also map conversation-progress, provider-reasoning and core-api; they are not selected because the backend change only adds three fields to the context status payload and ContextLimits (no request, prompt, stream or storage behaviour changes), which the selected Python files cover. provider-request-breakdown-core is not selected: its local vLLM profile has no route limits and its label text is unchanged. The real-Core check (OpenRouter with verified routes, capped and uncapped, and an OpenAI-compatible profile, at a LAN origin with the production bundle) is recorded in the PR body. Native/Tauri tests are unaffected.",
+  "change_digest": "a70cc4d4d2bca3d00da2d2e50fb4a6e2801bb9517e1017080bc7f34faef0cde9",
+  "reviewed_by": "Claude focused review for ctx-digest",
+  "reason": "Stream C2 (F1, in-turn progress digest): new turn_progress.py; chat.py gains a progress pre-step before the tool history of every routing request, the final answer and each deeper fold (Stream D's _fold_deeper), and passes the progress block to the ledger; chat_turn_ledger.py exposes foldable steps and recorded steps and embeds progress in the checkpoint it writes; context.py adds the chat_turn owner (validation, persistence without an owner pointer, t<step> ids), a prior-snapshot input for incremental compaction and fit_memory; domain.py adds ContextOwnerType.CHAT_TURN; storage.py deletes turn-owned snapshots and segments with the conversation. Selected: the new progress tests; every tool-loop file whose long turns now fold and summarise (in-turn pruning, prompt cache, tool history memory, tool loop, mid-turn compaction, final synthesis recovery, routing tolerance, subagents, agent messages, synthesis declarations, restart recovery, malformed calls, turn outcome history, write amplification, reasoning recovery, tool failures, subagent delivery, reference material, goals); the compactor and its callers (context, chat context assembly, chat, chat leftovers, deepseek/glm compat, conversation search, orchestration); storage, exporter, entity registration and domain. Counts from pytest --collect-only.",
+  "exclusions": "No frontend, native or Playwright tests: no UI, Rust or visible change (the checkpoint block sent to the model gains a progress entry; no API field changes). Provider adapters are unchanged. Harness runtimes own their context and never call the compactor. Real-Core evidence (OpenRouter deepseek/deepseek-v4.1-flash, a 30-file chained host-mode turn, and the retention eval s2 with five repeats against origin/main c6a7700) is recorded in the PR body. No full suite.",
   "expected_tests": {
-    "python": 152,
-    "frontend": 139,
+    "python": 651,
+    "frontend": 0,
     "native": 0,
-    "playwright": 226
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -15,22 +15,39 @@
   "python_browser": false,
   "python_node": false,
   "python": [
+    "tests/v3/test_turn_progress.py",
+    "tests/v3/test_midturn_compaction.py",
     "tests/v3/test_context.py",
-    "tests/v3/test_chat_api.py",
-    "tests/v3/test_model_output_budget.py",
-    "tests/v3/test_chat_context_assembly.py"
+    "tests/v3/test_in_turn_context_pruning.py",
+    "tests/v3/test_turn_prompt_cache.py",
+    "tests/v3/test_tool_history_memory.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_chat_context_assembly.py",
+    "tests/v3/test_storage.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_final_synthesis_recovery.py",
+    "tests/v3/test_chat_routing_tolerance.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_chat_agent_messages.py",
+    "tests/v3/test_synthesis_tool_declarations.py",
+    "tests/v3/test_restart_recovery_lifecycle.py",
+    "tests/v3/test_malformed_tool_call_feedback.py",
+    "tests/v3/test_turn_outcome_history.py",
+    "tests/v3/test_turn_write_amplification.py",
+    "tests/v3/test_reasoning_recovery.py",
+    "tests/v3/test_tool_failures.py",
+    "tests/v3/test_subagent_delivery.py",
+    "tests/v3/test_chat_reference_material.py",
+    "tests/v3/test_conversation_search.py",
+    "tests/v3/test_orchestration.py",
+    "tests/v3/test_exporter.py",
+    "tests/v3/test_generic_crud_exposure.py",
+    "tests/v3/test_domain.py",
+    "tests/v3/test_chat_leftovers.py",
+    "tests/v3/test_deepseek_glm_compat.py"
   ],
-  "frontend": [
-    "ui/src/components/WorkingContextPanel.test.tsx",
-    "ui/src/components/ProviderRequestInputDetails.test.tsx",
-    "ui/src/api/client.test.ts",
-    "ui/src/App.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant/desktop",
-    "entry:assistant/mobile-chromium",
-    "entry:assistant/mobile-webkit",
-    "area:working-context"
-  ]
+  "playwright": []
 }
