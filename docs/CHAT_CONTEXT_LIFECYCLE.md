@@ -343,13 +343,14 @@ step. Each follow-up model call receives the turn's replay, subject to two
 bounded transformations:
 
 * **Deterministic checkpoint.** The most recent provider response groups stay
-  whole: at most eight, and only as many whole groups, newest first, as fit a
-  quarter of the model's working input capacity (at least 2,000 estimated
-  tokens), but never fewer than the newest group. The token bound matters
-  when a model
-  batches several calls per response: counted in groups alone, five-call
-  batches kept about forty steps out of every checkpoint, and they were
-  cleared in place instead of folding into receipts. Older completed,
+  whole: at most eight. A window of eight groups was a window of eight steps
+  until models began batching calls, so it holds eight steps whatever their
+  size, and more (batched calls) only while its groups fit a quarter of the
+  model's working input capacity (at least 2,000 tokens, counted as the route
+  is sent them: each response's reasoning once), never fewer than the newest
+  group. Counted in groups alone, five-call batches kept about forty steps out
+  of every checkpoint, and they were cleared in place instead of folding into
+  receipts. Older completed,
   failed, or denied steps can enter a checkpoint; waiting approval/callback
   steps stay whole. The checkpoint advances after
   16 eligible unfolded steps, about 24,000 estimated tokens (the same

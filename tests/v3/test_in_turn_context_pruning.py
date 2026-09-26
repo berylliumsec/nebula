@@ -186,16 +186,15 @@ def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
     synthesis = [r for r in requests if r.tool_choice == ToolChoice.NONE]
     assert len(routing) == 21 and len(synthesis) == 1
     # Before checkpointing every prior call is replayed. Once the deterministic
-    # checkpoint is present, the newest calls after it remain full: the latest
-    # provider groups that fit the recent window's token bound (at least the
-    # newest, at most eight). The routing instructions never change.
+    # checkpoint is present, the newest calls after it remain full: at least
+    # the latest eight provider groups. The routing instructions never change.
     assert len({request.instructions for request in routing}) == 1
     for step, request in enumerate(routing):
         expected = [f"call-{index}" for index in range(1, step + 1)]
         replayed = [result.call_id for result in request.tool_results]
         assert replayed == expected[len(expected) - len(replayed) :]
         if replayed != expected:
-            assert 1 <= len(replayed)
+            assert len(replayed) >= 8
             assert _checkpointed(request)
     for request in (routing[-1], synthesis[0]):
         results = request.tool_results
@@ -586,13 +585,8 @@ def test_a_large_window_clears_tool_results_at_the_working_ceiling(
     )
     assert (limits.binding_limit, limits.target_input_tokens) == ("ceiling", 12_000)
     assert limits.input_capacity > 900_000
-    # Results were folded into the checkpoint (the recent window is bounded
-    # by the working capacity too) or cleared, to stay near the ceiling, far
-    # below the window.
-    assert any(
-        _checkpointed(req) or any(_cleared(r) for r in req.tool_results)
-        for req in routing
-    )
+    # Results were cleared to stay near the ceiling, far below the window.
+    assert any(_cleared(r) for req in routing for r in req.tool_results)
     assert max(estimate_model_request(req) for req in routing) < 2 * 12_000
 
 

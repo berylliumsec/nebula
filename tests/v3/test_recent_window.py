@@ -17,6 +17,7 @@ from nebula.v3.chat_turn_ledger import (
     RECENT_RESPONSE_GROUPS,
     RECENT_WINDOW_MIN_TOKENS,
     ChatTurnLedger,
+    _group_wire_tokens,
     _token_estimate,
     recent_window_tokens,
 )
@@ -59,8 +60,10 @@ def _batched(groups: int, *, size: int = 3_000) -> list[dict]:
 
 
 def test_the_window_keeps_whole_groups_newest_first_within_its_budget():
+    """Past eight steps, a batched window keeps only what fits its budget."""
+
     history = _batched(6)
-    newest_two = _token_estimate(history[-2 * BATCH : -BATCH]) + _token_estimate(
+    newest_two = _group_wire_tokens(history[-2 * BATCH : -BATCH]) + _group_wire_tokens(
         history[-BATCH:]
     )
 
@@ -77,9 +80,37 @@ def test_the_window_keeps_whole_groups_newest_first_within_its_budget():
     assert ChatTurnLedger._recent_groups(history, RECENT_RESPONSE_GROUPS, 1) == {
         "group-5"
     }
+    # ... and one call per response keeps its eight steps whatever their size:
+    # only a window past eight steps is held to the budget.
+    single = [_entry(step, step, size=20_000) for step in range(12)]
+    assert ChatTurnLedger._recent_groups(single, RECENT_RESPONSE_GROUPS, 1) == {
+        f"group-{step}" for step in range(4, 12)
+    }
     # ... the group count still caps the window, and a deeper fold keeps none.
     assert ChatTurnLedger._recent_groups(history, 1, 10**9) == {"group-5"}
     assert ChatTurnLedger._recent_groups(history, 0, 10**9) == set()
+
+
+def test_a_group_is_sized_as_the_route_is_sent_it():
+    """Its reasoning once, however many calls it made and however it is stored."""
+
+    thought = "considering which files to read next " * 200
+    state = {
+        "provider_id": "provider",
+        "model": "model-a",
+        "reasoning": thought,
+        "reasoning_details": [{"type": "reasoning.text", "text": thought}],
+    }
+    group = [
+        {**entry, "reasoning_state": state, "response_text": "Reading five files."}
+        for entry in _batched(1, size=500)
+    ]
+    one_call = _group_wire_tokens(group[:1])
+
+    # Each row carries the thought twice; the route is sent it once.
+    assert _token_estimate(group) > 4 * _group_wire_tokens(group)
+    assert _group_wire_tokens(group) < one_call + 4 * 300
+    assert thought[:200] in json.dumps(group[0])
 
 
 def test_the_budget_is_a_share_of_input_capacity_with_a_floor():
@@ -173,5 +204,5 @@ def test_counted_in_groups_alone_the_same_batches_were_cleared_in_place(
     last = routing[-1]
 
     cleared = [result for result in last.tool_results if _cleared(result)]
-    assert _covered(last) <= 15
+    assert _covered(last) <= 20
     assert len(cleared) >= 30
