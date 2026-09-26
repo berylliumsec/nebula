@@ -2459,12 +2459,20 @@ def test_local_chat_retrieves_only_its_engagement_and_persists(tmp_path, monkeyp
     instructions = final_request.instructions or ""
     assert instructions.startswith("No tools are available in this turn. ")
     assert final_request.tools == []
-    assert "BEGIN REFERENCE DATA (JSON)" in instructions
     assert "Cite provided references with [source_id:chunk_id]." in instructions
-    assert "CROSS_ENGAGEMENT_SECRET" not in instructions
-    assert final_request.messages == [
-        chat_module.ModelMessage(role="user", content="What port is relevant?")
-    ]
+    # Retrieved data follows the operator's words on their message, never in
+    # the instructions.
+    assert "REFERENCE DATA" not in instructions
+    [current] = final_request.messages
+    assert current.role == "user"
+    assert isinstance(current.content, str)
+    assert current.content.startswith(
+        "What port is relevant?\n\n"
+        + chat_module._REFERENCE_MATERIAL_HEADING
+        + "\n\nBEGIN REFERENCE DATA (JSON"
+    )
+    assert "Relevant port is 443." in current.content
+    assert "CROSS_ENGAGEMENT_SECRET" not in current.content
     session = store.get(ChatSession, completion.session_id)
     assert session.engagement_id == engagement.id
     persisted = service.session_messages(session.id)
@@ -2712,10 +2720,13 @@ def test_chat_retrieves_bundled_operator_help_without_project_documents(
     assert prepared.citations[0].source_id == "nebula-help:runner-setup"
     assert prepared.citations[0].artifact_id is None
     instructions = prepared.model_request.instructions or ""
-    assert "BEGIN NEBULA OPERATOR HELP (JSON)" in instructions
-    assert "supported fixed executable paths" in instructions
-    assert "no verified recovery procedure is available" in instructions
-    assert "BEGIN REFERENCE DATA" not in instructions
+    assert "OPERATOR HELP" not in instructions
+    current = prepared.model_request.messages[-1].content
+    assert isinstance(current, str)
+    assert "BEGIN NEBULA OPERATOR HELP (JSON" in current
+    assert "supported fixed executable paths" in current
+    assert "no verified recovery procedure is available" in current
+    assert "BEGIN REFERENCE DATA" not in current
 
     completion = asyncio.run(service.complete(prepared))
     assert completion.citations[0].source_id == "nebula-help:runner-setup"
@@ -2837,12 +2848,16 @@ def test_cloud_knowledge_requires_profile_and_per_request_consent_and_redacts(
         service.prepare(request.model_copy(update={"allow_cloud_knowledge": False}))
 
     prepared = service.prepare(request)
-    instructions = prepared.model_request.instructions or ""
-    assert "supersecret123" not in instructions
-    assert "abcdefghijklmnopqrstuvwxyz" not in instructions
-    assert "secretmaterial" not in instructions
-    assert "[REDACTED]" in instructions
-    assert "[REDACTED PRIVATE KEY]" in instructions
+    # The reference material rides on the operator's message, redacted.
+    sent = json.dumps(prepared.model_request.model_dump(mode="json"))
+    assert "supersecret123" not in sent
+    assert "abcdefghijklmnopqrstuvwxyz" not in sent
+    assert "secretmaterial" not in sent
+    current = prepared.model_request.messages[-1].content
+    assert isinstance(current, str)
+    assert "BEGIN REFERENCE DATA (JSON" in current
+    assert "[REDACTED]" in current
+    assert "[REDACTED PRIVATE KEY]" in current
     assert "supersecret123" not in prepared.citations[0].excerpt
 
 
