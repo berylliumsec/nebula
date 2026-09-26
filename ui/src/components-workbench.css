@@ -560,7 +560,9 @@ kbd { font-size: 11px; }
 .session-layout.chat { grid-template-columns: minmax(420px, 1fr); grid-template-rows: minmax(0, 1fr); }
 .session-layout.chat.conversation-panel-open { grid-template-columns: var(--conversation-panel-width, 280px) minmax(420px, 1fr); }
 .session-layout.chat .session-workspace, .session-layout.chat .chat-panel { min-height: 0; }
-.session-layout.chat .session-list { position: relative; display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
+/* clip, not hidden: the resize handle straddles the edge, and a hidden overflow is still a scroll
+   container that focus can shift sideways (which also dismissed the conversation actions menu). */
+.session-layout.chat .session-list { position: relative; display: flex; min-height: 0; flex-direction: column; overflow: hidden; overflow: clip; }
 .session-layout.chat .session-inspector { position: relative; }
 .session-layout.chat .session-list nav { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; }
 .session-layout.chat .session-workspace { display: flex; flex-direction: column; overflow: hidden; }

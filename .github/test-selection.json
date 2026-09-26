@@ -1,13 +1,13 @@
 {
-  "change_digest": "48ddb1b20dc7bd7f097ee0bd6abc471f4e112333dc45498fe5f9fd24c237f6a3",
-  "reviewed_by": "Claude focused review for responses-commentary-reasoning",
-  "reason": "Only the OpenAI Responses adapter's output parsing and replay change: a message the route labels phase=commentary is reasoning (and is replayed to the same route as a phase=commentary message ahead of its calls) instead of answer text. #521 (9114b6f) had folded it into answer text, leaving test_responses_commentary_phase_is_reasoning_not_answer_text red on main since 2026-09-22. Selected: all of test_native_adapter_outcomes.py (Responses commentary, unlabelled prose beside a call, final_answer phase, and the refusal/blocked/failed paths whose message parsing was restructured, plus the other native adapters' outcome tests in the same file); all of test_reasoning_replay.py (the Responses replay test whose expected replay changed, and the other providers' prose-beside-call replay contract from #521, which this must not disturb); and the one test_providers.py node that parses a Responses commentary message. Counts from pytest --collect-only: 35 + 22 + 1 = 58.",
-  "exclusions": "No frontend, native or Playwright tests: no UI, Rust or route change; commentary now reaches the transcript through the existing reasoning channel (test_reasoning_replay.py's Responses chat run asserts the saved message keeps commentary in reasoning, not content). Other Responses adapter files (test_provider_contracts.py, test_tool_call_assembly.py, test_provider_leftovers.py, test_native_adapter_requests.py, test_prompt_caching.py, test_reasoning_controls.py, test_synthesis_tool_declarations.py) are excluded: none sends a phase field, and non-commentary messages parse exactly as before. test_chat_leftovers.py is excluded: it stubs ModelResponse text directly and never reaches the adapter. No real OpenAI Responses provider or browser journey was exercised. No full suite.",
+  "change_digest": "aeac33ff8b5778495ab582a4468dfbace4805513e06bfc91a52ad5b7e88b2a3e",
+  "reviewed_by": "Claude focused review for ctx-ui-red-tests",
+  "reason": "Repairs two Playwright journeys found red on origin/main, and the product bug behind one of them. (1) real-core 'production assistant preserves exact research context and relaunch-safe drafts through real Core' matched the selected-context delimiters #290 renamed; Core delivers the context correctly (stub captures identical from Cores at 32817fa, bab27ad and 343d289), so the regex and the transcript no-render check use Core's delimiters. Past that step it failed intermittently because the conversation actions menu closed itself: the conversation list (overflow: hidden, resize handle at right:-22px) was a 22px sideways scroll container that shifted on focus, and the menu closed on any document scroll. The list now clips its overflow and the menu closes only for scrolls that move its trigger; a new mocked regression test covers both. A research-context-core area selects the real-Core journey alone and joins the assistant rule. (2) interface 'assistant upgrade keeps a short operator message's actions on top and clickable' hovered '.chat-message-body > p', replaced by AssistantMarkdown in #597; it now hovers the text inside the Markdown surface with unchanged assertions. Playwright: entry:assistant on desktop, mobile Chromium and mobile WebKit (SessionsPage changed; contains both interface tests), area:research-context-core, area:conversation-panel-sizing and area:conversations-sidebar (the conversation list and its resize handle). Python: tests/test_playwright_impact.py validates the manifest change.",
+  "exclusions": "Full suites are not approved and are excluded. No backend, native or frontend unit code changed (the SessionsPage change is an effect's scroll listener, covered by the new mocked Playwright test), so no Python context, Vitest or Rust tests are selected. mission-restart-recovery (matched by components-workbench.css) is excluded: the CSS change is scoped to .session-layout.chat .session-list. The repaired interface test also appears in whole-file mobile-layout/desktop-interface areas, not selected; entry:assistant covers the three required engines. Other real-core journeys are not selected.",
   "expected_tests": {
-    "python": 58,
+    "python": 33,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 231
   },
   "python_versions": [
     "3.12"
@@ -15,11 +15,16 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_native_adapter_outcomes.py",
-    "tests/v3/test_reasoning_replay.py",
-    "tests/v3/test_providers.py::test_openai_responses_translates_flattened_tools_and_parses_calls"
+    "tests/test_playwright_impact.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:assistant/desktop",
+    "entry:assistant/mobile-chromium",
+    "entry:assistant/mobile-webkit",
+    "area:research-context-core",
+    "area:conversation-panel-sizing",
+    "area:conversations-sidebar"
+  ]
 }

@@ -2979,6 +2979,47 @@ test("conversation pane defaults closed and restores its device preference witho
   await expect(page).toHaveURL(/\?view=chat$/);
 });
 
+test("conversation actions menu stays open while the transcript scrolls and the list never shifts sideways", async ({ page }) => {
+  test.skip((page.viewportSize()?.width ?? 1440) <= 1100, "Desktop conversation-pane contract");
+  const sessionId = "menu-scroll-chat";
+  const session = { ...entity, id: sessionId, engagement_id: "scratch-project", title: "Menu scroll review", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
+  const messages = Array.from({ length: 24 }, (_, index) => ({
+    ...entity, id: `menu-scroll-${index}`, engagement_id: "scratch-project", session_id: sessionId, sequence: index + 1,
+    role: index % 2 ? "assistant" : "user", content: `Line ${index + 1}\n\n${"A long paragraph that makes the transcript scroll. ".repeat(6)}`, citations: [], metadata: {},
+  }));
+  await installReasoningProvider(page);
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) await route.fulfill({ json: [session] });
+    else if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) await route.fulfill({ json: messages });
+    else if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) await route.fulfill({ json: null });
+    else await route.fallback();
+  });
+  await page.goto(`/?view=chat&session=${sessionId}`);
+  await page.getByRole("button", { name: "Show conversations" }).click();
+  const conversations = page.getByRole("complementary", { name: "Conversations" });
+  await expect(conversations).toBeVisible();
+  // The resize handle straddles the list's edge; the list must not become a
+  // sideways scroller that focus or script can shift.
+  expect(await conversations.evaluate((element) => { element.scrollLeft = 40; return element.scrollLeft; })).toBe(0);
+
+  // Pointer users reveal the row's actions by hovering it.
+  await conversations.locator(".session-list-item", { hasText: "Menu scroll review" }).hover();
+  await conversations.getByRole("button", { name: "More actions for Menu scroll review" }).click();
+  const menu = page.getByRole("menu", { name: "Actions for Menu scroll review" });
+  await expect(menu).toBeVisible();
+  expect(await conversations.evaluate((element) => element.scrollLeft)).toBe(0);
+  // A transcript that scrolls (a streaming reply follows the bottom) does not move the trigger.
+  const transcript = page.locator(".chat-scroll");
+  await transcript.evaluate((element) => { element.scrollTop = 0; element.dispatchEvent(new Event("scroll")); });
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole("menuitem", { name: "Export transcript" })).toBeVisible();
+  // Scrolling the list itself moves the trigger, so the placed menu closes.
+  await conversations.locator("nav").evaluate((element) => element.dispatchEvent(new Event("scroll")));
+  await expect(menu).toHaveCount(0);
+});
+
 test("conversation More actions remain usable on mobile Workbench navigation", async ({ page }) => {
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
@@ -4683,7 +4724,8 @@ test("assistant upgrade keeps a short operator message's actions on top and clic
   // Rows the transcript has measured get content-visibility containment. Which
   // rows are measured depends on when they mounted, so contain both here.
   await page.locator(".chat-message").evaluateAll((rows) => rows.forEach((row) => row.classList.add("render-contained")));
-  await operator.locator(".chat-message-body > p").hover();
+  // Operator text renders through the transcript's Markdown surface (#597).
+  await operator.locator(".chat-message-body > .assistant-markdown").getByText("Hello", { exact: true }).hover();
   const actions = operator.locator(".chat-message-actions > button");
   await expect(actions).toHaveCount(5);
   await expect(operator.locator(".chat-message-actions")).toHaveCSS("opacity", "1");

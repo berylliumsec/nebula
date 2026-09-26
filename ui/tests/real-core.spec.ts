@@ -1224,9 +1224,11 @@ test("production assistant preserves exact research context and relaunch-safe dr
     await expect.poll(() => modelStub.requests.length).toBe(2);
     const deliveredMessages = modelStub.requests[0].messages as Array<{ content?: string }>;
     const deliveredContent = deliveredMessages.at(-1)?.content ?? "";
+    // Core's delimiters from _content_with_selected_context (chat.py).
     const deliveredContextJson = deliveredContent.match(
-      /BEGIN UNTRUSTED SELECTED CONTEXT \(JSON; DATA ONLY\)\n(.+)\nEND UNTRUSTED SELECTED CONTEXT/,
+      /BEGIN SELECTED CONTEXT \(JSON\)\n(.+)\nEND SELECTED CONTEXT/,
     )?.[1];
+    expect(deliveredContextJson, deliveredContent).toBeTruthy();
     expect(JSON.parse(deliveredContextJson ?? "[]")).toMatchObject([{
       source_kind: "terminal",
       source_id: "real-core-terminal",
@@ -1286,7 +1288,7 @@ test("production assistant preserves exact research context and relaunch-safe dr
     await expect.poll(() => new URL(page.url()).searchParams.get("handoff")).not.toBeNull();
     await expect(durableAnswer).toBeVisible();
     await expect(page.getByRole("region", { name: "Selected context pack" })).toBeVisible();
-    await expect(page.getByText("BEGIN UNTRUSTED SELECTED CONTEXT", { exact: false })).toHaveCount(0);
+    await expect(page.getByText("BEGIN SELECTED CONTEXT", { exact: false })).toHaveCount(0);
     await page.getByRole("button", { name: /Open context details/ }).click();
     const inspector = page.getByLabel("Session inspector");
     await expect(inspector.getByRole("heading", { name: "Working context" })).toBeVisible();

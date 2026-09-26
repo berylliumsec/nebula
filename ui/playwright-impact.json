@@ -19,7 +19,7 @@
     {"name": "tool-suggestions", "patterns": ["ui/src/components/ToolSuggestion*", "ui/src/components/TypeSafe*", "src/nebula/v3/tool_suggestions.py"], "areas": ["tool-suggestions"]},
     {"name": "mcp-import", "patterns": ["ui/src/components/McpImportDialog*", "ui/src/components/HarnessSettings*", "src/nebula/v3/mcp*.py"], "areas": ["mcp-import"]},
     {"name": "ssh-environments", "patterns": ["ui/src/components/Environment*", "ui/src/sshTools.ts", "src/nebula/v3/environments.py", "src/nebula/v3/ssh_environments.py"], "areas": ["ssh-environments"]},
-    {"name": "assistant", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/pages/chatToolResultConsent.ts", "ui/src/pages/providerCredentialRecovery.ts", "ui/src/components/Chat*", "ui/src/components/Assistant*", "src/nebula/v3/chat*.py", "src/nebula/v3/harness*.py"], "areas": ["assistant", "chat-edit-in-place", "provider-thinking"]},
+    {"name": "assistant", "patterns": ["ui/src/pages/SessionsPage.tsx", "ui/src/pages/chatToolResultConsent.ts", "ui/src/pages/providerCredentialRecovery.ts", "ui/src/components/Chat*", "ui/src/components/Assistant*", "src/nebula/v3/chat*.py", "src/nebula/v3/harness*.py"], "areas": ["assistant", "chat-edit-in-place", "provider-thinking", "research-context-core"]},
     {"name": "activity-ledger", "patterns": ["ui/src/components/ActivityLedger*", "ui/src/components/activityLedger*", "ui/src/pages/harnessActivity*", "ui/src/mcpTools*"], "areas": ["activity-ledger"]},
     {"name": "interactive-guides", "patterns": ["ui/src/guides/**", "ui/src/guides.css", "src/nebula/v3/guides.py"], "areas": ["interactive-guides"]},
     {"name": "browser", "patterns": ["ui/src/components/Browser*", "ui/src/components/WorkbenchBrowser*", "ui/src/pages/Browser*", "src/nebula/v3/browser*.py", "ui/src-tauri/src/browser*.rs"], "areas": ["browser-complete"]},
@@ -163,6 +163,7 @@
       {"area":"provider-operator-context-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains unresolved operator questions until removal","runtime":"real-core","shard":"1/1"},
       {"area":"provider-operator-context-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core retains unresolved operator questions until removal","runtime":"real-core","shard":"1/1"}
     ],
+    "research-context-core": [{"area": "research-context-core", "project": "real-core", "test_match": "tests/real-core.spec.ts", "grep": "production assistant preserves exact research context", "runtime": "real-core", "shard": "1/1"}],
     "provider-request-breakdown-core": [
       {"area":"provider-request-breakdown-core","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"},
       {"area":"provider-request-breakdown-core","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade provider request breakdown survives a production LAN chat reload","runtime":"real-core","shard":"1/1"},
