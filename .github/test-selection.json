@@ -1,10 +1,10 @@
 {
-  "change_digest": "9c72a81e5544a3a967d949fe0a3c42273ad169e1c532b49ef844f4cdc930af06",
+  "change_digest": "599cffd2aed6c54aa16deff2fd6158a3cc4ee392ece225153ccb52025aac8175",
   "reviewed_by": "Claude focused review for ctx-retrieval",
-  "reason": "Stream R (F11) replaces the archived-conversation excerpt ranker in ChatService._model_context and adds a conversation.search Core tool. New pure module context_retrieval.py (paragraph-aligned chunking, BM25 with rarity-weighted identifier boost, tail-aware query, optional dense RRF via the knowledge index's local model when already ready), new conversation_search.py tool (LOCAL_READ analysis tool bound to one chat session, active projection up to the latest ready snapshot), conversation_search_components in runtime_platform.py, ChromaKnowledgeIndex.embed, conversation.search added to RETRIEVAL_TOOL_NAMES, and chat.py wiring (excerpt selection, offering the tool on compacted tool turns, recording it in the request snapshot, rebuilding it on resume). Selected: the two new test files; test_context.py (context/limits/lexical_score kept for missions); test_chat.py (compaction, excerpts, resume, runtime switch); every file whose tests drive a compacted prepare (history content fidelity, model output budget, project instructions, turn preflight latency snapshot reuse, API stream context, turn prompt cache); restart recovery of rerunnable retrieval reads; knowledge index (new embed method); structured results and tool catalog (exact tool spec sets and resume rebuild alongside the new components); and the compaction no-reasoning node. Counts from pytest --collect-only.",
-  "exclusions": "No frontend, native or Playwright tests: no UI, Rust or visible layout changes; the tool's activity renders through the existing generic native tool card using its display_name. Mission orchestration retrieval (orchestration.py still uses context.lexical_score) is unchanged and excluded. Other tool-spec-set tests (tool suggestions, subagents, browser companion) never compact a conversation, so the tool is not offered there. Real-Core evidence (scratch Core on 18716, OpenRouter deepseek/deepseek-v4.1-flash, 12K window) is recorded in the PR body. No full suite.",
+  "reason": "Stream R (F11), rebased onto Stream A (#605). Replaces Stream A's single excerpt-selection point (_retrieved_excerpts, whole messages by raw term counts) with the chunked ranker in the new pure module context_retrieval.py (paragraph-aligned passages, BM25 with rarity-weighted identifier boost, tail-aware query fed from the kept tail, optional dense RRF via the knowledge index's local model when already ready); fitted() inside _model_context becomes async so ranking runs in a worker thread; A's placement (after the current message) and heading are kept, payload entries gain an optional part. Adds the conversation.search Core tool (conversation_search.py; LOCAL_READ analysis tool covering exactly the latest ready snapshot's source messages in the active projection), offered only on tool turns whose request is compacted, recorded in the request snapshot and rebuilt on resume, with its definition reserved (archive_reserved_tokens) only on the compaction path; conversation.search joins RETRIEVAL_TOOL_NAMES; ChromaKnowledgeIndex.embed. Selected: the two new test files; Stream A's full selection (every file driving _model_context, compacted prepare, tool loops, goals, subagents, agent messages, turn accounting and the runtime-switch preflight node), since the assembly function and turn reserve changed, minus test_orchestration.py; plus restart recovery of rerunnable reads, the knowledge index (new embed), structured results and tool catalog (exact tool spec sets, resume rebuild), and API stream context. test_chat_context_assembly.py's trigger test now compares routing with the compacted turn's own reserve, which includes the search tool's definition. Counts from pytest --collect-only.",
+  "exclusions": "No frontend, native or Playwright tests: no UI, Rust or visible layout changes; the tool's activity renders through the existing generic native tool card by its display_name. test_orchestration.py is excluded: mission compaction and dependency retrieval (context.lexical_score) are unchanged and do not use _model_context. Real-Core evidence (scratch Core on 18716, OpenRouter deepseek/deepseek-v4.1-flash, 12K window) is recorded in the PR body. No full suite.",
   "expected_tests": {
-    "python": 307,
+    "python": 513,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -17,6 +17,7 @@
   "python": [
     "tests/v3/test_context_retrieval.py",
     "tests/v3/test_conversation_search.py",
+    "tests/v3/test_chat_context_assembly.py",
     "tests/v3/test_context.py",
     "tests/v3/test_chat.py",
     "tests/v3/test_history_content_fidelity.py",
@@ -29,7 +30,18 @@
     "tests/v3/test_tool_catalog.py",
     "tests/v3/test_api_stream_context.py",
     "tests/v3/test_turn_prompt_cache.py",
-    "tests/v3/test_inference_timeouts_probe_budget.py::test_context_compaction_asks_for_no_reasoning"
+    "tests/v3/test_in_turn_context_pruning.py",
+    "tests/v3/test_turn_outcome_history.py",
+    "tests/v3/test_chat_leftovers.py",
+    "tests/v3/test_turn_write_amplification.py",
+    "tests/v3/test_chat_goals.py",
+    "tests/v3/test_chat_api.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_synthesis_tool_declarations.py",
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_chat_agent_messages.py",
+    "tests/v3/test_inference_timeouts_probe_budget.py",
+    "tests/v3/test_api.py::test_runtime_switch_preflight_keeps_incompatible_model_unselected"
   ],
   "frontend": [],
   "native": [],
