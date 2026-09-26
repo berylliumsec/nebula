@@ -160,6 +160,7 @@ _CHAT_SESSION_ID_ENTITY_KINDS = frozenset(
         "chat_schedules",
         "chat_snapshot_parts",
         "chat_turns",
+        "chat_working_notes",
     }
 )
 
@@ -1643,6 +1644,7 @@ class NebulaStore:
                             "chat_read_cursors",
                             "chat_schedules",
                             "chat_snapshot_parts",
+                            "chat_working_notes",
                         )
                     ),
                     EntityRow.chat_session_id.in_(session_ids),

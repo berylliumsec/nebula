@@ -411,6 +411,8 @@ def test_subagent_tools_require_opt_in(tmp_path: Path) -> None:
             "list_subagents",
             "message_subagent",
             "stop_subagent",
+            # Every turn with tools can also keep working notes.
+            "notes.write",
         }
         assert opted_in.turn.request_snapshot["allow_subagents"] is True
         await chat.shutdown()

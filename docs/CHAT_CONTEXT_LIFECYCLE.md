@@ -14,7 +14,8 @@ contains future work; its unchecked items are not claims about current behavior.
 | Conversation | Core `ChatSession` and `ChatMessage` | Original, sequenced user/assistant messages, selected context attached to each turn, metadata, and retraction history | The active transcript reconstructed from stored messages, subject to conversation compaction |
 | Provider turn | Core `ChatTurn` and append-only step ledger | Tool intent, result, status, latest step projection, and checkpoint rows | Conversation input plus this turn's replayable calls/results or compact receipts |
 | Context snapshot | Core `ContextSnapshot` | Immutable derived memory, source IDs/sequences/hash, model, prompt version, usage, and success/failure | Memory and selected original excerpts when old conversation messages are archived from the request |
-| Tool output and artifacts | Core tool-call ledger and artifact store | Full retained output and artifact references | Recent results in full; older results may be receipts or absent from a bounded checkpoint |
+| Tool output and artifacts | Core tool-call ledger and artifact store | Full retained output and artifact references | In a turn: recent results in full, older ones as receipts or checkpoint entries. In later turns: a bounded tool-activity block on each answer, with ids that read the output again |
+| Working notes | Core `ChatWorkingNotes`, one per conversation | The assistant's own markdown notes (`notes.write`, at most 8 KiB), revision, time, and writing turn | The notes as a turn starts, after the operator's message; the latest notes inside each checkpoint written during the turn |
 
 A **turn** is one user request and the assistant's response, potentially including
 many provider calls and tool steps. A **provider call** is one request to the
@@ -32,9 +33,22 @@ rewrites the canonical transcript or turns a derived summary into evidence.
 3. The assistant finishes and Core saves assistant message B. The operator
    sends message C. `_merge_history` reconstructs A, B, C from canonical
    messages (and the selected context saved with A/C). It does **not** append
-   the previous turn's raw tool transcript to the new request. Tool activity
-   remains available in the ledger and artifacts. B may contain the assistant's
-   account of what it learned, but that is not the same as replaying tool output.
+   the previous turn's raw tool transcript to the new request. B is sent with
+   a **tool activity** data block rendered from its stored
+   `metadata.tool_results`: for each step, the tool, status, what it acted on
+   (`did`, the main argument, redacted, at most 120 characters), Core's result
+   summary (at most 160 characters, left out when it only lists the result's
+   keys), its `tool_call_id`, and up to four artifact ids. The block is at
+   most 2,500 bytes. It keeps every failed, denied or unsettled step first,
+   then successful steps whose output only their artifact ids reach again
+   (a command's output), then other successful ones, the most recent of each
+   first; it lists them in the order they ran and counts the rest. It is
+   derived from stored metadata only, so it is the same bytes on every later
+   request. The full output stays in
+   the ledger and artifacts, and `tool_output.search` (by `tool_call_id`) or
+   `tool_output.read` (by artifact id) reads it from any later turn of the
+   same conversation, never from another conversation. The operator's
+   transcript shows B's text alone.
 4. If the A/B/C history becomes too large, `_model_context` replaces its older
    portion in the request with a sourced snapshot's memory, carried as a
    labeled block at the start of the first message kept verbatim, and can add
@@ -64,10 +78,10 @@ the compactor's sizing policy. The effective values depend on model, route,
 output request, and profile.
 
 The estimate compared with the trigger counts everything the request will
-carry: instructions and messages, and for a tool turn the function
-declarations (converted exactly as routing sends them), the routing
-instructions, and a reserve for the largest on-demand catalog picks the ranker
-could still add. Core estimates about three UTF-8 bytes per token. After each
+carry: instructions and messages, the conversation's working notes, and for
+a tool turn the function declarations (converted exactly as routing sends
+them), the routing instructions, and a reserve for the largest on-demand
+catalog picks the ranker could still add. Core estimates about three UTF-8 bytes per token. After each
 turn whose last provider request reported at least 1,000 input tokens, the
 conversation records `reported / estimated` for that provider profile and
 model in `ChatSession.metadata.context_calibration`, smoothed (half the new
@@ -79,8 +93,8 @@ of the turn uses the raw estimate. The calibration assumes `input_tokens` is
 the provider's whole prompt, cached tokens included.
 
 The context endpoint's `estimated_input_tokens` (the Workbench meter) uses the
-same accounting: the latest turn's `reserved_input_tokens` for tools and
-routing instructions, scaled by `estimate_calibration`. It still excludes goal,
+same accounting: the latest turn's `reserved_input_tokens` for tools,
+routing instructions and the working notes, scaled by `estimate_calibration`. It still excludes goal,
 skill, and operator-decision instructions, retrieved help or knowledge, and
 excerpts, which are known only when a turn is assembled. The last provider
 request has a separate recorded estimate, with the provider's
@@ -109,7 +123,8 @@ When the estimate exceeds the 75% target, `_model_context`:
    derived history rather than instructions, and appends up to eight matching
    original transcript excerpts (as JSON data, within a fifth of the target and
    the room left) after the current message's own text and selected context.
-   Within a turn, the tool-history checkpoint follows them.
+   The conversation's working notes follow them, and within a turn the
+   tool-history checkpoint follows those.
 5. Never leaves a message out. Every canonical message in the active
    projection is either sent verbatim or covered by the snapshot that is sent.
    Over the target, the excerpts go first; then the compaction boundary moves
@@ -150,36 +165,72 @@ bounded transformations:
 * **Deterministic checkpoint.** The most recent eight provider response groups
   stay whole. Older completed, failed, or denied steps can enter a checkpoint;
   waiting approval/callback steps stay whole. The checkpoint advances after
-  16 eligible unfolded steps, about 24,000 estimated tokens, or an explicit
-  capacity-driven advance. The same checkpoint and replay rows remain stable
-  between advances for provider prefix caching. The checkpoint contains a
-  digest, covered step ranges/count, tool names, compact step receipts,
-  summaries/artifact references, and classified failure facts. It is capped at
-  16 KiB; its token estimate is capped at 4,000. When it exceeds the byte cap,
-  older successful receipts are dropped first, then failed ones if necessary,
-  and `omitted_steps` records the count. The hash and coverage prove which
-  durable steps were folded; **they do not mean their individual findings are
-  present in the model request**.
-* **Older-result clearing.** If the checkpoint plus replay still exceeds the
-  target, `_with_tool_history` replaces the fewest older full results with
-  short receipts while retaining call IDs/batch identity and, where available,
-  artifact references. It keeps the newest result whole when hard capacity
+  16 eligible unfolded steps, about 24,000 estimated tokens (the same
+  `estimate_tokens` count every request estimate uses), or an explicit
+  advance when a request crosses its target. The same checkpoint and replay
+  rows remain stable between advances for provider prefix caching. The
+  checkpoint (schema `nebula.chat-turn-checkpoint/v3`) contains a digest,
+  covered step ranges/count, tool names, and one receipt per step:
+  `[number, tool_index, state, did, summary, artifacts, failure]`. `did` is
+  the call's main argument (command, path, query, URL and so on), redacted
+  and at most 120 characters; `summary` is Core's result summary, at most 200
+  characters (empty when it only lists the result's keys); `artifacts` are
+  the result's artifact references; `failure` is Core's classification of a
+  failure and an `arguments_sha256` of the exact failed arguments. The
+  receipts are bounded at 3% of the model's input capacity, never below
+  16 KiB or above 64 KiB (16 KiB up to about a 182,000-token capacity,
+  64 KiB from about 728,000). Over the bound, older
+  successful receipts are dropped first, then failed ones if necessary, and
+  `omitted_steps` records the count. There is no separate token cap; the
+  stored `token_estimate` is the checkpoint's own estimate. The hash and
+  coverage prove which durable steps were folded; **they do not mean their
+  individual findings are present in the model request**.
+* **Older-result clearing.** If the checkpoint plus replay exceeds the target,
+  `_with_tool_history` advances the checkpoint and then replaces the oldest
+  full results still whole with short receipts, retaining call IDs/batch
+  identity and, where available, artifact references, until the request is at
+  a **watermark** below the target: `target − max(10% of input capacity,
+  8,000 tokens)`, but never below half the target. A result once cleared stays
+  cleared for the rest of the turn (Core recomputes this after a restart), so
+  a request changes its earlier bytes only when it crosses the target again,
+  not on every step. It keeps the newest result whole when hard capacity
   permits. A receipt directs the agent to `tool_output.search` or
   `tool_output.read` for the full retained output. If no artifact reference
   exists, a necessary result may require another tool call.
 
-This is a bounded replay strategy, not a semantic summary of the task. A long
-turn can have complete durable evidence yet lose an early observation from the
-model-facing checkpoint and recent tail. The agent must explicitly revisit
-canonical outputs or maintain its own concise task findings before drawing a
-conclusion that depends on them. The checkpoint does not by itself establish
-that the final answer is correct or incorrect.
+**Working notes.** Every provider turn with tools is offered `notes.write`,
+which replaces the conversation's working notes (markdown, at most 8 KiB): the
+assistant's own findings with exact identifiers, decisions and todo list. The
+routing instructions ask for them on long or multi-step work. A checkpoint
+written during the turn carries the latest notes as `working_notes`, outside
+the receipts' byte bound, so notes written by a step that has since folded are
+not lost; until then the `notes.write` call itself is replayed with its
+arguments. When a turn starts, the conversation's current notes are appended
+to the operator's message as a JSON data block, after the message's own
+content and before any checkpoint, and stay the same bytes for the whole turn.
+Notes that would push the request over hard input capacity are left out of it
+and a `chat.working_notes.omitted` diagnostic is recorded. A context-length
+recovery rebuild does not re-add them; the turn's notes calls and checkpoint
+still carry them. The notes are derived memory: they are never placed in the
+instructions and never grant permission or prove a tool effect. The context
+API returns them as `working_notes` (`content`, `revision`, `updated_at`,
+`turn_id`), or null when the assistant has never written notes. They are
+deleted with the conversation; a fork starts without them.
+
+This is a bounded replay strategy plus the agent's own notes, not a semantic
+summary of the task. A long turn can have complete durable evidence yet lose
+an early observation from the model-facing checkpoint and recent tail if the
+agent did not note it. The agent must revisit canonical outputs, or rely on
+notes that cite them, before drawing a conclusion that depends on them. The
+checkpoint does not by itself establish that the final answer is correct or
+incorrect.
 
 For a confirmed provider context-length rejection *before a response delta or
 tool effect*, Core may refresh exact model/route limits and retry the canonical
-request once. The in-turn path can retry once with older results cleared.
-Completed tool effects are never retried merely because a provider rejected a
-later request. A second rejection becomes an actionable capacity failure.
+request once. The in-turn path can retry once with older results cleared, and
+those results stay cleared for the rest of the turn. Completed tool effects
+are never retried merely because a provider rejected a later request. A second
+rejection becomes an actionable capacity failure.
 
 ## Other runtimes and lifecycles
 
@@ -220,10 +271,13 @@ a switch that requires compaction needs an explicit confirmation fingerprint.
    the original covered messages and any selected context before trusting a
    derived memory item.
 4. For an uninterrupted turn, inspect `chat_turn_step_events` and
-   `chat_turn_checkpoints`, compare covered ranges, `step_count`, `steps`, and
-   `omitted_steps`, then follow tool-call/artifact references for the exact
-   outputs. A missing receipt in the model-facing checkpoint is distinct from
-   a missing durable result.
+   `chat_turn_checkpoints`, compare covered ranges, `step_count`, `steps`,
+   `omitted_steps`, and `working_notes`, then follow tool-call/artifact
+   references for the exact outputs. A missing receipt in the model-facing
+   checkpoint is distinct from a missing durable result. `chat.tool_history.cleared`
+   diagnostics record each clearing event: results cleared then (`count`),
+   cleared in that request (`dropped_count`), replayed (`item_count`), and
+   the watermark (`limit`).
 5. Correlate request/turn events with provider errors, retries, and restart
    recovery. Make no correctness claim from checkpoint counts alone; compare
    the answer against the relevant original evidence.
@@ -243,7 +297,13 @@ all omitted findings were lost from every possible retrieval path.
   snapshot validation/reuse, and budget accounting.
 * `src/nebula/v3/chat_turn_ledger.py`: append-only step reconstruction,
   checkpoint eligibility, contents, and size cap.
+* `src/nebula/v3/tool_activity.py`: step briefs and the tool-activity block
+  a stored answer carries into later requests.
+* `src/nebula/v3/working_notes.py`: `notes.write`, notes storage, and the
+  notes data block.
 * `src/nebula/v3/domain.py`: durable `ContextSnapshot` and memory contracts.
-* `tests/v3/test_context.py`, `tests/v3/test_chat_context_assembly.py`, and
-  `tests/v3/test_turn_prompt_cache.py`: focused behavioral coverage. These
-  tests prove particular contracts, not semantic completeness of a summary.
+* `tests/v3/test_context.py`, `tests/v3/test_chat_context_assembly.py`,
+  `tests/v3/test_turn_prompt_cache.py`, `tests/v3/test_in_turn_context_pruning.py`,
+  and `tests/v3/test_tool_history_memory.py`: focused behavioral coverage.
+  These tests prove particular contracts, not semantic completeness of a
+  summary.
