@@ -14666,14 +14666,18 @@ class ChatService:
             except ConflictError:  # diagnostic-expected: concurrent writer won; the next candidate is tried
                 continue
 
-    def _turn_citations(self, prepared: PreparedChat) -> list[ChatCitation]:
+    def _turn_citations(
+        self, prepared: PreparedChat, answer: str = ""
+    ) -> list[ChatCitation]:
         """What the answer cites: attached knowledge, then what it searched.
 
         Excerpts ``knowledge.search`` delivered to the model during the turn
-        join the knowledge attached to its message, each chunk once. They are
-        read from the turn's durable step ledger, as the model received them,
-        so a resumed or restarted turn cites them too. ``conversation.search``
-        results are the conversation itself and are never citations.
+        join the knowledge attached to its message, each chunk once; a weak
+        match only when the ``answer`` refers to it (``searched_citations``).
+        They are read from the turn's durable step ledger, as the model
+        received them, so a resumed or restarted turn cites them too.
+        ``conversation.search`` results are the conversation itself and are
+        never citations.
         """
 
         citations = list(prepared.citations)
@@ -14686,7 +14690,7 @@ class ChatService:
                 or entry.get("status") != "complete"
             ):
                 continue
-            for citation in searched_citations(entry.get("provider_result")):
+            for citation in searched_citations(entry.get("provider_result"), answer):
                 key = (citation.source_id, citation.chunk_id)
                 if key not in known:
                     known.add(key)
@@ -14759,7 +14763,7 @@ class ChatService:
             ),
             finish_reason=response.finish_reason,
             provider_request_id=response.provider_request_id,
-            citations=self._turn_citations(prepared),
+            citations=self._turn_citations(prepared, content),
             tool_suggestions=(
                 public_suggestions(
                     prepared.turn.request_snapshot.get("tool_suggestions"),

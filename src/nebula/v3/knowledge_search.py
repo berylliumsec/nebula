@@ -170,11 +170,14 @@ class KnowledgeSearchTool(InvocationAnalysisTool):
         }
 
 
-def searched_citations(provider_result: Any) -> list[ChatCitation]:
+def searched_citations(provider_result: Any, answer: str = "") -> list[ChatCitation]:
     """The citations of the excerpts one ``knowledge.search`` result delivered.
 
     Read from the result as the model received it, so an excerpt the model
-    never saw is never cited, and the text is the redacted text it saw.
+    never saw is never cited, and the text is the redacted text it saw. An
+    excerpt the relevance model labelled weak is cited only when ``answer``
+    refers to its chunk id: a search returns its best matches even when
+    nothing answers, and the model was told a weak one may not.
     """
 
     if not isinstance(provider_result, str):
@@ -192,6 +195,11 @@ def searched_citations(provider_result: Any) -> list[ChatCitation]:
     citations: list[ChatCitation] = []
     for match in decoded.get("matches") or []:
         if not isinstance(match, dict):
+            continue
+        if (
+            match.get("relevance") == "weak"
+            and str(match.get("chunk_id")) not in answer
+        ):
             continue
         try:
             citations.append(

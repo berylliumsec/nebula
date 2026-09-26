@@ -205,7 +205,7 @@ def test_a_cloud_turn_needs_knowledge_consent_and_never_reads_local_only_sources
     assert store.get(ChatSession, confirmed.turn.session_id)
 
 
-def _long_matches(count: int):
+def _long_matches(count: int, relevances=None):
     from nebula.v3.chat import HarnessKnowledgeMatch, HarnessKnowledgeSearchResult
     from nebula.v3.domain import ChatCitation
 
@@ -221,7 +221,7 @@ def _long_matches(count: int):
                     excerpt=text[:320],
                 ),
                 local_only=False,
-                relevance="possible",
+                relevance=(relevances or ["possible"] * count)[index],
             )
             for index in range(count)
         ]
@@ -337,7 +337,9 @@ class _SearchBroker:
         from nebula.v3.knowledge_search import KnowledgeSearchTool
 
         self.knowledge = KnowledgeSearchTool(
-            "project", lambda *args: _long_matches(2), allow_local_only=True
+            "project",
+            lambda *args: _long_matches(3, ["possible", "weak", "weak"]),
+            allow_local_only=True,
         )
         self.workspace = workspace
 
@@ -410,8 +412,8 @@ def test_excerpts_the_model_searched_are_cited_once_and_survive_a_restart(tmp_pa
 
     completion = asyncio.run(service.complete(prepared))
 
-    # The attached chunk once, then the searched one; nothing from the
-    # conversation search.
+    # The attached chunk once, then the searched one the answer used; not
+    # the weak match it left alone, nor anything from the conversation.
     assert [(c.source_id, c.chunk_id) for c in completion.citations] == [
         ("source-0", "chunk-0"),
         ("source-1", "chunk-1"),
@@ -432,7 +434,10 @@ def test_excerpts_the_model_searched_are_cited_once_and_survive_a_restart(tmp_pa
     rebuilt = dataclasses.replace(
         prepared, citations=[attached], turn=store.get(ChatTurn, "turn")
     )
-    assert [c.chunk_id for c in restarted._turn_citations(rebuilt)] == [
+    assert [
+        c.chunk_id
+        for c in restarted._turn_citations(rebuilt, completion.message.content)
+    ] == [
         "chunk-0",
         "chunk-1",
     ]
