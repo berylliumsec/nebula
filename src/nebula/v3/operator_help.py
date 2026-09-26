@@ -80,6 +80,16 @@ _FAILURE_MARKERS = {
     "unhealthy",
 }
 
+# Every runbook shares product vocabulary ("runner", "image", "terminal",
+# "failed"), so a question also scores a tail of articles that merely mention
+# its words. A match must hold up against the best one: an article whose own
+# keyword phrase the question contains is on topic and needs a third of the
+# best score, so a question about two problems gets both runbooks; one that
+# matches shared words alone must come within three quarters of it.
+_PHRASE_RELATIVE_FLOOR = 1 / 3
+_TERM_RELATIVE_FLOOR = 3 / 4
+_MIN_SCORE = 6
+
 
 @dataclass(frozen=True)
 class OperatorHelpArticle:
@@ -163,10 +173,21 @@ def operator_help_articles() -> tuple[OperatorHelpArticle, ...]:
     return tuple(articles)
 
 
+def _contains_phrase(text: str, phrase: str) -> bool:
+    """Whether ``text`` contains ``phrase`` as whole words, not inside one."""
+
+    return re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", text) is not None
+
+
 def search_operator_help(
     queries: list[str], *, limit: int = 4
 ) -> tuple[OperatorHelpMatch, ...]:
-    """Return only high-signal product-help matches in deterministic order."""
+    """Return only high-signal product-help matches in deterministic order.
+
+    The best match always qualifies; the others must hold up against it (see
+    ``_PHRASE_RELATIVE_FLOOR``), so a weakly related tail is not sent beside
+    the runbook the question is about.
+    """
 
     if limit < 1:
         return ()
@@ -178,7 +199,7 @@ def search_operator_help(
     # intentionally excluded from ranking because nearly every runbook describes
     # a failure. Specific product nouns and observed identifiers choose the article.
     terms = raw_terms - _STOP_WORDS - _FAILURE_MARKERS
-    ranked: list[tuple[int, int, OperatorHelpArticle]] = []
+    ranked: list[tuple[int, int, bool, OperatorHelpArticle]] = []
     for ordinal, article in enumerate(operator_help_articles()):
         keyword_text = " ".join(article.keywords).casefold()
         title_text = article.title.casefold()
@@ -192,13 +213,21 @@ def search_operator_help(
         score += sum(
             10 for keyword in article.keywords if keyword.casefold() in query_text
         )
-        if score >= 6:
-            ranked.append((score, ordinal, article))
+        if score >= _MIN_SCORE:
+            phrase = any(
+                _contains_phrase(query_text, keyword.casefold())
+                for keyword in article.keywords
+            )
+            ranked.append((score, ordinal, phrase, article))
+    if not ranked:
+        return ()
     ranked.sort(key=lambda item: (-item[0], item[1]))
+    best = ranked[0][0]
     return tuple(
         OperatorHelpMatch(article=article, score=score)
-        for score, _ordinal, article in ranked[:limit]
-    )
+        for score, _ordinal, phrase, article in ranked
+        if score >= best * (_PHRASE_RELATIVE_FLOOR if phrase else _TERM_RELATIVE_FLOOR)
+    )[:limit]
 
 
 __all__ = [

@@ -138,9 +138,7 @@ def test_reference_material_leaves_the_instructions_byte_identical_across_turns(
         (ChatRole.USER, PORT_QUESTION),
     ]
     cited = [item.source_id for item in first.citations]
-    assert cited[0] == "nebula-help:runner-setup"
-    assert cited[-1] == "source-a"
-    assert all(item.startswith("nebula-help:") for item in cited[:-1])
+    assert cited == ["nebula-help:runner-setup", "source-a"]
     assert persisted[1].citations == first.citations
     assert [item.source_id for item in second.citations] == ["source-a"]
     assert [item.source_id for item in persisted[3].citations] == ["source-a"]
