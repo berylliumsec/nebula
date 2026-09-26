@@ -75,9 +75,14 @@ from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .browser_companion_tools import attached_session, companion_components
 from .application_model.tools import standalone_components
 from .conversation_search import CONVERSATION_SEARCH_TOOL_NAME, conversation_search_spec
+from .knowledge_search import (
+    KNOWLEDGE_SEARCH_ROUTING_INSTRUCTIONS,
+    KNOWLEDGE_SEARCH_TOOL_NAME,
+)
 from .runtime_platform import (
     conversation_search_components,
     dashboard_components,
+    knowledge_search_components,
     notes_components,
 )
 from .tool_activity import lookup_identifiers, step_brief, tool_activity_block
@@ -165,6 +170,14 @@ from .context import (
     resolve_context_limits,
     source_digest,
     updated_calibration,
+)
+from .knowledge_rerank import (
+    MAX_RERANK_CANDIDATES,
+    RerankCandidate,
+    candidate_scores,
+    has_content,
+    relevance_label,
+    relevant_candidates,
 )
 from .context_retrieval import (
     DenseEncoder,
@@ -723,6 +736,9 @@ class HarnessKnowledgeMatch:
     text: str
     citation: ChatCitation
     local_only: bool
+    # "strong", "possible" or "weak" when the local relevance model ranked
+    # an explicit search; None without it.
+    relevance: str | None = None
 
 
 @dataclass(frozen=True)
@@ -739,6 +755,10 @@ class _RetrievedChunk:
     local_only: bool
     score: float
     ordinal: int
+    # Embedding similarity, when vector search found the chunk: what the
+    # relevance gate reads besides the text (``knowledge_rerank``).
+    similarity: float | None = None
+    relevance: str | None = None
 
 
 def _reference_instructions(
@@ -1449,6 +1469,11 @@ def _routing_instructions(names: Collection[str], max_active_subagents: Any) -> 
         )
         + (AGENT_MESSAGE_ROUTING_INSTRUCTIONS if "send_agent_message" in names else "")
         + (NOTES_ROUTING_INSTRUCTIONS if NOTES_WRITE_TOOL_NAME in names else "")
+        + (
+            KNOWLEDGE_SEARCH_ROUTING_INSTRUCTIONS
+            if KNOWLEDGE_SEARCH_TOOL_NAME in names
+            else ""
+        )
     )
 
 
@@ -4969,6 +4994,8 @@ class ChatService:
             query,
             allow_local_only=True,
             token_budget=token_budget,
+            # Context nobody asked for carries only what answers the query.
+            ranked=False,
         )
         chunks = [
             _RetrievedChunk(
@@ -4993,8 +5020,16 @@ class ChatService:
         *,
         allow_local_only: bool,
         token_budget: int = 4_096,
+        ranked: bool = True,
     ) -> HarnessKnowledgeSearchResult:
-        """Return a bounded engagement-scoped search for a managed harness."""
+        """Return a bounded engagement-scoped search.
+
+        An explicit search (``ranked``, the harness gateway's and provider
+        turns' ``knowledge.search``) returns the best matches ordered by the
+        local relevance model, each labelled with how well it matched, and
+        leaves the judgement to the agent that asked: a search must not hide
+        the answer the way an unasked attachment may leave out a weak match.
+        """
 
         clean_query = query.strip()
         if not clean_query or not self._has_ready_knowledge(engagement_id):
@@ -5005,6 +5040,7 @@ class ChatService:
             redact=not allow_local_only,
             token_budget=max(1, min(token_budget, 8_192)),
             allow_local_only=allow_local_only,
+            gate=not ranked,
         )
         return HarnessKnowledgeSearchResult(
             [
@@ -5012,6 +5048,7 @@ class ChatService:
                     text=chunk.text,
                     citation=chunk.citation,
                     local_only=chunk.local_only,
+                    relevance=chunk.relevance,
                 )
                 for chunk in chunks
             ]
@@ -5400,6 +5437,7 @@ class ChatService:
             if selected
         ]
         tools_enabled = bool(tool_families)
+        knowledge_search = False
         if tools_enabled:
             if engagement_id is None:
                 raise ChatConfigurationError(
@@ -5596,6 +5634,29 @@ class ChatService:
                             Path(tool_components.workspace),
                         ),
                     )
+                # Offered whenever the project's knowledge may reach this
+                # model, not per message, so the tool list stays the same from
+                # turn to turn and the provider's prefix cache holds.
+                knowledge_search = (
+                    tool_components is not None
+                    and request.include_knowledge
+                    and (
+                        provider.config.local
+                        or (
+                            profile.privacy.permits_sensitive_data
+                            and request.allow_cloud_knowledge
+                        )
+                    )
+                    and self._has_ready_knowledge(engagement_id)
+                )
+                if knowledge_search:
+                    assert tool_components is not None
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        self._knowledge_search_components(
+                            tool_components, engagement_id, provider
+                        ),
+                    )
             except Exception as exc:
                 record_caught_exception(
                     "chat",
@@ -5675,6 +5736,9 @@ class ChatService:
             if (
                 request.include_knowledge
                 and engagement_id
+                # "thanks" or "ok, continue" has no subject a document could
+                # be about: no planning call, nothing attached.
+                and has_content(incoming[-1].content)
                 and self._has_ready_knowledge(engagement_id)
             ):
                 retrieval_queries = await self._plan_retrieval(
@@ -5682,7 +5746,10 @@ class ChatService:
                     model=selected_model,
                     query=incoming[-1].content,
                 )
-                engagement_chunks = self._retrieve(
+                # Vector search and relevance scoring are CPU work: off the
+                # event loop that streams every other conversation.
+                engagement_chunks = await asyncio.to_thread(
+                    self._retrieve,
                     engagement_id,
                     retrieval_queries,
                     redact=not provider.config.local,
@@ -5982,6 +6049,7 @@ class ChatService:
                     "tool_suggestions": tool_suggestions,
                     "tool_catalog": tool_catalog,
                     "conversation_search": conversation_search,
+                    "knowledge_search": knowledge_search,
                     "automation_runtime_digest": getattr(
                         tool_components, "runtime_digest", None
                     ),
@@ -11386,6 +11454,13 @@ class ChatService:
                         self.store, components.scope, Path(components.workspace)
                     ),
                 )
+            if components is not None and turn.request_snapshot.get("knowledge_search"):
+                components = combine_tool_components(
+                    components,
+                    self._knowledge_search_components(
+                        components, turn.engagement_id, provider
+                    ),
+                )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
             deferred = catalog_snapshot(turn.request_snapshot).get("deferred")
@@ -13949,6 +14024,30 @@ class ChatService:
             encode=encode, model=index.status.model, cache=self._conversation_vectors
         )
 
+    def _knowledge_search_components(
+        self,
+        components: RuntimeToolComponents | AutomationToolComponents,
+        engagement_id: str,
+        provider: ModelProvider,
+    ) -> RuntimeToolComponents:
+        # Only a model on this host may read local-only sources; a cloud
+        # model's searches leave them out and redact secrets.
+        return knowledge_search_components(
+            components.scope,
+            Path(components.workspace),
+            self.store,
+            engagement_id=engagement_id,
+            searcher=lambda engagement, query, allow_local_only, budget: (
+                self.harness_knowledge_search(
+                    engagement,
+                    query,
+                    allow_local_only=allow_local_only,
+                    token_budget=budget,
+                )
+            ),
+            allow_local_only=provider.config.local,
+        )
+
     def _conversation_search_components(
         self,
         components: RuntimeToolComponents | AutomationToolComponents,
@@ -14067,7 +14166,10 @@ class ChatService:
         redact: bool,
         token_budget: int,
         allow_local_only: bool = True,
+        gate: bool = True,
     ) -> list[_RetrievedChunk]:
+        if not queries or not has_content(queries[0]):
+            return []
         query_terms = [
             {
                 token.casefold()
@@ -14118,17 +14220,77 @@ class ChatService:
         if not allow_local_only:
             candidates = [item for item in candidates if not item.local_only]
         candidates.sort(key=lambda item: (-item.score, item.ordinal))
+        candidates = [
+            item for item in candidates if not (all_terms and item.score <= 0)
+        ]
+        candidates = self._relevant_knowledge(queries, candidates, gate=gate)
         selected: list[_RetrievedChunk] = []
         tokens = 0
         for candidate in candidates:
-            if all_terms and candidate.score <= 0:
-                continue
             candidate_tokens = estimate_tokens(candidate.text, message_count=1)
             if len(selected) >= 8 or tokens + candidate_tokens > token_budget:
                 continue
             selected.append(candidate)
             tokens += candidate_tokens
         return selected
+
+    def _relevant_knowledge(
+        self,
+        queries: list[str],
+        candidates: list[_RetrievedChunk],
+        *,
+        gate: bool = True,
+    ) -> list[_RetrievedChunk]:
+        """The candidates that answer the request, best first.
+
+        With the local relevance model ready, the best few candidates of the
+        existing ranking are scored against the operator's question and its
+        planned searches (``knowledge_rerank``). With ``gate``, only those that
+        answer it remain; without, all are kept in score order and labelled.
+        Until the model is ready the ranking stands as it is, and the model is
+        prepared in the background.
+        """
+
+        reranker = getattr(self.knowledge_index, "reranker", None)
+        if reranker is None or not candidates:
+            return candidates
+        if not reranker.ready:
+            reranker.ensure_started()
+            return candidates
+        pool = candidates[:MAX_RERANK_CANDIDATES]
+        reads = [
+            RerankCandidate(text=item.text, similarity=item.similarity) for item in pool
+        ]
+        try:
+            if gate:
+                kept = relevant_candidates(
+                    queries[0], reads, reranker.score, planned=queries[1:]
+                )
+            else:
+                scores = candidate_scores(
+                    queries[0], reads, reranker.score, planned=queries[1:]
+                )
+                kept = sorted(enumerate(scores), key=lambda item: (-item[1], item[0]))
+        except Exception as exc:
+            record_diagnostic(
+                "warning",
+                "chat",
+                "chat.retrieval.rerank_fallback",
+                "Relevance scoring of project knowledge failed; the retrieval "
+                "ranking was used unchanged.",
+                outcome="fallback",
+                stage="knowledge-retrieval",
+                retryable=True,
+                safe_failure_cause="The local relevance model could not score.",
+                exception=exc,
+            )
+            return candidates
+        return [
+            dataclass_replace(
+                pool[index], score=score, relevance=relevance_label(score)
+            )
+            for index, score in kept
+        ]
 
     def _retrieve_vector_candidates(
         self,
@@ -14208,6 +14370,8 @@ class ChatService:
                     local_only=self._source_is_local_only(source),
                     score=semantic_score + lexical_bonus,
                     ordinal=match.rank,
+                    # Chroma's cosine distance is 1 - similarity.
+                    similarity=1.0 - match.distance,
                 )
             )
         return candidates

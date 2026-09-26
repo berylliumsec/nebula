@@ -279,6 +279,38 @@ words). Library citations are labeled `Library:` so their workspace-wide
 scope stays visible. Cloud-provider privacy gates, per-request confirmation, and
 secret redaction still apply after retrieval.
 
+Nearest-neighbour search always returns something, so retrieved chunks pass a local
+relevance check before they are attached. A small cross-encoder
+(`mixedbread-ai/mxbai-rerank-xsmall-v1`, quantised ONNX, about 96 MB, Apache-2.0)
+scores the best eight candidates against the operator's question and every search
+the planner proposed. The check leans toward keeping the answer: the best-scoring
+chunk is attached unless the model confidently rejects it, and further chunks must
+clear a stricter line. A question about Nebula itself, or "thanks", no longer
+carries the project's runbooks, and a message with no subject of its own ("ok,
+continue") skips knowledge planning and retrieval entirely. The model runs through
+onnxruntime on the Core host, so project text never leaves it for scoring. It is
+fetched in the background the first time a source is indexed, pinned to one
+repository commit and verified by SHA-256 before it is loaded, and stored under
+`<data-dir>/knowledge-models` (override with `NEBULA_V3_KNOWLEDGE_MODELS_DIR`);
+`GET /api/v1/knowledge/index-status` reports its state under `reranker`. Until it is
+ready, or when `NEBULA_V3_KNOWLEDGE_RERANKER=off`, retrieval attaches the nearest
+chunks as before. On the labelled calibration set in
+`tests/v3/fixtures/knowledge_relevance_calibration.json`, every question sharing
+words with its answer and 14 of 15 paraphrases kept their document, and 11 of 13
+unrelated questions attached nothing.
+
+Tool-enabled provider turns in a Project with ready knowledge are also offered
+`knowledge.search`, the same search a managed harness has through its gateway: when
+the attached reference material does not answer, the model can search the Project's
+documents and Library itself. It is offered whenever knowledge is enabled for the
+turn and may reach its model (a local model, or a cloud model with sensitive-data
+permission and the knowledge confirmation), not per message, so the tool list stays
+stable for prompt caching. A search the model asked for is ranked by the relevance
+model and each excerpt is labelled strong, possible or weak rather than filtered, so
+the model judges a loose match itself; the harness gateway's search does the same. A
+cloud model's searches exclude local-only sources and redact secrets, results carry
+source and chunk ids for citation, and the search is a read that needs no approval.
+
 ## Context compaction
 
 For the distinction between durable conversation history, what each provider

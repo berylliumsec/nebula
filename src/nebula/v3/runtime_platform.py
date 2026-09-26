@@ -17,6 +17,7 @@ from typing import Any, Awaitable, Callable, Literal, Protocol, cast
 from .artifacts import ArtifactStore
 from .context_retrieval import DenseEncoder
 from .conversation_search import ConversationSearchTool
+from .knowledge_search import KnowledgeSearcher, KnowledgeSearchTool
 from .diagnostics import gather_diagnostic, record_caught_exception
 from .domain import (
     Approval,
@@ -241,6 +242,43 @@ def notes_components(
 
     registry = ToolRegistry()
     registry.register(WriteNotesTool(store))
+    broker = ToolBroker(
+        registry=registry,
+        policy_engine=PolicyEngine(),
+        runner=AnalysisOnlyRunner(),
+        ledger=StoreToolLedger(store),
+        workspace_resolver=lambda _engagement_id: workspace,
+    )
+    return RuntimeToolComponents(
+        broker=broker,
+        scope=scope,
+        workspace=workspace,
+        specs={spec.name: spec for spec in registry.specs()},
+        runtime_digest="",
+    )
+
+
+def knowledge_search_components(
+    scope: ScopePolicy,
+    workspace: Path,
+    store: NebulaStore,
+    *,
+    engagement_id: str,
+    searcher: KnowledgeSearcher,
+    allow_local_only: bool,
+) -> RuntimeToolComponents:
+    """Searching the project's knowledge on demand, for one provider turn.
+
+    ``allow_local_only`` is whether the turn's model runs on this host: a
+    cloud model's searches exclude local-only sources and redact secrets.
+    Built from the caller's resolved scope and workspace with no runtime
+    digest of its own; a read-only analysis tool records no evidence.
+    """
+
+    registry = ToolRegistry()
+    registry.register(
+        KnowledgeSearchTool(engagement_id, searcher, allow_local_only=allow_local_only)
+    )
     broker = ToolBroker(
         registry=registry,
         policy_engine=PolicyEngine(),
