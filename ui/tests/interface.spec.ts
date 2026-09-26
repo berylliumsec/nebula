@@ -4683,7 +4683,8 @@ test("assistant upgrade keeps a short operator message's actions on top and clic
   // Rows the transcript has measured get content-visibility containment. Which
   // rows are measured depends on when they mounted, so contain both here.
   await page.locator(".chat-message").evaluateAll((rows) => rows.forEach((row) => row.classList.add("render-contained")));
-  await operator.locator(".chat-message-body > p").hover();
+  // Operator text renders through the transcript's Markdown surface (#597).
+  await operator.locator(".chat-message-body > .assistant-markdown").getByText("Hello", { exact: true }).hover();
   const actions = operator.locator(".chat-message-actions > button");
   await expect(actions).toHaveCount(5);
   await expect(operator.locator(".chat-message-actions")).toHaveCSS("opacity", "1");
