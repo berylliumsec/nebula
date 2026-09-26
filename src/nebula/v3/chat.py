@@ -7409,7 +7409,7 @@ class ChatService:
                         # fit: all but the newest fold into the checkpoint,
                         # which carries their progress memory.
                         await self._refresh_turn_progress(
-                            prepared, turn, recent_groups=1
+                            prepared, turn, recent_groups=1, wait=True
                         )
                         if self._fold_deeper(
                             prepared,
@@ -8017,7 +8017,7 @@ class ChatService:
             # first, then the conversation ahead of the tool history is
             # compacted; only a request that still cannot fit fails, saying
             # what does not.
-            await self._refresh_turn_progress(prepared, turn)
+            await self._settle_turn_progress(turn)
             final_request = synthesis_request(operator_help_chunks)
             if operator_help_chunks and not fits_capacity(final_request):
                 operator_help_chunks = []
@@ -8034,7 +8034,9 @@ class ChatService:
             for keep in (1, 0):
                 if fits_capacity(final_request):
                     break
-                await self._refresh_turn_progress(prepared, turn, recent_groups=keep)
+                await self._refresh_turn_progress(
+                    prepared, turn, recent_groups=keep, wait=True
+                )
                 if self._fold_deeper(
                     prepared,
                     turn,
@@ -8968,19 +8970,29 @@ class ChatService:
         turn: ChatTurn,
         *,
         recent_groups: int = RECENT_RESPONSE_GROUPS,
+        wait: bool = False,
     ) -> None:
-        """Summarise a long turn's folded steps before its next request is built.
+        """Summarise a long turn's folded steps into its progress memory.
 
         Once enough foldable output has accumulated (``digest_trigger``), the
         turn's model turns it into a cited progress memory, guided by the goal
-        or else the turn's request; the next checkpoint the request advances
-        carries it, so the memory changes only when the checkpoint does. It is
-        charged to the goal like conversation compaction. A failure leaves the
-        checkpoint with its receipts alone and the turn going. Before a deeper
-        fold (``_fold_deeper``), ``recent_groups`` is that fold's window, so the
-        block it moves into the checkpoint at once is summarised first.
+        or else the turn's request; the next checkpoint the turn writes
+        carries it, so the memory changes only when the checkpoint does. A
+        refresh runs beside the routing loop rather than holding it: nothing
+        needs the memory before the checkpoint's next advance, and a blocking
+        refresh made long turns several times slower. One runs at a time per
+        turn. Before a deeper fold (``_fold_deeper``) the caller ``wait``s,
+        with ``recent_groups`` that fold's window, so the block it moves into
+        the checkpoint at once is summarised first. Refreshes are charged to
+        the goal like conversation compaction; a failure leaves the
+        checkpoint with its receipts alone and the turn going.
         """
 
+        pending = self.turn_progress.pending(turn.id)
+        if pending is not None:
+            if not wait:
+                return
+            await asyncio.wait({pending})
         limits = resolve_context_limits(
             prepared.provider_profile,
             model=prepared.resolved_model,
@@ -8999,6 +9011,45 @@ class ChatService:
             and goal.usage.total_tokens >= goal.token_budget
         ):
             return
+        summary = self._summarise_turn_progress(prepared, turn, sources, goal)
+        if wait:
+            await summary
+            return
+        task = create_diagnostic_task(
+            summary,
+            feature="chat",
+            event_code="chat.turn_progress",
+            failure_message=(
+                "The turn's progress memory could not be refreshed; its "
+                "checkpoint keeps the step receipts."
+            ),
+            name="nebula-turn-progress",
+        )
+        self.turn_progress.track(turn.id, task)
+        # One pass of the event loop: the refresh runs until it waits on the
+        # provider, and the routing loop goes on meanwhile.
+        await asyncio.sleep(0)
+
+    async def _settle_turn_progress(self, turn: ChatTurn) -> None:
+        """Let a refresh still running finish before the turn answers.
+
+        Its usage is then charged and in the turn's ``context_usage`` when the
+        answer is recorded; no new refresh starts for the answer.
+        """
+
+        pending = self.turn_progress.pending(turn.id)
+        if pending is not None:
+            await asyncio.wait({pending})
+
+    async def _summarise_turn_progress(
+        self,
+        prepared: PreparedChat,
+        turn: ChatTurn,
+        sources: list[ContextSource],
+        goal: ChatGoal | None,
+    ) -> None:
+        """One progress refresh and its charge to the turn and the goal."""
+
         try:
             result = await self.turn_progress.refresh(
                 turn,

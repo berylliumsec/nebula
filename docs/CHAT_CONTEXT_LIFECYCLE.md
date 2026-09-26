@@ -220,7 +220,10 @@ the project. An answer that fails any check, is not JSON, or was cut off by the
 output limit gets one repair request that names the problems (or asks for a
 shorter answer). After that, invalid items are dropped and counted, an
 unverified summary identifier becomes `[unverified]`, a cut-off answer keeps
-every complete item before the cut, and the rest is used.
+every complete item before the cut, and the rest is used. An answer with items
+but no summary (the summary is written last, so a cut-off answer loses it
+first) gets one composed from its first operator request and latest current
+state.
 
 **Degraded, not blocked.** If the provider call fails, or neither answer holds
 a usable memory, that group's memory is a deterministic extract of the original
@@ -342,6 +345,11 @@ presented as context. When a request fits only by folding all but its newest
 steps (`_fold_deeper`, before routing on or answering), the steps that fold is
 about to move are summarised first, so that checkpoint carries their memory
 too.
+
+A refresh runs beside the routing loop instead of holding it (nothing needs
+the memory before the checkpoint next advances), one at a time per turn; a
+deeper fold waits for it, and the final answer waits for one still running so
+its usage is accounted.
 
 The memory is stored as a `ContextSnapshot` owned by the turn and is only
 carried by the next checkpoint the turn writes, as `progress` (schema

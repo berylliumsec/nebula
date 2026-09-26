@@ -2243,3 +2243,38 @@ def test_a_degraded_or_foreign_prior_is_not_built_on(tmp_path):
 
     shown = json.loads(str(provider.requests[0].messages[0].content))
     assert [source["id"] for source in shown["sources"]] == ["m1", "m2"]
+
+
+def test_an_answer_without_a_summary_gets_one_composed_from_its_items(tmp_path):
+    store = NebulaStore(tmp_path / "composed-summary-context.db")
+    profile = _profile()
+    session = _owner(store, profile)
+    sources = _chat_history(
+        store,
+        session,
+        {
+            1: (ChatRole.USER, "Audit 10.20.30.40 for SEC-4471."),
+            2: (ChatRole.ASSISTANT, "TLS rotation is next."),
+        },
+    )
+    answer = json.dumps(
+        {
+            "user_requests": [
+                {"text": "Audit 10.20.30.40 for SEC-4471", "sources": ["m1"]}
+            ],
+            "current_state": [{"text": "TLS rotation is next.", "sources": ["m2"]}],
+        }
+    )
+    provider = ScriptedProvider(profile.id, [answer, answer])
+
+    result = _compact(store, session, profile, provider, sources)
+
+    memory = result.snapshot.memory
+    assert memory is not None
+    assert memory.summary == (
+        "The operator asked: Audit 10.20.30.40 for SEC-4471. "
+        "Where it stands: TLS rotation is next."
+    )
+    assert "No summary was returned" not in memory.summary
+    # A missing summary is a repair problem, not a dropped item.
+    assert result.snapshot.dropped_items == 0

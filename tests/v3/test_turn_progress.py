@@ -567,3 +567,41 @@ def test_a_deeper_fold_carries_memory_of_the_block_it_folds(tmp_path):
     # the deeper fold, and the memory covers them too.
     assert max(covered) >= 12 - 8
     assert provider.compactions
+
+
+class SlowDigestingProvider(DigestingProvider):
+    """Takes its time over each summary, as a real compactor model does."""
+
+    def __init__(self, calls: int) -> None:
+        super().__init__(calls)
+        self.log: list[str] = []
+
+    async def complete(self, request: ModelRequest):
+        if request.metadata.get("operation") != "context_compaction":
+            self.log.append("route")
+            return await super().complete(request)
+        self.log.append("summary started")
+        await asyncio.sleep(0.05)
+        self.log.append("summary finished")
+        return await super().complete(request)
+
+
+def test_a_refresh_runs_beside_the_routing_loop_and_is_settled_before_the_answer(
+    tmp_path,
+):
+    provider = SlowDigestingProvider(calls=30)
+    store, service, prepared = _long_turn(tmp_path, provider, PlantedScanBroker())
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == ANSWER
+    first = provider.log.index("summary started")
+    finished = provider.log.index("summary finished", first)
+    # The turn kept routing while its first summary was being written ...
+    assert "route" in provider.log[first:finished]
+    # ... and every summary finished, and was accounted, before the answer.
+    assert provider.log.count("summary started") == provider.log.count(
+        "summary finished"
+    )
+    assert completion.context_usage is not None
+    assert completion.context_usage.total_tokens == 3 * len(provider.compactions)

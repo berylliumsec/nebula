@@ -17,6 +17,7 @@ rolls the two up (a plain union while they fit the allowance).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from collections import OrderedDict
@@ -276,6 +277,25 @@ class TurnProgress:
             OrderedDict()
         )
         self._lock = threading.Lock()
+        # turn id -> the refresh running beside the turn's routing loop
+        self._tasks: dict[str, asyncio.Task[Any]] = {}
+
+    def pending(self, turn_id: str) -> asyncio.Task[Any] | None:
+        """The turn's refresh still running, if any."""
+
+        task = self._tasks.get(turn_id)
+        return task if task is not None and not task.done() else None
+
+    def track(self, turn_id: str, task: asyncio.Task[Any]) -> None:
+        """Remember ``task`` as the turn's running refresh until it ends."""
+
+        self._tasks[turn_id] = task
+
+        def finished(done: asyncio.Task[Any]) -> None:
+            if self._tasks.get(turn_id) is done:
+                del self._tasks[turn_id]
+
+        task.add_done_callback(finished)
 
     def _remember(
         self, turn_id: str, snapshot: ContextSnapshot | None, attempted: frozenset[int]
