@@ -272,8 +272,10 @@ fails. Core does not trigger this download during startup, so progress is always
 observable from the operator workspace. Chat asks the selected model for up to
 four bounded search queries, retrieves vector candidates from the active Project
 and the global Library, adds a small exact-term reranking bonus for security
-identifiers, and injects no more than eight cited chunks within the knowledge
-token budget. Library citations are labeled `Library:` so their workspace-wide
+identifiers, and attaches no more than eight cited chunks within the knowledge
+token budget to the operator's message in the model request, as labeled untrusted
+data rather than instructions (the saved transcript keeps only the operator's
+words). Library citations are labeled `Library:` so their workspace-wide
 scope stays visible. Cloud-provider privacy gates, per-request confirmation, and
 secret redaction still apply after retrieval.
 
@@ -345,11 +347,13 @@ cloud-knowledge transfer confirmation. Product-help citations use stable
 
 The corpus covers startup and diagnostics, runner and workstation setup, Terminal,
 automation runtime, policy/approval states, providers, reviewed execution, workspace limits,
-context compaction, migration/import/export, MCP servers, and the current release boundary. If no
-article matches an observed Nebula failure, the assistant is instructed to report
-the exact error and say that no verified recovery procedure is available instead of
-inventing a step. Command final synthesis also searches the observed failed result,
-so recovery guidance can match an error that was not known when the turn began.
+context compaction, migration/import/export, MCP servers, and the current release boundary.
+Matching articles travel with the operator's message in the model request, labeled as
+Nebula's own documentation rather than instructions. If no article matches an observed
+Nebula failure, the guidance sent with them tells the assistant to report the exact
+error and say that no verified recovery procedure is available instead of inventing a
+step. Command final synthesis also searches the observed failed result, so recovery
+guidance can match an error that was not known when the turn began.
 
 Treat the bundled Markdown as release material: update implementation references and
 recovery steps in the same change as behavior, keep every command and UI label
