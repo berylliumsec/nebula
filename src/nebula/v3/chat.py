@@ -74,11 +74,8 @@ from .provider_scheduler import ProviderAdmission, ProviderScheduler
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .browser_companion_tools import attached_session, companion_components
 from .application_model.tools import standalone_components
-from .conversation_search import (
-    CONVERSATION_SEARCH_TOOL_NAME,
-    conversation_search_spec,
-    turn_search_budget_spent,
-)
+from .conversation_search import CONVERSATION_SEARCH_TOOL_NAME, conversation_search_spec
+from .search_allowance import SEARCH_ALLOWANCE_TOOLS, turn_search_allowance_spent
 from .knowledge_search import (
     KNOWLEDGE_SEARCH_ROUTING_INSTRUCTIONS,
     KNOWLEDGE_SEARCH_TOOL_NAME,
@@ -7922,15 +7919,16 @@ class ChatService:
                     call = call.model_copy(update={"id": f"nbc{turn.next_step:06d}"})
                 # A search past the turn's allowance does not run: Core answers
                 # it with an ordinary result that tells the model to answer
-                # from what it found. Counted from the turn's own ledger, so a
-                # resumed turn keeps its count.
+                # from what it has. Counted from the turn's own ledger, so a
+                # resumed turn keeps its count (see search_allowance).
                 spent = (
-                    turn_search_budget_spent(
+                    turn_search_allowance_spent(
                         self._turn_history(turn),
+                        call.name,
                         str(call.arguments.get("query") or ""),
                         response_group=routed.replay.get("response_group"),
                     )
-                    if refusal is None and call.name == CONVERSATION_SEARCH_TOOL_NAME
+                    if refusal is None and call.name in SEARCH_ALLOWANCE_TOOLS
                     else None
                 )
                 if refusal is not None or spent is not None:

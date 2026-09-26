@@ -197,15 +197,23 @@ to that request's instructions, which already differ from routing's.
 
 A tool turn whose request is served by a snapshot is also offered
 `conversation.search`, which returns matching passages of the archived
-originals. Once a turn has run eight searches (`TURN_SEARCH_BUDGET`), or its
-last three found nothing, Core answers the searches of any later routing
-response itself, without running them. The searches one response asks for run
-together or not at all. The answer is an ordinary result, not an error: the
-search did not run, so answer the operator's request as asked from what was
-already found and the working memory. The count comes from the turn's ledger,
-so a turn resumed after a restart keeps it. Answered searches
-spend no tool budget. Each counts as a routing deviation, so after three
-responses of nothing but such searches the turn stops routing and answers.
+originals (a turn with project knowledge gets `knowledge.search` likewise).
+
+Each of the two searches has a per-turn allowance (`search_allowance.py`).
+Once a turn has run eight searches of one kind (`TURN_SEARCH_BUDGET`), or its
+last three found nothing, Core answers that kind of search itself, in any
+later routing response, without running it:
+
+* The searches one response asks for run together or not at all.
+* The answer is an ordinary result, not an error: the search did not run, so
+  answer the operator's request as asked from what is already known.
+* It also points to `tool_output.search` for an earlier result cleared from
+  the model's context.
+* The count comes from the turn's ledger, so a turn resumed after a restart
+  keeps it.
+* Answered searches spend no tool budget. Each counts as a routing deviation,
+  so after three responses of nothing but such searches the turn stops routing
+  and answers.
 
 ### Background pre-compaction
 

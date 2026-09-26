@@ -1,12 +1,12 @@
-"""A turn's ``conversation.search`` calls have an allowance Core enforces.
+"""A turn's ``conversation.search`` and ``knowledge.search`` calls have allowances.
 
-The tool asks the model to stop after searches that find nothing, and models
-still searched twenty to a hundred times in one turn to re-confirm facts they
-already had, each search another provider round trip over a growing history.
-Past the allowance a search does not run: Core answers it with an ordinary
-result telling the model to answer from what it found. Nothing fails, nothing
-waits for approval, and the turn goes on. The count comes from the turn's own
-ledger, so a turn resumed after a restart keeps it.
+The tools ask the model to stop once searching stops finding anything, and
+models still searched twenty to a hundred times in one turn to re-confirm facts
+they already had, each search another provider round trip over a growing
+history. Past the allowance a search does not run: Core answers it with an
+ordinary result telling the model to answer from what it has. Nothing fails,
+nothing waits for approval, and the turn goes on. The count comes from the
+turn's own ledger, so a turn resumed after a restart keeps it.
 """
 
 import asyncio
@@ -15,10 +15,13 @@ import json
 from nebula.v3.chat import ChatService
 from nebula.v3.conversation_search import (
     CONVERSATION_SEARCH_TOOL_NAME,
+    conversation_search_spec,
+)
+from nebula.v3.knowledge_search import KNOWLEDGE_SEARCH_TOOL_NAME, knowledge_search_spec
+from nebula.v3.search_allowance import (
     TURN_EMPTY_SEARCH_LIMIT,
     TURN_SEARCH_BUDGET,
-    conversation_search_spec,
-    turn_search_budget_spent,
+    turn_search_allowance_spent,
 )
 from nebula.v3.domain import ChatTurn, ChatTurnStatus
 from nebula.v3.providers import ToolCall
@@ -28,12 +31,14 @@ from tests.v3.test_chat_tool_loop import _prepared, _response
 ANSWER = "The ticket is OMEGA-7465; the other details are in my notes above."
 
 
-def _search_entry(step: int, found: int = 1, **fields) -> dict:
+def _search_entry(
+    step: int, found: int = 1, name: str = CONVERSATION_SEARCH_TOOL_NAME, **fields
+) -> dict:
     return {
         "step": step,
         "tool_call_id": f"search-{step}",
         "model_call_id": f"call-{step}",
-        "name": CONVERSATION_SEARCH_TOOL_NAME,
+        "name": name,
         "arguments": {"query": f"fact {step}"},
         "budget_class": "artifact_query",
         "status": "complete",
@@ -46,7 +51,9 @@ def _search_entry(step: int, found: int = 1, **fields) -> dict:
 
 def test_the_allowance_is_counted_from_the_searches_that_ran():
     history = [_search_entry(step) for step in range(TURN_SEARCH_BUDGET - 1)]
-    assert turn_search_budget_spent(history, "q") is None
+    assert (
+        turn_search_allowance_spent(history, CONVERSATION_SEARCH_TOOL_NAME, "q") is None
+    )
 
     # Calls Core answered itself never ran and do not count; other tools
     # between searches do not either.
@@ -54,10 +61,14 @@ def test_the_allowance_is_counted_from_the_searches_that_ran():
         _search_entry(90, budget_class="refused"),
         {"step": 91, "name": "safe_read", "budget_class": "execution"},
     ]
-    assert turn_search_budget_spent(history, "q") is None
+    assert (
+        turn_search_allowance_spent(history, CONVERSATION_SEARCH_TOOL_NAME, "q") is None
+    )
 
     history.append(_search_entry(TURN_SEARCH_BUDGET))
-    spent = turn_search_budget_spent(history, "next fact")
+    spent = turn_search_allowance_spent(
+        history, CONVERSATION_SEARCH_TOOL_NAME, "next fact"
+    )
     assert spent is not None
     assert spent["search_budget_spent"] is True
     assert spent["searches_this_turn"] == TURN_SEARCH_BUDGET
@@ -66,6 +77,8 @@ def test_the_allowance_is_counted_from_the_searches_that_ran():
     assert "results" not in spent
     assert "did not run" in spent["detail"]
     assert "Answer the operator's request as they asked" in spent["detail"]
+    # A result cleared from the model's context is pointed to, not re-searched.
+    assert "tool_output.search" in spent["detail"]
 
     # The searches one response asks for run together: the allowance counts
     # only the searches of earlier responses.
@@ -73,8 +86,15 @@ def test_the_allowance_is_counted_from_the_searches_that_ran():
         _search_entry(step, response_group="first")
         for step in range(TURN_SEARCH_BUDGET)
     ]
-    assert turn_search_budget_spent(grouped, "q", response_group="first") is None
-    assert turn_search_budget_spent(grouped, "q", response_group="second")
+    assert (
+        turn_search_allowance_spent(
+            grouped, CONVERSATION_SEARCH_TOOL_NAME, "q", response_group="first"
+        )
+        is None
+    )
+    assert turn_search_allowance_spent(
+        grouped, CONVERSATION_SEARCH_TOOL_NAME, "q", response_group="second"
+    )
 
 
 def test_searches_that_keep_finding_nothing_end_the_searching():
@@ -83,14 +103,18 @@ def test_searches_that_keep_finding_nothing_end_the_searching():
         _search_entry(step, found=0)
         for step in range(2, 2 + TURN_EMPTY_SEARCH_LIMIT - 1)
     ]
-    assert turn_search_budget_spent(history, "q") is None
+    assert (
+        turn_search_allowance_spent(history, CONVERSATION_SEARCH_TOOL_NAME, "q") is None
+    )
     history.append(_search_entry(9, found=0))
-    spent = turn_search_budget_spent(history, "q")
+    spent = turn_search_allowance_spent(history, CONVERSATION_SEARCH_TOOL_NAME, "q")
     assert spent is not None
-    assert "never said" in spent["detail"]
+    assert "most likely not there" in spent["detail"]
     # A search that finds something resets the run of empty ones.
     history.append(_search_entry(10))
-    assert turn_search_budget_spent(history, "q") is None
+    assert (
+        turn_search_allowance_spent(history, CONVERSATION_SEARCH_TOOL_NAME, "q") is None
+    )
 
 
 class SearchBroker:
@@ -236,3 +260,78 @@ def test_the_searches_one_response_asks_for_run_together(tmp_path):
     assert json.loads(last["provider_result"])["searches_this_turn"] == (
         TURN_SEARCH_BUDGET + 2
     )
+
+
+def test_each_kind_of_search_has_its_own_allowance():
+    conversation = [_search_entry(step) for step in range(TURN_SEARCH_BUDGET)]
+    assert turn_search_allowance_spent(conversation, CONVERSATION_SEARCH_TOOL_NAME, "q")
+    assert (
+        turn_search_allowance_spent(conversation, KNOWLEDGE_SEARCH_TOOL_NAME, "q")
+        is None
+    )
+    knowledge = [
+        _search_entry(step, name=KNOWLEDGE_SEARCH_TOOL_NAME)
+        for step in range(TURN_SEARCH_BUDGET)
+    ]
+    spent = turn_search_allowance_spent(knowledge, KNOWLEDGE_SEARCH_TOOL_NAME, "q")
+    assert spent is not None
+    assert spent["tool"] == KNOWLEDGE_SEARCH_TOOL_NAME
+    assert "the project's knowledge" in spent["detail"]
+    # No excerpts, so nothing is cited from it.
+    assert "matches" not in spent
+    # Other tools are never answered in their place.
+    assert turn_search_allowance_spent(knowledge, "safe_read", "q") is None
+
+
+def test_a_knowledge_search_past_its_allowance_is_answered_too(tmp_path):
+    class KnowledgeBroker:
+        def __init__(self) -> None:
+            self.calls = []
+
+        async def execute(self, invocation, scope, *, approval=None):
+            del scope, approval
+            self.calls.append(invocation)
+            return ToolExecutionResult(
+                output={
+                    "tool": KNOWLEDGE_SEARCH_TOOL_NAME,
+                    "query": invocation.arguments["query"],
+                    "matches": [],
+                    "result_count": 1,
+                    "detail": "1 excerpt(s).",
+                }
+            )
+
+    broker = KnowledgeBroker()
+    responses = [
+        _response(
+            calls=[
+                ToolCall(
+                    id=f"knowledge-{index}",
+                    name=KNOWLEDGE_SEARCH_TOOL_NAME,
+                    arguments={"query": f"policy {index}"},
+                )
+            ]
+        )
+        for index in range(TURN_SEARCH_BUDGET + 1)
+    ]
+    responses += [_response(), _response(text=ANSWER)]
+    store, service, prepared, provider = _prepared(
+        tmp_path,
+        responses,
+        broker,
+        max_tool_calls=50,
+        extra_specs=[knowledge_search_spec()],
+    )
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == ANSWER
+    assert len(broker.calls) == TURN_SEARCH_BUDGET
+    last = [
+        entry
+        for entry in _entries(service, prepared.turn.id)
+        if entry["name"] == KNOWLEDGE_SEARCH_TOOL_NAME
+    ][-1]
+    assert last["status"] == "complete"
+    assert last["budget_class"] == "refused"
+    assert json.loads(last["provider_result"])["search_budget_spent"] is True
