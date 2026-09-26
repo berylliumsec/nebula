@@ -7928,6 +7928,7 @@ class ChatService:
                     turn_search_budget_spent(
                         self._turn_history(turn),
                         str(call.arguments.get("query") or ""),
+                        response_group=routed.replay.get("response_group"),
                     )
                     if refusal is None and call.name == CONVERSATION_SEARCH_TOOL_NAME
                     else None

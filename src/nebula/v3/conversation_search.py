@@ -57,12 +57,13 @@ _DETAIL_RESERVE = 400
 # An explicit search may take a few seconds, so it embeds more of the archive
 # per call than the automatic excerpts a turn's preparation waits for.
 SEARCH_DENSE_MAX_NEW = 64
-# Searches one turn may run. A turn looks up the details its answer needs, a
-# question about a dozen of them one search each; past that it is re-reading
-# what it found (models have searched a hundred times in one turn to
-# re-confirm a dozen facts they already had, each search another provider
-# round trip over a growing history).
-TURN_SEARCH_BUDGET = 12
+# Searches a turn runs before a later response's searches are answered
+# instead. A turn looks up the details its answer needs; past that it is
+# re-reading what it found (models have searched a hundred times in one turn
+# to re-confirm a dozen facts they already had, each search another provider
+# round trip over a growing history). The allowance is checked per response,
+# so the searches one response asks for together run together or not at all.
+TURN_SEARCH_BUDGET = 8
 # Searches in a row that found nothing: the conversation most likely never
 # said it, and rewording again rarely changes that.
 TURN_EMPTY_SEARCH_LIMIT = 3
@@ -240,13 +241,18 @@ def _found_nothing(entry: Mapping[str, Any]) -> bool:
 
 
 def turn_search_budget_spent(
-    history: Iterable[Mapping[str, Any]], query: str
+    history: Iterable[Mapping[str, Any]],
+    query: str,
+    *,
+    response_group: str | None = None,
 ) -> dict[str, Any] | None:
     """The result a further search this turn gets instead of running, if any.
 
     Counted from the turn's own ledger (the searches that ran), so a turn
-    resumed after a restart keeps its count. The result is a normal one, not
-    an error: the model is told to answer from what it found.
+    resumed after a restart keeps its count. Searches of ``response_group``,
+    the response asking for this one, do not count: a response's searches
+    run together or not at all, so no half-checked batch reaches the answer.
+    The result is a normal one, not an error.
     """
 
     searches = [
@@ -254,6 +260,7 @@ def turn_search_budget_spent(
         for entry in history
         if entry.get("name") == CONVERSATION_SEARCH_TOOL_NAME
         and entry.get("budget_class") == "artifact_query"
+        and not (response_group and entry.get("response_group") == response_group)
     ]
     empty = 0
     for entry in reversed(searches):
@@ -264,16 +271,19 @@ def turn_search_budget_spent(
         detail = (
             f"This search did not run. The last {empty} searches found "
             "nothing, so the conversation most likely never said what you are "
-            "looking for, and no more searches run this turn. Answer now from "
-            "the results above and your working memory; say a detail is "
-            "missing only if it is in neither."
+            "looking for, and further searches this turn get this notice. "
+            "Answer the operator's request as they asked, from what you "
+            "already found and your working memory; call a detail missing "
+            "only if you have it from neither."
         )
     elif len(searches) >= TURN_SEARCH_BUDGET:
         detail = (
-            "This search did not run: the turn has used its allowance of "
-            f"{TURN_SEARCH_BUDGET} searches of the earlier conversation. The "
-            "results above and your working memory are what you have. Answer "
-            "now from them; say a detail is missing only if it is in neither."
+            f"This search did not run: this turn has already run {len(searches)} "
+            f"searches of the earlier conversation, past its allowance of "
+            f"{TURN_SEARCH_BUDGET}, and further searches get this notice. Answer "
+            "the operator's request as they asked, from what you already found "
+            "and your working memory; call a detail missing only if you have "
+            "it from neither."
         )
     else:
         return None

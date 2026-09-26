@@ -65,7 +65,16 @@ def test_the_allowance_is_counted_from_the_searches_that_ran():
     # Nothing was searched, so no empty result list says nothing was found.
     assert "results" not in spent
     assert "did not run" in spent["detail"]
-    assert "Answer now" in spent["detail"]
+    assert "Answer the operator's request as they asked" in spent["detail"]
+
+    # The searches one response asks for run together: the allowance counts
+    # only the searches of earlier responses.
+    grouped = [
+        _search_entry(step, response_group="first")
+        for step in range(TURN_SEARCH_BUDGET)
+    ]
+    assert turn_search_budget_spent(grouped, "q", response_group="first") is None
+    assert turn_search_budget_spent(grouped, "q", response_group="second")
 
 
 def test_searches_that_keep_finding_nothing_end_the_searching():
@@ -153,7 +162,7 @@ def test_a_search_past_the_allowance_gets_an_ordinary_result_and_the_turn_answer
         result = json.loads(entry["provider_result"])
         assert result["search_budget_spent"] is True
         assert result["searches_this_turn"] == TURN_SEARCH_BUDGET
-        assert "Answer now" in entry["result_summary"]
+        assert "did not run" in entry["result_summary"]
     assert all(entry["status"] == "complete" for entry in searches)
     turn = store.get(ChatTurn, prepared.turn.id)
     assert turn.status == ChatTurnStatus.COMPLETE
@@ -194,3 +203,36 @@ def test_a_resumed_turn_keeps_the_searches_it_already_ran(tmp_path):
     assert last["name"] == CONVERSATION_SEARCH_TOOL_NAME
     assert last["status"] == "complete"
     assert json.loads(last["provider_result"])["search_budget_spent"] is True
+
+
+def test_the_searches_one_response_asks_for_run_together(tmp_path):
+    broker = SearchBroker()
+    batch = _response(
+        calls=[
+            ToolCall(
+                id=f"batched-{index}",
+                name=CONVERSATION_SEARCH_TOOL_NAME,
+                arguments={"query": f"fact {index}"},
+            )
+            for index in range(TURN_SEARCH_BUDGET + 2)
+        ]
+    )
+    store, service, prepared, provider = _prepared(
+        tmp_path,
+        [batch, _search(99), _response(), _response(text=ANSWER)],
+        broker,
+        max_tool_calls=50,
+        extra_specs=[conversation_search_spec()],
+    )
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == ANSWER
+    # The first response's searches all ran, past the allowance; the next
+    # response's search was answered instead.
+    assert len(broker.calls) == TURN_SEARCH_BUDGET + 2
+    last = _entries(service, prepared.turn.id)[-1]
+    assert last["budget_class"] == "refused"
+    assert json.loads(last["provider_result"])["searches_this_turn"] == (
+        TURN_SEARCH_BUDGET + 2
+    )
