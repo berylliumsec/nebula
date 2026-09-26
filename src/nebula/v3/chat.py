@@ -8490,15 +8490,18 @@ class ChatService:
                 "fits the model's context window.",
                 outcome="success",
                 stage="chat",
+                # Keys from the diagnostics allowlist: the results cleared
+                # now, all cleared in this request, those replayed, and the
+                # watermark.
                 metadata={
                     "provider": prepared.provider_profile.id,
                     "model_id": prepared.resolved_model,
-                    "cleared": len(newly),
-                    "cleared_total": len(
+                    "count": len(newly),
+                    "dropped_count": len(
                         sticky.intersection(result.call_id for result in whole)
                     ),
-                    "results": len(whole),
-                    "watermark": watermark,
+                    "item_count": len(whole),
+                    "limit": watermark,
                 },
             )
         return cleared(fitted, receipts, sticky)
@@ -8559,8 +8562,8 @@ class ChatService:
                     metadata={
                         "provider": prepared.provider_profile.id,
                         "model_id": prepared.resolved_model,
-                        "cleared": cleared,
-                        "results": len(whole),
+                        "count": cleared,
+                        "item_count": len(whole),
                     },
                 )
                 return retry

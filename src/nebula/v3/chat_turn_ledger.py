@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from .context import estimate_tokens
 from .database import ChatTurnCheckpointRow, ChatTurnStepEventRow, Database
 from .domain import ChatTurn, utc_now
-from .tool_activity import clipped, step_brief
+from .tool_activity import result_summary, step_brief
 from .tool_results import without_results_api_key
 
 # The checkpoint advances in blocks: once this many steps, or this many
@@ -688,9 +688,7 @@ class ChatTurnLedger:
             # What the call acted on, beside what came of it: a receipt that
             # says only "completed" cannot tell the model which file it read.
             brief = step_brief(item.get("arguments"))
-            result_summary = clipped(
-                str(item.get("result_summary") or ""), _RECEIPT_SUMMARY_CHARS
-            )
+            outcome = result_summary(item.get("result_summary"), _RECEIPT_SUMMARY_CHARS)
             references = [
                 str(ref.get("artifact_id"))[:120]
                 for ref in item.get("artifacts") or []
@@ -703,7 +701,7 @@ class ChatTurnLedger:
                 del failure["problem"]
             # Trailing fields are left off; an empty placeholder keeps the
             # position of a later one.
-            trailing: list[Any] = [brief, result_summary, references, failure]
+            trailing: list[Any] = [brief, outcome, references, failure]
             while trailing and not trailing[-1]:
                 trailing.pop()
             receipt.extend(

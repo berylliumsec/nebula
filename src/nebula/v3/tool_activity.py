@@ -56,6 +56,10 @@ _BRIEF_KEYS = (
     "name",
 )
 _WHITESPACE = re.compile(r"\s+")
+# The summaries Core writes when a result has nothing better to say
+# (``ChatService._result_summary``): a list of its keys says nothing a later
+# request can use.
+_UNINFORMATIVE_SUMMARY = re.compile(r"^(?:Result fields: .*|Capability completed)$")
 
 
 def clipped(value: str, limit: int) -> str:
@@ -67,6 +71,15 @@ def clipped(value: str, limit: int) -> str:
 
     text = _WHITESPACE.sub(" ", redact_text(value)).strip()
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def result_summary(value: Any, limit: int) -> str:
+    """Core's summary of a result, bounded; ``""`` when it says nothing."""
+
+    if not isinstance(value, str):
+        return ""
+    text = clipped(value, limit)
+    return "" if _UNINFORMATIVE_SUMMARY.match(text) else text
 
 
 def step_brief(arguments: Any) -> str:
@@ -105,9 +118,9 @@ def _activity_item(raw: Mapping[str, Any]) -> dict[str, Any]:
     brief = raw.get("brief")
     if isinstance(brief, str) and brief:
         item["did"] = brief[:BRIEF_CHARS]
-    summary = raw.get("summary")
-    if isinstance(summary, str) and summary.strip():
-        item["summary"] = clipped(summary, ACTIVITY_SUMMARY_CHARS)
+    summary = result_summary(raw.get("summary"), ACTIVITY_SUMMARY_CHARS)
+    if summary:
+        item["summary"] = summary
     call_id = raw.get("tool_call_id")
     if isinstance(call_id, str) and call_id:
         item["tool_call_id"] = call_id[:200]
@@ -132,12 +145,14 @@ def _encoded(value: Any) -> str:
 def tool_activity_block(results: Any) -> str:
     """The data block a stored answer's tool steps render as, or ``""``.
 
-    ``results`` is the answer's ``metadata.tool_results``. The block keeps
-    every failed, denied or unsettled step first, then the most recent
-    successful ones, in the order they ran, within ``ACTIVITY_BLOCK_BYTES``;
-    the rest are counted. A failure is what the model must not repeat
-    blindly, and the newest results are the ones the answer most likely
-    rests on.
+    ``results`` is the answer's ``metadata.tool_results``. Within
+    ``ACTIVITY_BLOCK_BYTES`` the block keeps every failed, denied or
+    unsettled step first, then successful steps whose output only their
+    artifact ids reach again, then the other successful ones, the most
+    recent of each first; it lists them in the order they ran and counts the
+    rest. A failure is what the model must not repeat blindly; a command's
+    output is lost to a later turn without its artifact id, where a file
+    read can simply be repeated.
     """
 
     if not isinstance(results, Sequence) or isinstance(results, (str, bytes)):
@@ -145,10 +160,17 @@ def tool_activity_block(results: Any) -> str:
     steps = [raw for raw in results if isinstance(raw, Mapping)]
     if not steps:
         return ""
-    unsettled = [i for i, raw in enumerate(steps) if raw.get("status") != "complete"]
-    settled = [i for i, raw in enumerate(steps) if raw.get("status") == "complete"]
-    # The newest of each class first, failures ahead of successes.
-    priority = [*reversed(unsettled), *reversed(settled)]
+    unsettled: list[int] = []
+    retained: list[int] = []
+    settled: list[int] = []
+    for index, raw in enumerate(steps):
+        if raw.get("status") != "complete":
+            unsettled.append(index)
+        elif raw.get("result_artifact_id") or raw.get("artifacts"):
+            retained.append(index)
+        else:
+            settled.append(index)
+    priority = [*reversed(unsettled), *reversed(retained), *reversed(settled)]
     heading = len(TOOL_ACTIVITY_HEADING.encode()) + 1
     # {"steps":[...]} plus room for the largest omitted count it could carry.
     used = heading + len('{"omitted":,"steps":[]}') + len(str(len(steps)))
@@ -178,6 +200,7 @@ __all__ = [
     "BRIEF_CHARS",
     "TOOL_ACTIVITY_HEADING",
     "clipped",
+    "result_summary",
     "step_brief",
     "tool_activity_block",
 ]

@@ -37,11 +37,14 @@ rewrites the canonical transcript or turns a derived summary into evidence.
    a **tool activity** data block rendered from its stored
    `metadata.tool_results`: for each step, the tool, status, what it acted on
    (`did`, the main argument, redacted, at most 120 characters), Core's result
-   summary (at most 160 characters), its `tool_call_id`, and up to four
-   artifact ids. The block is at most 2,500 bytes: every failed, denied or
-   unsettled step first, then the most recent successful ones, in the order
-   they ran, and a count of the rest. It is derived from stored metadata only,
-   so it is the same bytes on every later request. The full output stays in
+   summary (at most 160 characters, left out when it only lists the result's
+   keys), its `tool_call_id`, and up to four artifact ids. The block is at
+   most 2,500 bytes. It keeps every failed, denied or unsettled step first,
+   then successful steps whose output only their artifact ids reach again
+   (a command's output), then other successful ones, the most recent of each
+   first; it lists them in the order they ran and counts the rest. It is
+   derived from stored metadata only, so it is the same bytes on every later
+   request. The full output stays in
    the ledger and artifacts, and `tool_output.search` (by `tool_call_id`) or
    `tool_output.read` (by artifact id) reads it from any later turn of the
    same conversation, never from another conversation. The operator's
@@ -171,11 +174,12 @@ bounded transformations:
   `[number, tool_index, state, did, summary, artifacts, failure]`. `did` is
   the call's main argument (command, path, query, URL and so on), redacted
   and at most 120 characters; `summary` is Core's result summary, at most 200
-  characters; `artifacts` are the result's artifact references; `failure` is
-  Core's classification of a failure and an `arguments_sha256` of the exact
-  failed arguments. The receipts are bounded at 3% of the model's input
-  capacity, never below 16 KiB or above 64 KiB (16 KiB up to about a
-  182,000-token capacity, 64 KiB from about 728,000). Over the bound, older
+  characters (empty when it only lists the result's keys); `artifacts` are
+  the result's artifact references; `failure` is Core's classification of a
+  failure and an `arguments_sha256` of the exact failed arguments. The
+  receipts are bounded at 3% of the model's input capacity, never below
+  16 KiB or above 64 KiB (16 KiB up to about a 182,000-token capacity,
+  64 KiB from about 728,000). Over the bound, older
   successful receipts are dropped first, then failed ones if necessary, and
   `omitted_steps` records the count. There is no separate token cap; the
   stored `token_estimate` is the checkpoint's own estimate. The hash and
@@ -271,8 +275,9 @@ a switch that requires compaction needs an explicit confirmation fingerprint.
    `omitted_steps`, and `working_notes`, then follow tool-call/artifact
    references for the exact outputs. A missing receipt in the model-facing
    checkpoint is distinct from a missing durable result. `chat.tool_history.cleared`
-   diagnostics record each clearing event, its watermark and how many results
-   it cleared.
+   diagnostics record each clearing event: results cleared then (`count`),
+   cleared in that request (`dropped_count`), replayed (`item_count`), and
+   the watermark (`limit`).
 5. Correlate request/turn events with provider errors, retries, and restart
    recovery. Make no correctness claim from checkpoint counts alone; compare
    the answer against the relevant original evidence.

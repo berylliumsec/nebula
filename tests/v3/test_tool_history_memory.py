@@ -281,6 +281,32 @@ def test_tool_activity_is_bounded_and_keeps_every_failure():
     assert activity["omitted"] == 400 - len(kept)
 
 
+def test_tool_activity_keeps_a_command_output_ahead_of_later_file_reads():
+    """A long turn's early command is the step a later turn cannot redo."""
+
+    reads = [
+        {
+            "tool_call_id": f"read-{index}",
+            "capability": "workspace.read",
+            "status": "complete",
+            "brief": f"path=data/f{index:02d}.txt",
+            "summary": "Result fields: continuation, lines, path, schema, searchable",
+            "artifacts": [],
+        }
+        for index in range(1, 33)
+    ]
+    block = tool_activity_block([_result(0), *reads])
+    activity = json.loads(block.split("\n", 1)[1])
+    kept = [step["tool_call_id"] for step in activity["steps"]]
+    assert kept[0] == "tool-call-0"
+    assert activity["steps"][0]["artifact_ids"] == ["artifact-0"]
+    # Then the most recent reads, in order; Core's list of result keys is not
+    # a summary worth the bytes.
+    assert kept[1:] == [f"read-{index}" for index in range(34 - len(kept), 33)]
+    assert all("summary" not in step for step in activity["steps"][1:])
+    assert activity["omitted"] == 33 - len(kept)
+
+
 def test_a_saved_answer_records_what_each_tool_call_acted_on(tmp_path):
     broker = RecordingBroker()
     store, service, prepared, _ = _prepared(
