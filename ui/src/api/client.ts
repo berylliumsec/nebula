@@ -33,8 +33,10 @@ import type {
   TerminalRecordingTools,
   ContextMemory,
   ContextSnapshot,
+  ContextSnapshotQuality,
   ContextSourceReference,
   ContextStatus,
+  ContextWorkingNotes,
   DebugSessionStart,
   DeviceCapabilitySnapshot,
   CredentialStatus,
@@ -1265,10 +1267,14 @@ interface WireContextMemoryItem extends JsonObject {
 interface WireContextMemory extends JsonObject {
   objective?: string | null;
   summary: string;
+  user_requests?: WireContextMemoryItem[];
+  current_state?: WireContextMemoryItem[];
   confirmed_facts?: WireContextMemoryItem[];
   decisions?: WireContextMemoryItem[];
   constraints?: WireContextMemoryItem[];
+  attempts?: WireContextMemoryItem[];
   corrections?: WireContextMemoryItem[];
+  references?: WireContextMemoryItem[];
   open_questions?: WireContextMemoryItem[];
   evidence_ids?: string[];
   artifact_ids?: string[];
@@ -1288,6 +1294,15 @@ interface WireContextSnapshot extends WireEntity {
   usage?: WireChatCompletion["usage"];
   cost_usd?: number;
   error?: string | null;
+  quality?: string | null;
+  dropped_items?: number | null;
+}
+
+interface WireContextWorkingNotes extends JsonObject {
+  content?: string | null;
+  revision?: number | null;
+  updated_at?: string | null;
+  turn_id?: string | null;
 }
 
 interface WireContextStatus extends JsonObject {
@@ -1307,6 +1322,7 @@ interface WireContextStatus extends JsonObject {
   route_context_window?: number | null;
   route_input_limit?: number | null;
   estimated_input_tokens?: number;
+  estimate_calibration?: number | null;
   last_provider_request?: {
     instructions: number;
     conversation: number;
@@ -1315,6 +1331,7 @@ interface WireContextStatus extends JsonObject {
     other: number;
     estimated_total: number;
     reported_input_tokens?: number | null;
+    reported_cached_input_tokens?: number | null;
     attempt: number;
   } | null;
   compacted_through?: number;
@@ -1322,6 +1339,8 @@ interface WireContextStatus extends JsonObject {
   compaction_usage?: WireChatCompletion["usage"];
   compaction_cost_usd?: number;
   snapshot?: WireContextSnapshot | null;
+  quality?: string | null;
+  working_notes?: WireContextWorkingNotes | null;
 }
 
 interface WireChatStreamEvent extends JsonObject {
@@ -2987,13 +3006,35 @@ function mapContextMemory(value: WireContextMemory): ContextMemory {
   return {
     objective: value.objective ?? undefined,
     summary: value.summary,
+    userRequests: items(value.user_requests),
+    currentState: items(value.current_state),
     confirmedFacts: items(value.confirmed_facts),
     decisions: items(value.decisions),
     constraints: items(value.constraints),
+    attempts: items(value.attempts),
     corrections: items(value.corrections),
+    references: items(value.references),
     openQuestions: items(value.open_questions),
     evidenceIds: value.evidence_ids ?? [],
     artifactIds: value.artifact_ids ?? [],
+  };
+}
+
+// Unknown or missing values read as undefined so an older Core, or a newer one
+// with a quality this client does not know, still renders its snapshot.
+function contextQuality(value: unknown): ContextSnapshotQuality | undefined {
+  return value === "complete" || value === "salvaged" || value === "degraded" ? value : undefined;
+}
+
+function mapContextWorkingNotes(
+  value: WireContextWorkingNotes | null | undefined,
+): ContextWorkingNotes | undefined {
+  if (!value || typeof value.content !== "string" || !value.content.trim()) return undefined;
+  return {
+    content: value.content,
+    revision: numberField(value.revision),
+    updatedAt: value.updated_at ?? "",
+    turnId: value.turn_id ?? undefined,
   };
 }
 
@@ -3022,6 +3063,8 @@ function mapContextSnapshot(value: WireContextSnapshot): ContextSnapshot {
     },
     costUsd: numberField(value.cost_usd),
     error: value.error ?? undefined,
+    quality: contextQuality(value.quality) ?? "complete",
+    droppedItems: numberField(value.dropped_items),
     createdAt: value.created_at,
   };
 }
@@ -3050,6 +3093,9 @@ function mapContextStatus(value: WireContextStatus): ContextStatus {
     routeContextWindow: value.route_context_window ?? undefined,
     routeInputLimit: value.route_input_limit ?? undefined,
     estimatedInputTokens: numberField(value.estimated_input_tokens),
+    estimateCalibration: typeof value.estimate_calibration === "number" && Number.isFinite(value.estimate_calibration)
+      ? value.estimate_calibration
+      : undefined,
     lastProviderRequest: value.last_provider_request ? {
       instructions: numberField(value.last_provider_request.instructions),
       conversation: numberField(value.last_provider_request.conversation),
@@ -3058,6 +3104,7 @@ function mapContextStatus(value: WireContextStatus): ContextStatus {
       other: numberField(value.last_provider_request.other),
       estimatedTotal: numberField(value.last_provider_request.estimated_total),
       reportedInputTokens: value.last_provider_request.reported_input_tokens ?? undefined,
+      reportedCachedInputTokens: value.last_provider_request.reported_cached_input_tokens ?? undefined,
       attempt: numberField(value.last_provider_request.attempt),
     } : undefined,
     compactedThrough: numberField(value.compacted_through),
@@ -3072,6 +3119,8 @@ function mapContextStatus(value: WireContextStatus): ContextStatus {
     },
     compactionCostUsd: numberField(value.compaction_cost_usd),
     snapshot: value.snapshot ? mapContextSnapshot(value.snapshot) : undefined,
+    quality: contextQuality(value.quality) ?? (value.snapshot ? contextQuality(value.snapshot.quality) : undefined),
+    workingNotes: mapContextWorkingNotes(value.working_notes),
   };
 }
 

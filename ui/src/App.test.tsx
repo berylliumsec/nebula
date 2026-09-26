@@ -987,7 +987,7 @@ describe("Nebula workspace", () => {
     expect(screen.queryByRole("heading", { name: "Working memory" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open context details, 100 percent of target input used" }));
     const inspector = await screen.findByLabelText("Session inspector");
-    expect(within(inspector).getByText("Core compacted through message 1; the source transcript remains unchanged.")).toBeVisible();
+    expect(within(inspector).getByText("Compacted through message 1. The original messages are unchanged and searchable.")).toBeVisible();
     await user.click(within(inspector).getByText("Inspect saved memory"));
     expect(within(inspector).getByText("The selected service uses port 8443.")).toBeVisible();
     rendered.unmount();

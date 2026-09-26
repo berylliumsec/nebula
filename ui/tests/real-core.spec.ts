@@ -1292,7 +1292,7 @@ test("production assistant preserves exact research context and relaunch-safe dr
     await page.getByRole("button", { name: /Open context details/ }).click();
     const inspector = page.getByLabel("Session inspector");
     await expect(inspector.getByRole("heading", { name: "Working context" })).toBeVisible();
-    await expect(inspector.getByText(/estimated.*target input tokens/)).toBeVisible();
+    await expect(inspector.getByText(/[\d,]+ of [\d,]+ target input tokens/)).toBeVisible();
 
     const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
     await composer.fill("draft retained across a production relaunch");
@@ -1405,7 +1405,9 @@ test("assistant upgrade provider request breakdown survives a production LAN cha
     await expect(page.getByText("Real Core retained the exact research context.")).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: /Open context details/ }).click();
     const inspector = page.getByLabel("Session inspector").or(page.getByRole("dialog", { name: "Conversation details" }));
-    await expect(inspector.getByText(/context meter estimates saved conversation/i)).toBeVisible();
+    await expect(inspector.getByText(/meter estimates the next request: conversation, instructions and tool definitions/i)).toBeVisible();
+    // The provider's own count is on the collapsed row; the stub reports no cache figure.
+    await expect(inspector.locator("summary", { hasText: "Last provider request" })).toHaveText("Last provider request · 18 reported");
     await inspector.getByText("Last provider request").click();
     await expect(inspector.getByText(/18 reported by provider/)).toBeVisible();
     await expect(inspector.getByText(/Tool schemas/)).toHaveCount(0);

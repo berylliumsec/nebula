@@ -1039,6 +1039,19 @@ kbd { font-size: 11px; }
 .session-memory section { display: grid; gap: 3px; padding: 0; border: 0; }
 .session-memory section strong { color: var(--text); font-size: 11px; }
 .session-memory ul { display: grid; gap: 4px; margin: 0; padding-left: 17px; }
+/* A reduced-quality memory keeps its "Ready" state but says what changed; the text carries it, the colour only repeats it. */
+.session-context-summary strong .session-context-quality { text-transform: none; }
+.session-context-summary > .status-dot.partial { background: var(--orange); }
+.session-disclosure-meta { color: var(--muted); }
+.session-agent-notes-body { padding: 8px 11px; overflow-x: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface); }
+.session-agent-notes-body .assistant-markdown { font-size: 11px; line-height: 1.5; }
+.session-agent-notes-body .assistant-markdown :is(h1, h2, h3, h4, h5, h6) { margin: 8px 0 4px; color: var(--text); font-size: 11px; line-height: 1.4; }
+.session-agent-notes-body .assistant-markdown :is(p, ul, ol, blockquote) { margin: 4px 0; }
+.session-agent-notes-body .assistant-markdown :not(pre) > code { font-size: 10.5px; }
+.session-agent-notes-body .assistant-markdown > :first-child { margin-top: 0; }
+.session-agent-notes-body .assistant-markdown > :last-child { margin-bottom: 0; }
+.session-agent-notes-body .assistant-markdown .contains-task-list { padding-left: 4px; list-style: none; }
+.session-agent-notes-body .assistant-markdown .task-list-item input { margin: 0 5px 0 0; vertical-align: -1px; }
 .chat-panel { position: relative; min-height: 0; container: chat-panel / size; border-color: var(--border-soft); border-radius: var(--radius-panel); }
 .chat-empty-state { min-height: 0; padding: 24px; }
 .chat-empty-state .button { margin-top: 16px; }
@@ -2623,6 +2636,10 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 @media (max-width: 1100px) {
   .session-inspector.assistant-drawer { display: block; width: min(100%, 620px); max-height: 85dvh; overflow-y: auto; border: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); }
   .assistant-drawer button, .assistant-attachment-dialog button { min-height: 44px; }
+}
+/* Disclosure rows in the details sheet are touch targets; padding keeps the native marker. */
+@media (max-width: 1100px), (pointer: coarse) {
+  .assistant-drawer .session-memory > summary { box-sizing: border-box; min-height: 44px; padding: 14px 0; line-height: 16px; }
 }
 
 /* Familiar composer utilities share one quiet icon treatment. */

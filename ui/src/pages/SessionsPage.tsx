@@ -9,7 +9,7 @@ import { useResizableSidePanel } from "../components/useResizableSidePanel";
 import "../browser-assistant.css";
 import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
-import { ProviderRequestInputDetails } from "../components/ProviderRequestInputDetails";
+import { WorkingContextPanel, contextUsePercent } from "../components/WorkingContextPanel";
 import { ChatCatchUp } from "../components/ChatCatchUp";
 import { ResolvedApprovalNotice } from "../components/ResolvedApprovalNotice";
 import { isPendingRequest, pendingApprovalId, useSessionState } from "./useSessionState";
@@ -1568,21 +1568,7 @@ export function SessionsPage() {
     setSubagentLimit(activeChatSession.subagentLimit);
   }, [activeChatSession?.id, activeChatSession?.revision]);
   const activeContextStatus = contextStatus?.ownerId === sessionId ? contextStatus : undefined;
-  const contextPercent = activeContextStatus && activeContextStatus.status !== "runtime_managed" && activeContextStatus.targetInputTokens > 0
-    ? Math.min(100, Math.round((activeContextStatus.estimatedInputTokens / activeContextStatus.targetInputTokens) * 100))
-    : undefined;
-  const contextCapacityLabel = !activeContextStatus ? ""
-    : activeContextStatus.routeLimitsRequired && activeContextStatus.routeLimitsVerified
-      ? `${activeContextStatus.eligibleRouteCount ?? 0} compatible routes · ${(activeContextStatus.routeContextWindow ?? activeContextStatus.contextWindow).toLocaleString()} route minimum · ${(activeContextStatus.routeInputLimit ?? activeContextStatus.targetInputTokens).toLocaleString()} input ceiling`
-      : activeContextStatus.routeLimitsRequired
-        ? `route limits unverified · safe ${activeContextStatus.contextWindow.toLocaleString()}-token ceiling`
-        : activeContextStatus.capacitySource === "model_catalog"
-          ? "exact model catalog"
-          : activeContextStatus.capacitySource === "known_model"
-            ? "published model limits"
-            : activeContextStatus.capacitySource === "configured"
-              ? "configured estimate"
-              : "safe fallback estimate";
+  const contextPercent = contextUsePercent(activeContextStatus);
   const enabledProviders = useMemo(() => providers.filter((provider) => provider.enabled), [providers]);
   const selectedProvider = enabledProviders.find((provider) => provider.id === providerId);
   const selectedHarness = harnesses.find((harness) => harness.id === harnessId);
@@ -5726,14 +5712,7 @@ export function SessionsPage() {
           /> : <p>Subagents appear after the first saved turn.</p>
           : drawerTab === "results" ? api && sessionId ? <ChatResults key={sessionId} api={api} sessionId={sessionId} onMessage={openDrawerMessage} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} /> : <p>Results appear after the first saved turn.</p> : <>
           {api && sessionId && searchParams.get("turn") && <ChatTurnDetails api={api} sessionId={sessionId} turnId={searchParams.get("turn")!} onMessage={openDrawerMessage} />}
-          <section className="session-context-health"><h3>Working context</h3>{!sessionId ? <p>Context becomes durable after the first saved turn.</p> : contextStatusLoading && !activeContextStatus ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Reading Core context…</div> : contextStatusError ? <div className="session-context-error"><p>{contextStatusError}</p><button className="button quiet" type="button" onClick={() => setContextRefreshKey((value) => value + 1)}>Retry</button></div> : activeContextStatus ? <><div className="session-context-summary"><span className={`status-dot ${activeContextStatus.status === "failed" ? "unavailable" : activeContextStatus.status === "stale" ? "pending" : "healthy"}`} /><div><strong>{activeContextStatus.status === "runtime_managed" ? "Harness managed" : activeContextStatus.status.replaceAll("_", " ")}</strong><small>{activeContextStatus.status === "runtime_managed" ? "The selected harness owns compaction and reports its usage through activity." : `${activeContextStatus.estimatedInputTokens.toLocaleString()} estimated · ${activeContextStatus.targetInputTokens.toLocaleString()} target input tokens · ${contextCapacityLabel}`}</small></div></div>{contextPercent !== undefined && <div className="session-context-progress" aria-label={`${contextPercent} percent of target input used`}><span style={{ width: `${contextPercent}%` }} /></div>}{activeContextStatus.compactedThrough > 0 && <p>Core compacted through message {activeContextStatus.compactedThrough}; the source transcript remains unchanged.</p>}{activeContextStatus.snapshot?.memory && <details className="session-memory"><summary>Inspect saved memory</summary><div>{activeContextStatus.snapshot.memory.objective && <section><strong>Objective</strong><p>{activeContextStatus.snapshot.memory.objective}</p></section>}<section><strong>Summary</strong><p>{activeContextStatus.snapshot.memory.summary}</p></section>{([
-              ["Confirmed facts", activeContextStatus.snapshot.memory.confirmedFacts],
-              ["Decisions", activeContextStatus.snapshot.memory.decisions],
-              ["Constraints", activeContextStatus.snapshot.memory.constraints],
-              ["Corrections", activeContextStatus.snapshot.memory.corrections],
-              ["Open questions", activeContextStatus.snapshot.memory.openQuestions],
-            ] as const).map(([label, items]) => items.length ? <section key={label}><strong>{label}</strong><ul>{items.map((item, index) => <li key={`${label}-${index}`}>{item.text}</li>)}</ul></section> : null)}<small>{activeContextStatus.snapshot.sourceReferences.length} source reference{activeContextStatus.snapshot.sourceReferences.length === 1 ? "" : "s"} · private reasoning is not stored</small></div></details>}</> : <p>Context status has not been recorded yet.</p>}</section>
-          {activeContextStatus && activeContextStatus.status !== "runtime_managed" && <section className="session-context-health"><p>The context meter estimates saved conversation and project instructions. It excludes tools and references added during a request.</p>{activeContextStatus.lastProviderRequest && <ProviderRequestInputDetails request={activeContextStatus.lastProviderRequest} />}</section>}
+          <WorkingContextPanel hasSession={Boolean(sessionId)} loading={contextStatusLoading} error={contextStatusError || undefined} status={activeContextStatus} onRetry={() => setContextRefreshKey((value) => value + 1)} />
           {runtimeKind === "provider" && api && sessionId && <ProviderGoalChildren api={api} sessionId={sessionId} goal={providerGoal} onOpenChild={id => void selectSession(id)} />}</>}
         </ChatWorkspaceDrawer>}
       </div>

@@ -2170,11 +2170,98 @@ describe("ApiClient", () => {
       sourceId: "message-1",
       sequence: 1,
     });
+    // An older Core sends none of the v2 memory, quality, calibration or notes
+    // fields; the status still maps, with nothing claimed on its behalf.
+    expect(chat.snapshot?.memory).toMatchObject({ userRequests: [], currentState: [], attempts: [], references: [] });
+    expect(chat.snapshot).toMatchObject({ quality: "complete", droppedItems: 0 });
+    expect(chat.quality).toBeUndefined();
+    expect(chat.estimateCalibration).toBeUndefined();
+    expect(chat.workingNotes).toBeUndefined();
     expect(mission.ownerType).toBe("agent_run");
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
       "http://127.0.0.1:8765/api/v1/chat/sessions/session-1/context",
       "http://127.0.0.1:8765/api/v1/runs/run-1/context",
     ]);
+  });
+
+  it("maps v2 context memory, snapshot quality, calibration, cache hits and working notes", async () => {
+    const reference = { source_kind: "chat_message", source_id: "message-1", sequence: 1 };
+    const cited = (text: string) => ({ text, sources: [reference] });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      owner_type: "chat_session",
+      owner_id: "session-1",
+      status: "ready",
+      context_window: 128000,
+      max_output_tokens: 8000,
+      target_input_tokens: 91500,
+      estimated_input_tokens: 71240,
+      estimate_calibration: 1.12,
+      quality: "degraded",
+      last_provider_request: {
+        instructions: 4000, conversation: 60000, tool_schemas: 5000, tool_results: 0, other: 0,
+        estimated_total: 69000, reported_input_tokens: 68912, reported_cached_input_tokens: 42036, attempt: 1,
+      },
+      compacted_through: 42,
+      working_notes: { content: "## Todo\n- [ ] Ask about .40", revision: 6, updated_at: "2026-09-26T10:00:00Z", turn_id: "turn-9" },
+      snapshot: {
+        id: "snapshot-1", created_at: "2026-09-26T10:00:00Z", updated_at: "2026-09-26T10:00:00Z", revision: 1,
+        owner_type: "chat_session", owner_id: "session-1", version: 2, status: "ready", compacted_through: 42,
+        quality: "salvaged", dropped_items: 3,
+        memory: {
+          summary: "Reviewing TLS.",
+          user_requests: [cited("Map 10.20.0.0/24.")],
+          current_state: [cited("12 of 17 listeners checked.")],
+          attempts: [cited("sslyze timed out.")],
+          references: [cited("/home/op/scans/tls.json")],
+        },
+        source_references: [reference],
+        provider_profile_id: "provider-1", model: "model-1", prompt_version: "nebula-context-v2",
+      },
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const context = await client.getChatContext("session-1");
+
+    expect(context.estimateCalibration).toBe(1.12);
+    // Core's status names the served snapshot's quality; it wins over the row.
+    expect(context.quality).toBe("degraded");
+    expect(context.snapshot).toMatchObject({ quality: "salvaged", droppedItems: 3 });
+    expect(context.lastProviderRequest).toMatchObject({ reportedInputTokens: 68912, reportedCachedInputTokens: 42036 });
+    expect(context.workingNotes).toEqual({ content: "## Todo\n- [ ] Ask about .40", revision: 6, updatedAt: "2026-09-26T10:00:00Z", turnId: "turn-9" });
+    expect(context.snapshot?.memory).toMatchObject({
+      userRequests: [{ text: "Map 10.20.0.0/24.", sources: [{ sourceKind: "chat_message", sourceId: "message-1", sequence: 1 }] }],
+      currentState: [{ text: "12 of 17 listeners checked." }],
+      attempts: [{ text: "sslyze timed out." }],
+      references: [{ text: "/home/op/scans/tls.json" }],
+      decisions: [],
+      corrections: [],
+    });
+  });
+
+  it("falls back to the snapshot's quality and ignores unknown quality or empty notes", async () => {
+    const base = {
+      owner_type: "chat_session", owner_id: "session-1", status: "ready", context_window: 8192,
+      max_output_tokens: 2048, target_input_tokens: 4608,
+      snapshot: {
+        id: "snapshot-1", created_at: "2026-09-26T10:00:00Z", updated_at: "2026-09-26T10:00:00Z", revision: 1,
+        owner_type: "chat_session", owner_id: "session-1", version: 1, status: "ready", compacted_through: 4,
+        quality: "degraded", memory: { summary: "Extract." }, provider_profile_id: "p", model: "m", prompt_version: "v2",
+      },
+    };
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...base, working_notes: { content: "  ", revision: 1, updated_at: "2026-09-26T10:00:00Z" } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...base, quality: "experimental", snapshot: { ...base.snapshot, quality: "experimental" }, estimate_calibration: null, working_notes: null }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    const first = await client.getChatContext("session-1");
+    expect(first.quality).toBe("degraded");
+    expect(first.workingNotes).toBeUndefined();
+
+    const second = await client.getChatContext("session-1");
+    expect(second.quality).toBeUndefined();
+    expect(second.snapshot?.quality).toBe("complete");
+    expect(second.estimateCalibration).toBeUndefined();
+    expect(second.workingNotes).toBeUndefined();
   });
 
   it("maps generic engagement, asset, report, evidence, and mission mutations", async () => {

@@ -1918,13 +1918,37 @@ export interface ContextMemoryItem {
 export interface ContextMemory {
   objective?: string;
   summary: string;
+  /** Operator requests, in order and close to verbatim. Empty from older Cores. */
+  userRequests: ContextMemoryItem[];
+  /** Where the work stands and the next step. Empty from older Cores. */
+  currentState: ContextMemoryItem[];
   confirmedFacts: ContextMemoryItem[];
   decisions: ContextMemoryItem[];
   constraints: ContextMemoryItem[];
+  /** Approaches tried and their outcomes. Empty from older Cores. */
+  attempts: ContextMemoryItem[];
   corrections: ContextMemoryItem[];
+  /** Exact paths, URLs, hosts, commands and IDs. Empty from older Cores. */
+  references: ContextMemoryItem[];
   openQuestions: ContextMemoryItem[];
   evidenceIds: Identifier[];
   artifactIds: Identifier[];
+}
+
+/**
+ * How much of a ready snapshot the compactor model produced: every item
+ * (`complete`), the model's memory minus items that failed validation
+ * (`salvaged`), or a deterministic extract of requests and identifiers
+ * because the model's summary could not be used (`degraded`).
+ */
+export type ContextSnapshotQuality = "complete" | "salvaged" | "degraded";
+
+/** The notes the assistant keeps for a conversation with its notes tool. */
+export interface ContextWorkingNotes {
+  content: string;
+  revision: number;
+  updatedAt: string;
+  turnId?: Identifier;
 }
 
 export interface ContextSnapshot {
@@ -1942,6 +1966,10 @@ export interface ContextSnapshot {
   usage: ChatUsage;
   costUsd: number;
   error?: string;
+  /** `complete` when an older Core does not report it. */
+  quality: ContextSnapshotQuality;
+  /** Memory items removed because they failed validation. */
+  droppedItems: number;
   createdAt: string;
 }
 
@@ -1962,12 +1990,18 @@ export interface ContextStatus {
   routeContextWindow?: number;
   routeInputLimit?: number;
   estimatedInputTokens: number;
+  /** Factor learned from provider-reported usage and applied to the estimate. */
+  estimateCalibration?: number;
   lastProviderRequest?: ProviderRequestInput;
   compactedThrough: number;
   sourceReferences: ContextSourceReference[];
   compactionUsage: ChatUsage;
   compactionCostUsd: number;
   snapshot?: ContextSnapshot;
+  /** Quality of the served snapshot; absent without one or from an older Core. */
+  quality?: ContextSnapshotQuality;
+  /** Absent until the assistant first writes notes, or from an older Core. */
+  workingNotes?: ContextWorkingNotes;
 }
 
 export interface ProviderRequestInput {
@@ -1978,6 +2012,8 @@ export interface ProviderRequestInput {
   other: number;
   estimatedTotal: number;
   reportedInputTokens?: number;
+  /** The part of `reportedInputTokens` the provider served from its prompt cache. */
+  reportedCachedInputTokens?: number;
   attempt: number;
 }
 
