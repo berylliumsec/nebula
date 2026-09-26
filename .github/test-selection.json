@@ -1,5 +1,5 @@
 {
-  "change_digest": "d380d20d5ea500bfaccb87be00002b24be6207e0c1672aea19d5f4d606ebc314",
+  "change_digest": "39bc21563ac9d9fc1d3c05f9ec084aea20a7f747eea0b4055cefc37d09b25c94",
   "reviewed_by": "Claude focused review for ctx-capacity-source",
   "reason": "Core now reports which limit binds the context window. resolve_context_limits records binding_limit (model | configured | route | fallback) and input_limit_binds; ContextStatus exposes binding_limit, input_capacity and input_limit_binds on the chat and mission context APIs (null for runtime-managed context); source/capacity_source keep their meaning (they are read by api.py and chat.py only to fill capacity_source). The Working context capacity label now uses binding_limit and input_capacity instead of inferring them. Python: test_context.py (five binding-limit unit tests: configured below verified routes, smallest route with and without its input limit, catalog window below every route, catalog/known/configured/fallback, unverified OpenRouter floor/primary route/configured) plus the files that resolve limits or serve the context API: test_chat_api.py (chat, mission and harness context payloads), test_model_output_budget.py and test_chat_context_assembly.py. Frontend: WorkingContextPanel (label cases for every binding and an older Core), client mapping, ProviderRequestInputDetails and the App saved-memory journey. Playwright: area:working-context and entry:assistant on desktop, mobile Chromium and mobile WebKit (SessionsPage renders the panel).",
   "exclusions": "Full suites are not approved and are excluded. Rules for chat.py/api.py/context.py also map conversation-progress, provider-reasoning and core-api; they are not selected because the backend change only adds three fields to the context status payload and ContextLimits (no request, prompt, stream or storage behaviour changes), which the selected Python files cover. provider-request-breakdown-core is not selected: its local vLLM profile has no route limits and its label text is unchanged. The real-Core check (OpenRouter with verified routes, capped and uncapped, and an OpenAI-compatible profile, at a LAN origin with the production bundle) is recorded in the PR body. Native/Tauri tests are unaffected.",
@@ -26,7 +26,6 @@
     "ui/src/api/client.test.ts",
     "ui/src/App.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": [
     "entry:assistant/desktop",
