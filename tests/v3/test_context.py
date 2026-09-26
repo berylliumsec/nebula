@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 
 import pytest
 from pydantic import ValidationError
@@ -20,6 +21,7 @@ from nebula.v3.context import (
     lexical_score,
     compactor_memory_schema,
     memory_text,
+    WORKING_CONTEXT_CEILING,
     resolve_context_limits,
     source_digest,
     unsupported_identifiers,
@@ -778,7 +780,9 @@ def test_binding_limit_for_catalog_known_configured_and_fallback_windows():
     assert (known.source, known.binding_limit) == ("known_model", "configured")
     hosted.metadata["options"] = {}
     published = resolve_context_limits(hosted, model="claude-opus-5")
-    assert (published.source, published.binding_limit) == ("known_model", "model")
+    # Its 1M-token window is above the working ceiling, which now sizes it.
+    assert (published.source, published.window_limit) == ("known_model", "model")
+    assert published.binding_limit == "ceiling"
 
     configured = resolve_context_limits(_profile(context_window=16_000))
     assert (configured.source, configured.binding_limit) == (
@@ -809,6 +813,105 @@ def test_binding_limit_for_unverified_openrouter_ceilings():
         64_000,
         "configured",
     )
+
+
+def _catalog(window: int, **options: int) -> ProviderProfile:
+    """A hosted profile whose catalog publishes ``window`` for model-a."""
+
+    profile = _profile(**options)
+    profile.is_local = False
+    profile.metadata["model_descriptors"] = [
+        {"id": "model-a", "context_window": window, "max_output_tokens": 32_000}
+    ]
+    return profile
+
+
+def test_working_ceiling_sizes_a_large_window_without_shrinking_it():
+    limits = resolve_context_limits(_catalog(1_000_000), model="model-a")
+
+    # The window and the hard input capacity are the model's.
+    assert limits.context_window == 1_000_000
+    assert limits.input_capacity == 1_000_000 - limits.max_output_tokens
+    # The working context is sized as if the capacity were ceiling / 75%.
+    assert limits.working_input_capacity == 266_667
+    assert limits.target_input_tokens == WORKING_CONTEXT_CEILING == 200_000
+    assert limits.compacted_input_target == 160_000
+    assert (limits.binding_limit, limits.window_limit) == ("ceiling", "model")
+
+
+def test_working_ceiling_leaves_windows_below_it_unchanged():
+    # 262,144 tokens leave less than ceiling / 75% of input.
+    below = resolve_context_limits(_catalog(262_144), model="model-a")
+    assert below.working_input_capacity == below.input_capacity
+    assert below.target_input_tokens == math.floor(below.input_capacity * 0.75)
+    assert below.binding_limit == "model"
+
+    # A configured window at or under the ceiling is an ordinary cap.
+    capped = resolve_context_limits(
+        _catalog(1_000_000, context_window=16_000, max_output_tokens=2_000),
+        model="model-a",
+    )
+    assert (capped.target_input_tokens, capped.binding_limit) == (10_500, "configured")
+    at_ceiling = resolve_context_limits(
+        _catalog(1_000_000, context_window=200_000), model="model-a"
+    )
+    assert at_ceiling.binding_limit == "configured"
+    assert at_ceiling.target_input_tokens < WORKING_CONTEXT_CEILING
+
+
+def test_configured_window_above_the_ceiling_opts_into_a_larger_working_context():
+    opted = resolve_context_limits(
+        _catalog(1_000_000, context_window=500_000, max_output_tokens=20_000),
+        model="model-a",
+    )
+    assert opted.context_window == 500_000
+    assert opted.working_input_capacity == opted.input_capacity == 480_000
+    assert opted.target_input_tokens == 360_000
+    assert opted.binding_limit == "configured"
+
+    # Configuring the model's whole window keeps all of it.
+    whole = resolve_context_limits(
+        _catalog(1_000_000, context_window=1_000_000), model="model-a"
+    )
+    assert whole.working_input_capacity == whole.input_capacity
+    assert whole.target_input_tokens > WORKING_CONTEXT_CEILING
+    assert whole.binding_limit == "model"
+
+
+def test_working_ceiling_applies_to_verified_routes_and_names_the_route_window():
+    limits = resolve_context_limits(
+        _routed(1_000_000, 1_000_000), model="author/model-a"
+    )
+    assert limits.context_window == 1_000_000
+    assert limits.target_input_tokens == 200_000
+    assert (limits.binding_limit, limits.window_limit) == ("ceiling", "route")
+
+    opted = resolve_context_limits(
+        _routed(1_000_000, 1_000_000, context_window=400_000),
+        model="author/model-a",
+    )
+    assert (opted.context_window, opted.binding_limit) == (400_000, "configured")
+    assert opted.target_input_tokens > 200_000
+
+
+def test_compactor_sizes_segments_and_summaries_from_the_working_input(tmp_path):
+    store = NebulaStore(tmp_path / "plan.db")
+    compactor = ContextCompactor(store)
+    provider = MemoryProvider("provider-a")
+
+    ceiling = compactor._compactor_plan(_catalog(1_000_000), provider, "model-a", None)
+    opted = compactor._compactor_plan(
+        _catalog(1_000_000, context_window=1_000_000), provider, "model-a", None
+    )
+
+    # Segments scale from the 266,667-token working input, not the 1M window;
+    # every request is still checked against the model's real capacity.
+    assert ceiling.segment_budget < math.floor(266_667 * 0.60)
+    assert ceiling.segment_budget * 3 < opted.segment_budget
+    assert ceiling.input_capacity == opted.input_capacity
+    # 5% of the 160,000-token compacted target.
+    assert ceiling.summary_output_tokens == 8_000
+    assert opted.summary_output_tokens > ceiling.summary_output_tokens
 
 
 def test_token_estimation_and_security_identifier_retrieval_are_deterministic():

@@ -64,6 +64,16 @@ DEFAULT_MAX_OUTPUT_TOKENS = 2_048
 DEFAULT_OUTPUT_WINDOW_DIVISOR = 4
 DEFAULT_OUTPUT_FLOOR_TOKENS = 8_192
 CONTEXT_TARGET_FRACTION = 0.75
+# The working context's default ceiling, in input tokens. A model whose window
+# is far larger (1M-token models) would otherwise carry a conversation to 75%
+# of that window before compacting it, and models attend less reliably across
+# very long contexts ("context rot"), tool results included. Past the ceiling
+# the conversation is compacted and tool results are cleared as if the model's
+# input capacity were ``WORKING_CONTEXT_CEILING / CONTEXT_TARGET_FRACTION``;
+# hard capacity checks keep the real window. A profile whose configured
+# ``options.context_window`` exceeds the ceiling has opted into a larger
+# working context, and its window sizes it as before.
+WORKING_CONTEXT_CEILING = 200_000
 COMPACTOR_INPUT_FRACTION = 0.60
 COMPACTOR_OUTPUT_FRACTION = 0.05
 # The memory a compactor call may write: 5% of the compacted input target, but
@@ -263,6 +273,10 @@ class ContextLimits(BaseModel):
     context_window: int = Field(ge=1)
     max_output_tokens: int = Field(ge=1)
     input_capacity: int = Field(ge=1)
+    # The input the working context is sized from: ``input_capacity``, held to
+    # the working ceiling unless the profile opted into a larger one. Targets,
+    # compaction and clearing scale from it; hard checks use ``input_capacity``.
+    working_input_capacity: int = Field(ge=1)
     target_input_tokens: int = Field(ge=1)
     compacted_input_target: int = Field(ge=1)
     source: str = Field(pattern=r"^(model_catalog|known_model|configured|fallback)$")
@@ -273,10 +287,16 @@ class ContextLimits(BaseModel):
     route_context_window: int | None = Field(default=None, ge=1)
     route_input_limit: int | None = Field(default=None, ge=1)
     route_limits_required: bool = False
-    # Which limit set ``context_window``. ``source`` says where the model's
-    # figures came from and stays "model_catalog" when a smaller configured
-    # window is what actually binds; this names the binding one.
+    # Which limit sizes the working context: the one that set the window
+    # (``window_limit``), or "ceiling" when the working ceiling holds the
+    # target below the share of a larger window. ``source`` says where the
+    # model's figures came from and stays "model_catalog" when a smaller
+    # configured window is what actually binds; this names the binding one.
     binding_limit: str = Field(
+        default="fallback", pattern=r"^(model|configured|route|fallback|ceiling)$"
+    )
+    # Which limit set ``context_window``, whether or not the ceiling binds.
+    window_limit: str = Field(
         default="fallback", pattern=r"^(model|configured|route|fallback)$"
     )
     # True when a published input limit (the model's or a verified route's),
@@ -312,9 +332,13 @@ class ContextStatus(BaseModel):
     route_context_window: int | None = Field(default=None, ge=1)
     route_input_limit: int | None = Field(default=None, ge=1)
     route_limits_required: bool = False
-    # Which limit sets ``context_window`` (see ContextLimits.binding_limit);
-    # None for a runtime-managed context or an older Core.
+    # Which limit sizes the working context (see ContextLimits.binding_limit)
+    # and which set ``context_window``; None for a runtime-managed context or
+    # an older Core.
     binding_limit: str | None = Field(
+        default=None, pattern=r"^(model|configured|route|fallback|ceiling)$"
+    )
+    window_limit: str | None = Field(
         default=None, pattern=r"^(model|configured|route|fallback)$"
     )
     # The input the request may use before the target fraction is applied.
@@ -540,6 +564,11 @@ def resolve_context_limits(
     if not isinstance(options, dict):
         options = {}
     configured_window = _positive_option(options.get("context_window"), 0)
+    # A configured window above the ceiling opts into a larger working context,
+    # even where a route or catalog limit later narrows the window itself.
+    working_ceiling = (
+        None if configured_window > WORKING_CONTEXT_CEILING else WORKING_CONTEXT_CEILING
+    )
     configured_output = _positive_option(options.get("max_output_tokens"), 0)
     descriptors = profile.metadata.get("model_descriptors", [])
     descriptor = next(
@@ -718,6 +747,15 @@ def resolve_context_limits(
     input_limit_binds = bool(input_limit) and input_limit < input_capacity
     if input_limit:
         input_capacity = min(input_capacity, input_limit)
+    # The smallest capacity whose target reaches the ceiling, so a held target
+    # is the ceiling exactly.
+    ceiling_input = (
+        math.ceil(working_ceiling / CONTEXT_TARGET_FRACTION)
+        if working_ceiling is not None
+        else None
+    )
+    ceiling_binds = ceiling_input is not None and input_capacity > ceiling_input
+    working_input = ceiling_input if ceiling_binds and ceiling_input else input_capacity
     metadata_revision = (
         profile.metadata.get("route_catalog_revision")
         or profile.metadata.get("model_catalog_revision")
@@ -728,11 +766,10 @@ def resolve_context_limits(
         context_window=context_window,
         max_output_tokens=output,
         input_capacity=input_capacity,
-        target_input_tokens=max(
-            1, math.floor(input_capacity * CONTEXT_TARGET_FRACTION)
-        ),
+        working_input_capacity=working_input,
+        target_input_tokens=max(1, math.floor(working_input * CONTEXT_TARGET_FRACTION)),
         compacted_input_target=max(
-            1, math.floor(input_capacity * COMPACTOR_INPUT_FRACTION)
+            1, math.floor(working_input * COMPACTOR_INPUT_FRACTION)
         ),
         source=source,
         estimated=estimated,
@@ -744,7 +781,8 @@ def resolve_context_limits(
         route_context_window=route_context_window or None,
         route_input_limit=route_input_limit or None,
         route_limits_required=profile.provider_type == "openrouter",
-        binding_limit=binding_limit,
+        binding_limit="ceiling" if ceiling_binds else binding_limit,
+        window_limit=binding_limit,
         input_limit_binds=input_limit_binds,
     )
 
@@ -1708,12 +1746,17 @@ class ContextCompactor:
         reserve = self._objective_reserve(objective) + self._schema_reserve(provider)
         instructions = COMPACTOR_INSTRUCTIONS
         fixed = reserve + estimate_tokens(instructions)
-        if fixed > limits.input_capacity // 2:
+        # Segments and the summary allowance scale from the working input, so
+        # a 1M-token model under the working ceiling compacts in the pieces a
+        # 266K one would; each request is still checked against the real
+        # capacity (``input_capacity`` below).
+        working_input = limits.working_input_capacity
+        if fixed > working_input // 2:
             # The full guidance may take at most half the input; a small
             # window gets the brief form and keeps its room for sources.
             instructions = COMPACTOR_BRIEF_INSTRUCTIONS
             fixed = reserve + estimate_tokens(instructions)
-        segment_capacity = limits.input_capacity - fixed
+        segment_capacity = working_input - fixed
         # Two leaf memories must still fit one roll-up segment (60% of the
         # capacity), and a memory estimates at about 1.2x its output tokens.
         summary_output_tokens = min(
@@ -2745,6 +2788,7 @@ __all__ = [
     "COMPACTOR_INPUT_FRACTION",
     "CONTEXT_PROMPT_VERSION",
     "CONTEXT_TARGET_FRACTION",
+    "WORKING_CONTEXT_CEILING",
     "ContextCapacityError",
     "ContextCallBudget",
     "ContextCompactionError",

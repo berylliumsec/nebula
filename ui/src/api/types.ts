@@ -1943,7 +1943,9 @@ export interface ContextMemory {
  */
 export type ContextSnapshotQuality = "complete" | "salvaged" | "degraded";
 
-export type ContextBindingLimit = "model" | "configured" | "route" | "fallback";
+export type ContextWindowLimit = "model" | "configured" | "route" | "fallback";
+/** What sizes the working context: the window's own limit, or the working ceiling. */
+export type ContextBindingLimit = ContextWindowLimit | "ceiling";
 
 /** The notes the assistant keeps for a conversation with its notes tool. */
 export interface ContextWorkingNotes {
@@ -1992,11 +1994,15 @@ export interface ContextStatus {
   routeContextWindow?: number;
   routeInputLimit?: number;
   /**
-   * Which limit sets `contextWindow`: the model's own window, the profile's
-   * configured window, the smallest usable provider route, or the safe floor.
-   * Absent for a runtime-managed context or from an older Core.
+   * Which limit sizes the working context: the one that set `contextWindow`
+   * (the model's own window, the profile's configured window, the smallest
+   * usable provider route, or the safe floor), or `ceiling` when the working
+   * ceiling holds the target below the share of a larger window. Absent for a
+   * runtime-managed context or from an older Core.
    */
   bindingLimit?: ContextBindingLimit;
+  /** Which limit set `contextWindow`, including when the working ceiling binds. */
+  windowLimit?: ContextWindowLimit;
   /** Input the request may use before Core's target fraction applies. */
   inputCapacity?: number;
   /** True when a published input limit, not window less reply, set `inputCapacity`. */

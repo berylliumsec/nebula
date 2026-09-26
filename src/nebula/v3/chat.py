@@ -6807,10 +6807,11 @@ class ChatService:
         # The same headroom below the target that clearing leaves, so the
         # steps after the compaction add to the request before it crosses the
         # target again.
-        target, capacity = self._estimate_limits(
-            prepared, self._request_limits(prepared.provider_profile, request)
+        limits = self._request_limits(prepared.provider_profile, request)
+        target, _capacity = self._estimate_limits(prepared, limits)
+        headroom = target - self._clearing_watermark(
+            target, self._working_allowance(prepared, limits)
         )
-        headroom = target - self._clearing_watermark(target, capacity)
         components = prepared.tool_components
         add_search = (
             offer_search
@@ -8967,7 +8968,7 @@ class ChatService:
             turn,
             advance=advance,
             recent_groups=recent_groups,
-            byte_limit=checkpoint_byte_limit(limits.input_capacity),
+            byte_limit=checkpoint_byte_limit(limits.working_input_capacity),
             working_notes=lambda: checkpoint_notes(
                 read_working_notes(self.store, turn.session_id)
             ),
@@ -9020,7 +9021,20 @@ class ChatService:
         return True
 
     @staticmethod
-    def _clearing_watermark(target: int, capacity: int) -> int:
+    def _working_allowance(prepared: PreparedChat, limits: ContextLimits) -> int:
+        """The working input capacity in raw estimated tokens.
+
+        Clearing and receipts scale from it rather than from the hard input
+        capacity, so a model above the working ceiling clears tool results as
+        a ceiling-sized one would.
+        """
+
+        return estimate_allowance(
+            limits.working_input_capacity, prepared.estimate_calibration
+        )
+
+    @staticmethod
+    def _clearing_watermark(target: int, working: int) -> int:
         """Where clearing takes a request that crossed its target.
 
         Clearing to just under the target would clear one more result on
@@ -9028,11 +9042,11 @@ class ChatService:
         that result on, so the provider's prefix cache would miss each time.
         Clearing a block below the target leaves room for the next several
         steps (Anthropic's context editing clears "at least" a batch for the
-        same reason). A small window keeps at least half its target. Both
-        are in the raw estimated tokens ``_estimate_limits`` returns.
+        same reason). A small window keeps at least half its target. Both are
+        raw estimated tokens; ``working`` is ``_working_allowance``.
         """
 
-        return max(target // 2, target - max(capacity // 10, 8_000))
+        return max(target // 2, target - max(working // 10, 8_000))
 
     def _with_tool_history(
         self, prepared: PreparedChat, turn: ChatTurn, request: ModelRequest
@@ -9112,7 +9126,9 @@ class ChatService:
         # whatever is done. It is taken down to the watermark in this one
         # change: the checkpoint advances, then the oldest results still
         # whole are cleared, the fewest that reach the watermark.
-        watermark = self._clearing_watermark(target, capacity)
+        watermark = self._clearing_watermark(
+            target, self._working_allowance(prepared, limits)
+        )
         advanced, advanced_entries = self._compacted_turn_history(
             turn, limits, advance=True
         )
@@ -12829,6 +12845,7 @@ class ChatService:
             route_input_limit=limits.route_input_limit,
             route_limits_required=limits.route_limits_required,
             binding_limit=limits.binding_limit,
+            window_limit=limits.window_limit,
             input_capacity=limits.input_capacity,
             input_limit_binds=limits.input_limit_binds,
             estimated_input_tokens=active_estimated,

@@ -31,7 +31,7 @@ import type {
   TerminalCommandPage,
   TerminalCommandRecord,
   TerminalRecordingTools,
-  ContextBindingLimit,
+  ContextWindowLimit,
   ContextMemory,
   ContextSnapshot,
   ContextSnapshotQuality,
@@ -1323,6 +1323,7 @@ interface WireContextStatus extends JsonObject {
   route_context_window?: number | null;
   route_input_limit?: number | null;
   binding_limit?: string | null;
+  window_limit?: string | null;
   input_capacity?: number | null;
   input_limit_binds?: boolean;
   estimated_input_tokens?: number;
@@ -3031,7 +3032,7 @@ function contextQuality(value: unknown): ContextSnapshotQuality | undefined {
 }
 
 // An older Core omits it and a newer one may add values; neither is guessed at.
-function contextBindingLimit(value: unknown): ContextBindingLimit | undefined {
+function contextWindowLimit(value: unknown): ContextWindowLimit | undefined {
   return value === "model" || value === "configured" || value === "route" || value === "fallback" ? value : undefined;
 }
 
@@ -3101,7 +3102,8 @@ function mapContextStatus(value: WireContextStatus): ContextStatus {
     eligibleRouteCount: value.eligible_route_count ?? undefined,
     routeContextWindow: value.route_context_window ?? undefined,
     routeInputLimit: value.route_input_limit ?? undefined,
-    bindingLimit: contextBindingLimit(value.binding_limit),
+    bindingLimit: value.binding_limit === "ceiling" ? "ceiling" : contextWindowLimit(value.binding_limit),
+    windowLimit: contextWindowLimit(value.window_limit),
     inputCapacity: typeof value.input_capacity === "number" && value.input_capacity > 0 ? value.input_capacity : undefined,
     inputLimitBinds: value.input_limit_binds === true,
     estimatedInputTokens: numberField(value.estimated_input_tokens),
