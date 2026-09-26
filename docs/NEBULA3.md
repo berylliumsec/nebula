@@ -376,7 +376,11 @@ An article is sent only when the message is about it: at least a seventh of the
 content words the operator wrote (not the context they selected) must name the
 article's topic (its title and keywords), so ordinary project conversation carries no
 help however many words it shares with a runbook, and a large selection does not hide
-a runbook question. Articles must also hold up against the best match: one that only shares
+a runbook question. When the operator's words ask about a problem ("why does this
+fail?", "what's wrong here?"), the selected lines that report a Nebula failure (a
+failure naming a Nebula surface such as the runner, Terminal, Core or a provider, or
+a Nebula error reference) count as what they wrote, up to five lines. The rest of a
+selection never does. Articles must also hold up against the best match: one that only shares
 product vocabulary with the question is left out, while each problem the question
 names by an article's keyword phrase keeps its runbook, up to three per request.
 This product corpus is separate from Project knowledge uploads: it is available even
@@ -392,7 +396,9 @@ Nebula's own documentation rather than instructions. If no article matches an ob
 Nebula failure, the guidance sent with them tells the assistant to report the exact
 error and say that no verified recovery procedure is available instead of inventing a
 step. Command final synthesis also searches the observed failed result, so recovery
-guidance can match an error that was not known when the turn began.
+guidance can match an error that was not known when the turn began. A failure receipt
+is searched by what it says (its category, problem, next action and error reference),
+not by the input schema it repeats for the model.
 
 Treat the bundled Markdown as release material: update implementation references and
 recovery steps in the same change as behavior, keep every command and UI label

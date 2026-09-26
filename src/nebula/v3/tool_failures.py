@@ -97,6 +97,35 @@ def _diagnostic(
     return reference, captured
 
 
+def failure_receipt_text(value: Any) -> str | None:
+    """The words of a failure receipt a person reads, or None for another result.
+
+    A receipt repeats the tool's input schema so the model can correct its
+    next call; searched as text, that schema's words ("properties",
+    "required", "type") outweigh the failure's own and match unrelated
+    documents. The category, problem, detail, next action and diagnostic
+    reference are what the failure says.
+    """
+
+    decoded: Any = value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except ValueError:  # diagnostic-expected: plain text is not a receipt
+            return None
+    if not isinstance(decoded, dict) or decoded.get("schema") != FAILURE_SCHEMA:
+        return None
+    parts = [
+        decoded.get("tool"),
+        str(decoded.get("category") or "").replace("_", " "),
+        decoded.get("problem"),
+        decoded.get("detail"),
+        decoded.get("next_action"),
+        decoded.get("diagnostic_reference"),
+    ]
+    return " ".join(part for part in parts if isinstance(part, str) and part)
+
+
 def unavailable_tool_failure(
     name: str, detail: str, *, call_id: str | None = None
 ) -> dict[str, Any]:

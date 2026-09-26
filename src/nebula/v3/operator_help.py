@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
@@ -97,6 +98,49 @@ _MIN_SCORE = 6
 # keywords): a runbook question, even a chatty one, clears it; ordinary
 # project conversation does not.
 _MIN_TOPIC_SHARE = 0.15
+# Words that make an operator's message a troubleshooting request even when
+# it names nothing of Nebula itself ("why does this fail?", "what's wrong
+# here?"): its subject is then the failure in the context they selected.
+_TROUBLESHOOTING_WORDS = {
+    "broken",
+    "fail",
+    "fails",
+    "failing",
+    "fix",
+    "help",
+    "issue",
+    "problem",
+    "stuck",
+    "why",
+    "working",
+    "wrong",
+}
+# What a selected line must name, beside a failure, to report a Nebula one:
+# the product's own surfaces, not words any project uses ("docker", "image",
+# "model"), so a selected build log of the operator's own project stays theirs.
+_NEBULA_SURFACES = {
+    "automate",
+    "automation",
+    "compaction",
+    "core",
+    "doctor",
+    "mcp",
+    "nebula",
+    "podman",
+    "provider",
+    "runner",
+    "runtime",
+    "sandbox",
+    "sidecar",
+    "terminal",
+    "workstation",
+}
+# A Nebula diagnostic reference, as failure receipts and error notices carry.
+_DIAGNOSTIC_REFERENCE = re.compile(r"\berr_[0-9a-f]{32}\b")
+# Selected lines that can join the subject: enough for an error and its
+# context, never a whole log.
+_SELECTION_FAILURE_LINES = 5
+_SELECTION_LINE_CHARS = 500
 _WORD_ENDINGS = ("ing", "ed", "s")
 
 
@@ -218,37 +262,90 @@ def _contains_phrase(text: str, phrase: str) -> bool:
     return re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", text) is not None
 
 
+def _plain_words(text: str) -> set[str]:
+    """``text``'s words without the punctuation that ends a clause
+    ("error:", "unavailable.")."""
+
+    return {word.rstrip(".:/-") for word in _WORD.findall(text)}
+
+
+def _selection_failure_lines(selection: str) -> list[str]:
+    """The lines of a selection that report a Nebula failure.
+
+    A line qualifies when it states a failure and names a Nebula product
+    surface or carries a Nebula diagnostic reference. Long lines are split
+    into sentences first, so a one-line log dump yields the failing sentence.
+    """
+
+    lines: list[str] = []
+    for raw in selection.splitlines():
+        for line in (
+            re.split(r"(?<=[.!?])\s+", raw)
+            if len(raw) > _SELECTION_LINE_CHARS
+            else [raw]
+        ):
+            line = line.strip()[:_SELECTION_LINE_CHARS]
+            folded = line.casefold()
+            words = _plain_words(folded)
+            if (words & _FAILURE_MARKERS and words & _NEBULA_SURFACES) or (
+                _DIAGNOSTIC_REFERENCE.search(folded)
+            ):
+                lines.append(line)
+                if len(lines) >= _SELECTION_FAILURE_LINES:
+                    return lines
+    return lines
+
+
+def help_subject(operator_text: str, selections: Sequence[str]) -> list[str]:
+    """What decides whether a chat turn is about operating Nebula.
+
+    The operator's own words, which a large selected document must neither
+    drown nor, by mentioning a runner, turn into a runbook question. Only
+    when those words ask about a problem ("why does this fail?") do the
+    selected lines that report a Nebula failure join them: the question's
+    subject is then the error the operator selected. Search with the result
+    (``search_operator_help``).
+    """
+
+    folded = operator_text.casefold()
+    if "?" not in folded and not _plain_words(folded) & (
+        _TROUBLESHOOTING_WORDS | _FAILURE_MARKERS
+    ):
+        return [operator_text]
+    subject = [operator_text]
+    for selection in selections:
+        for line in _selection_failure_lines(selection):
+            if len(subject) > _SELECTION_FAILURE_LINES:
+                return subject
+            subject.append(line)
+    return subject
+
+
 def search_operator_help(
     queries: list[str],
     *,
     limit: int = 4,
     observed_failure: bool = False,
-    about: list[str] | None = None,
 ) -> tuple[OperatorHelpMatch, ...]:
     """Return only high-signal product-help matches in deterministic order.
 
-    ``queries`` rank the articles. ``about`` (``queries`` when omitted) is
-    what decides whether the search concerns operating Nebula at all: it must
-    carry a product or failure word, and an article must be what one of its
-    texts is about (``_MIN_TOPIC_SHARE``). A chat passes the operator's own
-    words, so a large selected document neither drowns a runbook question
-    nor, by mentioning a runner, turns an ordinary note into one. With
-    ``observed_failure`` the queries are Core's receipts of tool steps that
-    failed in this turn, not conversation, and the failure itself is the
-    reason to look for a recovery procedure. The best remaining match
-    qualifies; the others must hold up against it (see
-    ``_PHRASE_RELATIVE_FLOOR``), so a weakly related tail is not sent beside
-    the runbook the question is about.
+    ``queries`` must carry a product or failure word, and an article must be
+    what one of them is about (``_MIN_TOPIC_SHARE``). A chat passes what the
+    turn asks about operating Nebula (``help_subject``), so a large selected
+    document neither drowns a runbook question nor, by mentioning a runner,
+    turns an ordinary note into one. With ``observed_failure`` the queries
+    are Core's receipts of tool steps that failed in this turn, not
+    conversation, and the failure itself is the reason to look for a
+    recovery procedure. The best remaining match qualifies; the others must
+    hold up against it (see ``_PHRASE_RELATIVE_FLOOR``), so a weakly related
+    tail is not sent beside the runbook the question is about.
     """
 
     if limit < 1:
         return ()
-    about = queries if about is None else about
     query_text = " ".join(queries).casefold()
     raw_terms = set(_WORD.findall(query_text))
-    if not set(_WORD.findall(" ".join(about).casefold())) & (
-        _PRODUCT_MARKERS | _FAILURE_MARKERS
-    ):
+    if not _plain_words(query_text) & (_PRODUCT_MARKERS | _FAILURE_MARKERS):
         return ()
     # Failure words decide whether recovery lookup is appropriate, but they are
     # intentionally excluded from ranking because nearly every runbook describes
@@ -256,7 +353,7 @@ def search_operator_help(
     terms = raw_terms - _STOP_WORDS - _FAILURE_MARKERS
     messages = [
         set(_WORD.findall(text.casefold())) - _STOP_WORDS - _FAILURE_MARKERS
-        for text in about
+        for text in queries
     ]
     ranked: list[tuple[int, int, bool, OperatorHelpArticle]] = []
     for ordinal, article in enumerate(operator_help_articles()):
@@ -295,6 +392,7 @@ __all__ = [
     "CORPUS_ID",
     "OperatorHelpArticle",
     "OperatorHelpMatch",
+    "help_subject",
     "operator_help_articles",
     "search_operator_help",
 ]

@@ -207,7 +207,7 @@ from .workspace_provenance import (
     WorkspaceProvenanceService,
     actor_id_for,
 )
-from .operator_help import CORPUS_ID, search_operator_help
+from .operator_help import CORPUS_ID, help_subject, search_operator_help
 from .knowledge_index import KnowledgeIndex, KnowledgeIndexError
 from .providers import (
     ReasoningEffort,
@@ -327,7 +327,11 @@ from .tool_results import (
     sanitize_model_history_result,
     serialize_model_result,
 )
-from .tool_failures import tool_failure, unavailable_tool_failure
+from .tool_failures import (
+    failure_receipt_text,
+    tool_failure,
+    unavailable_tool_failure,
+)
 
 if TYPE_CHECKING:
     from .automation_tools import AutomationToolComponents, AutomationToolPlatform
@@ -5767,12 +5771,16 @@ class ChatService:
                 ).target_input_tokens
                 // 5,
             )
+            # What the turn asks about operating Nebula: the operator's words,
+            # and a Nebula failure they selected only when those words ask
+            # about a problem (see help_subject). The rest of a selection is
+            # the operator's material, not a question to Nebula's runbooks.
             operator_help_chunks = self._retrieve_operator_help(
-                [incoming[-1].content],
+                help_subject(
+                    durable_incoming[-1].content,
+                    [item.text for item in request.context_attachments],
+                ),
                 token_budget=knowledge_budget,
-                # Whether the turn is about operating Nebula is the operator's
-                # words alone, not the context they selected beside them.
-                about=[durable_incoming[-1].content],
             )
             operator_help_tokens = sum(
                 estimate_tokens(chunk.text, message_count=1)
@@ -9096,8 +9104,11 @@ class ChatService:
         ]
         if not failed_entries:
             return []
+        # A failure receipt is searched by what it says, not by the input
+        # schema it repeats for the model.
         queries = [
-            str(entry.get("provider_result", ""))
+            failure_receipt_text(entry["provider_result"])
+            or str(entry["provider_result"])
             for entry in failed_entries
             if entry.get("provider_result")
         ]
@@ -14821,7 +14832,6 @@ class ChatService:
         *,
         token_budget: int,
         observed_failure: bool = False,
-        about: list[str] | None = None,
     ) -> list[_RetrievedChunk]:
         selected: list[_RetrievedChunk] = []
         tokens = 0
@@ -14830,7 +14840,6 @@ class ChatService:
                 queries,
                 limit=_MAX_OPERATOR_HELP_ARTICLES,
                 observed_failure=observed_failure,
-                about=about,
             )
         ):
             article = match.article
