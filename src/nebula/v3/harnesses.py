@@ -5720,6 +5720,12 @@ def _claude_detailed_usage(
 
     The result's own ``total_cost_usd`` is the session's running total, so the
     connection works out the turn's cost and passes it in.
+
+    Claude Code reports the Messages API usage, whose ``input_tokens`` counts
+    only the uncached remainder beside cache reads and writes. As
+    ``providers._anthropic_usage`` does, ``input_tokens`` becomes the whole
+    prompt with reads and writes recorded apart, so a harness turn's tokens
+    mean what a provider turn's do.
     """
 
     values = usage if isinstance(usage, dict) else {}
@@ -5731,10 +5737,10 @@ def _claude_detailed_usage(
                 return max(0, int(value))
         return 0
 
-    input_tokens = count("input_tokens", "inputTokens")
-    output_tokens = count("output_tokens", "outputTokens")
     cache_creation = count("cache_creation_input_tokens", "cacheCreationInputTokens")
     cache_read = count("cache_read_input_tokens", "cacheReadInputTokens")
+    input_tokens = count("input_tokens", "inputTokens") + cache_read + cache_creation
+    output_tokens = count("output_tokens", "outputTokens")
     return HarnessDetailedUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
