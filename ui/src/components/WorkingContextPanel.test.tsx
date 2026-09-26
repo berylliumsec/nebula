@@ -223,6 +223,22 @@ describe("contextCapacityLabel", () => {
     }))).toBe("27 compatible routes · 1,000,000 route minimum");
   });
 
+  it("names the working ceiling that holds a large window's target", () => {
+    // A 1M-token catalog model: the target stops at the 200,000-token ceiling.
+    expect(contextCapacityLabel(contextStatus({
+      contextWindow: 1_000_000, targetInputTokens: 200_000, bindingLimit: "ceiling", windowLimit: "model", inputCapacity: 967_232,
+    }))).toBe("200,000-token working ceiling · 1,000,000 model window");
+    // The same under verified OpenRouter routes.
+    expect(contextCapacityLabel(routed({
+      contextWindow: 1_000_000, targetInputTokens: 200_000, bindingLimit: "ceiling", windowLimit: "route",
+      inputCapacity: 967_232, routeContextWindow: 1_000_000, routeInputLimit: 1_000_000,
+    }))).toBe("200,000-token working ceiling · 27 compatible routes · 1,000,000 route minimum");
+    // An unverified primary route window.
+    expect(contextCapacityLabel(contextStatus({
+      routeLimitsRequired: true, contextWindow: 1_048_576, targetInputTokens: 200_000, bindingLimit: "ceiling", windowLimit: "route",
+    }))).toBe("200,000-token working ceiling · 1,048,576 route window");
+  });
+
   it("leads with a configured cap outside verified routes too", () => {
     // A 16,000 configured window under a model catalog that allows more.
     expect(contextCapacityLabel(contextStatus({ contextWindow: 16_000, bindingLimit: "configured" })))

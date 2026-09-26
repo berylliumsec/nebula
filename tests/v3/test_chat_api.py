@@ -528,6 +528,7 @@ def test_chat_api_completes_streams_and_exposes_durable_history(tmp_path, monkey
     assert context.json()["quality"] is None
     # No catalog and no configured window: the safe floor sizes the request.
     assert context.json()["binding_limit"] == "fallback"
+    assert context.json()["window_limit"] == "fallback"
     assert context.json()["input_capacity"] == (
         context.json()["context_window"] - context.json()["max_output_tokens"]
     )
@@ -1160,6 +1161,7 @@ def test_run_context_endpoint_is_authenticated_and_reports_provenance(tmp_path):
     assert payload["quality"] == "complete"
     assert payload["context_window"] == 16_000
     assert payload["binding_limit"] == "configured"
+    assert payload["window_limit"] == "configured"
     assert payload["input_capacity"] == 16_000 - payload["max_output_tokens"]
     assert payload["snapshot"]["id"] == snapshot.id
     assert payload["snapshot"]["source_references"][0]["source_id"] == task.id
@@ -1203,6 +1205,7 @@ def test_harness_context_capacity_remains_runtime_owned_and_unknown(tmp_path):
         assert payload["status"] == "runtime_managed"
         assert payload["capacity_source"] == "runtime"
         assert payload["binding_limit"] is None
+        assert payload["window_limit"] is None
         assert payload["input_capacity"] is None
         assert payload["context_window"] == 0
         assert payload["target_input_tokens"] == 0

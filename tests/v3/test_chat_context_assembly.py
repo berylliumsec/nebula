@@ -650,3 +650,31 @@ def test_the_reserve_covers_the_largest_catalog_picks_routing_can_send(tmp_path)
     ):
         added = catalog_instructions({"deferred": sorted(deferred), **picks}, specs)
         assert tools + prefix + chat_module.estimate_tokens(added) <= reserve
+
+
+def test_context_status_reports_the_working_ceiling_on_a_large_window(tmp_path):
+    """Stream X: a 1M-token model is sized by the 200,000-token working ceiling.
+
+    The meter, compaction and preflight all read the same limits, so the
+    status the Working context panel shows carries the ceiling as the target
+    and names it, while the window and hard capacity stay the model's.
+    """
+
+    profile = _profile(local=False)
+    profile.metadata["model_descriptors"] = [
+        {"id": "model-a", "context_window": 1_000_000, "max_output_tokens": 32_000}
+    ]
+    store, service, session, profile, provider = _chat(
+        tmp_path,
+        lambda provider_id: FakeProvider(provider_id, local=False),
+        history=_history(2),
+        profile=profile,
+    )
+
+    status = service.context_status(session.id)
+
+    assert status.context_window == 1_000_000
+    assert status.target_input_tokens == 200_000
+    assert status.compacted_input_target == 160_000
+    assert status.input_capacity is not None and status.input_capacity > 900_000
+    assert (status.binding_limit, status.window_limit) == ("ceiling", "model")

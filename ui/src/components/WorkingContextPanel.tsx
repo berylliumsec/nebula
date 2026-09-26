@@ -17,6 +17,14 @@ export function contextUsePercent(status: ContextStatus | undefined): number | u
 /** Where the window size comes from, so an estimated limit never reads as exact. */
 export function contextCapacityLabel(status: ContextStatus): string {
   const window = status.contextWindow.toLocaleString();
+  if (status.bindingLimit === "ceiling") {
+    // The working ceiling holds the target below a larger window; the window
+    // (and the hard input capacity) stay the model's or the routes'.
+    const lead = `${status.targetInputTokens.toLocaleString()}-token working ceiling`;
+    return status.routeLimitsRequired && status.routeLimitsVerified && status.windowLimit === "route"
+      ? `${lead} · ${status.eligibleRouteCount ?? 0} compatible routes · ${(status.routeContextWindow ?? status.contextWindow).toLocaleString()} route minimum`
+      : `${lead} · ${window} ${status.windowLimit === "route" ? "route window" : "model window"}`;
+  }
   // Core names the limit that sets the window; a window below the model's or
   // the routes' own leads, and the facts it narrows follow.
   const configured = status.bindingLimit === "configured" ? `${window} configured cap` : undefined;

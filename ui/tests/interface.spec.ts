@@ -9227,6 +9227,24 @@ test("Assistant session details use reloadable drawer navigation", async ({ page
   await expect.poll(() => new URL(page.url()).searchParams.get("drawer")).toBeNull();
 });
 
+test("provider options explain the working ceiling beside the context window", async ({ page }) => {
+  await openWorkspace(page, "/settings#models-settings", "Settings");
+  const opener = page.getByRole("button", { name: "Add provider" });
+  await opener.scrollIntoViewIfNeeded();
+  await opener.click();
+  const dialog = page.getByRole("dialog", { name: "Add model provider", exact: true });
+  await expect(dialog).toBeVisible();
+  await dialog.getByText("Advanced provider options").click();
+  const field = dialog.getByLabel("Context window (tokens)");
+  await field.scrollIntoViewIfNeeded();
+  // A window above 200,000 is the opt-in to a larger working context.
+  await expect(field).toHaveAccessibleDescription(
+    "Leave blank to use the model's published window. Conversations are compacted by about 200,000 tokens even on larger windows; a value above 200,000 opts into a larger working context. A value here also caps the window.",
+  );
+  await expect(dialog.locator("#provider-window-help")).toBeVisible();
+  expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+});
+
 test("stabilization audit primary mutation dialogs through the shared dialog contract", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const captureDialog = async (name: string, opener: ReturnType<Page["getByRole"]>, dialogName: string) => {

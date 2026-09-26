@@ -165,6 +165,19 @@ describe("settings page dialogs", () => {
     );
   });
 
+  it("explains the working ceiling where the context window is configured", async () => {
+    const user = userEvent.setup();
+    renderSettings("/settings");
+
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    const dialog = screen.getByRole("dialog", { name: "Add model provider" });
+    // A window above the 200,000-token working ceiling is the opt-in to a
+    // larger working context (resolve_context_limits).
+    expect(within(dialog).getByLabelText("Context window (tokens)")).toHaveAccessibleDescription(
+      "Leave blank to use the model's published window. Conversations are compacted by about 200,000 tokens even on larger windows; a value above 200,000 opts into a larger working context. A value here also caps the window.",
+    );
+  });
+
   it("saves an unattended provider with an opaque systemd credential reference", async () => {
     workspace.addProvider.mockResolvedValue(undefined);
     const user = userEvent.setup();

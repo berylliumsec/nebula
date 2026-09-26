@@ -2200,6 +2200,7 @@ describe("ApiClient", () => {
       estimated_input_tokens: 71240,
       estimate_calibration: 1.12,
       binding_limit: "configured",
+      window_limit: "configured",
       input_capacity: 14000,
       input_limit_binds: false,
       quality: "degraded",
@@ -2229,7 +2230,7 @@ describe("ApiClient", () => {
     const context = await client.getChatContext("session-1");
 
     expect(context.estimateCalibration).toBe(1.12);
-    expect(context).toMatchObject({ bindingLimit: "configured", inputCapacity: 14000, inputLimitBinds: false });
+    expect(context).toMatchObject({ bindingLimit: "configured", windowLimit: "configured", inputCapacity: 14000, inputLimitBinds: false });
     // Core's status names the served snapshot's quality; it wins over the row.
     expect(context.quality).toBe("degraded");
     expect(context.snapshot).toMatchObject({ quality: "salvaged", droppedItems: 3 });
@@ -2242,6 +2243,19 @@ describe("ApiClient", () => {
       references: [{ text: "/home/op/scans/tls.json" }],
       decisions: [],
       corrections: [],
+    });
+  });
+
+  it("maps the working ceiling apart from the limit that set the window", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      owner_type: "chat_session", owner_id: "session-1", status: "not_needed", context_window: 1000000,
+      max_output_tokens: 32768, target_input_tokens: 200000, binding_limit: "ceiling", window_limit: "route",
+      input_capacity: 967232, input_limit_binds: false,
+    }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    await expect(client.getChatContext("session-1")).resolves.toMatchObject({
+      bindingLimit: "ceiling", windowLimit: "route", targetInputTokens: 200000, inputCapacity: 967232,
     });
   });
 
@@ -2269,6 +2283,7 @@ describe("ApiClient", () => {
     expect(second.snapshot?.quality).toBe("complete");
     expect(second.estimateCalibration).toBeUndefined();
     expect(second.bindingLimit).toBeUndefined();
+    expect(second.windowLimit).toBeUndefined();
     expect(second.workingNotes).toBeUndefined();
   });
 

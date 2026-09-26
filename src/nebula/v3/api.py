@@ -10706,6 +10706,7 @@ def create_app(
             if provider_id
             else False,
             binding_limit=limits.binding_limit if provider_id else "fallback",
+            window_limit=limits.window_limit if provider_id else "fallback",
             input_capacity=(
                 limits.input_capacity
                 if provider_id
