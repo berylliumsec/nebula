@@ -28,8 +28,7 @@ from nebula.v3.context import (
     ContextMemory,
     ContextSource,
     ContextSourceReference,
-    memory_prompt_schema,
-    memory_response_schema,
+    compactor_memory_schema,
 )
 from nebula.v3.domain import (
     ChatMessage,
@@ -208,8 +207,8 @@ def _request_memory(provider: ModelProvider, tmp_path: Path) -> ContextMemory:
     return result.memory
 
 
-# The instructions carry the field guidance, so the schema there is bare.
-SCHEMA_INSTRUCTION = json_schema_instruction(memory_prompt_schema())
+# The instructions carry the field guidance, so the schema is bare.
+SCHEMA_INSTRUCTION = json_schema_instruction(compactor_memory_schema())
 
 
 def test_compaction_without_structured_output_puts_the_schema_in_the_instructions(
@@ -234,9 +233,11 @@ def test_compaction_with_structured_output_keeps_the_schema_on_the_wire(tmp_path
     _request_memory(provider, tmp_path)
 
     [request] = provider.requests
-    assert request.response_schema == memory_response_schema()
-    # The wire schema carries the field guidance for the model.
-    assert "description" in request.response_schema["properties"]["user_requests"]
+    assert request.response_schema == compactor_memory_schema()
+    # The model cites short source ids, and the objective is Core's to fill.
+    items = request.response_schema["$defs"]["ContextMemoryItem"]["properties"]
+    assert items["sources"]["items"] == {"type": "string"}
+    assert "objective" not in request.response_schema["properties"]
     assert SCHEMA_INSTRUCTION not in (request.instructions or "")
 
 

@@ -158,18 +158,26 @@ mutation route: `GET /api/v1/chat/sessions/{session_id}/context`.
 ### The compactor
 
 `ContextCompactor` is shared by chat and provider-backed missions. Its prompt
-(`CONTEXT_PROMPT_VERSION = "nebula-context-v2"`) is detailed instructions plus
-the `ContextMemory` schema, whose field descriptions travel with a
-structured-output request. It asks for the operator's requests in order and
-close to verbatim, the current state and next step, decisions with reasons,
-constraints, confirmed facts, attempts and their outcomes (failures included),
-corrections, exact references (paths, URLs, hosts, commands, IDs), open
-questions, and a summary of at most about 200 words. Pleasantries, superseded
+(`CONTEXT_PROMPT_VERSION = "nebula-context-v2"`) is fixed instructions plus a
+bare JSON schema; both are byte-identical on every call so a provider's prompt
+cache can serve them. It asks, in this order, for the operator's requests (in
+order, close to verbatim), the current state and next step, corrections,
+constraints, decisions with reasons, confirmed facts, attempts and their
+outcomes (failures included), exact references (paths, URLs, hosts, commands,
+IDs), open questions, and last a summary of at most about 200 words, so an
+answer the output limit cuts off loses the least. Pleasantries, superseded
 plans, and bulky output already referenced by an ID are dropped. Source text is
-presented as data, never as instructions. The full guidance may take at most
-half of the input capacity; a smaller model (roughly under 3,000 to 4,000 input
-tokens) gets a brief form of it.
-When no objective is supplied, none is sent and none is reserved.
+presented as data, never as instructions. The request states its answer limit
+(`answer_limit_tokens`). The full guidance may take at most half of the input
+capacity; a smaller model (roughly under 3,000 input tokens) gets a brief form.
+
+Each source is sent as a short id and its text (`m12` for chat message 12), and
+the model cites those ids; Core maps them back to canonical references. A
+whole reference with its UUID cost about 35 output tokens per citation, which
+cut memories off on small allowances. The objective (the active goal's, or none)
+only tells the model what the work is for; the model never writes or answers
+it, and Core copies it into the memory. When no objective is supplied, none is
+sent and none is reserved.
 
 **Sizing.** A compactor call may write
 `min(max_output_tokens, max(1,024, floor(0.05 × compacted_input_target)))`
@@ -178,21 +186,25 @@ on a small window. On the 8,192-token fallback window that is 1,024 tokens
 (previously 184). Every request stays within the model's input capacity; the
 instructions, schema, and objective are reserved first, and 60% of the remainder
 is the budget for one group of sources. Long source sets are split into groups
-greedily from the start and reduced hierarchically: each group becomes a memory,
-and groups of memories are rolled up until one remains. If no two memories fit
-one roll-up request, they are merged mechanically within the allowance.
+greedily from the start. Each group becomes a memory; memories that fit the
+allowance together are unioned mechanically (no call, nothing lost), and only
+memories that must be compressed are rolled up by the model. A model roll-up
+that keeps fewer than half the items the trimmed union would keep is replaced
+by that union. If no two memories fit one roll-up request, they are unioned
+and trimmed to the allowance.
 
-**Validation and repair.** Every list item must cite only the canonical sources
-of its request, and every strong identifier in its text (URL, CVE, UUID, IPv4
-address and port, long hex string, multi-segment path, file name with a known
-extension) must appear in the original text of the sources it cites. For a
-roll-up, that is the original messages its merged items cite, never a derived
-summary. Identifiers in the free-text summary must appear in some source.
-Evidence and artifact IDs must be named by the sources and exist in the
-project. An answer that fails any check, is not JSON, or was cut off by the
+**Validation and repair.** Every list item must cite only the sources of its
+request, and every strong identifier in its text (URL, CVE, UUID, IPv4 address
+and port, long hex string, rooted or path-like multi-segment path, file name
+with a known extension) must appear whole in the original text of the sources
+it cites. For a roll-up, that is the original messages its items cite, never a
+derived summary. Identifiers in the free-text summary must appear in some
+source. Evidence and artifact IDs must be named by the sources and exist in
+the project. An answer that fails any check, is not JSON, or was cut off by the
 output limit gets one repair request that names the problems (or asks for a
 shorter answer). After that, invalid items are dropped and counted, an
-unverified summary identifier becomes `[unverified]`, and the rest is used.
+unverified summary identifier becomes `[unverified]`, a cut-off answer keeps
+every complete item before the cut, and the rest is used.
 
 **Degraded, not blocked.** If the provider call fails, or neither answer holds
 a usable memory, that group's memory is a deterministic extract of the original
@@ -213,9 +225,10 @@ window) and goal/mission budget errors still fail the request and record a
 exact sources, provider profile, model, prompt, objective, and output allowance.
 Because groups are formed greedily from the start of an append-only archive,
 the next compaction finds the earlier groups unchanged and reuses their
-memories. Only new or changed groups and the roll-ups are summarised again.
-`segment_count` and `reused_segments` on the snapshot show how much was
-reused. Segments are derived like snapshots and are deleted with their owner.
+memories. Only new or changed groups (and any roll-up that must compress) are
+summarised again. `segment_count` and `reused_segments` on the snapshot show
+how much was reused. Segments are derived like snapshots and are deleted with
+their owner.
 
 These checks prove structural provenance, identifier faithfulness, and a
 bounded request. They cannot prove that a model summary preserved every fact or

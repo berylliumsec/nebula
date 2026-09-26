@@ -28,7 +28,7 @@ from nebula.v3.context import (
     ContextCompactionError,
     ContextCompactor,
     ContextSource,
-    memory_prompt_schema,
+    compactor_memory_schema,
 )
 from nebula.v3.domain import ChatTokenUsage, ContextMemory, ContextSourceReference
 from nebula.v3.model_catalog import openrouter_model_routes
@@ -394,7 +394,7 @@ def test_compaction_falls_back_when_response_format_rejected(
     system = _system(retry)
     assert system.count("Return JSON matching this schema: ") == 1
     assert (
-        json.dumps(memory_prompt_schema(), ensure_ascii=False, separators=(",", ":"))
+        json.dumps(compactor_memory_schema(), ensure_ascii=False, separators=(",", ":"))
         in system
     )
 
