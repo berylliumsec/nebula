@@ -1,10 +1,10 @@
 {
-  "change_digest": "5afd6713cab290696610a64fc9c8ca30e8b15f52182656eae1c2b7c74b9f473d",
-  "reviewed_by": "Claude focused review for ctx-docs-final",
-  "reason": "This diff changes only Markdown documentation (docs/CHAT_CONTEXT_LIFECYCLE.md and docs/design/assistant-context-state-machine.md): it documents provider prompt caching, reference-material relevance (operator-help gating, the knowledge reranker, knowledge.search and its citations), corrects where knowledge.search is offered, and updates the header and code/test index after the context-management overhaul (#602-#627). No executable source, tests, UI assets, provider contracts, or runtime behavior change. Every cited symbol and constant was checked against origin/main; internal anchors were checked against headings.",
-  "exclusions": "Python, frontend, native, and Playwright runtime tests are all excluded because the change has no executable behavior. No browser, real-Core, LAN, physical-device, provider, or full-suite gate is claimed for this documentation update.",
+  "change_digest": "d9fe448852c1ecd9d89bf815ca361018f447c4383dd565b5e0bff068bd11c197",
+  "reviewed_by": "Claude focused review for ctx-help-edges",
+  "reason": "L5 operator-help edges. (1) operator_help.help_subject: when the operator's own words ask about a problem (a question mark or troubleshooting/failure words), up to five selected lines that report a Nebula failure (a failure word plus a Nebula surface such as runner, terminal, core, provider, podman, or a Nebula error reference) join the words; prepare_async now searches operator help with that subject (the rest of a selection is never searched), and search_operator_help's gate ignores clause punctuation; the unused about= parameter is removed. (2) tool_failures.failure_receipt_text: _tool_operator_help searches a failure receipt by its category, problem, detail, next action and error reference instead of the whole receipt with its repeated input schema. Selected: operator-help tests (new cases and the #612/#614 cases), test_chat.py and reference-material tests (help citations and selections), the tool loop (synthesis help), tool-failure receipts, and prepare-path retrieval tests. Counts from pytest --collect-only.",
+  "exclusions": "No frontend, native or Playwright tests: no UI change; citations render as before. The bundled operator_help.md corpus is unchanged (test_packaging excluded). Real-Core evidence (scratch Core on 18719, deepseek/deepseek-v4.1-flash, base 60a4544 vs branch) is in the PR body. No full suite.",
   "expected_tests": {
-    "python": 0,
+    "python": 186,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -14,7 +14,16 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
+  "python": [
+    "tests/v3/test_operator_help.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_reference_material.py",
+    "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_tool_failures.py",
+    "tests/v3/test_turn_preflight_latency.py",
+    "tests/v3/test_inference_timeouts_probe_budget.py",
+    "tests/v3/test_knowledge_index.py"
+  ],
   "frontend": [],
   "native": [],
   "playwright": []
