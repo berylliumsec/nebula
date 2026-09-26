@@ -1,10 +1,10 @@
 {
-  "change_digest": "26d9d52621fc0bf6b932d994df210311deffc013181ac398fd40872092f3b159",
-  "reviewed_by": "Claude focused review for ctx-reference",
-  "reason": "Stream K: per-turn operator help and project knowledge move from the instructions to a labelled reference block on the current user message of the provider request (chat.py: _reference_material/_with_reference_material, _model_context(reference=...) which attaches it before sizing and matches excerpts to the operator's words only, PreparedChat.reference_material reused by the context-length recovery path; the shared renderer's labels now state trust). Selected: the new regression file; test_chat.py (prepare/complete with knowledge, operator help, cloud-knowledge redaction, context recovery); every file driving _model_context or the excerpt query (context assembly, conversation.search wiring, turn prompt cache); context-length recovery (history fidelity, leftovers); knowledge retrieval timing and probe budgets; the knowledge index (harness_knowledge_context uses the relabelled renderer); operator help (docs/NEBULA3.md edited); resume (restart recovery lifecycle) and the tool loop (within-turn stability test); Stream C1's working-notes/tool-history tests, since its notes block now follows the reference block on the same message (rebased onto 8930a17); test_context.py since Stream B (#611, rebased onto 5268ea5) changed the compactor that _model_context calls with the reference-bearing messages. Counts from pytest --collect-only.",
-  "exclusions": "No frontend, native or Playwright tests: no UI, Rust or visible layout change (the request placement is provider-facing only; citations and the transcript are unchanged). test_orchestration.py excluded: missions do not use operator help, _reference_material or _model_context. test_context_retrieval.py excluded: the pure ranker is unchanged and receives the same query as before. Real-Core evidence (scratch Core on 18719, OpenRouter deepseek/deepseek-v4.1-flash, fix vs base 343d289) is in the PR body. No full suite.",
+  "change_digest": "a9c151f7f0ca4b0953c2c74246cc7700c8ee91043331cea4e433e2ddc6e668a2",
+  "reviewed_by": "Claude focused review for ctx-help-relevance",
+  "reason": "Follow-up to Stream K: operator-help retrieval gains a relevance floor. search_operator_help keeps the best match and only those that hold up against it (an article whose keyword phrase the question contains as whole words needs a third of the best score; a match on shared vocabulary alone needs three quarters), and chat's _retrieve_operator_help asks for at most three articles (was eight). Scoring and ranking are unchanged. Engagement-knowledge retrieval is deliberately unchanged (measured: no embedding floor separates relevant from irrelevant chunks). Selected: operator-help ranking tests (new cases), test_chat.py (help citations, knowledge, synthesis wiring), the Stream K reference-material tests (tightened citation list), the tool loop (final-synthesis help path), and knowledge retrieval/timing tests that run prepare with retrieval. Counts from pytest --collect-only.",
+  "exclusions": "No frontend, native or Playwright tests: no UI or visible change; citations render as before, only fewer weakly related help articles are sent and cited. test_packaging.py excluded: the bundled operator_help.md corpus is unchanged. No full suite.",
   "expected_tests": {
-    "python": 305,
+    "python": 154,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -15,21 +15,13 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_reference_material.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_context_assembly.py",
-    "tests/v3/test_conversation_search.py",
-    "tests/v3/test_turn_prompt_cache.py",
-    "tests/v3/test_knowledge_index.py",
     "tests/v3/test_operator_help.py",
-    "tests/v3/test_history_content_fidelity.py",
-    "tests/v3/test_chat_leftovers.py",
-    "tests/v3/test_turn_preflight_latency.py",
-    "tests/v3/test_inference_timeouts_probe_budget.py",
-    "tests/v3/test_restart_recovery_lifecycle.py",
+    "tests/v3/test_chat.py",
+    "tests/v3/test_chat_reference_material.py",
     "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_tool_history_memory.py",
-    "tests/v3/test_context.py"
+    "tests/v3/test_knowledge_index.py",
+    "tests/v3/test_turn_preflight_latency.py",
+    "tests/v3/test_inference_timeouts_probe_budget.py"
   ],
   "frontend": [],
   "native": [],
