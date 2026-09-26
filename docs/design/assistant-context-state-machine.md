@@ -91,9 +91,11 @@ stateDiagram-v2
 ```
 
 Receipts say what each step acted on and how it ended. Their byte bound is 3%
-of the working input capacity, between 16 KiB and 64 KiB; over it, individual receipts are
+of the working input capacity, between 16 KiB and 64 KiB, and never above 15% of
+it (down to 2 KiB) on a small window; over it, individual receipts are
 omitted while their covered ranges/count and an `omitted_steps` count remain.
-A checkpoint also carries the conversation's latest working notes. Clearing
+A checkpoint also carries the conversation's latest working notes, unless the
+current message it rides on already carries that revision. Clearing
 keeps result identity and available artifact references, and a cleared result
 stays cleared for the rest of the turn, so earlier request bytes change once
 per target crossing, and a crossing clears room for at least three average

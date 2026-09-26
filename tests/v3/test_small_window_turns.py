@@ -104,10 +104,10 @@ def test_a_small_window_changes_its_request_late_not_at_every_step(
 ):
     """On a 12K window with some conversation, 23 of 24 steps changed the
     request, 16 of them ahead of its tool history (the checkpoint advancing
-    at every crossing). Now the checkpoint folds once, the requests run on to
-    the capacity while there is no room below the target, the conversation is
-    compacted once when there is no room below the capacity either, and
-    after that each crossing clears room for several steps."""
+    at every crossing). Now the checkpoint folds once and the requests run on
+    to the capacity while there is no room below the target. Folded, the
+    replay leaves room below the capacity for more steps, so the conversation
+    is not compacted (it was, and sent 8% more uncached tokens)."""
 
     prepared, provider, routing, limits, recorded = _run(
         tmp_path, monkeypatch, window=12_288, history=4
@@ -118,8 +118,8 @@ def test_a_small_window_changes_its_request_late_not_at_every_step(
     assert recorded.count("chat.tool_history.capacity_ceiling") >= 1
     sizes = [calibrated_request_estimate(request, None) for request in routing]
     assert max(sizes) > limits.target_input_tokens
-    assert [cause for _, cause in prepared.midturn_compactions] == ["step_room"]
-    assert recorded.count("chat.context.midturn_compacted") == 1
+    assert not prepared.midturn_compactions
+    assert not provider.compactions
 
 
 def test_a_turn_without_room_for_its_headroom_clears_late(tmp_path, monkeypatch):

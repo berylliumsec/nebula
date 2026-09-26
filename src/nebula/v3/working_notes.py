@@ -133,6 +133,25 @@ def checkpoint_notes(notes: ChatWorkingNotes | None) -> dict[str, Any] | None:
     return _notes_payload(notes) if notes is not None and notes.content else None
 
 
+def block_notes_revision(text: str) -> int | None:
+    """The revision of the notes a request message carries as a data block.
+
+    ``text`` is the message's text; None when it carries no notes block.
+    """
+
+    _, found, rest = text.rpartition(WORKING_NOTES_HEADING + "\n")
+    if not found:
+        return None
+    try:
+        payload = json.loads(rest.split("\n", 1)[0])
+    except (
+        ValueError
+    ):  # diagnostic-expected: operator text that only quotes the heading
+        return None
+    revision = payload.get("revision") if isinstance(payload, dict) else None
+    return revision if isinstance(revision, int) else None
+
+
 def working_notes_block(notes: ChatWorkingNotes | None) -> str:
     """The notes as a request data block, or ``""`` when there are none."""
 
