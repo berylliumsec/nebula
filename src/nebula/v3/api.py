@@ -10705,6 +10705,13 @@ def create_app(
             route_limits_required=limits.route_limits_required
             if provider_id
             else False,
+            binding_limit=limits.binding_limit if provider_id else "fallback",
+            input_capacity=(
+                limits.input_capacity
+                if provider_id
+                else context_window - max_output_tokens
+            ),
+            input_limit_binds=limits.input_limit_binds if provider_id else False,
             estimated_input_tokens=estimated_input_tokens,
             compacted_through=through,
             source_references=latest.source_references if latest else [],

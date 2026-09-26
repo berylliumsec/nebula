@@ -35,6 +35,9 @@ function contextStatus(overrides: Partial<ContextStatus> = {}): ContextStatus {
     capacitySource: "model_catalog",
     routeLimitsRequired: false,
     routeLimitsVerified: false,
+    bindingLimit: "model",
+    inputCapacity: 120_000,
+    inputLimitBinds: false,
     estimatedInputTokens: 71_240,
     estimateCalibration: 1.12,
     lastProviderRequest: {
@@ -187,32 +190,53 @@ describe("contextCapacityLabel", () => {
     routeLimitsRequired: true, routeLimitsVerified: true, eligibleRouteCount: 27, ...overrides,
   });
 
-  it("leads with a smaller configured window and keeps the route facts after it", () => {
+  it("leads with the configured cap Core says binds, and keeps the route facts after it", () => {
     // options.context_window 16,000 under routes that accept 1,000,000.
     expect(contextCapacityLabel(routed({
-      contextWindow: 16_000, maxOutputTokens: 2_000, targetInputTokens: 10_500,
-      routeContextWindow: 1_000_000, routeInputLimit: 1_000_000,
+      contextWindow: 16_000, maxOutputTokens: 2_000, targetInputTokens: 10_500, bindingLimit: "configured",
+      inputCapacity: 14_000, routeContextWindow: 1_000_000, routeInputLimit: 1_000_000,
     }))).toBe("16,000 configured cap · 14,000 input ceiling · 27 compatible routes · 1,000,000 route minimum");
   });
 
-  it("leads with the routes when the smallest route is the window", () => {
+  it("leads with the routes when the smallest route binds, with Core's input ceiling", () => {
     expect(contextCapacityLabel(routed({
-      contextWindow: 65_536, maxOutputTokens: 8_000, targetInputTokens: 42_750,
+      contextWindow: 65_536, bindingLimit: "route", inputCapacity: 57_000, inputLimitBinds: true,
       routeContextWindow: 65_536, routeInputLimit: 57_000,
     }))).toBe("27 compatible routes · 65,536 route minimum · 57,000 input ceiling");
-    // The route's input limit is above what the window leaves, so the window binds the input.
+    // Core reports the ceiling; the label no longer re-derives it from the window.
     expect(contextCapacityLabel(routed({
-      contextWindow: 65_536, maxOutputTokens: 8_000, targetInputTokens: 43_152,
+      contextWindow: 65_536, bindingLimit: "route", inputCapacity: 30_000, inputLimitBinds: true,
       routeContextWindow: 65_536, routeInputLimit: 65_536,
-    }))).toBe("27 compatible routes · 65,536 route minimum · 57,536 input ceiling");
+    }))).toBe("27 compatible routes · 65,536 route minimum · 30,000 input ceiling");
   });
 
-  it("omits an input ceiling it cannot reproduce from Core's target", () => {
-    // A model input limit the status does not carry sized this target.
+  it("names a model window below every route", () => {
     expect(contextCapacityLabel(routed({
-      contextWindow: 65_536, maxOutputTokens: 8_000, targetInputTokens: 30_000,
-      routeContextWindow: 65_536, routeInputLimit: 65_536,
-    }))).toBe("27 compatible routes · 65,536 route minimum");
+      contextWindow: 128_000, bindingLimit: "model", inputCapacity: 120_000, routeContextWindow: 200_000,
+    }))).toBe("128,000 model window · 120,000 input ceiling · 27 compatible routes · 200,000 route minimum");
+  });
+
+  it("does not infer a configured cap from an older Core that omits the binding limit", () => {
+    // The window is below the route minimum, but nothing says a configured window set it.
+    expect(contextCapacityLabel(routed({
+      contextWindow: 16_000, bindingLimit: undefined, inputCapacity: undefined, routeContextWindow: 1_000_000,
+    }))).toBe("27 compatible routes · 1,000,000 route minimum");
+  });
+
+  it("leads with a configured cap outside verified routes too", () => {
+    // A 16,000 configured window under a model catalog that allows more.
+    expect(contextCapacityLabel(contextStatus({ contextWindow: 16_000, bindingLimit: "configured" })))
+      .toBe("16,000 configured cap · exact model catalog");
+    expect(contextCapacityLabel(contextStatus({ contextWindow: 16_000, bindingLimit: "configured", capacitySource: "known_model" })))
+      .toBe("16,000 configured cap · published model limits");
+    // With no model window the configured value is the estimate itself.
+    expect(contextCapacityLabel(contextStatus({ contextWindow: 16_000, bindingLimit: "configured", capacitySource: "configured" })))
+      .toBe("configured estimate");
+    expect(contextCapacityLabel(contextStatus({ bindingLimit: "model" }))).toBe("exact model catalog");
+    // Unverified OpenRouter routes: a configured window below the safe ceiling leads.
+    expect(contextCapacityLabel(contextStatus({ routeLimitsRequired: true, contextWindow: 6_000, bindingLimit: "configured" })))
+      .toBe("6,000 configured cap · route limits unverified");
+    expect(contextCapacityLabel(contextStatus({ routeLimitsRequired: true, contextWindow: 8_192, bindingLimit: "fallback" })))
+      .toBe("route limits unverified · safe 8,192-token ceiling");
   });
 });
-

@@ -2177,6 +2177,9 @@ describe("ApiClient", () => {
     expect(chat.quality).toBeUndefined();
     expect(chat.estimateCalibration).toBeUndefined();
     expect(chat.workingNotes).toBeUndefined();
+    expect(chat.bindingLimit).toBeUndefined();
+    expect(chat.inputCapacity).toBeUndefined();
+    expect(chat.inputLimitBinds).toBe(false);
     expect(mission.ownerType).toBe("agent_run");
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
       "http://127.0.0.1:8765/api/v1/chat/sessions/session-1/context",
@@ -2196,6 +2199,9 @@ describe("ApiClient", () => {
       target_input_tokens: 91500,
       estimated_input_tokens: 71240,
       estimate_calibration: 1.12,
+      binding_limit: "configured",
+      input_capacity: 14000,
+      input_limit_binds: false,
       quality: "degraded",
       last_provider_request: {
         instructions: 4000, conversation: 60000, tool_schemas: 5000, tool_results: 0, other: 0,
@@ -2223,6 +2229,7 @@ describe("ApiClient", () => {
     const context = await client.getChatContext("session-1");
 
     expect(context.estimateCalibration).toBe(1.12);
+    expect(context).toMatchObject({ bindingLimit: "configured", inputCapacity: 14000, inputLimitBinds: false });
     // Core's status names the served snapshot's quality; it wins over the row.
     expect(context.quality).toBe("degraded");
     expect(context.snapshot).toMatchObject({ quality: "salvaged", droppedItems: 3 });
@@ -2250,7 +2257,7 @@ describe("ApiClient", () => {
     };
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ ...base, working_notes: { content: "  ", revision: 1, updated_at: "2026-09-26T10:00:00Z" } }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ ...base, quality: "experimental", snapshot: { ...base.snapshot, quality: "experimental" }, estimate_calibration: null, working_notes: null }), { status: 200 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...base, quality: "experimental", snapshot: { ...base.snapshot, quality: "experimental" }, estimate_calibration: null, working_notes: null, binding_limit: "experimental" }), { status: 200 }));
     const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
 
     const first = await client.getChatContext("session-1");
@@ -2261,6 +2268,7 @@ describe("ApiClient", () => {
     expect(second.quality).toBeUndefined();
     expect(second.snapshot?.quality).toBe("complete");
     expect(second.estimateCalibration).toBeUndefined();
+    expect(second.bindingLimit).toBeUndefined();
     expect(second.workingNotes).toBeUndefined();
   });
 

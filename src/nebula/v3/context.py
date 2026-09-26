@@ -273,6 +273,15 @@ class ContextLimits(BaseModel):
     route_context_window: int | None = Field(default=None, ge=1)
     route_input_limit: int | None = Field(default=None, ge=1)
     route_limits_required: bool = False
+    # Which limit set ``context_window``. ``source`` says where the model's
+    # figures came from and stays "model_catalog" when a smaller configured
+    # window is what actually binds; this names the binding one.
+    binding_limit: str = Field(
+        default="fallback", pattern=r"^(model|configured|route|fallback)$"
+    )
+    # True when a published input limit (the model's or a verified route's),
+    # not the window less the reply allowance, set ``input_capacity``.
+    input_limit_binds: bool = False
 
 
 class WorkingNotesStatus(BaseModel):
@@ -303,6 +312,14 @@ class ContextStatus(BaseModel):
     route_context_window: int | None = Field(default=None, ge=1)
     route_input_limit: int | None = Field(default=None, ge=1)
     route_limits_required: bool = False
+    # Which limit sets ``context_window`` (see ContextLimits.binding_limit);
+    # None for a runtime-managed context or an older Core.
+    binding_limit: str | None = Field(
+        default=None, pattern=r"^(model|configured|route|fallback)$"
+    )
+    # The input the request may use before the target fraction is applied.
+    input_capacity: int | None = Field(default=None, ge=1)
+    input_limit_binds: bool = False
     estimated_input_tokens: int = Field(default=0, ge=0)
     # The factor ``estimated_input_tokens`` was scaled by, from the provider's
     # reported usage for this conversation and model; None when uncalibrated.
@@ -559,6 +576,9 @@ def resolve_context_limits(
                 known_model = True
             if not model_output:
                 model_output = known[1] or 0
+    # Which limit each candidate window stands for, as caps narrow them below.
+    model_window_limit = "model"
+    configured_window_limit = "configured"
     route_limits_verified = model is not None and descriptor_routes_verified(
         descriptor, model
     )
@@ -609,6 +629,8 @@ def resolve_context_limits(
         route_context_window = min(route_windows)
         route_input_limit = min(route_inputs)
         route_output_limit = min(route_outputs)
+        if not model_window or route_context_window <= model_window:
+            model_window_limit = "route"
         model_window = min(
             value for value in (model_window, route_context_window) if value
         )
@@ -628,9 +650,14 @@ def resolve_context_limits(
             else 0
         )
         window_cap = primary_window or DEFAULT_CONTEXT_WINDOW
+        cap_limit = "route" if primary_window else "fallback"
+        if not model_window or window_cap < model_window:
+            model_window_limit = cap_limit
         model_window = model_window or primary_window
         if model_window:
             model_window = min(model_window, window_cap)
+        if configured_window and window_cap < configured_window:
+            configured_window_limit = cap_limit
         if configured_window:
             configured_window = min(configured_window, window_cap)
         if not primary_window:
@@ -647,15 +674,23 @@ def resolve_context_limits(
         )
         source = "known_model" if known_model else "model_catalog"
         estimated = profile.provider_type == "openrouter" and not route_limits_verified
+        # A configured window binds only when it is below the model's own.
+        binding_limit = (
+            configured_window_limit
+            if configured_window and configured_window < model_window
+            else model_window_limit
+        )
     elif configured_window:
         context_window = configured_window
         source = "configured"
         estimated = True
+        binding_limit = configured_window_limit
     else:
         context_window = DEFAULT_CONTEXT_WINDOW
         source = "fallback"
         estimated = True
         window_known = False
+        binding_limit = "fallback"
     if model_output >= context_window:
         # A published output limit at or above the window never binds: output
         # stays below the window anyway. It is no separate output limit (the
@@ -680,6 +715,7 @@ def resolve_context_limits(
         default_output = min(DEFAULT_MAX_OUTPUT_TOKENS, *output_caps)
     output = min(requested_output_tokens or default_output, *output_caps)
     input_capacity = context_window - output
+    input_limit_binds = bool(input_limit) and input_limit < input_capacity
     if input_limit:
         input_capacity = min(input_capacity, input_limit)
     metadata_revision = (
@@ -708,6 +744,8 @@ def resolve_context_limits(
         route_context_window=route_context_window or None,
         route_input_limit=route_input_limit or None,
         route_limits_required=profile.provider_type == "openrouter",
+        binding_limit=binding_limit,
+        input_limit_binds=input_limit_binds,
     )
 
 
