@@ -158,6 +158,7 @@ from .context import (
     estimate_model_request,
     estimate_model_request_parts,
     estimate_tokens,
+    calibrated_request_estimate,
     estimate_tool_definitions,
     memory_text,
     resolve_context_limits,
@@ -879,6 +880,11 @@ class PreparedChat:
     # changes an earlier result only when it crosses the target again. A
     # turn resumed in a new process recomputes them.
     cleared_tool_calls: set[str] = field(default_factory=set)
+    # Routing responses whose reasoning the turn no longer replays: every
+    # response but the newest, as of the last time clearing results alone
+    # could not reach the watermark (``_budgeted_reasoning``). Sticky like
+    # the cleared results.
+    reasoning_dropped: set[str] = field(default_factory=set)
     # (step, cause) pairs a mid-turn conversation compaction was attempted
     # for; each is tried once (``_compact_mid_turn``).
     midturn_compactions: set[tuple[int, str]] = field(default_factory=set)
@@ -2168,6 +2174,65 @@ def _cleared_tool_result(
         receipt["found"] = found
     whole = output if isinstance(output, str) else json.dumps(output, sort_keys=True)
     return receipt if len(json.dumps(receipt)) < len(whole) else output
+
+
+def _reasoning_group(result: ModelToolResult) -> str:
+    """The routing response a replayed result belongs to."""
+
+    return result.response_group or f"call:{result.call_id}"
+
+
+def _earlier_groups(results: Sequence[ModelToolResult]) -> set[str]:
+    """Every routing response ``results`` replay but the newest."""
+
+    if not results:
+        return set()
+    newest = _reasoning_group(results[-1])
+    return {
+        group
+        for group in (_reasoning_group(result) for result in results)
+        if group != newest
+    }
+
+
+# The stamp of the route and model a reasoning state came from
+# (``providers._reasoning_state``). It is what per-call replay state, a
+# Gemini thought signature or the ``extra_content`` an OpenAI-compatible
+# route signs a call with, goes back under, so it outlives the reasoning.
+_REASONING_STAMP = ("provider_id", "model")
+
+
+def _budgeted_reasoning(
+    results: Sequence[ModelToolResult], dropped: Collection[str]
+) -> list[ModelToolResult]:
+    """The replayed results without the reasoning of ``dropped`` responses.
+
+    Reasoning goes back with the response that issued its calls, and every
+    route reads it (DeepSeek on OpenRouter bills each replayed thought). The
+    newest response keeps it always: Anthropic and Bedrock reject a tool-use
+    step without its thinking, and a model continues from its own last
+    thought. An earlier response keeps its stamp, so its calls' signatures
+    still go back: Gemini 3 validates the signature of every step in the
+    current turn. The ledger keeps every thought; adapters that need a
+    placeholder on an assistant message add their own.
+    """
+
+    if not results:
+        return []
+    newest = _reasoning_group(results[-1])
+    budgeted: list[ModelToolResult] = []
+    for result in results:
+        state = result.reasoning_state
+        if (
+            state is not None
+            and _reasoning_group(result) != newest
+            and _reasoning_group(result) in dropped
+        ):
+            stamp = {key: state[key] for key in _REASONING_STAMP if key in state}
+            if stamp != state:
+                result = result.model_copy(update={"reasoning_state": stamp or None})
+        budgeted.append(result)
+    return budgeted
 
 
 _CHECKPOINT_HEADING = (
@@ -7014,6 +7079,9 @@ class ChatService:
         )
         replayed = self._replayed_tool_history(prepared, turn, entries=replay_entries)
         prepared.cleared_tool_calls.update(result.call_id for result in replayed[:-1])
+        # The provider refused even the cleared request: earlier reasoning
+        # goes as well.
+        prepared.reasoning_dropped.update(_earlier_groups(replayed))
         # The request as the turn assembles it, around its current conversation.
         template = failed_request.model_copy(
             update={"messages": prepared.model_request.messages, "tool_results": []}
@@ -8129,10 +8197,8 @@ class ChatService:
                     "compacted: the current message, instructions and tool-history "
                     "checkpoint need about "
                     + str(
-                        calibrated_estimate(
-                            estimate_model_request(final_request),
-                            prepared.estimate_calibration,
-                            hard=True,
+                        calibrated_request_estimate(
+                            final_request, prepared.estimate_calibration, hard=True
                         )
                     )
                     + f" estimated input tokens of {limits.input_capacity}. Its tool "
@@ -8571,7 +8637,7 @@ class ChatService:
     ) -> bool:
         limits = cls._request_limits(profile, request)
         return (
-            calibrated_estimate(estimate_model_request(request), calibration, hard=True)
+            calibrated_request_estimate(request, calibration, hard=True)
             <= limits.input_capacity
         )
 
@@ -8583,9 +8649,7 @@ class ChatService:
         calibration: float | None = None,
     ) -> None:
         limits = cls._request_limits(profile, request)
-        estimated = calibrated_estimate(
-            estimate_model_request(request), calibration, hard=True
-        )
+        estimated = calibrated_request_estimate(request, calibration, hard=True)
         if estimated > limits.input_capacity:
             raise ChatConfigurationError(
                 "the complete provider request exceeds the selected model context "
@@ -9043,7 +9107,9 @@ class ChatService:
         Clearing a block below the target leaves room for the next several
         steps (Anthropic's context editing clears "at least" a batch for the
         same reason). A small window keeps at least half its target. Both are
-        raw estimated tokens; ``working`` is ``_working_allowance``.
+        in one unit: the provider's tokens for clearing (``working`` is then
+        ``ContextLimits.working_input_capacity``), raw estimated tokens for
+        mid-turn compaction's headroom (``working`` is ``_working_allowance``).
         """
 
         return max(target // 2, target - max(working // 10, 8_000))
@@ -9073,7 +9139,16 @@ class ChatService:
         """
 
         limits = self._request_limits(prepared.provider_profile, request)
-        target, capacity = self._estimate_limits(prepared, limits)
+        # Compared in the provider's tokens: the calibration scales the
+        # request's text, and its JSON never counts below its estimate
+        # (``calibrated_request_estimate``), so a request that clears nothing
+        # here is not one the capacity check then turns away.
+        target, capacity = limits.target_input_tokens, limits.input_capacity
+        calibration = prepared.estimate_calibration
+
+        def measured(candidate: ModelRequest, *, hard: bool = False) -> int:
+            return calibrated_request_estimate(candidate, calibration, hard=hard)
+
         sticky = prepared.cleared_tool_calls
 
         def replayed(
@@ -9092,21 +9167,25 @@ class ChatService:
                 }
             )
 
+        # Responses whose replayed reasoning this turn has let go.
+        thoughtless = prepared.reasoning_dropped
+
         def cleared(
             fitted: ModelRequest,
             receipts: list[ModelToolResult],
             call_ids: set[str],
         ) -> ModelRequest:
             whole = fitted.tool_results
-            if not call_ids.intersection(result.call_id for result in whole):
-                return fitted
+            results = (
+                [
+                    receipt if result.call_id in call_ids else result
+                    for result, receipt in zip(whole, receipts, strict=True)
+                ]
+                if call_ids.intersection(result.call_id for result in whole)
+                else list(whole)
+            )
             return fitted.model_copy(
-                update={
-                    "tool_results": [
-                        receipt if result.call_id in call_ids else result
-                        for result, receipt in zip(whole, receipts, strict=True)
-                    ]
-                }
+                update={"tool_results": _budgeted_reasoning(results, thoughtless)}
             )
 
         def receipts_for(entries: list[dict[str, Any]]) -> list[ModelToolResult]:
@@ -9120,15 +9199,17 @@ class ChatService:
             return fitted
         receipts = receipts_for(replay_entries)
         current = cleared(fitted, receipts, sticky)
-        if estimate_model_request(current) <= target:
+        if measured(current) <= target:
             return current
         # The request crossed its target, so its earlier bytes change now
         # whatever is done. It is taken down to the watermark in this one
         # change: the checkpoint advances, then the oldest results still
-        # whole are cleared, the fewest that reach the watermark.
-        watermark = self._clearing_watermark(
-            target, self._working_allowance(prepared, limits)
-        )
+        # whole are cleared, the fewest that reach the watermark, and only
+        # when that is not enough every earlier response lets its replayed
+        # reasoning go. A model's thoughts are often its only note of what a
+        # cleared result held: dropped first, a DeepSeek chain turn re-read
+        # its files (73 tool calls where 39 had done).
+        watermark = self._clearing_watermark(target, limits.working_input_capacity)
         advanced, advanced_entries = self._compacted_turn_history(
             turn, limits, advance=True
         )
@@ -9137,7 +9218,7 @@ class ChatService:
             fitted = replayed(checkpoint, replay_entries)
             receipts = receipts_for(replay_entries)
             current = cleared(fitted, receipts, sticky)
-            if not fitted.tool_results or estimate_model_request(current) <= watermark:
+            if not fitted.tool_results or measured(current) <= watermark:
                 return current
         whole = fitted.tool_results
         # A receipt is never larger than its result, so bisection finds the
@@ -9158,13 +9239,39 @@ class ChatService:
         low, high = 0, len(candidates)
         while low < high:
             middle = (low + high) // 2
-            if estimate_model_request(clearing(middle)) <= watermark:
+            if measured(clearing(middle)) <= watermark:
                 high = middle
             else:
                 low = middle + 1
         newly = set(candidates[:low])
+        if measured(clearing(low)) > watermark:
+            # Every earlier result is a receipt and the request is still
+            # above the watermark: earlier reasoning goes too.
+            earlier = _earlier_groups(whole) - thoughtless
+            if earlier:
+                thoughtless.update(earlier)
+                record_diagnostic(
+                    "debug",
+                    "chat",
+                    "chat.tool_history.reasoning_dropped",
+                    "Earlier routing responses were replayed without their "
+                    "reasoning so the request fits the model's context window.",
+                    outcome="success",
+                    stage="chat",
+                    # The responses let go now, those replayed, and the
+                    # watermark.
+                    metadata={
+                        "provider": prepared.provider_profile.id,
+                        "model_id": prepared.resolved_model,
+                        "count": len(earlier),
+                        "item_count": len(
+                            {_reasoning_group(result) for result in whole}
+                        ),
+                        "limit": watermark,
+                    },
+                )
         if (
-            estimate_model_request(clearing(low)) > capacity
+            measured(clearing(low), hard=True) > capacity
             and whole[-1].call_id not in sticky
         ):
             # Even the newest result no longer fits whole.
@@ -9222,7 +9329,10 @@ class ChatService:
             cleared = len(whole) - kept
             retry = failed_request.model_copy(
                 update={
-                    "tool_results": [*receipts[:cleared], *whole[cleared:]],
+                    "tool_results": _budgeted_reasoning(
+                        [*receipts[:cleared], *whole[cleared:]],
+                        prepared.reasoning_dropped,
+                    ),
                     "metadata": {
                         **failed_request.metadata,
                         "context_length_recovery": "cleared_tool_results",
