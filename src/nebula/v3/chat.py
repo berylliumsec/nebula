@@ -68,6 +68,7 @@ from .chat_turn_ledger import (
     ChatTurnLedger,
     TurnCheckpoint,
     checkpoint_byte_limit,
+    recent_window_tokens,
 )
 from .provider_scheduler import ProviderAdmission, ProviderScheduler
 from .browser_tools import BrowserToolPlatform, combine_tool_components
@@ -9024,14 +9025,16 @@ class ChatService:
     ) -> tuple[TurnCheckpoint | None, list[dict[str, Any]]]:
         """The turn's checkpoint and replay, sized for the request's model.
 
-        A checkpoint written now bounds its receipts by the model's input
-        capacity and carries the conversation's working notes.
+        The recent window is bounded by the model's working input capacity
+        too, and a checkpoint written now bounds its receipts by it and
+        carries the conversation's working notes.
         """
 
         return self.turn_ledger.compacted_history(
             turn,
             advance=advance,
             recent_groups=recent_groups,
+            recent_tokens=recent_window_tokens(limits.working_input_capacity),
             byte_limit=checkpoint_byte_limit(limits.working_input_capacity),
             working_notes=lambda: checkpoint_notes(
                 read_working_notes(self.store, turn.session_id)

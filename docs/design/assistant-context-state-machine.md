@@ -60,7 +60,7 @@ stateDiagram-v2
     [*] --> ToolStep: tool completes or fails
     ToolStep --> Ledger: append step event; retain output/artifact
     Ledger --> Replay: reconstruct latest step projection
-    Replay --> Recent: retain latest 8 response groups in full
+    Replay --> Recent: retain latest groups in full (at most 8; past 8 steps only within a quarter of working capacity)
     Recent --> Checkpoint: 16 eligible steps or 24k estimated tokens
     Recent --> Fit: checkpoint does not advance
     Checkpoint --> Fit: fold older nonwaiting steps into bounded receipts + notes

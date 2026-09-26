@@ -342,12 +342,19 @@ original message or artifact.
 step. Each follow-up model call receives the turn's replay, subject to two
 bounded transformations:
 
-* **Deterministic checkpoint.** The most recent eight provider response groups
-  stay whole. Older completed, failed, or denied steps can enter a checkpoint;
-  waiting approval/callback steps stay whole. The checkpoint advances after
-  16 eligible unfolded steps, about 24,000 estimated tokens (the same
-  `estimate_tokens` count every request estimate uses), or an explicit
-  advance when a request crosses its target. The same checkpoint and replay
+* **Deterministic checkpoint.** The most recent provider response groups stay
+  whole: at most eight. A window of eight groups was a window of eight steps
+  until models began batching calls, so it holds eight steps whatever their
+  size, and more (batched calls) only while its groups fit a quarter of the
+  model's working input capacity (at least 2,000 tokens, counted as the route
+  is sent them: each response's reasoning once), never fewer than the newest
+  group. Counted in groups alone, five-call batches kept about forty steps out
+  of every checkpoint, and they were cleared in place instead of folding into
+  receipts. Older completed, failed, or denied steps can enter a
+  checkpoint; waiting approval/callback steps stay whole. The checkpoint
+  advances after 16 eligible unfolded steps, about 24,000 estimated tokens
+  (the same `estimate_tokens` count every request estimate uses), or an
+  explicit advance when a request crosses its target. The same checkpoint and replay
   rows remain stable between advances for provider prefix caching. The
   checkpoint (schema `nebula.chat-turn-checkpoint/v3`) contains a digest,
   covered step ranges/count, tool names, and one receipt per step:
