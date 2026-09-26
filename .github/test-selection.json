@@ -1,10 +1,10 @@
 {
-  "change_digest": "a9c151f7f0ca4b0953c2c74246cc7700c8ee91043331cea4e433e2ddc6e668a2",
-  "reviewed_by": "Claude focused review for ctx-help-relevance",
-  "reason": "Follow-up to Stream K: operator-help retrieval gains a relevance floor. search_operator_help keeps the best match and only those that hold up against it (an article whose keyword phrase the question contains as whole words needs a third of the best score; a match on shared vocabulary alone needs three quarters), and chat's _retrieve_operator_help asks for at most three articles (was eight). Scoring and ranking are unchanged. Engagement-knowledge retrieval is deliberately unchanged (measured: no embedding floor separates relevant from irrelevant chunks). Selected: operator-help ranking tests (new cases), test_chat.py (help citations, knowledge, synthesis wiring), the Stream K reference-material tests (tightened citation list), the tool loop (final-synthesis help path), and knowledge retrieval/timing tests that run prepare with retrieval. Counts from pytest --collect-only.",
-  "exclusions": "No frontend, native or Playwright tests: no UI or visible change; citations render as before, only fewer weakly related help articles are sent and cited. test_packaging.py excluded: the bundled operator_help.md corpus is unchanged. No full suite.",
+  "change_digest": "41c71dff4de71a3520e2ed10d48bf46a6ae616aeb5f06103ade62ae1d415ace9",
+  "reviewed_by": "Claude focused review for ctx-evals",
+  "reason": "Adds scripts/context_retention_eval.py, a standalone retention eval that drives a scratch Core only over its HTTP API (plus optional read-only SQLite probes), its unit tests, and a 'Measuring retention' section in docs/CHAT_CONTEXT_LIFECYCLE.md. No Core, UI, native or provider code changes. The selected file covers the script's pure parts: deterministic scenario generation, exact-match scoring and answer-line parsing, tool re-read counting, cache-aware pricing, metrics, aggregation and the Markdown report.",
+  "exclusions": "No src/, ui/ or native code changes, so Core Python suites, frontend, native and Playwright tests are excluded (the script imports nothing from Core). The script's HTTP driving is exercised against real scratch Cores served from origin/main (baseline run recorded in the PR), not in CI, because it needs a provider key and a real model. No full-suite, browser, LAN or device gate is claimed.",
   "expected_tests": {
-    "python": 154,
+    "python": 34,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -15,13 +15,7 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_operator_help.py",
-    "tests/v3/test_chat.py",
-    "tests/v3/test_chat_reference_material.py",
-    "tests/v3/test_chat_tool_loop.py",
-    "tests/v3/test_knowledge_index.py",
-    "tests/v3/test_turn_preflight_latency.py",
-    "tests/v3/test_inference_timeouts_probe_budget.py"
+    "tests/test_context_retention_eval.py"
   ],
   "frontend": [],
   "native": [],

@@ -406,3 +406,56 @@ all omitted findings were lost from every possible retrieval path.
   and `tests/v3/test_tool_history_memory.py`: focused behavioral coverage.
   These tests prove particular contracts, not semantic completeness of a
   summary.
+
+## Measuring retention
+
+`scripts/context_retention_eval.py` measures what a model still knows after
+context management has run, which the contract tests above cannot show. It
+plants exact values (ticket codes, paths, ports, names, one later corrected)
+in a real conversation, forces compaction and checkpoint folding with a small
+configured window, asks for the values back and scores the replies by exact
+match; no model judges another.
+
+| Scenario | Exercises | Scored |
+| --- | --- | --- |
+| `s1` | Sixteen turns of status notes with twelve facts in filler, 12K window: several conversation compactions | Recall of all twelve in one tool-free probe turn (a superseded port answered alone counts as `stale`), then again with tools on (`recall_retry`, for example through `conversation.search`) |
+| `s2` | One tool turn following a 32-file `workspace.read` chain, 16K window: result clearing and checkpoint folding | Recall of every file's key; repeated reads and `tool_output.*` re-fetches |
+| `s3` | Four files read in turn 1, asked about in later turns | Recall with tools off (what crosses the turn boundary) and with tools on, plus re-fetches |
+
+Each report also records compactions (from the context endpoint, or every
+`context_snapshots` row when the store is readable), failed compactions,
+snapshot quality with dropped items and reused segments, compaction latency
+(the wait before a compacting turn started), sends Core refused before a turn
+started (the harness resends up to twice, as an operator would), in-turn
+checkpoint rows,
+re-reads of planted files and `tool_output.*` re-fetches (separately, those
+naming an earlier turn's output), `conversation.search` and `notes.write` calls
+and the working notes' size, provider-reported input with cache reads and
+writes, the ratio of reported input to Core's estimate and Core's
+`estimate_calibration`, cost from Core's model catalog prices, and wall time.
+Results are mean (min) across `--repeat` runs with a fixed seed.
+
+Run it only against a scratch Core. It creates projects and provider profiles
+and switches its tool-using projects to host execution with approvals off,
+so it refuses a Core holding projects it did not create unless
+`--allow-existing-data` is passed:
+
+```sh
+.venv/bin/python scripts/context_retention_eval.py \
+  --serve-from <checkout> --data-dir <fresh dir> --port <free port> \
+  --repeat 2 --label <commit> --out <report prefix>
+```
+
+`--base-url`/`--token` evaluate a Core that is already running. The default
+model is `deepseek/deepseek-v4.1-flash` through an OpenRouter profile with
+`secret_ref: env:OPEN_ROUTER_API_KEY`; when that variable is absent, the served
+Core starts through `bash -ic` so the shell profile supplies it. The script
+prints an upper-bound cost estimate first and stops at `--max-cost-usd`
+(default $1). It writes `<prefix>.json` and a Markdown table `<prefix>.md`.
+
+Recall on one model and seed is evidence about that configuration, not a
+guarantee: compare builds with the same model, seed, windows, repeat count
+and harness (reports record its sha256), and read the per-probe table and
+failed turns before trusting a mean. `s2` tends to be all or nothing per run
+(the model either keeps its findings or loses them to clearing), so compare it
+over at least five repeats (`--scenarios s2 --repeat 5`).
