@@ -1,10 +1,10 @@
 {
-  "change_digest": "5550f0021e68aea9c77e890fabe6b72ddf3d958cf24e5ccd86ddf339bca9950b",
-  "reviewed_by": "Claude focused review for ctx-search-citations",
-  "reason": "Follow-up to #622: a provider tool turn's answer cites the excerpts knowledge.search delivered to the model (ChatService._turn_citations in _completion, read from the durable step ledger via knowledge_search.searched_citations; deduplicated against attached knowledge; weak matches only when the answer refers to them; conversation.search never cited). Both searches now keep only what fits the 8 KiB model-delivery bound (tool_results.fit_model_result), since an oversized result reached the model as a size notice. Selected: the knowledge.search tests (citations, restart, delivery bound, fit helper), conversation.search tests (delivery bound), reranker tests (shared search path), the chat tool loop and routing-prose/synthesis tests (every completion goes through _completion), test_chat.py (plain-turn completions keep their citations), reference material and knowledge index tests. Counts from pytest --collect-only.",
-  "exclusions": "No frontend, native or Playwright tests: no UI change. The existing citation chips render tool-turn citations; checked on the production bundle served by a scratch Core in desktop Chromium 1440, mobile Chromium 390 and mobile WebKit 390 (evidence in the PR body). The local-only reranker calibration test stays skipped in CI. Harness gateway results are not turned into citations (harness turns own their answer assembly). No full suite.",
+  "change_digest": "169629f8cf5eae73c4f87bc87250323b44ed3f83cec2b031d1367b9371f6741e",
+  "reviewed_by": "Claude focused review for ctx-search-budget",
+  "reason": "conversation.search gets a per-turn allowance (8 searches, or 3 empty in a row), counted from the turn ledger (conversation_search.turn_search_budget_spent over _turn_history, the same ledger count the catalog-discovery limit uses). Past it the routing loop answers the call itself through _refused_tool_step, which gains an ordinary-result mode: status complete, budget_class refused (no budget spent), trusted_result so the replay carries Core's text, and the existing routing-deviation limit then stops a model that keeps searching. Selected: the new test file; conversation.search tests; every file driving the sequential routing loop, refused steps and replay (tool loop, tool catalog incl. the discovery limit, mid-turn compaction, in-turn pruning, prompt cache, synthesis declarations, turn outcome history), restart recovery, tool-history memory (tool activity from stored results) and test_chat.py. Counts from pytest --collect-only.",
+  "exclusions": "No frontend, native or Playwright tests: no UI change; the answered search renders in the existing tool card as a completed call with its detail. Harness and mission paths do not offer conversation.search. Real-Core evidence (s1 retention eval, 3 repeats per build, base 517a4a5 vs branch, port 18719) is in the PR body. No full suite.",
   "expected_tests": {
-    "python": 188,
+    "python": 249,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -15,15 +15,18 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_knowledge_search.py",
+    "tests/v3/test_conversation_search_budget.py",
     "tests/v3/test_conversation_search.py",
-    "tests/v3/test_knowledge_rerank.py",
     "tests/v3/test_chat_tool_loop.py",
+    "tests/v3/test_tool_catalog.py",
+    "tests/v3/test_midturn_compaction.py",
+    "tests/v3/test_in_turn_context_pruning.py",
+    "tests/v3/test_turn_prompt_cache.py",
+    "tests/v3/test_restart_recovery_lifecycle.py",
+    "tests/v3/test_tool_history_memory.py",
     "tests/v3/test_chat.py",
-    "tests/v3/test_chat_reference_material.py",
-    "tests/v3/test_knowledge_index.py",
-    "tests/v3/test_routing_prose_answer.py",
-    "tests/v3/test_synthesis_tool_declarations.py"
+    "tests/v3/test_synthesis_tool_declarations.py",
+    "tests/v3/test_turn_outcome_history.py"
   ],
   "frontend": [],
   "native": [],
