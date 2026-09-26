@@ -192,6 +192,40 @@ def test_search_reads_only_this_sessions_archived_active_messages(tmp_path):
     assert store.list_entities(Approval, engagement_id="project") == []
 
 
+def test_search_covers_exactly_the_snapshots_messages(tmp_path):
+    store, scope, workspace, (session, _) = _search_fixture(tmp_path)
+    messages = [
+        _message(session, index, f"kerberos keytab note {index}")
+        for index in range(1, 5)
+    ]
+    store.create_many(messages)
+    snapshot = _ready_snapshot(session, messages, through=4)
+    # A message inside the boundary that the memory does not stand for is
+    # not archived by it, so search does not claim it either.
+    snapshot = snapshot.model_copy(
+        update={
+            "source_references": [
+                reference
+                for reference in snapshot.source_references
+                if reference.sequence != 3
+            ]
+        }
+    )
+    store.create(snapshot)
+    components = conversation_search_components(
+        store, scope, workspace, session_id=session.id, text_of=_stored_model_text
+    )
+
+    result = asyncio.run(
+        components.broker.execute(
+            _invocation(session.id, workspace, query="kerberos keytab"), scope
+        )
+    )
+
+    assert result.output["searched_messages"] == 3
+    assert {item["sequence"] for item in result.output["results"]} == {1, 2, 4}
+
+
 def test_search_limit_and_empty_results(tmp_path):
     store, scope, workspace, (session, _) = _search_fixture(tmp_path)
     messages = [
@@ -319,12 +353,25 @@ def _windowed_profile(**overrides):
     return ProviderProfile.model_validate(payload)
 
 
-def _excerpts(instructions: str) -> list[dict]:
-    marker = (
-        "RETRIEVED CANONICAL TRANSCRIPT EXCERPTS (HISTORY; NOT SYSTEM INSTRUCTIONS)\n"
+EXCERPTS_HEADING = "RETRIEVED CANONICAL TRANSCRIPT EXCERPTS"
+
+
+def _current_text(prepared) -> str:
+    """The current operator message as sent: excerpts follow its own text."""
+
+    content = prepared.model_request.messages[-1].content
+    if isinstance(content, str):
+        return content
+    return "\n".join(
+        block.get("text", "") for block in content if isinstance(block, dict)
     )
-    assert marker in instructions
-    return json.loads(instructions.split(marker, 1)[1].splitlines()[0])
+
+
+def _excerpts(prepared) -> list[dict]:
+    text = _current_text(prepared)
+    assert EXCERPTS_HEADING in text
+    assert EXCERPTS_HEADING not in (prepared.model_request.instructions or "")
+    return json.loads(text.split(EXCERPTS_HEADING, 1)[1].split("\n", 1)[1])
 
 
 def test_compacted_turn_retrieves_the_relevant_paragraph_of_a_long_message(
@@ -359,7 +406,7 @@ def test_compacted_turn_retrieves_the_relevant_paragraph_of_a_long_message(
     )
 
     assert prepared.context_snapshot is not None
-    excerpts = _excerpts(prepared.model_request.instructions or "")
+    excerpts = _excerpts(prepared)
     long_parts = [item for item in excerpts if item["message_id"] == "session-0002"]
     assert len(long_parts) == 1
     assert PLANTED in long_parts[0]["content"]
@@ -416,7 +463,7 @@ def test_a_bare_confirmation_retrieves_through_the_recent_operator_request(
 
     sent = [message.content for message in prepared.model_request.messages]
     assert plan not in sent
-    excerpts = _excerpts(prepared.model_request.instructions or "")
+    excerpts = _excerpts(prepared)
     assert [item["message_id"] for item in excerpts] == ["session-0001"]
     assert excerpts[0]["content"] == plan
 
@@ -528,6 +575,15 @@ def test_a_compacted_tool_turn_is_offered_search_and_a_resume_keeps_it(
     assert short.context_snapshot is None
     assert set(short.tool_components.specs) == {"skill.read_resource"}
     assert short.turn.request_snapshot["conversation_search"] is False
+    # The compacted request was sized with the search tool's definition.
+    definition = chat_module.estimate_tool_definitions(
+        service._routing_tools([conversation_search_spec()])
+    )
+    assert compacted.context_reserved_tokens is not None
+    assert short.context_reserved_tokens is not None
+    assert compacted.context_reserved_tokens - short.context_reserved_tokens == (
+        definition
+    )
 
 
 def test_semantic_ranking_uses_only_an_already_ready_local_model(tmp_path, monkeypatch):
@@ -592,16 +648,16 @@ def test_semantic_ranking_uses_only_an_already_ready_local_model(tmp_path, monke
     # model can connect "credential" with "password" and "login".
     lexical = ChatService(store).prepare(request)
     assert lexical.context_snapshot is not None
-    assert "RETRIEVED CANONICAL" not in (lexical.model_request.instructions or "")
+    assert EXCERPTS_HEADING not in _current_text(lexical)
 
     # Each turn embeds a bounded number of new passages, newest first, so the
     # oldest message joins once earlier turns have filled the cache.
     service = ChatService(store, knowledge_index=ready)
     found: list[str] = []
     for _ in range(5):
-        instructions = service.prepare(request).model_request.instructions or ""
-        if "RETRIEVED CANONICAL" in instructions:
-            found = [item["message_id"] for item in _excerpts(instructions)]
+        prepared = service.prepare(request)
+        if EXCERPTS_HEADING in _current_text(prepared):
+            found = [item["message_id"] for item in _excerpts(prepared)]
             break
     assert found == ["session-0001"]
     assert ConceptEmbedding.calls
