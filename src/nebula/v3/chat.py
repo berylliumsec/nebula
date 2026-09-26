@@ -5483,7 +5483,11 @@ class ChatService:
                 // 5,
             )
             operator_help_chunks = self._retrieve_operator_help(
-                [incoming[-1].content], token_budget=knowledge_budget
+                [incoming[-1].content],
+                token_budget=knowledge_budget,
+                # Whether the turn is about operating Nebula is the operator's
+                # words alone, not the context they selected beside them.
+                about=[durable_incoming[-1].content],
             )
             operator_help_tokens = sum(
                 estimate_tokens(chunk.text, message_count=1)
@@ -8336,7 +8340,9 @@ class ChatService:
             ).target_input_tokens
             // 5,
         )
-        return self._retrieve_operator_help(queries, token_budget=token_budget)
+        return self._retrieve_operator_help(
+            queries, token_budget=token_budget, observed_failure=True
+        )
 
     def _replayed_tool_history(
         self,
@@ -13228,12 +13234,21 @@ class ChatService:
 
     @staticmethod
     def _retrieve_operator_help(
-        queries: list[str], *, token_budget: int
+        queries: list[str],
+        *,
+        token_budget: int,
+        observed_failure: bool = False,
+        about: list[str] | None = None,
     ) -> list[_RetrievedChunk]:
         selected: list[_RetrievedChunk] = []
         tokens = 0
         for ordinal, match in enumerate(
-            search_operator_help(queries, limit=_MAX_OPERATOR_HELP_ARTICLES)
+            search_operator_help(
+                queries,
+                limit=_MAX_OPERATOR_HELP_ARTICLES,
+                observed_failure=observed_failure,
+                about=about,
+            )
         ):
             article = match.article
             text = article.reference_text

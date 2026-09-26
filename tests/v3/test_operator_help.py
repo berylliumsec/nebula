@@ -5,6 +5,11 @@ from nebula.v3.operator_help import (
     operator_help_articles,
     search_operator_help,
 )
+from nebula.v3.domain import RiskClass
+from nebula.v3.tool_failures import tool_failure
+from nebula.v3.tool_results import serialize_model_result
+from nebula.v3.tools import ToolSpec
+from scripts.context_retention_eval import DEFAULT_SEED, SCENARIOS, build_scenario
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -135,3 +140,193 @@ def test_chat_sends_at_most_three_runbooks():
     assert [chunk.citation.source_id for chunk in chunks] == [
         f"nebula-help:{article}" for article in _articles(question)[:3]
     ]
+
+
+def test_ordinary_project_conversation_gets_no_operator_help():
+    # The retention eval's turns are ordinary project conversation: status
+    # notes that mention a storage migration and a vendor comparison, and
+    # questions about planted facts. Their length made some runbook share
+    # dozens of words with them, and the best of those was sent with two of
+    # them (mcp-servers and runner-setup, about 5.6K characters).
+    for name in SCENARIOS:
+        for turn in build_scenario(name, DEFAULT_SEED).turns:
+            assert _articles(turn.content) == [], (name, turn.role)
+    assert (
+        _articles(
+            "Here is the storage migration plan for the audit log store: move to "
+            "PostgreSQL next sprint, and keep the old export until the model "
+            "review is done."
+        )
+        == []
+    )
+    assert _articles("What port is relevant?") == []
+
+
+def test_a_chatty_runbook_question_still_gets_its_runbook():
+    assert _articles(
+        "Hi! I've been trying all morning and I keep seeing that Nebula says no "
+        "rootless container runner is available, even though I installed Docker "
+        "yesterday following the guide. What should I check first?"
+    ) == ["runner-setup"]
+    assert _articles(
+        "My terminal keeps disconnecting every ten minutes or so while I'm "
+        "running long scans, is that expected?"
+    ) == ["human-terminal"]
+    assert _articles(
+        "Can you help? The assistant says the model is unavailable for the "
+        "provider I configured this morning."
+    ) == ["provider-model"]
+    assert _articles(
+        "Why does my command keep waiting for approval? It is a simple port "
+        "scan on the target in scope."
+    ) == ["scope-approval"]
+
+
+def test_a_failed_tool_receipt_is_searched_for_its_recovery_procedure():
+    # Final synthesis searches Core's own receipts of the turn's failed steps.
+    # They are not conversation and name no topic of their own; the failure is
+    # the reason to look, and Settings > Diagnostics is where an error
+    # reference is inspected.
+    spec = ToolSpec(
+        name="safe_read",
+        description="Return one bounded value.",
+        input_schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+            "additionalProperties": False,
+        },
+        output_schema={"type": "object", "additionalProperties": True},
+        risk_class=RiskClass.LOCAL_READ,
+    )
+    receipt = serialize_model_result(
+        tool_failure(
+            spec,
+            {"value": "a"},
+            RuntimeError("the probe failed"),
+            phase="after_execution",
+            call_id="call-1",
+        )
+    )
+
+    assert search_operator_help([receipt]) == ()
+    observed = search_operator_help([receipt], observed_failure=True)
+    assert observed[0].article.article_id == "diagnostics"
+
+
+def test_chat_attaches_no_help_to_a_status_note_but_keeps_it_for_a_failed_step(
+    tmp_path,
+):
+    import asyncio
+
+    from nebula.v3.chat import ChatCompletionRequest, ChatService
+    from nebula.v3.domain import Engagement
+    from nebula.v3.providers import ToolCall
+    from nebula.v3.storage import NebulaStore
+    from tests.v3.test_chat import FakeProvider, _profile
+    from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
+
+    store = NebulaStore(tmp_path / "status-note.db")
+    engagement = store.create(Engagement(id="eng-notes", name="Status notes"))
+    profile = store.create(_profile(local=True))
+    provider = FakeProvider(profile.id, local=True)
+    note = build_scenario("s1", DEFAULT_SEED).turns[0].content
+    prepared = ChatService(store, provider_factory=lambda _: provider).prepare(
+        ChatCompletionRequest(
+            engagement_id=engagement.id,
+            provider_id=profile.id,
+            include_knowledge=False,
+            messages=[{"role": "user", "content": note}],
+        )
+    )
+    assert prepared.citations == []
+    assert prepared.reference_material == ""
+    assert prepared.model_request.messages[-1].content == note
+
+    class FailingBroker(RecordingBroker):
+        async def execute(self, invocation, scope, *, approval=None):
+            del scope, approval
+            self.calls.append(invocation)
+            raise RuntimeError("the probe failed")
+
+    _, service, turn, scripted = _prepared(
+        tmp_path / "failed-step",
+        [
+            _response(
+                calls=[
+                    ToolCall(id="call-1", name="safe_read", arguments={"value": "a"})
+                ]
+            ),
+            _response(),
+            _response(text="The read failed."),
+        ],
+        FailingBroker(),
+    )
+    completion = asyncio.run(service.complete(turn))
+
+    assert [citation.source_id for citation in completion.citations] == [
+        "nebula-help:diagnostics"
+    ]
+    final = [request for request in scripted.requests if not request.metadata]
+    assert "nebula-help:diagnostics" in (final[-1].instructions or "")
+
+
+def _prepare_with_selection(tmp_path, question: str, selected: str):
+    import hashlib
+
+    from nebula.v3.chat import ChatCompletionRequest, ChatService
+    from nebula.v3.domain import Engagement
+    from nebula.v3.storage import NebulaStore
+    from tests.v3.test_chat import FakeProvider, _profile
+
+    store = NebulaStore(tmp_path / "selection.db")
+    engagement = store.create(Engagement(id="eng-selection", name="Selection"))
+    profile = store.create(_profile(local=True))
+    provider = FakeProvider(profile.id, local=True)
+    return ChatService(store, provider_factory=lambda _: provider).prepare(
+        ChatCompletionRequest(
+            engagement_id=engagement.id,
+            provider_id=profile.id,
+            include_knowledge=False,
+            messages=[{"role": "user", "content": question}],
+            context_attachments=[
+                {
+                    "source_kind": "document",
+                    "source_label": "Selected text",
+                    "text": selected,
+                    "sha256": hashlib.sha256(selected.encode("utf-8")).hexdigest(),
+                }
+            ],
+        )
+    )
+
+
+def test_selected_context_neither_hides_nor_invents_a_runbook_question(tmp_path):
+    # Whether a turn is about operating Nebula is decided by the operator's
+    # own words. A large selection used to dilute a runbook question below
+    # the topic share, and a selection that mentions a runner must not turn
+    # an ordinary note into one.
+    note = build_scenario("s1", DEFAULT_SEED).turns[0].content
+    selection = (note * 2)[:9_000]
+    question = (
+        "Nebula says no rootless container runner is available. "
+        "What should I check first?"
+    )
+
+    prepared = _prepare_with_selection(tmp_path / "question", question, selection)
+
+    assert [item.source_id for item in prepared.citations] == [
+        "nebula-help:runner-setup"
+    ]
+    current = prepared.model_request.messages[-1].content
+    assert isinstance(current, str) and "BEGIN SELECTED CONTEXT" in current
+
+    ordinary = _prepare_with_selection(
+        tmp_path / "note",
+        "Keep this for later.",
+        "Runner unavailable: the rootless docker runner was not detected on the "
+        "build host, so the podman machine took over.",
+    )
+
+    assert ordinary.citations == []
+    assert ordinary.reference_material == ""
