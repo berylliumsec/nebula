@@ -174,7 +174,9 @@ from .context import (
 from .knowledge_rerank import (
     MAX_RERANK_CANDIDATES,
     RerankCandidate,
+    candidate_scores,
     has_content,
+    relevance_label,
     relevant_candidates,
 )
 from .context_retrieval import (
@@ -734,6 +736,9 @@ class HarnessKnowledgeMatch:
     text: str
     citation: ChatCitation
     local_only: bool
+    # "strong", "possible" or "weak" when the local relevance model ranked
+    # an explicit search; None without it.
+    relevance: str | None = None
 
 
 @dataclass(frozen=True)
@@ -753,6 +758,7 @@ class _RetrievedChunk:
     # Embedding similarity, when vector search found the chunk: what the
     # relevance gate reads besides the text (``knowledge_rerank``).
     similarity: float | None = None
+    relevance: str | None = None
 
 
 def _reference_instructions(
@@ -4988,6 +4994,8 @@ class ChatService:
             query,
             allow_local_only=True,
             token_budget=token_budget,
+            # Context nobody asked for carries only what answers the query.
+            ranked=False,
         )
         chunks = [
             _RetrievedChunk(
@@ -5012,8 +5020,16 @@ class ChatService:
         *,
         allow_local_only: bool,
         token_budget: int = 4_096,
+        ranked: bool = True,
     ) -> HarnessKnowledgeSearchResult:
-        """Return a bounded engagement-scoped search for a managed harness."""
+        """Return a bounded engagement-scoped search.
+
+        An explicit search (``ranked``, the harness gateway's and provider
+        turns' ``knowledge.search``) returns the best matches ordered by the
+        local relevance model, each labelled with how well it matched, and
+        leaves the judgement to the agent that asked: a search must not hide
+        the answer the way an unasked attachment may leave out a weak match.
+        """
 
         clean_query = query.strip()
         if not clean_query or not self._has_ready_knowledge(engagement_id):
@@ -5024,6 +5040,7 @@ class ChatService:
             redact=not allow_local_only,
             token_budget=max(1, min(token_budget, 8_192)),
             allow_local_only=allow_local_only,
+            gate=not ranked,
         )
         return HarnessKnowledgeSearchResult(
             [
@@ -5031,6 +5048,7 @@ class ChatService:
                     text=chunk.text,
                     citation=chunk.citation,
                     local_only=chunk.local_only,
+                    relevance=chunk.relevance,
                 )
                 for chunk in chunks
             ]
@@ -14148,6 +14166,7 @@ class ChatService:
         redact: bool,
         token_budget: int,
         allow_local_only: bool = True,
+        gate: bool = True,
     ) -> list[_RetrievedChunk]:
         if not queries or not has_content(queries[0]):
             return []
@@ -14204,7 +14223,7 @@ class ChatService:
         candidates = [
             item for item in candidates if not (all_terms and item.score <= 0)
         ]
-        candidates = self._relevant_knowledge(queries, candidates)
+        candidates = self._relevant_knowledge(queries, candidates, gate=gate)
         selected: list[_RetrievedChunk] = []
         tokens = 0
         for candidate in candidates:
@@ -14216,14 +14235,20 @@ class ChatService:
         return selected
 
     def _relevant_knowledge(
-        self, queries: list[str], candidates: list[_RetrievedChunk]
+        self,
+        queries: list[str],
+        candidates: list[_RetrievedChunk],
+        *,
+        gate: bool = True,
     ) -> list[_RetrievedChunk]:
         """The candidates that answer the request, best first.
 
         With the local relevance model ready, the best few candidates of the
-        existing ranking are scored against the operator's question and only
-        those that answer it remain (``knowledge_rerank``). Until then the
-        ranking stands as it is, and the model is prepared in the background.
+        existing ranking are scored against the operator's question and its
+        planned searches (``knowledge_rerank``). With ``gate``, only those that
+        answer it remain; without, all are kept in score order and labelled.
+        Until the model is ready the ranking stands as it is, and the model is
+        prepared in the background.
         """
 
         reranker = getattr(self.knowledge_index, "reranker", None)
@@ -14233,16 +14258,19 @@ class ChatService:
             reranker.ensure_started()
             return candidates
         pool = candidates[:MAX_RERANK_CANDIDATES]
+        reads = [
+            RerankCandidate(text=item.text, similarity=item.similarity) for item in pool
+        ]
         try:
-            kept = relevant_candidates(
-                queries[0],
-                [
-                    RerankCandidate(text=item.text, similarity=item.similarity)
-                    for item in pool
-                ],
-                reranker.score,
-                planned=queries[1:],
-            )
+            if gate:
+                kept = relevant_candidates(
+                    queries[0], reads, reranker.score, planned=queries[1:]
+                )
+            else:
+                scores = candidate_scores(
+                    queries[0], reads, reranker.score, planned=queries[1:]
+                )
+                kept = sorted(enumerate(scores), key=lambda item: (-item[1], item[0]))
         except Exception as exc:
             record_diagnostic(
                 "warning",
@@ -14257,7 +14285,12 @@ class ChatService:
                 exception=exc,
             )
             return candidates
-        return [dataclass_replace(pool[index], score=score) for index, score in kept]
+        return [
+            dataclass_replace(
+                pool[index], score=score, relevance=relevance_label(score)
+            )
+            for index, score in kept
+        ]
 
     def _retrieve_vector_candidates(
         self,

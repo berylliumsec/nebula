@@ -386,25 +386,40 @@ def test_unrelated_questions_attach_no_knowledge_and_paraphrases_still_do(tmp_pa
     # Ingesting knowledge is when the relevance model is fetched.
     assert reranker.started == 2
 
-    unrelated = chat.harness_knowledge_search(
-        "eng-a", RUNNER_QUESTION, allow_local_only=True
-    )
-    paraphrase = chat.harness_knowledge_search(
-        "eng-a", "How does a user log in?", allow_local_only=True
-    )
-    context = chat.harness_knowledge_context("eng-a", "How does a user log in?")
+    unrelated = chat.harness_knowledge_context("eng-a", RUNNER_QUESTION)
+    paraphrase = chat.harness_knowledge_context("eng-a", "How does a user log in?")
 
-    assert unrelated.matches == []
-    assert [match.citation.source_id for match in paraphrase.matches] == [
+    assert unrelated.citations == []
+    assert [citation.source_id for citation in paraphrase.citations] == [
         ids["access.txt"]
     ]
-    assert [citation.source_id for citation in context.citations] == [ids["access.txt"]]
     status = client.get(
         "/api/v1/knowledge/index-status",
         headers={"Authorization": "Bearer test-token"},
     ).json()
     assert status["reranker"]["state"] == "ready"
     assert status["reranker"]["model"] == "mixedbread-ai/mxbai-rerank-xsmall-v1"
+
+
+def test_an_explicit_search_is_ranked_and_labelled_rather_than_gated(tmp_path):
+    store, index, _, ids = _knowledge_project(tmp_path, FakeReranker(keyword_scorer))
+    chat = ChatService(store, knowledge_index=index)
+
+    paraphrase = chat.harness_knowledge_search(
+        "eng-a", "How does a user log in?", allow_local_only=True
+    )
+    unrelated = chat.harness_knowledge_search(
+        "eng-a", RUNNER_QUESTION, allow_local_only=True
+    )
+
+    # The answer first and strong; the rest follow, labelled, for the agent
+    # that asked to weigh.
+    assert [match.citation.source_id for match in paraphrase.matches] == [
+        ids["access.txt"],
+        ids["harbor.md"],
+    ]
+    assert [match.relevance for match in paraphrase.matches] == ["strong", "weak"]
+    assert {match.relevance for match in unrelated.matches} == {"weak"}
 
 
 def test_until_the_model_is_ready_retrieval_is_unchanged_and_it_is_prepared(

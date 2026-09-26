@@ -305,9 +305,11 @@ the attached reference material does not answer, the model can search the Projec
 documents and Library itself. It is offered whenever knowledge is enabled for the
 turn and may reach its model (a local model, or a cloud model with sensitive-data
 permission and the knowledge confirmation), not per message, so the tool list stays
-stable for prompt caching. A cloud model's searches exclude local-only sources and
-redact secrets, results carry source and chunk ids for citation, and the search is a
-read that needs no approval.
+stable for prompt caching. A search the model asked for is ranked by the relevance
+model and each excerpt is labelled strong, possible or weak rather than filtered, so
+the model judges a loose match itself; the harness gateway's search does the same. A
+cloud model's searches exclude local-only sources and redact secrets, results carry
+source and chunk ids for citation, and the search is a read that needs no approval.
 
 ## Context compaction
 

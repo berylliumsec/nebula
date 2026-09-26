@@ -14346,6 +14346,11 @@ class HarnessRuntimeService:
                     "artifact_id": match.citation.artifact_id,
                     "chunk_id": match.citation.chunk_id,
                     "page": match.citation.page,
+                    **(
+                        {"relevance": match.relevance}
+                        if getattr(match, "relevance", None)
+                        else {}
+                    ),
                     "text": match.text,
                 }
                 for match in result.matches[:8]

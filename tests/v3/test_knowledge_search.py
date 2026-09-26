@@ -145,13 +145,14 @@ def test_a_turn_whose_attachment_missed_recovers_the_document_by_searching(
     assert not any(c.source_id in ids.values() for c in prepared.citations)
     assert prepared.turn.request_snapshot["knowledge_search"] is True
     output = _search(store, prepared, "maintenance window")
-    assert output["result_count"] == 1
     match = output["matches"][0]
     assert match["source_id"] == ids["harbor.md"]
+    assert match["relevance"] == "strong"
     assert "Tuesday from 02:00 to 04:00 UTC" in match["text"]
     assert match["chunk_id"] and match["citation"]
-    # The same relevance gate applies to searches: nothing answers this.
-    assert _search(store, prepared, RUNNER_QUESTION)["result_count"] == 0
+    # A search is ranked, not gated: nothing answers this, and it says so.
+    unrelated = _search(store, prepared, RUNNER_QUESTION)
+    assert {item["relevance"] for item in unrelated["matches"]} == {"weak"}
     calls = store.list_entities(ToolCall, engagement_id="eng-a")
     assert {call.status for call in calls} == {ToolCallStatus.COMPLETE}
     assert store.list_entities(Approval, engagement_id="eng-a") == []
@@ -197,5 +198,6 @@ def test_a_cloud_turn_needs_knowledge_consent_and_never_reads_local_only_sources
     assert KNOWLEDGE_SEARCH_TOOL_NAME not in unconfirmed.tool_components.specs
     assert KNOWLEDGE_SEARCH_TOOL_NAME in confirmed.tool_components.specs
     # The runbook is local-only: a cloud model's search never returns it.
-    assert _search(store, confirmed, "maintenance window")["result_count"] == 0
+    found = _search(store, confirmed, "maintenance window")["matches"]
+    assert found and ids["harbor.md"] not in {item["source_id"] for item in found}
     assert store.get(ChatSession, confirmed.turn.session_id)

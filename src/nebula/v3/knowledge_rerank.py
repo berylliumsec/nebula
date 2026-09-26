@@ -156,26 +156,19 @@ def has_content(query: str) -> bool:
     return bool(terms(query))
 
 
-def relevant_candidates(
+def candidate_scores(
     query: str,
     candidates: Sequence[RerankCandidate],
     scorer: Scorer,
     *,
     planned: Sequence[str] = (),
-) -> list[tuple[int, float]]:
-    """``(index, score)`` of the candidates to attach, best first.
+) -> list[float]:
+    """Each candidate's best score against the question and planned searches.
 
-    Each chunk is scored against the operator's question; one that falls
+    Every chunk is scored against the operator's question; one that falls
     short of ``RELEVANCE_THRESHOLD`` is scored again against every ``planned``
     search (candidates in order, up to ``MAX_RETRY_PAIRS``) and keeps its best
-    score. Attached are:
-
-    * the best-scoring chunk, unless it scores below ``BEST_THRESHOLD``;
-    * every chunk at ``RELEVANCE_THRESHOLD``;
-    * a chunk within ``RESCUE_SIMILARITY`` of the question by embedding that
-      scores at least ``RESCUE_THRESHOLD``;
-    * the chunk nearest by embedding, at ``NEAREST_SIMILARITY``, when it
-      scores at least ``NEAREST_THRESHOLD``.
+    score, so a paraphrase survives whichever wording the planner chose.
     """
 
     if not candidates:
@@ -203,6 +196,41 @@ def relevant_candidates(
             raise RerankerError("the reranker returned an unexpected number of scores")
         for (index, _), score in zip(targets, second, strict=True):
             scores[index] = max(scores[index], score)
+    return scores
+
+
+def relevance_label(score: float) -> Literal["strong", "possible", "weak"]:
+    """How an explicit search reports a result's score to the model."""
+
+    if score >= RELEVANCE_THRESHOLD:
+        return "strong"
+    if score >= BEST_THRESHOLD:
+        return "possible"
+    return "weak"
+
+
+def relevant_candidates(
+    query: str,
+    candidates: Sequence[RerankCandidate],
+    scorer: Scorer,
+    *,
+    planned: Sequence[str] = (),
+) -> list[tuple[int, float]]:
+    """``(index, score)`` of the candidates to attach unasked, best first.
+
+    Scores come from ``candidate_scores``. Attached are:
+
+    * the best-scoring chunk, unless it scores below ``BEST_THRESHOLD``;
+    * every chunk at ``RELEVANCE_THRESHOLD``;
+    * a chunk within ``RESCUE_SIMILARITY`` of the question by embedding that
+      scores at least ``RESCUE_THRESHOLD``;
+    * the chunk nearest by embedding, at ``NEAREST_SIMILARITY``, when it
+      scores at least ``NEAREST_THRESHOLD``.
+    """
+
+    scores = candidate_scores(query, candidates, scorer, planned=planned)
+    if not scores:
+        return []
     kept = {
         index
         for index, score in enumerate(scores)
@@ -546,6 +574,8 @@ __all__ = [
     "RerankerError",
     "RerankerStatus",
     "Scorer",
+    "candidate_scores",
     "has_content",
+    "relevance_label",
     "relevant_candidates",
 ]
