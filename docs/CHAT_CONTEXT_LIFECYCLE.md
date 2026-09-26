@@ -1,13 +1,13 @@
 # Conversation history and working context
 
-This describes the provider-backed chat implementation at `main` commit
-`9a983ee` as inspected on 2026-09-26. It distinguishes the durable record from
+This describes provider-backed chat on `main` after the context-management
+overhaul of 2026-09-26 (#602 onward). It distinguishes the durable record from
 the input assembled for a particular model call. The
 [state diagrams](design/assistant-context-state-machine.md)
 map these rules to request and recovery states. The separate [design proposal](design/openrouter-native-harness.md)
 contains future work; its unchecked items are not claims about current behavior.
 
-## The four boundaries
+## Boundaries
 
 | Boundary | Owner | What persists | What the next model call receives |
 | --- | --- | --- | --- |
@@ -195,9 +195,95 @@ the next turn replays it without them. One exception stays in the instructions: 
 step failed, final synthesis adds operator help matching the observed failure
 to that request's instructions, which already differ from routing's.
 
+### Provider prompt caching
+
+Prefix stability is what lets a provider serve the repeated part of a request
+from its cache. OpenAI, DeepSeek, Gemini 2.5+, Grok and most other routes reuse
+a repeated prefix on their own. Claude reuses one only up to an explicit
+breakpoint, so the Anthropic, Bedrock and OpenRouter adapters mark them
+(`providers.py`), at most four per request:
+
+* the last tool definition and the instructions (through OpenRouter, the
+  instructions only, which Claude renders after the tools);
+* the newest message, so the next step or turn reads everything up to it;
+* the operator message before the current one, which stays put while the
+  current message gains a checkpoint and older results are cleared;
+* the current operator message, ahead of the tool replay, when a breakpoint
+  is still free.
+
+Breakpoints go only where a route is known to accept them: every Claude model
+on the Anthropic Messages API, Claude 4 and later on Bedrock (`cachePoint`
+blocks), and `anthropic/*` models through OpenRouter. Other OpenAI-compatible
+endpoints are never sent `cache_control`. A one-shot request (compaction,
+naming: one message, no tools) marks only its instructions, so it does not pay
+Claude's cache-write premium on content nothing reads again. OpenAI itself is
+sent the chat session id as `prompt_cache_key`. A profile can turn all of this
+off with `options.prompt_caching: false`.
+
+Usage is normalised across adapters: `input_tokens` is the whole prompt,
+cached tokens included (Anthropic and Bedrock report cache reads and writes
+beside a smaller `input_tokens`, which Core sums), `cached_input_tokens` is the
+part read from the cache, and `cache_creation_input_tokens` the part written to
+it. Goal budgets, calibration and cost estimates all read `input_tokens` that
+way. Cost estimates still charge cached tokens at the full input rate.
+
+## Reference material relevance
+
+Two kinds of reference material are retrieved per turn and ride on the current
+message (see [What is sent](#what-is-sent-by-example)). Each is attached only
+when it is about the operator's request.
+
+**Nebula operator help** (`operator_help.py`). Articles are scored against the
+message and its selected context, as before. An article is attached only when
+at least 15% of the *operator's own words* (not the selected context) are about
+its topic (`_MIN_TOPIC_SHARE`), then only while it holds up against the best
+match (a third of its score when the message names the article's keyword
+phrase, three quarters otherwise), and at most three articles. A selection can
+reorder the articles a question is about but cannot add one to an ordinary
+message. Final synthesis after a failed tool step passes
+`observed_failure=True`: its queries are Core's failure receipts, which name no
+topic, so the topic-share rule is skipped there.
+
+**Project knowledge** (`knowledge_rerank.py`). The retrieval planner's searches
+find candidate chunks with the local embedding index as before. A local
+cross-encoder (`mixedbread-ai/mxbai-rerank-xsmall-v1`, quantised ONNX, pinned
+by commit, size and SHA-256, downloaded in the background into a 0700 model
+directory and never waited for by a turn) then scores the best eight candidates
+against the operator's question and every planned search. The best chunk is
+attached unless the reranker confidently rejects it (`BEST_THRESHOLD`, −3.1);
+further chunks need −1.5 (`RELEVANCE_THRESHOLD`), or a lower bar when the
+embedding model already placed them close to the question. A message with no
+subject of its own ("thanks", "ok, continue") skips knowledge retrieval. While
+the model is unavailable, or with `NEBULA_V3_KNOWLEDGE_RERANKER=off`, retrieval
+attaches the nearest chunks as it always did. Project knowledge never leaves
+the host for reranking. On a labelled set of 50 questions the reranker keeps
+14/14 lexical and 14/15 paraphrased questions' documents and attaches nothing
+to 11/13 unrelated ones (before: all 13 attached documents).
+
+**`knowledge.search`** (`knowledge_search.py`). Every provider tool turn whose
+project has ready knowledge that may reach the selected model (a local model,
+or a cloud model allowed sensitive data with the knowledge confirmation) is
+offered `knowledge.search`, whatever the message, so the tool list stays stable
+across turns. It is how the model recovers a document that automatic
+attachment left out. It reuses the harness gateway's search: local-only
+sources never reach a cloud model, and a cloud model gets redacted text. Its
+results are not gated but ranked, each labelled `strong`, `possible` or `weak`,
+and the chunks it delivered join the answer's citations (weak ones only when
+the answer names their chunk id). Search results, like every tool result, must
+fit the 8 KiB a result may carry to the model (`tool_results.fit_model_result`
+keeps as many whole results as fit and says how many were left out).
+
+Both `conversation.search` and `knowledge.search` have the per-turn allowance
+described under [Conversation compaction](#conversation-compaction).
+
 A tool turn whose request is served by a snapshot is also offered
 `conversation.search`, which returns matching passages of the archived
-originals (a turn with project knowledge gets `knowledge.search` likewise).
+originals: chunked, ranked with BM25 plus an exact-identifier boost, and fused
+with the local embedding model's ranking when that model is already loaded
+(`context_retrieval.py`). The same ranking chooses the excerpts above.
+`knowledge.search` is a separate tool (see
+[Reference material relevance](#reference-material-relevance)) and does not
+depend on compaction.
 
 Each of the two searches has a per-turn allowance (`search_allowance.py`).
 Once a turn has run eight searches of one kind (`TURN_SEARCH_BUDGET`), or its
@@ -615,7 +701,10 @@ The immutable deployed checkout `a31328c` inspected on 2026-09-26 had **no
 turns had thousands of tool steps and bounded turn checkpoints that omitted
 many successful receipts. This is a point-in-time operational observation;
 it does not establish that ordinary conversations never need compaction or that
-all omitted findings were lost from every possible retrieval path.
+all omitted findings were lost from every possible retrieval path. It is why the
+2026-09-26 overhaul put as much weight on long single turns (clearing
+hysteresis, lookup receipts, working notes, mid-turn compaction, the
+token-bounded recent window) as on conversation compaction.
 
 ## Code and tests
 
@@ -632,14 +721,28 @@ all omitted findings were lost from every possible retrieval path.
   a stored answer carries into later requests.
 * `src/nebula/v3/working_notes.py`: `notes.write`, notes storage, and the
   notes data block.
-* `src/nebula/v3/domain.py`: durable `ContextSnapshot`, `ContextSegment`, and
-  memory contracts.
-* `tests/v3/test_context.py`, `tests/v3/test_chat_context_assembly.py`,
-  `tests/v3/test_turn_prompt_cache.py`, `tests/v3/test_in_turn_context_pruning.py`,
-  `tests/v3/test_tool_history_memory.py`, and `tests/v3/test_precompaction.py`:
-  focused behavioral coverage.
-  These tests prove particular contracts, not semantic completeness of a
-  summary.
+* `src/nebula/v3/domain.py`: durable `ContextSnapshot`, `ContextSegment`,
+  `ChatWorkingNotes`, and memory contracts.
+* `src/nebula/v3/providers.py`: prompt-cache breakpoints, `prompt_cache_key`,
+  and usage normalisation.
+* `src/nebula/v3/context_retrieval.py` and `conversation_search.py`: excerpt
+  ranking and `conversation.search`.
+* `src/nebula/v3/operator_help.py`, `knowledge_rerank.py`, and
+  `knowledge_search.py`: reference material relevance and `knowledge.search`.
+* `src/nebula/v3/search_allowance.py`: the per-turn search allowance.
+* `src/nebula/v3/tool_results.py`: `fit_model_result`, the bound on what one
+  tool result carries to the model.
+* Focused behavioral coverage: `tests/v3/test_context.py`,
+  `test_chat_context_assembly.py`, `test_chat_reference_material.py`,
+  `test_prompt_caching.py`, `test_replay_estimates.py`,
+  `test_turn_prompt_cache.py`, `test_in_turn_context_pruning.py`,
+  `test_recent_window.py`, `test_tool_history_memory.py`,
+  `test_midturn_compaction.py`, `test_precompaction.py`,
+  `test_context_retrieval.py`, `test_conversation_search.py`,
+  `test_search_allowance.py`, `test_operator_help.py`,
+  `test_knowledge_rerank.py`, and `test_knowledge_search.py`. These tests prove
+  particular contracts, not semantic completeness of a summary; the retention
+  eval below measures that.
 
 ## Measuring retention
 
