@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from .context import estimate_tokens
 from .database import ChatTurnCheckpointRow, ChatTurnStepEventRow, Database
 from .domain import ChatTurn, utc_now
-from .tool_activity import result_summary, step_brief
+from .tool_activity import clipped, lookup_identifiers, result_summary, step_brief
 from .tool_results import without_results_api_key
 
 # The checkpoint advances in blocks: once this many steps, or this many
@@ -609,6 +609,7 @@ class ChatTurnLedger:
         advance: bool = False,
         byte_limit: int = CHECKPOINT_BYTE_LIMIT,
         working_notes: Callable[[], dict[str, Any] | None] | None = None,
+        recent_groups: int = RECENT_RESPONSE_GROUPS,
     ) -> tuple[TurnCheckpoint | None, list[dict[str, Any]]]:
         """The turn's checkpoint and the entries replayed whole after it.
 
@@ -625,6 +626,11 @@ class ChatTurnLedger:
         A checkpoint that advances bounds its receipts by ``byte_limit`` and
         carries the session's working notes as ``working_notes`` returns them
         then: a folded ``notes.write`` call no longer replays its content.
+
+        An advance with fewer ``recent_groups`` folds deeper, for a request
+        that no longer fits even with every result cleared. Coverage only
+        grows: later calls with the default window keep replaying just what
+        the deeper checkpoint left out.
         """
 
         history = self.history(turn)
@@ -635,7 +641,7 @@ class ChatTurnLedger:
             group = self._group(entry)
             if group not in groups:
                 groups.append(group)
-        keep_groups = set(groups[-RECENT_RESPONSE_GROUPS:])
+        keep_groups = set(groups[-recent_groups:]) if recent_groups > 0 else set()
         fold = [
             entry
             for entry in history
@@ -689,6 +695,17 @@ class ChatTurnLedger:
             # says only "completed" cannot tell the model which file it read.
             brief = step_brief(item.get("arguments"))
             outcome = result_summary(item.get("result_summary"), _RECEIPT_SUMMARY_CHARS)
+            # A folded lookup keeps what it found, so its receipt still answers.
+            found = lookup_identifiers(
+                item.get("name"), item.get("arguments"), item.get("provider_result")
+            )
+            if found:
+                outcome = clipped(
+                    "; ".join(
+                        part for part in (outcome, "found " + ", ".join(found)) if part
+                    ),
+                    _RECEIPT_SUMMARY_CHARS,
+                )
             references = [
                 str(ref.get("artifact_id"))[:120]
                 for ref in item.get("artifacts") or []

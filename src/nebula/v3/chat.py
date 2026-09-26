@@ -63,18 +63,23 @@ from .chat_turn_headers import (
     engagement_turn_headers,
     session_turn_headers,
 )
-from .chat_turn_ledger import ChatTurnLedger, TurnCheckpoint, checkpoint_byte_limit
+from .chat_turn_ledger import (
+    RECENT_RESPONSE_GROUPS,
+    ChatTurnLedger,
+    TurnCheckpoint,
+    checkpoint_byte_limit,
+)
 from .provider_scheduler import ProviderAdmission, ProviderScheduler
 from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .browser_companion_tools import attached_session, companion_components
 from .application_model.tools import standalone_components
-from .conversation_search import conversation_search_spec
+from .conversation_search import CONVERSATION_SEARCH_TOOL_NAME, conversation_search_spec
 from .runtime_platform import (
     conversation_search_components,
     dashboard_components,
     notes_components,
 )
-from .tool_activity import step_brief, tool_activity_block
+from .tool_activity import lookup_identifiers, step_brief, tool_activity_block
 from .working_notes import (
     NOTES_ROUTING_INSTRUCTIONS,
     NOTES_WRITE_TOOL_NAME,
@@ -874,6 +879,9 @@ class PreparedChat:
     # changes an earlier result only when it crosses the target again. A
     # turn resumed in a new process recomputes them.
     cleared_tool_calls: set[str] = field(default_factory=set)
+    # (step, cause) pairs a mid-turn conversation compaction was attempted
+    # for; each is tried once (``_compact_mid_turn``).
+    midturn_compactions: set[tuple[int, str]] = field(default_factory=set)
 
 
 @dataclass
@@ -1300,6 +1308,19 @@ def _recorded_context_calibration(
             ),
         }
     }
+
+
+def _may_recover_again(recoveries: Sequence[str]) -> bool:
+    """Whether a rejected request gets one more context-length recovery.
+
+    Each strategy is tried once: the first recovery; then, only after a
+    retry that cleared a tool turn's older results was refused too, one that
+    compacts the conversation instead. Nothing is retried a third time.
+    """
+
+    return not recoveries or (
+        len(recoveries) == 1 and recoveries[0] == "cleared_tool_results"
+    )
 
 
 def _added_usage(left: ChatTokenUsage, right: ChatTokenUsage) -> ChatTokenUsage:
@@ -2064,6 +2085,12 @@ def _cleared_tool_result(
         "artifact_ids": artifact_ids[:12],
         "note": note,
     }
+    # A cleared lookup keeps what it found, so its receipt still answers.
+    found = lookup_identifiers(
+        entry.get("name"), entry.get("arguments"), entry.get("provider_result")
+    )
+    if found:
+        receipt["found"] = found
     whole = output if isinstance(output, str) else json.dumps(output, sort_keys=True)
     return receipt if len(json.dumps(receipt)) < len(whole) else output
 
@@ -5586,7 +5613,7 @@ class ChatService:
                     context_snapshot,
                     session,
                 ) = await self._model_context(
-                    request=request,
+                    requested_output_tokens=request.max_output_tokens,
                     profile=profile,
                     provider=provider,
                     model=selected_model,
@@ -6017,19 +6044,24 @@ class ChatService:
     async def _complete_with_context_recovery(
         self, prepared: PreparedChat, request: ModelRequest
     ) -> ModelResponse:
-        try:
-            self._record_provider_request(prepared, request)
-            response = await prepared.provider.complete(request)
-        except ProviderContextLengthError:
-            retry = await self._recover_context_length_rejection(prepared, request)
+        recoveries: list[str] = []
+        while True:
             try:
-                self._record_provider_request(prepared, retry)
-                response = await prepared.provider.complete(retry)
+                self._record_provider_request(prepared, request)
+                response = await prepared.provider.complete(request)
+                break
             except ProviderContextLengthError as exc:
-                raise ChatConfigurationError(
-                    "the provider rejected the compacted request context; reduce "
-                    "mandatory instructions or configure a lower context cap"
-                ) from exc
+                if not _may_recover_again(recoveries):
+                    raise ChatConfigurationError(
+                        "the provider rejected the compacted request context; reduce "
+                        "mandatory instructions or configure a lower context cap"
+                    ) from exc
+                request = await self._recover_context_length_rejection(
+                    prepared, request, allow_clearing=not recoveries
+                )
+                recoveries.append(
+                    str(request.metadata.get("context_length_recovery") or "1")
+                )
         self._record_provider_response(prepared, response)
         return response
 
@@ -6368,7 +6400,7 @@ class ChatService:
     async def _stream_with_context_recovery(
         self, prepared: PreparedChat, request: ModelRequest
     ) -> AsyncIterator[Any]:
-        attempted_recovery = False
+        recoveries: list[str] = []
         while True:
             output_started = False
             try:
@@ -6392,7 +6424,7 @@ class ChatService:
                     yield event
                 return
             except ProviderContextLengthError:
-                if attempted_recovery:
+                if not _may_recover_again(recoveries):
                     raise ChatConfigurationError(
                         "the provider rejected the compacted request context; reduce "
                         "mandatory instructions or configure a lower context cap"
@@ -6403,51 +6435,26 @@ class ChatService:
                         "Nebula did not retry the partial response"
                     )
                 request = await self._recover_context_length_rejection(
-                    prepared, request
+                    prepared, request, allow_clearing=not recoveries
                 )
-                attempted_recovery = True
+                recoveries.append(
+                    str(request.metadata.get("context_length_recovery") or "1")
+                )
 
-    async def _recover_context_length_rejection(
-        self, prepared: PreparedChat, failed_request: ModelRequest
-    ) -> ModelRequest:
-        """Refresh exact limits and rebuild canonical context for one safe retry.
+    def _canonical_request_messages(
+        self, prepared: PreparedChat
+    ) -> tuple[list[ChatRequestMessage], list[ChatMessage]]:
+        """The conversation a request is assembled from, and its stored messages.
 
-        A tool turn's results are what grew, so its retry clears older ones
-        instead; nothing runs again.
+        The canonical transcript stands for what each turn was sent with,
+        including the context the operator selected for this very turn.
         """
 
-        # The provider counted more than Core's calibrated estimate, so the
-        # rest of the turn trusts only the raw one.
-        prepared.estimate_calibration = None
-        # prepared.turn lags the routing loop by a step; the guard below needs
-        # the turn as it is.
-        turn = self._refresh_turn(prepared.turn) if prepared.turn is not None else None
-        if turn is not None and failed_request.tool_results:
-            cleared = self._cleared_tool_history_retry(prepared, turn, failed_request)
-            if cleared is not None:
-                return cleared
-        if turn is not None and (turn.execution_tool_calls or self._turn_history(turn)):
-            raise ChatConfigurationError(
-                "the provider rejected the request context after tool routing began; "
-                "Nebula will not repeat tool work"
-            )
-        if (
-            prepared.session is None and prepared.pending_session is None
-        ) or prepared.source_request is None:
-            raise ChatConfigurationError(
-                "the provider rejected the request context and the durable conversation "
-                "could not be reassembled safely"
-            )
-        refreshed = await self._refresh_context_metadata(
-            prepared.provider_profile.id, prepared.provider, prepared.resolved_model
-        )
         canonical = (
             self._session_messages(prepared.session)
             if prepared.session is not None
             else []
         )
-        # The canonical transcript stands for what each turn was sent with,
-        # including the context the operator selected for this very turn.
         messages = [
             ChatRequestMessage(
                 role=item.role,
@@ -6472,6 +6479,59 @@ class ChatService:
                     }
                 )
             messages.extend(added)
+        return messages, canonical
+
+    async def _recover_context_length_rejection(
+        self,
+        prepared: PreparedChat,
+        failed_request: ModelRequest,
+        *,
+        allow_clearing: bool = True,
+    ) -> ModelRequest:
+        """Refresh exact limits and rebuild canonical context for one safe retry.
+
+        A tool turn's results are what grew, so its retry clears older ones
+        instead; nothing runs again. When clearing cannot help, or already
+        did and the provider still refused (``allow_clearing`` False), the
+        conversation ahead of the tool history is compacted instead
+        (``_compact_mid_turn``).
+        """
+
+        # The provider counted more than Core's calibrated estimate, so the
+        # rest of the turn trusts only the raw one.
+        prepared.estimate_calibration = None
+        # prepared.turn lags the routing loop by a step; the guard below needs
+        # the turn as it is.
+        turn = self._refresh_turn(prepared.turn) if prepared.turn is not None else None
+        if turn is not None and failed_request.tool_results and allow_clearing:
+            cleared = self._cleared_tool_history_retry(prepared, turn, failed_request)
+            if cleared is not None:
+                return cleared
+        if turn is not None and (turn.execution_tool_calls or self._turn_history(turn)):
+            # Clearing cannot shrink the tool history further, so the
+            # conversation ahead of it is compacted instead; the ledger is
+            # replayed as it is and no tool runs again.
+            compacted = await self._compacted_rejected_tool_request(
+                prepared, turn, failed_request
+            )
+            if compacted is not None:
+                return compacted
+            raise ChatConfigurationError(
+                "the provider rejected the request context after tool routing began, "
+                "and compacting the conversation could not make room for the turn's "
+                "tool history; Nebula will not repeat tool work"
+            )
+        if (
+            prepared.session is None and prepared.pending_session is None
+        ) or prepared.source_request is None:
+            raise ChatConfigurationError(
+                "the provider rejected the request context and the durable conversation "
+                "could not be reassembled safely"
+            )
+        refreshed = await self._refresh_context_metadata(
+            prepared.provider_profile.id, prepared.provider, prepared.resolved_model
+        )
+        messages, canonical = self._canonical_request_messages(prepared)
         goal = self.store.get(ChatGoal, turn.goal_id) if turn and turn.goal_id else None
         budget = ContextCallBudget(
             max_tokens=(
@@ -6488,7 +6548,7 @@ class ChatService:
                 snapshot,
                 session,
             ) = await self._model_context(
-                request=prepared.source_request,
+                requested_output_tokens=prepared.source_request.max_output_tokens,
                 profile=refreshed,
                 provider=prepared.provider,
                 model=prepared.resolved_model,
@@ -6610,6 +6670,289 @@ class ChatService:
                     expected_revision=latest.revision,
                 )
         return retry
+
+    async def _compact_mid_turn(
+        self,
+        prepared: PreparedChat,
+        turn: ChatTurn,
+        request: ModelRequest,
+        *,
+        cause: str,
+        offer_search: bool = False,
+    ) -> ChatTurn | None:
+        """Compact a running tool turn's conversation so its tool history fits.
+
+        ``request`` is the complete request that did not fit, tool history
+        included. Everything it carries beside the conversation (instructions
+        around it, function declarations, the replayed results, the
+        checkpoint, the working notes) is reserved, and the conversation is
+        compacted afresh into what the target leaves, less the headroom
+        clearing leaves below it (``_model_context``, ``reuse_snapshot=False``;
+        the input capacity when even the current message does not fit that). The ledger, its checkpoint and its
+        replay are untouched: no tool runs again, and no step leaves the
+        request except as the receipt or checkpoint entry it already was.
+        Codex compacts mid-turn the same way rather than end the turn.
+
+        ``prepared.model_request`` then carries the smaller conversation and
+        the notes as they are now, and the turn's request snapshot records it,
+        so every later request of the turn, a resumed one included, extends
+        it. With ``offer_search`` a tool turn whose conversation is now served
+        by a snapshot gains ``conversation.search``. Each ``cause`` is tried
+        once per step. Returns the updated turn, or None when no smaller
+        conversation could be assembled and the caller falls back.
+        """
+
+        session = prepared.session
+        key = (turn.next_step, cause)
+        if (
+            session is None
+            or prepared.engagement_id is None
+            or key in prepared.midturn_compactions
+        ):
+            return None
+        prepared.midturn_compactions.add(key)
+        messages, canonical = self._canonical_request_messages(prepared)
+        if not canonical:
+            return None
+        base = prepared.model_request
+        instructions = base.instructions or ""
+        notes_block = working_notes_block(read_working_notes(self.store, session.id))
+        conversation_tokens = estimate_messages(base.messages, instructions)
+        # The same headroom below the target that clearing leaves, so the
+        # steps after the compaction add to the request before it crosses the
+        # target again.
+        target, capacity = self._estimate_limits(
+            prepared, self._request_limits(prepared.provider_profile, request)
+        )
+        headroom = target - self._clearing_watermark(target, capacity)
+        components = prepared.tool_components
+        add_search = (
+            offer_search
+            and components is not None
+            and CONVERSATION_SEARCH_TOOL_NAME not in components.specs
+        )
+        goal = self.store.get(ChatGoal, turn.goal_id) if turn.goal_id else None
+        budget = ContextCallBudget(
+            max_tokens=(
+                max(0, goal.token_budget - goal.usage.total_tokens)
+                if goal is not None and goal.token_budget is not None
+                else None
+            )
+        )
+        output_cap = (
+            prepared.source_request.max_output_tokens
+            if prepared.source_request is not None
+            else turn.request_snapshot.get("operator_max_output_tokens")
+        )
+        try:
+            (
+                model_messages,
+                _,
+                usage,
+                snapshot,
+                refreshed_session,
+            ) = await self._model_context(
+                requested_output_tokens=(
+                    output_cap if isinstance(output_cap, int) else None
+                ),
+                profile=prepared.provider_profile,
+                provider=prepared.provider,
+                model=prepared.resolved_model,
+                messages=messages,
+                stored_messages=canonical,
+                session=session,
+                instructions=instructions,
+                budget=budget,
+                required_parameters={"tools"} if request.tools else set(),
+                reuse_snapshot=False,
+                # The turn's reference material rides on its message as before.
+                reference=prepared.reference_material,
+                # What the request adds beside the conversation: the rest of
+                # the request as it is, and the notes the rebuilt one carries.
+                reserved_tokens=max(
+                    0, estimate_model_request(request) - conversation_tokens
+                )
+                + (estimate_tokens("\n\n" + notes_block) if notes_block else 0),
+                target_headroom=headroom,
+                archive_reserved_tokens=(
+                    estimate_tool_definitions(
+                        self._routing_tools([conversation_search_spec()])
+                    )
+                    if add_search
+                    else 0
+                ),
+                calibration=prepared.estimate_calibration,
+                objective=goal.objective if goal is not None else None,
+            )
+        except (ContextCapacityError, ContextCompactionError) as exc:
+            if goal is not None and exc.usage.total_tokens > 0:
+                self._charge_goal(
+                    goal.id,
+                    exc.usage,
+                    exhausted_reason="Token budget exhausted during context compaction.",
+                )
+            record_caught_exception(
+                "chat",
+                "chat.context.midturn_compaction_failed",
+                "A running tool turn's conversation could not be compacted to "
+                "make room for its tool history.",
+                exc,
+                stage="context",
+                metadata={
+                    "provider": prepared.provider_profile.id,
+                    "model_id": prepared.resolved_model,
+                    "session_id": session.id,
+                    "reason_code": cause,
+                    "step": turn.next_step,
+                },
+            )
+            return None
+        if goal is not None and usage.total_tokens > 0:
+            goal = self._charge_goal(
+                goal.id,
+                usage,
+                exhausted_reason="Token budget exhausted during context compaction.",
+            )
+            if goal.status != ChatGoalStatus.RUNNING:
+                raise ChatConfigurationError(
+                    "goal token budget was exhausted during context compaction"
+                )
+        rebuilt = join_consecutive_assistant_messages(
+            [
+                ModelMessage(
+                    role=item.role.value,
+                    content=self._model_content(
+                        item,
+                        prepared.engagement_id,
+                        images_supported=prepared.provider_profile.capabilities.vision,
+                    ),
+                )
+                for item in model_messages
+            ]
+        )
+        if notes_block:
+            rebuilt = _with_trailing_block(rebuilt, notes_block)
+        prepared.context_usage = _added_usage(prepared.context_usage, usage)
+        if estimate_messages(rebuilt, instructions) >= conversation_tokens:
+            # The conversation is already as small as compaction makes it.
+            return None
+        prepared.model_request = base.model_copy(update={"messages": rebuilt})
+        prepared.session = refreshed_session or session
+        if snapshot is not None:
+            prepared.context_snapshot = snapshot
+        search_added = add_search and snapshot is not None
+        if search_added:
+            assert components is not None
+            prepared.tool_components = combine_tool_components(
+                components, self._conversation_search_components(components, session.id)
+            )
+        latest = self._refresh_turn(turn)
+        compact_snapshot, snapshot_parts = split_request_snapshot(
+            {
+                **latest.request_snapshot,
+                "model_request": prepared.model_request.model_dump(mode="json"),
+                "context_usage": prepared.context_usage.model_dump(mode="json"),
+                **({"conversation_search": True} if search_added else {}),
+                "midturn_compactions": int(
+                    latest.request_snapshot.get("midturn_compactions") or 0
+                )
+                + 1,
+            },
+            engagement_id=latest.engagement_id,
+            session_id=latest.session_id,
+        )
+        with self.store.transaction() as transaction:
+            stage_snapshot_parts(transaction, snapshot_parts)
+            updated = transaction.update(
+                ChatTurn,
+                latest.id,
+                {"request_snapshot": compact_snapshot},
+                expected_revision=latest.revision,
+            )
+        prepared.turn = updated
+        record_diagnostic(
+            "warning",
+            "chat",
+            "chat.context.midturn_compacted",
+            "A running tool turn compacted its conversation to make room for "
+            "its tool history; no tool ran again.",
+            outcome="fallback",
+            stage="context",
+            metadata={
+                "provider": prepared.provider_profile.id,
+                "model_id": prepared.resolved_model,
+                "session_id": session.id,
+                "reason_code": cause,
+                "step": turn.next_step,
+                "compacted_through": (
+                    snapshot.compacted_through if snapshot is not None else None
+                ),
+            },
+        )
+        return updated
+
+    async def _compacted_rejected_tool_request(
+        self, prepared: PreparedChat, turn: ChatTurn, failed_request: ModelRequest
+    ) -> ModelRequest | None:
+        """The rejected tool-turn request once more, its conversation compacted.
+
+        The provider counted more than the estimate even with the older
+        results cleared, so every result but the newest stays cleared and the
+        conversation ahead of the history makes room (``_compact_mid_turn``).
+        The request keeps its instructions, functions and calls; None when no
+        smaller conversation exists.
+        """
+
+        try:
+            prepared.provider_profile = await self._refresh_context_metadata(
+                prepared.provider_profile.id, prepared.provider, prepared.resolved_model
+            )
+        except ChatConfigurationError as exc:
+            # The limits the turn has stand; the compaction below makes room
+            # by the rejection itself, with the raw estimate.
+            record_caught_exception(
+                "chat",
+                "chat.context.limits_refresh_failed",
+                "Exact model limits could not be refreshed after a context "
+                "rejection; the turn's limits were kept.",
+                exc,
+                stage="context",
+                metadata={
+                    "provider": prepared.provider_profile.id,
+                    "model_id": prepared.resolved_model,
+                },
+            )
+        _, replay_entries = self._compacted_turn_history(
+            turn, self._request_limits(prepared.provider_profile, failed_request)
+        )
+        replayed = self._replayed_tool_history(prepared, turn, entries=replay_entries)
+        prepared.cleared_tool_calls.update(result.call_id for result in replayed[:-1])
+        # The request as the turn assembles it, around its current conversation.
+        template = failed_request.model_copy(
+            update={"messages": prepared.model_request.messages, "tool_results": []}
+        )
+
+        def assembled() -> ModelRequest:
+            request = template.model_copy(
+                update={"messages": prepared.model_request.messages}
+            )
+            request = self._with_tool_history(prepared, turn, request)
+            return self._with_completion_hook_feedback(request, turn)
+
+        updated = await self._compact_mid_turn(
+            prepared, turn, assembled(), cause="provider_rejected"
+        )
+        if updated is None:
+            return None
+        retry = assembled()
+        return retry.model_copy(
+            update={
+                "metadata": {
+                    **retry.metadata,
+                    "context_length_recovery": "compacted_conversation",
+                }
+            }
+        )
 
     async def _verify_openrouter_route_limits(
         self, profile: ProviderProfile, provider: ModelProvider, model: str
@@ -7044,8 +7387,32 @@ class ChatService:
                         prepared.estimate_calibration,
                     ):
                         # Even with its older results cleared the turn no
-                        # longer fits a routing request. It answers from what
-                        # it gathered rather than failing with all of it.
+                        # longer fits a routing request. The conversation
+                        # ahead of its tool history is compacted to make room,
+                        # and routing starts this step again.
+                        compacted = await self._compact_mid_turn(
+                            prepared,
+                            turn,
+                            routing,
+                            cause="context_full",
+                            offer_search=True,
+                        )
+                        if compacted is not None:
+                            turn = compacted
+                            components = prepared.tool_components or components
+                            continue
+                        # The replayed steps themselves are what no longer
+                        # fit: all but the newest fold into the checkpoint.
+                        if self._fold_deeper(
+                            prepared,
+                            turn,
+                            routing,
+                            recent_groups=1,
+                            cause="context_full",
+                        ):
+                            continue
+                        # Nothing smaller: it answers from what it gathered
+                        # rather than failing with all of it.
                         record_diagnostic(
                             "warning",
                             "chat",
@@ -7588,16 +7955,6 @@ class ChatService:
                 expected_revision=turn.revision,
             )
             operator_help_chunks = self._tool_operator_help(prepared, turn)
-            known_citations = {
-                (citation.source_id, citation.chunk_id)
-                for citation in prepared.citations
-            }
-            prepared.citations.extend(
-                chunk.citation
-                for chunk in operator_help_chunks
-                if (chunk.citation.source_id, chunk.citation.chunk_id)
-                not in known_citations
-            )
             # Unused on-demand tools stay out of the synthesis inventory too.
             loaded_names = loaded_tool_names(catalog_receipt, self._turn_history(turn))
             # The replayed history calls functions, so the synthesis declares
@@ -7612,36 +7969,105 @@ class ChatService:
                 for spec in components.specs.values()
                 if spec.name not in deferred_names
             )
-            final_request = prepared.model_request.model_copy(
-                update={
-                    "instructions": (
-                        _CHAT_TOOL_RESULT_INSTRUCTIONS
-                        + "\n\n"
-                        + (prepared.model_request.instructions or "")
-                        + _tool_inventory_instructions(
-                            {
-                                name: spec
-                                for name, spec in components.specs.items()
-                                if name in deferred_names and name in loaded_names
-                            }
+
+            def synthesis_request(help_chunks: list[_RetrievedChunk]) -> ModelRequest:
+                # The turn as it is when asked: a compaction updates it.
+                current = turn
+                assert current is not None
+                request = prepared.model_request.model_copy(
+                    update={
+                        "instructions": (
+                            _CHAT_TOOL_RESULT_INSTRUCTIONS
+                            + "\n\n"
+                            + (prepared.model_request.instructions or "")
+                            + _tool_inventory_instructions(
+                                {
+                                    name: spec
+                                    for name, spec in components.specs.items()
+                                    if name in deferred_names and name in loaded_names
+                                }
+                            )
+                            + _reference_instructions(
+                                help_chunks, trusted_operator_help=True
+                            )
+                        ),
+                        "tools": synthesis_tools,
+                        "tool_choice": ToolChoice.NONE,
+                        "parallel_tool_calls": False,
+                    }
+                )
+                request = self._with_tool_history(prepared, current, request)
+                return self._with_completion_hook_feedback(request, current)
+
+            def fits_capacity(request: ModelRequest) -> bool:
+                return self._fits_request_capacity(
+                    prepared.provider_profile, request, prepared.estimate_calibration
+                )
+
+            # The answer must fit: the turn's work is only useful if it is
+            # reported. The runbook help retrieved after a failure goes
+            # first, then the conversation ahead of the tool history is
+            # compacted; only a request that still cannot fit fails, saying
+            # what does not.
+            final_request = synthesis_request(operator_help_chunks)
+            if operator_help_chunks and not fits_capacity(final_request):
+                operator_help_chunks = []
+                final_request = synthesis_request(operator_help_chunks)
+            if not fits_capacity(final_request):
+                compacted = await self._compact_mid_turn(
+                    prepared, turn, final_request, cause="final_answer"
+                )
+                if compacted is not None:
+                    turn = compacted
+                    final_request = synthesis_request(operator_help_chunks)
+            # Then the replay: the newest step stays whole if it can, and
+            # otherwise every step answers from its checkpoint receipt.
+            for keep in (1, 0):
+                if fits_capacity(final_request):
+                    break
+                if self._fold_deeper(
+                    prepared,
+                    turn,
+                    final_request,
+                    recent_groups=keep,
+                    cause="final_answer",
+                ):
+                    final_request = synthesis_request(operator_help_chunks)
+            if not fits_capacity(final_request):
+                limits = self._request_limits(prepared.provider_profile, final_request)
+                raise ChatConfigurationError(
+                    "the turn's answer cannot fit the model's input capacity even "
+                    "with its older tool results cleared and the conversation "
+                    "compacted: the current message, instructions and tool-history "
+                    "checkpoint need about "
+                    + str(
+                        calibrated_estimate(
+                            estimate_model_request(final_request),
+                            prepared.estimate_calibration,
+                            hard=True,
                         )
-                        + _reference_instructions(
-                            operator_help_chunks, trusted_operator_help=True
-                        )
-                    ),
-                    "tools": synthesis_tools,
-                    "tool_choice": ToolChoice.NONE,
-                    "parallel_tool_calls": False,
-                }
+                    )
+                    + f" estimated input tokens of {limits.input_capacity}. Its tool "
+                    "results are saved; ask again with a model that has a larger "
+                    "context window, or a shorter message"
+                )
+            known_citations = {
+                (citation.source_id, citation.chunk_id)
+                for citation in prepared.citations
+            }
+            prepared.citations.extend(
+                chunk.citation
+                for chunk in operator_help_chunks
+                if (chunk.citation.source_id, chunk.citation.chunk_id)
+                not in known_citations
             )
-            final_request = self._with_tool_history(prepared, turn, final_request)
-            final_request = self._with_completion_hook_feedback(final_request, turn)
             final_request = self._fit_turn_goal_request(prepared, final_request)
             self._ensure_request_capacity(
                 prepared.provider_profile,
                 final_request,
                 prepared.estimate_calibration,
             )
+            synthesized_from = prepared.model_request
             completed = False
             routing_thoughts = self.turn_reasoning(turn)
             recovery_attempts = 0
@@ -7649,6 +8075,13 @@ class ChatService:
             # The turn asks again, and ends on this if the attempts run out.
             fallback_answer: ModelResponse | None = None
             while not completed and not route_again:
+                if prepared.model_request is not synthesized_from:
+                    # A context recovery reassembled the conversation: a
+                    # later attempt asks with it, not the request it replaced.
+                    synthesized_from = prepared.model_request
+                    final_request = self._fit_turn_goal_request(
+                        prepared, synthesis_request(operator_help_chunks)
+                    )
                 attempt_completed = False
                 tool_call_rejected = False
                 streamed_text: list[str] = []
@@ -8428,7 +8861,12 @@ class ChatService:
         return request
 
     def _compacted_turn_history(
-        self, turn: ChatTurn, limits: ContextLimits, *, advance: bool = False
+        self,
+        turn: ChatTurn,
+        limits: ContextLimits,
+        *,
+        advance: bool = False,
+        recent_groups: int = RECENT_RESPONSE_GROUPS,
     ) -> tuple[TurnCheckpoint | None, list[dict[str, Any]]]:
         """The turn's checkpoint and replay, sized for the request's model.
 
@@ -8439,11 +8877,58 @@ class ChatService:
         return self.turn_ledger.compacted_history(
             turn,
             advance=advance,
+            recent_groups=recent_groups,
             byte_limit=checkpoint_byte_limit(limits.input_capacity),
             working_notes=lambda: checkpoint_notes(
                 read_working_notes(self.store, turn.session_id)
             ),
         )
+
+    def _fold_deeper(
+        self,
+        prepared: PreparedChat,
+        turn: ChatTurn,
+        request: ModelRequest,
+        *,
+        recent_groups: int,
+        cause: str,
+    ) -> bool:
+        """Fold all but the newest ``recent_groups`` response groups now.
+
+        The last resort for a request that fits with neither its results
+        cleared nor its conversation compacted: the replayed calls, and the
+        reasoning each carries, move into the checkpoint as receipts, and
+        their outputs stay readable through ``tool_output``. The checkpoint
+        is durable and only grows, so the requests after it extend it.
+        Whether the checkpoint advanced.
+        """
+
+        before = self.turn_ledger.latest_checkpoint(turn.id)
+        checkpoint, _ = self._compacted_turn_history(
+            turn,
+            self._request_limits(prepared.provider_profile, request),
+            advance=True,
+            recent_groups=recent_groups,
+        )
+        if checkpoint is None or checkpoint == before:
+            return False
+        record_diagnostic(
+            "warning",
+            "chat",
+            "chat.tool_history.folded",
+            "A tool turn folded its recent steps into the checkpoint because "
+            "the request did not fit otherwise.",
+            outcome="fallback",
+            stage="chat",
+            metadata={
+                "provider": prepared.provider_profile.id,
+                "model_id": prepared.resolved_model,
+                "reason_code": cause,
+                "step": turn.next_step,
+                "count": recent_groups,
+            },
+        )
+        return True
 
     @staticmethod
     def _clearing_watermark(target: int, capacity: int) -> int:
@@ -8551,9 +9036,15 @@ class ChatService:
                 return current
         whole = fitted.tool_results
         # A receipt is never larger than its result, so bisection finds the
-        # fewest to clear.
+        # fewest to clear. What the model fetched to answer from (a file,
+        # an earlier output, the archived conversation) is cleared last: a
+        # cleared lookup reads as an unanswered one.
         candidates = [
-            result.call_id for result in whole[:-1] if result.call_id not in sticky
+            result.call_id
+            for retrieval in (False, True)
+            for result in whole[:-1]
+            if result.call_id not in sticky
+            and (result.name in RETRIEVAL_TOOL_NAMES) == retrieval
         ]
 
         def clearing(count: int) -> ModelRequest:
@@ -12521,7 +13012,7 @@ class ChatService:
     async def _model_context(
         self,
         *,
-        request: ChatCompletionRequest,
+        requested_output_tokens: int | None,
         profile: ProviderProfile,
         provider: ModelProvider,
         model: str,
@@ -12534,6 +13025,7 @@ class ChatService:
         reuse_snapshot: bool = True,
         reserved_tokens: int = 0,
         archive_reserved_tokens: int = 0,
+        target_headroom: int = 0,
         calibration: float | None = None,
         objective: str | None = None,
         reference: str = "",
@@ -12556,11 +13048,15 @@ class ChatService:
         and messages (tool definitions, routing instructions, catalog picks),
         and ``archive_reserved_tokens`` what it adds once older messages are
         archived (the ``conversation.search`` definition a tool turn gets);
-        ``calibration`` scales Core's estimate to the provider's own count
+        ``target_headroom`` lowers the target alone, never the capacity, for a
+        request that should leave room below the target (a running turn's
+        next steps); ``calibration`` scales Core's estimate to the provider's
+        own count
         (see ``updated_calibration``). ``objective`` guides the compactor.
         ``reference`` is the material retrieved for this turn (operator help,
         project knowledge): it joins the current message ahead of any
         excerpts, and every estimate here counts it.
+        ``requested_output_tokens`` is the operator's output cap, if any.
 
         No message is left out: each is either sent verbatim or covered by the
         snapshot that is sent. Over the target, the excerpts go first, then
@@ -12572,7 +13068,7 @@ class ChatService:
         limits = resolve_context_limits(
             profile,
             model=model,
-            requested_output_tokens=request.max_output_tokens,
+            requested_output_tokens=requested_output_tokens,
             required_parameters=required_parameters,
         )
         images_supported = profile.capabilities.vision
@@ -12582,6 +13078,7 @@ class ChatService:
         target = (
             estimate_allowance(limits.target_input_tokens, calibration)
             - reserved_tokens
+            - target_headroom
         )
         capacity = (
             estimate_allowance(limits.input_capacity, calibration, hard=True)

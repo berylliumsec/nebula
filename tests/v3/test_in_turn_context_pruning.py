@@ -224,7 +224,12 @@ def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
 def test_routing_that_cannot_fit_answers_from_results_instead_of_failing(
     tmp_path, monkeypatch
 ):
-    """Routing-only overhead fills the window: the turn answers from its results."""
+    """Routing-only overhead fills the window: the turn answers from its results.
+
+    Once even cleared results no longer fit, the replayed steps fold into the
+    checkpoint and routing goes on from its receipts, until even that no
+    longer fits; the answer then carries every step, replayed or folded.
+    """
 
     broker = ScanBroker()
     provider = LongTurnProvider(calls=30)
@@ -251,9 +256,24 @@ def test_routing_that_cannot_fit_answers_from_results_instead_of_failing(
     for request in requests:
         assert estimate_model_request(request) <= _capacity(prepared, request)
     (synthesis,) = [r for r in requests if r.tool_choice == ToolChoice.NONE]
-    assert [r.call_id for r in synthesis.tool_results] == [
-        f"call-{step}" for step in range(1, len(broker.calls) + 1)
-    ]
+    replayed = [int(r.call_id.removeprefix("call-")) for r in synthesis.tool_results]
+    assert replayed == list(
+        range(len(broker.calls) - len(replayed) + 1, len(broker.calls) + 1)
+    )
+    folded = set(range(1, len(broker.calls) + 1)) - set(replayed)
+    if folded:
+        # No step is left out: what is not replayed is in the checkpoint.
+        assert _checkpointed(synthesis)
+        block = str(synthesis.messages[-1].content).split(
+            "EARLIER TOOL HISTORY CHECKPOINT", 1
+        )[1]
+        checkpoint = json.loads(block.split("\n", 1)[1])
+        covered = {
+            step + 1
+            for first, last in checkpoint["covered_steps"]
+            for step in range(first, last + 1)
+        }
+        assert folded <= covered
 
 
 _CONTEXT_REJECTION = {
