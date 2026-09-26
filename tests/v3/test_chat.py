@@ -3011,7 +3011,7 @@ def test_long_durable_chat_uses_a_bounded_user_led_model_context(tmp_path, monke
 
     assert len(prepared.model_request.messages) <= 200
     assert prepared.model_request.messages[0].role == "user"
-    assert prepared.model_request.messages[-1].content == (
+    assert prepared.model_request.messages[-1].content.startswith(
         "What was decided about CVE-2025-12345?"
     )
     roles = [message.role for message in prepared.model_request.messages]
@@ -3027,16 +3027,21 @@ def test_long_durable_chat_uses_a_bounded_user_led_model_context(tmp_path, monke
         )
         <= limits.target_input_tokens
     )
-    assert "DERIVED WORKING MEMORY" in (prepared.model_request.instructions or "")
-    assert "Which deployment region is authoritative?" in (
-        prepared.model_request.instructions or ""
-    )
-    assert "RETRIEVED CANONICAL TRANSCRIPT EXCERPTS" in (
-        prepared.model_request.instructions or ""
-    )
-    assert "CVE-2025-12345 applies to port 8443" in (
-        prepared.model_request.instructions or ""
-    )
+    instructions = prepared.model_request.instructions or ""
+    # Operator decisions are Core's own instructions; the derived memory and
+    # the retrieved originals are history, carried in the conversation: the
+    # memory ahead of the first message kept, the originals after the
+    # operator's current words.
+    assert "Which deployment region is authoritative?" in instructions
+    assert "DERIVED WORKING MEMORY" not in instructions
+    assert "RETRIEVED CANONICAL TRANSCRIPT EXCERPTS" not in instructions
+    first = prepared.model_request.messages[0].content
+    current = prepared.model_request.messages[-1].content
+    assert first.startswith("EARLIER CONVERSATION, COMPACTED BY NEBULA")
+    assert "DERIVED WORKING MEMORY" in first
+    excerpts = current.split("\n\n", 1)[1]
+    assert excerpts.startswith("RETRIEVED CANONICAL TRANSCRIPT EXCERPTS")
+    assert "CVE-2025-12345 applies to port 8443" in excerpts
     assert prepared.context_snapshot is not None
     compaction_requests = [
         request
@@ -3444,6 +3449,14 @@ def test_durable_session_rejects_divergent_or_forged_history(tmp_path, monkeypat
         "allow_subagents": False,
         "allow_agent_messaging": False,
         "max_active_subagents": None,
+        # Settled with the turn: what a tool-free request adds beside the
+        # conversation. The fake provider reports too few tokens to calibrate.
+        "context_calibration": {
+            "runtimes": [],
+            "reserved_input_tokens": chat_module.estimate_tokens(
+                chat_module._NO_TOOL_PREFIX
+            ),
+        },
     }
     assert [message.sequence for message in service.session_messages(session.id)] == [
         1,
@@ -3507,6 +3520,14 @@ def test_existing_session_cursor_and_messages_roll_back_together(tmp_path, monke
         "allow_subagents": False,
         "allow_agent_messaging": False,
         "max_active_subagents": None,
+        # Settled with the turn: what a tool-free request adds beside the
+        # conversation. The fake provider reports too few tokens to calibrate.
+        "context_calibration": {
+            "runtimes": [],
+            "reserved_input_tokens": chat_module.estimate_tokens(
+                chat_module._NO_TOOL_PREFIX
+            ),
+        },
     }
     assert [message.sequence for message in service.session_messages(session.id)] == [
         1,

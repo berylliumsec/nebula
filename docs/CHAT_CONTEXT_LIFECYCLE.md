@@ -36,8 +36,10 @@ rewrites the canonical transcript or turns a derived summary into evidence.
    remains available in the ledger and artifacts. B may contain the assistant's
    account of what it learned, but that is not the same as replaying tool output.
 4. If the A/B/C history becomes too large, `_model_context` replaces its older
-   portion in the request with a sourced snapshot and can add matching original
-   excerpts. The stored A/B/C messages remain intact.
+   portion in the request with a sourced snapshot's memory, carried as a
+   labeled block at the start of the first message kept verbatim, and can add
+   matching original excerpts after the current message. Neither goes into
+   the instructions. The stored A/B/C messages remain intact.
 
 Project instructions, current goal/plan/skills, unresolved questions, and
 permissions are assembled from their current authorities for each applicable
@@ -59,33 +61,81 @@ The default trigger is `floor(0.75 × input_capacity)`, where input capacity is
 the resolved context window minus reserved output, also capped by any separate
 input limit. The post-compaction target is `floor(0.60 × input_capacity)` for
 the compactor's sizing policy. The effective values depend on model, route,
-output request, and profile; the Workbench context meter is an estimate of saved
-conversation and project instructions and excludes some material added during a
-request. The last provider request has a separate recorded estimate.
+output request, and profile.
 
-When messages plus instructions exceed the 75% target, `_model_context`:
+The estimate compared with the trigger counts everything the request will
+carry: instructions and messages, and for a tool turn the function
+declarations (converted exactly as routing sends them), the routing
+instructions, and a reserve for the largest on-demand catalog picks the ranker
+could still add. Core estimates about three UTF-8 bytes per token. After each
+turn whose last provider request reported at least 1,000 input tokens, the
+conversation records `reported / estimated` for that provider profile and
+model in `ChatSession.metadata.context_calibration`, smoothed (half the new
+sample, half the previous factor) and bounded to 0.6–1.5, in the same session
+write that saves the answer. Target decisions (compaction, in-turn clearing)
+scale the estimate by that factor; hard capacity checks never scale it below
+0.8 of the raw estimate, and after a provider context-length rejection the rest
+of the turn uses the raw estimate. The calibration assumes `input_tokens` is
+the provider's whole prompt, cached tokens included.
 
-1. Refuses to proceed if the current user message and required instructions
-   exceed hard input capacity, or if no durable older messages can be archived.
-2. Keeps a recent, complete tail beginning with a user message. It initially
-   budgets up to 40% of the target for this tail, while always retaining the
-   current message.
-3. Summarizes the older canonical messages, including the selected context
-   originally supplied with them, through `ContextCompactor`. The selected
+The context endpoint's `estimated_input_tokens` (the Workbench meter) uses the
+same accounting: the latest turn's `reserved_input_tokens` for tools and
+routing instructions, scaled by `estimate_calibration`. It still excludes goal,
+skill, and operator-decision instructions, retrieved help or knowledge, and
+excerpts, which are known only when a turn is assembled. The last provider
+request has a separate recorded estimate, with the provider's
+`reported_input_tokens` and `reported_cached_input_tokens`.
+
+When the estimate exceeds the 75% target, `_model_context`:
+
+1. Refuses to proceed only if the current user message, required instructions
+   and tool reserve exceed hard input capacity. A conversation with nothing
+   durable to archive (a new chat) is sent unchanged while it fits capacity.
+2. Reuses the latest ready snapshot, without a model call, when it covers
+   exactly the stored messages up to its boundary (the same message IDs and
+   the same canonical content hash) and every later message fits beside its
+   memory.
+3. Otherwise keeps a recent, complete tail beginning with a user message,
+   initially budgeted at 40% of what the target leaves after instructions and
+   reserve, while always retaining the current message, and summarizes the
+   older canonical messages, including the selected context originally
+   supplied with them, through `ContextCompactor`. The compactor's objective is
+   the active goal's objective, or none: the latest message ("thanks") is no
+   guide to what later turns served by the same memory will ask. The selected
    model produces structured memory with cited source references. Long source
-   sets are chunked and reduced hierarchically; source references must validate.
-4. Adds that memory to the request instructions as derived history, and may
-   append up to eight matching original transcript excerpts within the remaining
-   excerpt budget. It tightens the tail until the assembled estimate fits.
+   sets are chunked and reduced hierarchically; source references must
+   validate.
+4. Sends the memory as a leading block of the first kept message, labeled as
+   derived history rather than instructions, and appends up to eight matching
+   original transcript excerpts (as JSON data, within a fifth of the target and
+   the room left) after the current message's own text and selected context.
+   Within a turn, the tool-history checkpoint follows them.
+5. Never leaves a message out. Every canonical message in the active
+   projection is either sent verbatim or covered by the snapshot that is sent.
+   Over the target, the excerpts go first; then the compaction boundary moves
+   forward past the messages that do not fit, and the archive is compacted
+   again, at most three compactions per request. A request still above the
+   target is sent when it fits input capacity (diagnostic
+   `chat.context.over_target`); only a request above capacity fails. When the
+   instructions, tools and current message alone exceed the target, input
+   capacity is the goal, so turns do not compact again chasing a target no
+   compaction can reach. If compacting past a later boundary fails, the
+   boundary already compacted serves when it fits capacity.
+
+The memory block is rendered from the snapshot alone, and the excerpts, which
+change every turn, come last. So between compactions each request repeats the
+previous request's instructions and messages byte for byte up to the previous
+current message, and provider prefix caches keep hitting. The stored message
+never contains its excerpts; the next turn replays it without them.
 
 Snapshots are immutable, scoped to one chat session, and keyed for reuse by
 canonical source content, provider/model, and prompt version. A ready snapshot
-can keep serving while the later messages still fit and its source IDs exactly
-match the archived portion. An edit/retraction of covered messages forces fresh
-compaction. A failed summarization records a failed snapshot and returns an
-error; Core does not silently drop the old messages. The context API exposes
-status, limits, source references, coverage, usage, and cost, but no mutation
-route: `GET /api/v1/chat/sessions/{session_id}/context`.
+keeps serving while the later messages still fit and its covered messages match
+it by ID and content. An edit (even in place) or retraction of a covered message
+forces fresh compaction. A failed summarization records a failed snapshot and
+returns an error; Core does not silently drop the old messages. The context API
+exposes status, limits, source references, coverage, usage, and cost, but no
+mutation route: `GET /api/v1/chat/sessions/{session_id}/context`.
 
 This validation proves structural provenance and a bounded request. It cannot
 prove that a model summary preserved every fact or the exact meaning of a long
@@ -161,8 +211,10 @@ a switch that requires compaction needs an explicit confirmation fingerprint.
    provider-backed or harness-managed. Avoid inferring the model's input from
    the browser transcript alone.
 2. Read the canonical message sequence and active retractions. Compare the
-   request's saved `last_provider_request` estimate with the context endpoint's
-   current estimate; the latter is not necessarily the historical request.
+   request's saved `last_provider_request` estimate and the provider's
+   `reported_input_tokens` with the context endpoint's current estimate; the
+   latter is not necessarily the historical request. The session's
+   `context_calibration` shows the factor later estimates were scaled by.
 3. For conversation compaction, inspect `context_snapshots` for status,
    `compacted_through`, source IDs/hash, model, prompt version, and usage. Check
    the original covered messages and any selected context before trusting a
@@ -192,6 +244,6 @@ all omitted findings were lost from every possible retrieval path.
 * `src/nebula/v3/chat_turn_ledger.py`: append-only step reconstruction,
   checkpoint eligibility, contents, and size cap.
 * `src/nebula/v3/domain.py`: durable `ContextSnapshot` and memory contracts.
-* `tests/v3/test_context.py`, `tests/v3/test_api_stream_context.py`, and
+* `tests/v3/test_context.py`, `tests/v3/test_chat_context_assembly.py`, and
   `tests/v3/test_turn_prompt_cache.py`: focused behavioral coverage. These
   tests prove particular contracts, not semantic completeness of a summary.

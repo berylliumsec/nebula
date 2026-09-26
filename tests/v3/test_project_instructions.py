@@ -153,7 +153,10 @@ def test_agents_md_survives_compaction_verbatim(tmp_path, monkeypatch):
     prepared = service.prepare(_request(profile, engagement, session))
 
     instructions = prepared.model_request.instructions or ""
-    assert "DERIVED WORKING MEMORY" in instructions
+    # The derived memory is history in the conversation; the rules stay the
+    # system's own instructions.
+    assert "DERIVED WORKING MEMORY" not in instructions
+    assert "DERIVED WORKING MEMORY" in str(prepared.model_request.messages[0].content)
     assert RULES in instructions
     compaction_inputs = [
         request

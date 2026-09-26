@@ -13,15 +13,19 @@ separate runtime owner.
 stateDiagram-v2
     [*] --> Stored: user message arrives
     Stored --> Rebuilt: merge active canonical transcript
-    Rebuilt --> Direct: estimated input <= target
-    Rebuilt --> Compact: estimated input > 75% input capacity
-    Compact --> Reuse: ready snapshot covers exact sources and tail fits
-    Compact --> Summarize: new or changed archived sources
+    Rebuilt --> Direct: calibrated estimate incl. tool reserve <= target
+    Rebuilt --> Compact: calibrated estimate incl. tool reserve > target
+    Compact --> Reuse: latest ready snapshot matches covered ids and content hash
+    Compact --> Summarize: new, changed, or outgrown archive
+    Compact --> Failed: current message and mandatory input exceed capacity
+    Reuse --> Request: everything after its boundary fits
+    Reuse --> Summarize: rest no longer fits beside its memory
     Summarize --> Ready: validated sourced memory
     Summarize --> Failed: model, validation, or budget error
-    Compact --> Failed: mandatory input cannot fit
-    Reuse --> Request
-    Ready --> Request: memory + recent user-led tail + optional originals
+    Ready --> Request: fits target
+    Ready --> Summarize: over target without excerpts; boundary moves forward (max 3)
+    Ready --> Request: still over target, within input capacity
+    Ready --> Failed: above input capacity
     Direct --> Request: active messages + instructions
     Failed --> [*]: actionable error; originals retained
     Request --> Stored: answer saved as canonical message
@@ -30,8 +34,11 @@ stateDiagram-v2
 `Stored` is durable; `Request` is a temporary projection. A new user turn
 rebuilds from saved messages. Previous turn tool calls are not appended to that
 new request as a raw transcript. A snapshot is derived and must cite its
-covered canonical messages. Pending approvals/recovery block a new user turn
-before this diagram begins.
+covered canonical messages. In `Request`, the memory leads the first message
+kept verbatim and retrieved originals follow the current message; the
+instructions carry neither. No canonical message is left out: moving the
+boundary compacts the messages it passes rather than dropping them. Pending
+approvals/recovery block a new user turn before this diagram begins.
 
 ## Continuing one provider turn
 
@@ -68,7 +75,10 @@ checkpoint. The newest result stays whole when hard capacity allows.
 | `runtime_managed` | External harness owns context and Core has no authoritative capacity | Inspect harness activity |
 | pending approval/recovery | Durable turn or uncertain effect, outside lossy memory | Resolve the decision/effect before starting another turn |
 
-The UI meter estimates saved messages and project instructions; it excludes
-some request-time additions. It does not display the complete historical
-transcript size or prove what a prior provider call received. Use the saved
-request estimate and canonical records for a historical investigation.
+The UI meter estimates saved messages, project instructions, and the latest
+turn's tool definitions and routing instructions, scaled by the conversation's
+calibration from provider-reported usage. It excludes goal, skill and decision
+instructions and per-turn retrieved material. It does not display the complete
+historical transcript size or prove what a prior provider call received. Use
+the saved request estimate and canonical records for a historical
+investigation.
