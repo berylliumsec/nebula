@@ -62,8 +62,16 @@ stateDiagram-v2
     Cross --> Clear: advance checkpoint; still above watermark
     Cross --> Send: advance reaches watermark
     Clear --> Send: clear oldest whole outputs down to watermark
+    Clear --> Compact: still over input capacity
+    Compact --> Sticky: conversation compacted; replay unchanged
+    Compact --> Fold: nothing smaller
+    Fold --> Sticky: all but the newest step folded into the checkpoint
+    Fold --> Answer: nothing left to fold (routing stops)
+    Send --> Compact: provider rejects; clearing cannot fix it
     Send --> ToolStep: model requests another tool
-    Send --> [*]: model completes answer
+    Send --> Answer: model finishes routing
+    Answer --> [*]: synthesis fits (help dropped, conversation compacted, steps folded)
+    Answer --> [*]: actionable capacity error; tool results saved
 ```
 
 Receipts say what each step acted on and how it ended. Their byte bound is 3%
@@ -74,7 +82,13 @@ keeps result identity and available artifact references, and a cleared result
 stays cleared for the rest of the turn, so earlier request bytes change once
 per target crossing. Neither operation deletes the durable ledger. Waiting
 approvals/callbacks remain outside the checkpoint. The newest result stays
-whole when hard capacity allows.
+whole when hard capacity allows. When even a fully cleared history leaves the
+request over capacity, or the provider refuses a request clearing cannot fix,
+the conversation ahead of the history is compacted mid-turn (once per step and
+cause). The ledger replay is sent unchanged, no tool runs again, and the
+compacted conversation serves the rest of the turn. When the replayed steps
+are what no longer fit, all but the newest fold into the checkpoint. Lookups
+the model made this turn are cleared after its other results.
 
 ## Operator-visible states and recovery
 

@@ -16,6 +16,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from .redaction import redact_text
+from .tools import RETRIEVAL_TOOL_NAMES
 
 # What a call acted on, in at most this many characters.
 BRIEF_CHARS = 120
@@ -71,6 +72,103 @@ def clipped(value: str, limit: int) -> str:
 
     text = _WHITESPACE.sub(" ", redact_text(value)).strip()
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+# A token that names something: letters and digits together, joined by the
+# punctuation identifiers use (codes, versions, paths, hosts, URLs, ids).
+_TOKEN = re.compile(r"(?<![\w./:@-])[A-Za-z0-9][\w./:@-]{2,120}")
+_DIGIT = re.compile(r"\d")
+_LETTER = re.compile(r"[A-Za-z]")
+_ADDRESS = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}(?::\d{1,5})?")
+# Result fields that describe the result rather than what it found.
+_RESULT_METADATA_KEYS = frozenset(
+    {
+        "schema",
+        "sha256",
+        "digest",
+        "id",
+        "artifact_id",
+        "artifact_ids",
+        "result_artifact_id",
+        "tool_call_id",
+        "continuation_cursor",
+        "cursor",
+    }
+)
+# Text read from one result, at most.
+_IDENTIFIER_SCAN_CHARS = 64 * 1024
+LOOKUP_IDENTIFIERS = 6
+
+
+def _result_texts(value: Any) -> list[str]:
+    """The string values of a decoded result, its own metadata left out."""
+
+    texts: list[str] = []
+    budget = _IDENTIFIER_SCAN_CHARS
+
+    def walk(item: Any) -> None:
+        nonlocal budget
+        if budget <= 0:
+            return
+        if isinstance(item, str):
+            texts.append(item[:budget])
+            budget -= len(item)
+        elif isinstance(item, Mapping):
+            for key, child in item.items():
+                if key not in _RESULT_METADATA_KEYS:
+                    walk(child)
+        elif isinstance(item, (list, tuple)):
+            for child in item:
+                walk(child)
+
+    walk(value)
+    return texts
+
+
+def lookup_identifiers(
+    name: Any, arguments: Any, result: Any, *, limit: int = LOOKUP_IDENTIFIERS
+) -> list[str]:
+    """What a lookup found, as the identifiers its output names.
+
+    A receipt for a read or search that left the request would otherwise say
+    only that it ran; the codes, paths, hosts and ids its output named are
+    usually what the model read it for. Deterministic, redacted and bounded;
+    identifiers the call itself asked for are left out. Empty for any tool
+    but a lookup.
+    """
+
+    if name not in RETRIEVAL_TOOL_NAMES:
+        return []
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except (
+            json.JSONDecodeError
+        ):  # diagnostic-expected: a plain-text result is scanned as it is
+            pass
+    asked = {
+        str(value)
+        for value in (arguments.values() if isinstance(arguments, Mapping) else ())
+        if isinstance(value, (str, int, float))
+    }
+    found: list[str] = []
+    for text in _result_texts(result):
+        for match in _TOKEN.finditer(redact_text(text)):
+            # Punctuation that ends a sentence or a label is not part of it.
+            token = match.group(0).rstrip("./:@-")
+            if (
+                len(token) < 4
+                or not _DIGIT.search(token)
+                or not (_LETTER.search(token) or _ADDRESS.fullmatch(token))
+                or token in asked
+                or token in found
+                or "REDACTED" in token
+            ):
+                continue
+            found.append(token)
+            if len(found) >= limit:
+                return found
+    return found
 
 
 def result_summary(value: Any, limit: int) -> str:
@@ -200,6 +298,7 @@ __all__ = [
     "BRIEF_CHARS",
     "TOOL_ACTIVITY_HEADING",
     "clipped",
+    "lookup_identifiers",
     "result_summary",
     "step_brief",
     "tool_activity_block",

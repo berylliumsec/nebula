@@ -269,7 +269,10 @@ bounded transformations:
   `[number, tool_index, state, did, summary, artifacts, failure]`. `did` is
   the call's main argument (command, path, query, URL and so on), redacted
   and at most 120 characters; `summary` is Core's result summary, at most 200
-  characters (empty when it only lists the result's keys); `artifacts` are
+  characters (empty when it only lists the result's keys), and for a lookup
+  (`workspace.read`/`search`, `tool_output.read`/`search`,
+  `conversation.search`) also `found` and up to six identifiers its output
+  named (codes, paths, hosts, addresses, URLs, ids); `artifacts` are
   the result's artifact references; `failure` is Core's classification of a
   failure and an `arguments_sha256` of the exact failed arguments. The
   receipts are bounded at 3% of the model's input capacity, never below
@@ -288,8 +291,12 @@ bounded transformations:
   8,000 tokens)`, but never below half the target. A result once cleared stays
   cleared for the rest of the turn (Core recomputes this after a restart), so
   a request changes its earlier bytes only when it crosses the target again,
-  not on every step. It keeps the newest result whole when hard capacity
-  permits. A receipt directs the agent to `tool_output.search` or
+  not on every step. What the model looked up this turn (`workspace.read`,
+  `workspace.search`, `tool_output.read`, `tool_output.search`,
+  `conversation.search`) is cleared only after every other older result, since
+  a cleared lookup reads as an unanswered one, and a cleared lookup's receipt
+  lists what it found the same way. It keeps the newest result whole when
+  hard capacity permits. A receipt directs the agent to `tool_output.search` or
   `tool_output.read` for the full retained output. If no artifact reference
   exists, a necessary result may require another tool call.
 
@@ -305,7 +312,8 @@ to the operator's message as a JSON data block, after the message's own
 content and before any checkpoint, and stay the same bytes for the whole turn.
 Notes that would push the request over hard input capacity are left out of it
 and a `chat.working_notes.omitted` diagnostic is recorded. A context-length
-recovery rebuild does not re-add them; the turn's notes calls and checkpoint
+recovery rebuild before any tool ran does not re-add them (a mid-turn
+compaction does, as they are then); the turn's notes calls and checkpoint
 still carry them. The notes are derived memory: they are never placed in the
 instructions and never grant permission or prove a tool effect. The context
 API returns them as `working_notes` (`content`, `revision`, `updated_at`,
@@ -320,12 +328,52 @@ notes that cite them, before drawing a conclusion that depends on them. The
 checkpoint does not by itself establish that the final answer is correct or
 incorrect.
 
+**Mid-turn conversation compaction.** Clearing shrinks only the tool history.
+When a request still cannot fit, Core compacts the *conversation* ahead of it
+in the running turn, as it would between turns, rather than stopping the work:
+`_compact_mid_turn` reserves everything else the request carries (the
+instructions around the conversation, function declarations, the replayed
+results, the checkpoint, and the current working notes) plus the same headroom
+below the target that clearing leaves. It then compacts the canonical
+conversation afresh into what is left (`_model_context` with
+`reuse_snapshot=False`; the input capacity is the goal when even the current
+message does not fit the target). The turn's ledger, checkpoint and replay are
+sent exactly as before, so no step leaves the request and no tool runs again.
+The compacted conversation (with the notes as they are now) becomes the turn's
+request from then on: it is recorded in the turn's request snapshot, so later
+steps and a resumed turn extend it and keep their prefix cache, and
+`chat.context.midturn_compacted` records the event. A tool turn whose older
+messages are now served by a snapshot is also offered `conversation.search`.
+Compaction usage is charged to the turn's goal like any other compaction. Each
+cause is tried once per step:
+
+* **Routing that no longer fits** (`context_full`): even with every result
+  cleared, the request is over input capacity. After compaction routing starts
+  the same step again. When the replayed steps themselves are what no longer
+  fits (clearing replaces outputs, not the calls or the reasoning each replays),
+  every step but the newest response group folds into the checkpoint
+  (`chat.tool_history.folded`), and routing goes on from its receipts and the
+  notes. Only when neither makes room does routing stop and the turn answer
+  from what it gathered (`chat.routing.context_full`).
+* **The final answer.** The synthesis request must fit, or the turn's work is
+  lost. The runbook help retrieved after failed steps is dropped first, then
+  the conversation is compacted, then every step but the newest, and finally
+  that one too, folds into the checkpoint. Only a request whose current
+  message, instructions and checkpoint still cannot fit fails, with an
+  actionable error that says its tool results are saved.
+* **A provider context-length rejection** after tool routing began, when
+  clearing could not shrink the request, or cleared it and the provider still
+  refused. Every result but the newest stays cleared, and the conversation is
+  compacted for one more retry.
+
 For a confirmed provider context-length rejection *before a response delta or
 tool effect*, Core may refresh exact model/route limits and retry the canonical
-request once. The in-turn path can retry once with older results cleared, and
-those results stay cleared for the rest of the turn. Completed tool effects
-are never retried merely because a provider rejected a later request. A second
-rejection becomes an actionable capacity failure.
+request once. Within a tool turn the first retry clears older results (they
+stay cleared for the rest of the turn), and a request clearing cannot fix, or
+a cleared retry the provider refuses too, is retried once more with the
+conversation compacted. Completed tool effects are never retried merely because
+a provider rejected a later request. A further rejection becomes an actionable
+capacity failure.
 
 ## Other runtimes and lifecycles
 
