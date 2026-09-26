@@ -198,6 +198,7 @@ from .model_catalog import (
     route_discovery_model,
     route_limits_verified,
 )
+from .model_pricing import combined_billed_cost
 from .privacy import ProviderPrivacyViolation, validate_engagement_provider_privacy
 from .environments import resolve_ssh_environments
 from .mcp import McpProbeError, catalog_mcp_profiles, resolve_mcp_profiles
@@ -6664,6 +6665,7 @@ class ChatService:
                 + current.usage.cached_input_tokens,
                 cache_creation_input_tokens=usage.cache_creation_input_tokens
                 + current.usage.cache_creation_input_tokens,
+                cost_usd=combined_billed_cost(usage, current.usage),
             )
             current_problem = _final_answer_problem(current)
         if prepared.turn is not None:
@@ -10451,6 +10453,7 @@ class ChatService:
             + response.usage.cached_input_tokens,
             cache_creation_input_tokens=turn.usage.cache_creation_input_tokens
             + response.usage.cache_creation_input_tokens,
+            cost_usd=combined_billed_cost(turn.usage, response.usage),
         )
         reasoning_changes, reasoning_parts = self._reasoning_changes(
             turn, response.reasoning

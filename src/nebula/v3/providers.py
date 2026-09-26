@@ -16,6 +16,7 @@ import binascii
 import ipaddress
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -31,6 +32,7 @@ from collections.abc import (
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from enum import Enum
 from typing import Any, Literal
@@ -67,7 +69,9 @@ from .model_catalog import (
     openrouter_model_routes,
     openrouter_models,
     openrouter_upstream_providers,
+    route_limits_verified,
 )
+from .model_pricing import provider_token_rates
 from .redaction import redact_text
 from .tool_markup import recover as _recover_tool_markup
 
@@ -274,6 +278,9 @@ class ProviderConfig(BaseModel):
     # Models the catalog marks as always reasoning (OpenRouter
     # ``reasoning.mandatory``); they are never asked to skip it.
     reasoning_mandatory_models: list[str] = Field(default_factory=list)
+    # Per-token prices each exact model's catalog entry publishes (OpenRouter
+    # ``pricing``: decimal strings by billing unit), for cost estimates.
+    model_prices: dict[str, dict[str, str]] = Field(default_factory=dict)
 
     @field_validator("base_url")
     @classmethod
@@ -638,6 +645,36 @@ class ModelUsage(BaseModel):
     # The part of ``input_tokens`` the route wrote to its prompt cache, when
     # it says (Claude routes bill it above the uncached rate); zero otherwise.
     cache_creation_input_tokens: int = 0
+    # What the route billed for this response in USD, when it says
+    # (OpenRouter's ``usage.cost``, which prices the upstream endpoint that
+    # actually served it); ``None`` otherwise.
+    cost_usd: float | None = None
+
+
+def usage_cost_usd(config: ProviderConfig, model: str | None, usage: Any) -> float:
+    """USD cost of ``usage`` (a ``ModelUsage`` or ``ChatTokenUsage``).
+
+    What the route billed, when it reported that; otherwise an estimate from
+    the profile's configured rates or the model's catalog prices
+    (:func:`provider_token_rates`), with cache reads and writes billed at
+    their own rates instead of the full input rate.
+    """
+
+    billed = getattr(usage, "cost_usd", None)
+    if isinstance(billed, (int, float)) and not isinstance(billed, bool):
+        return float(billed)
+    exact = model or config.default_model
+    rates = provider_token_rates(
+        config.options, config.model_prices.get(exact) if exact else None
+    )
+    return rates.cost_usd(
+        input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+        cached_input_tokens=int(getattr(usage, "cached_input_tokens", 0) or 0),
+        cache_creation_input_tokens=int(
+            getattr(usage, "cache_creation_input_tokens", 0) or 0
+        ),
+    )
 
 
 # The validation context key under which an adapter hands its request to the
@@ -2173,11 +2210,12 @@ def _token_count(value: Any) -> int:
     return max(0, int(value))
 
 
-def _openai_usage(usage: Any) -> ModelUsage:
+def _openai_usage(usage: Any, *, billed: bool = False) -> ModelUsage:
     """Read Chat Completions usage; gateways omit ``total_tokens`` or send null.
 
     Goal token budgets gate on the total, so a missing one is summed rather
-    than recorded as zero.
+    than recorded as zero. ``billed`` reads the cost the route reports
+    (OpenRouter's ``usage.cost``); other gateways' cost fields are not trusted.
     """
 
     if not isinstance(usage, dict):
@@ -2199,7 +2237,32 @@ def _openai_usage(usage: Any) -> ModelUsage:
         total_tokens=_token_count(usage.get("total_tokens")) or prompt + completion,
         cached_input_tokens=min(cached, prompt) if prompt else cached,
         cache_creation_input_tokens=min(written, prompt) if prompt else written,
+        cost_usd=_openrouter_billed_cost(usage) if billed else None,
     )
+
+
+def _openrouter_billed_cost(usage: dict[str, Any]) -> float | None:
+    """OpenRouter's billed cost for one generation, upstream included.
+
+    With the operator's own upstream key (BYOK) ``cost`` is OpenRouter's fee
+    and the upstream bills ``cost_details.upstream_inference_cost`` itself.
+    """
+
+    def amount(value: Any) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        return float(value) if math.isfinite(value) and value >= 0 else None
+
+    cost = amount(usage.get("cost"))
+    if cost is None or usage.get("is_byok") is not True:
+        return cost
+    details = usage.get("cost_details")
+    upstream = (
+        amount(details.get("upstream_inference_cost"))
+        if isinstance(details, dict)
+        else None
+    )
+    return cost + (upstream or 0.0)
 
 
 def _tool_call_slot(
@@ -4353,7 +4416,10 @@ class OpenAICompatibleProvider(ModelProvider):
                 part for part in (routed_reasoning, inline_reasoning.strip()) if part
             ),
             tool_calls=calls,
-            usage=_openai_usage(data.get("usage")),
+            usage=_openai_usage(
+                data.get("usage"),
+                billed=self.config.flavor == ProviderFlavor.OPENROUTER,
+            ),
             finish_reason=choice.get("finish_reason"),
             provider_request_id=data.get("id"),
             raw=data,
@@ -4770,7 +4836,10 @@ async def _stream_openai_compatible(
                     response_model = data.get("model") or response_model
                     chunk_usage = data.get("usage")
                     if chunk_usage:
-                        usage = _openai_usage(chunk_usage)
+                        usage = _openai_usage(
+                            chunk_usage,
+                            billed=provider.config.flavor == ProviderFlavor.OPENROUTER,
+                        )
                     choice = _first_choice(data)
                     finish_reason = choice.get("finish_reason") or finish_reason
                     failure = _finish_reason_failure(choice)
@@ -6566,9 +6635,65 @@ def provider_from_profile(
                     for item in described
                     if item.get("reasoning_mandatory") is True
                 ],
+                "model_prices": _catalog_prices(described),
             }
         )
     return build_provider(config)
+
+
+def _catalog_prices(described: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
+    """Each described model's prices, as high as any endpoint serving it charges.
+
+    OpenRouter's model-level price is its cheapest endpoint's, and routing can
+    pick a dearer one (DeepSeek V4.1 Flash lists $0.035/M input while Together
+    serves it at $0.30/M). Where the model's endpoints were measured, each
+    unit takes the highest price among them, so an estimate is never below
+    the bill. An alias falls back to its target's prices.
+    """
+
+    def prices(item: dict[str, Any]) -> dict[str, str]:
+        routes = (
+            item.get("route_limits")
+            if route_limits_verified(item, str(item["id"]))
+            else None
+        )
+        peak: dict[str, tuple[Decimal, str]] = {}
+        for source in [
+            item.get("pricing"),
+            *(
+                route.get("pricing")
+                for route in (routes if isinstance(routes, list) else [])
+                if isinstance(route, dict)
+            ),
+        ]:
+            for unit, value in source.items() if isinstance(source, dict) else []:
+                if not isinstance(unit, str) or not isinstance(value, str):
+                    continue
+                try:
+                    price = Decimal(value)
+                except (
+                    InvalidOperation
+                ):  # diagnostic-expected: an unusable price is left out
+                    continue
+                if (
+                    price.is_finite()
+                    and price >= 0
+                    and (unit not in peak or price > peak[unit][0])
+                ):
+                    peak[unit] = (price, value)
+        return {unit: value for unit, (_, value) in peak.items()}
+
+    by_id = {str(item["id"]): prices(item) for item in described}
+    targets = {
+        str(item["id"]): item.get("alias_target")
+        for item in described
+        if isinstance(item.get("alias_target"), str)
+    }
+    return {
+        model: own or by_id.get(targets.get(model) or "", {})
+        for model, own in by_id.items()
+        if own or by_id.get(targets.get(model) or "")
+    }
 
 
 __all__ = [
@@ -6604,4 +6729,5 @@ __all__ = [
     "json_schema_instruction",
     "provider_from_profile",
     "retry_policy",
+    "usage_cost_usd",
 ]
