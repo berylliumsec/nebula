@@ -1050,6 +1050,9 @@ _RETRIEVED_EXCERPTS_HEADING = (
 )
 # The most relevant few originals, not a second transcript.
 _MAX_RETRIEVED_EXCERPTS = 8
+# A question about several problems gets a runbook for each, up to this
+# many; the articles run to several hundred tokens each.
+_MAX_OPERATOR_HELP_ARTICLES = 3
 # How many times one request moves its compaction boundary forward, each time
 # compacting again, before it settles for a request above the target that
 # still fits the model's input capacity.
@@ -13229,7 +13232,9 @@ class ChatService:
     ) -> list[_RetrievedChunk]:
         selected: list[_RetrievedChunk] = []
         tokens = 0
-        for ordinal, match in enumerate(search_operator_help(queries, limit=8)):
+        for ordinal, match in enumerate(
+            search_operator_help(queries, limit=_MAX_OPERATOR_HELP_ARTICLES)
+        ):
             article = match.article
             text = article.reference_text
             candidate_tokens = estimate_tokens(text, message_count=1)
