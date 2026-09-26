@@ -22,6 +22,9 @@ from nebula.v3.chat import ChatCompletionRequest, ChatService
 from nebula.v3.domain import Engagement
 from nebula.v3.knowledge_index import ChromaKnowledgeIndex
 from nebula.v3.knowledge_rerank import (
+    BEST_THRESHOLD,
+    NEAREST_SIMILARITY,
+    NEAREST_THRESHOLD,
     RELEVANCE_THRESHOLD,
     RESCUE_SIMILARITY,
     RESCUE_THRESHOLD,
@@ -61,51 +64,106 @@ class TableScorer:
         return [self.table.get(pair, self.default) for pair in pairs]
 
 
-def test_the_gate_keeps_answers_at_the_calibrated_boundaries():
+def test_the_best_chunk_is_kept_unless_confidently_unrelated():
     candidates = [
+        RerankCandidate("best but weak"),
+        RerankCandidate("second, weak"),
+    ]
+    near_miss = TableScorer(
+        {("q", "best but weak"): BEST_THRESHOLD, ("q", "second, weak"): -3.5}
+    )
+    rejected = TableScorer(
+        {("q", "best but weak"): BEST_THRESHOLD - 0.01, ("q", "second, weak"): -5.0}
+    )
+
+    # The best chunk is attached at the loose line; others need the strict one.
+    assert relevant_candidates("q", candidates, near_miss) == [(0, BEST_THRESHOLD)]
+    # A confident rejection of even the best chunk attaches nothing.
+    assert relevant_candidates("q", candidates, rejected) == []
+
+
+def test_further_chunks_need_the_strict_line_or_embedding_support():
+    candidates = [
+        RerankCandidate("strong"),
         RerankCandidate("at the line"),
         RerankCandidate("just below"),
-        RerankCandidate("strong"),
         RerankCandidate("close paraphrase", similarity=RESCUE_SIMILARITY),
         RerankCandidate("not close enough", similarity=RESCUE_SIMILARITY - 0.01),
-        RerankCandidate("close but rejected", similarity=0.9),
+        RerankCandidate("close but rejected", similarity=RESCUE_SIMILARITY + 0.01),
     ]
     scorer = TableScorer(
         {
+            ("q", "strong"): 4.0,
             ("q", "at the line"): RELEVANCE_THRESHOLD,
             ("q", "just below"): RELEVANCE_THRESHOLD - 0.01,
-            ("q", "strong"): 4.0,
             ("q", "close paraphrase"): RESCUE_THRESHOLD,
             ("q", "not close enough"): RESCUE_THRESHOLD + 1.0,
-            ("q", "close but rejected"): RESCUE_THRESHOLD - 0.01,
+            # Below the rescue line, and nearest by embedding yet below that
+            # bar too.
+            ("q", "close but rejected"): NEAREST_THRESHOLD - 0.01,
         }
     )
 
     kept = relevant_candidates("q", candidates, scorer)
 
-    assert kept == [(2, 4.0), (0, RELEVANCE_THRESHOLD), (3, RESCUE_THRESHOLD)]
+    assert kept == [(0, 4.0), (1, RELEVANCE_THRESHOLD), (3, RESCUE_THRESHOLD)]
 
 
-def test_a_chunk_below_the_line_is_read_again_with_the_search_that_found_it():
+def test_the_nearest_chunk_by_embedding_keeps_a_lower_bar():
     candidates = [
-        RerankCandidate("credential passage", variant="user authentication steps"),
-        RerankCandidate("already relevant", variant="another search"),
-        RerankCandidate("same words", variant="HOW DO I LOG IN"),
-        RerankCandidate("no variant"),
+        RerankCandidate("cross-encoder favourite", similarity=0.10),
+        RerankCandidate("embedding nearest", similarity=NEAREST_SIMILARITY),
+        RerankCandidate("far", similarity=0.05),
     ]
     scorer = TableScorer(
         {
-            ("how do i log in", "credential passage"): -6.0,
-            ("user authentication steps", "credential passage"): -1.0,
-            ("how do i log in", "already relevant"): 2.0,
+            ("q", "cross-encoder favourite"): -3.5,
+            ("q", "embedding nearest"): NEAREST_THRESHOLD,
+            ("q", "far"): -9.0,
+        }
+    )
+    too_low = TableScorer(
+        {
+            ("q", "cross-encoder favourite"): -3.5,
+            ("q", "embedding nearest"): NEAREST_THRESHOLD - 0.01,
         }
     )
 
-    kept = relevant_candidates("how do i log in", candidates, scorer)
+    assert relevant_candidates("q", candidates, scorer) == [(1, NEAREST_THRESHOLD)]
+    assert relevant_candidates("q", candidates, too_low) == []
 
-    assert kept == [(1, 2.0), (0, -1.0)]
-    # One batch for the question, one for the single chunk worth re-reading.
-    assert scorer.calls[1] == [("user authentication steps", "credential passage")]
+
+def test_a_short_chunk_is_read_again_with_every_planned_search():
+    candidates = [
+        RerankCandidate("maintenance passage"),
+        RerankCandidate("already relevant"),
+    ]
+    scorer = TableScorer(
+        {
+            ("when can we take it down", "maintenance passage"): -3.2,
+            ("maintenance window policy", "maintenance passage"): -3.08,
+            ("maintenance window schedule", "maintenance passage"): -0.8,
+            ("when can we take it down", "already relevant"): 1.0,
+        }
+    )
+
+    kept = relevant_candidates(
+        "when can we take it down",
+        candidates,
+        scorer,
+        planned=[
+            "maintenance window policy",
+            "WHEN CAN WE TAKE IT DOWN",
+            "maintenance window schedule",
+        ],
+    )
+
+    assert kept == [(1, 1.0), (0, -0.8)]
+    # Only the chunk below the line is re-read, once per distinct search.
+    assert scorer.calls[1] == [
+        ("maintenance window policy", "maintenance passage"),
+        ("maintenance window schedule", "maintenance passage"),
+    ]
 
 
 def test_a_scorer_that_miscounts_is_an_error():
@@ -481,30 +539,32 @@ def test_the_pinned_model_meets_its_calibration():  # pragma: no cover - local o
     outcome: dict[str, list[bool]] = {}
     for item in calibration["questions"]:
         question, relevant, kind = item["question"], set(item["relevant"]), item["kind"]
-        variants = [question, *item["variants"]]
-        vectors = embed(variants)
-        candidates = []
-        for (_, text), vector in zip(chunks, chunk_vectors):
-            similarities = [cosine(query, vector) for query in vectors]
-            best = max(range(len(variants)), key=similarities.__getitem__)
-            candidates.append(
-                RerankCandidate(
-                    text=text,
-                    variant=variants[best] if best else None,
-                    similarity=max(similarities),
-                )
-            )
+        vectors = embed([question, *item["variants"]])
+        scored = sorted(
+            (
+                (max(cosine(query, vector) for query in vectors), index)
+                for index, vector in enumerate(chunk_vectors)
+            ),
+            reverse=True,
+        )
+        # Retrieval hands the gate its candidates nearest first.
+        order = [index for _, index in scored]
+        candidates = [
+            RerankCandidate(text=chunks[index][1], similarity=similarity)
+            for similarity, index in scored
+        ]
         kept = (
-            relevant_candidates(question, candidates, reranker.score)
+            relevant_candidates(
+                question, candidates, reranker.score, planned=item["variants"]
+            )
             if has_content(question)
             else []
         )
-        names = {chunks[index][0] for index, _ in kept}
+        names = {chunks[order[index]][0] for index, _ in kept}
         outcome.setdefault(kind, []).append(
             bool(names & relevant) if relevant else not names
         )
     print({kind: f"{sum(values)}/{len(values)}" for kind, values in outcome.items()})
-    assert all(outcome["unrelated"])
     assert all(outcome["lexical"])
-    assert sum(outcome["paraphrase"]) >= 12
-    assert sum(outcome["hard_negative"]) >= 4
+    assert sum(outcome["paraphrase"]) >= 14
+    assert sum(outcome["unrelated"]) >= 11

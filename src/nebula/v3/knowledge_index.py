@@ -192,9 +192,6 @@ class IndexedKnowledgeChunk:
     distance: float
     rank: int
     scope: Literal["engagement", "library"] = "engagement"
-    # Which of the queries found it at this distance, so a reranker can read
-    # the chunk with the search that matched it.
-    query_index: int = 0
 
 
 class KnowledgeIndex(Protocol):
@@ -518,10 +515,8 @@ class ChromaKnowledgeIndex:
         scope: Literal["engagement", "library"],
         where: dict[str, str] | None = None,
     ) -> list[IndexedKnowledgeChunk]:
-        normalized = [" ".join(query.split()).strip() for query in queries]
-        # Each cleaned query's position among the queries the caller passed.
-        positions = [index for index, query in enumerate(normalized) if query]
-        cleaned = [normalized[index] for index in positions]
+        cleaned = [" ".join(query.split()).strip() for query in queries]
+        cleaned = [query for query in cleaned if query]
         if not cleaned or limit <= 0:
             return []
         try:
@@ -595,9 +590,6 @@ class ChromaKnowledgeIndex:
                     else 1.0,
                     rank=ordinal,
                     scope=scope,
-                    query_index=(
-                        positions[query_index] if query_index < len(positions) else 0
-                    ),
                 )
                 previous = candidates.get(candidate.id)
                 if previous is None or candidate.distance < previous.distance:

@@ -282,21 +282,32 @@ secret redaction still apply after retrieval.
 Nearest-neighbour search always returns something, so retrieved chunks pass a local
 relevance check before they are attached. A small cross-encoder
 (`mixedbread-ai/mxbai-rerank-xsmall-v1`, quantised ONNX, about 96 MB, Apache-2.0)
-reads the best eight candidates together with the operator's question, and with the
-planned search that found each one, and chunks that do not answer the question are
-left out: a question about Nebula itself, or "thanks", no longer carries the
-project's runbooks. A message with no subject of its own ("ok, continue") skips
-knowledge planning and retrieval entirely. The model runs through onnxruntime on
-the Core host, so project text never leaves it for scoring. It is fetched in the
-background the first time a source is indexed, pinned to one repository commit and
-verified by SHA-256 before it is loaded, and stored under
+scores the best eight candidates against the operator's question and every search
+the planner proposed. The check leans toward keeping the answer: the best-scoring
+chunk is attached unless the model confidently rejects it, and further chunks must
+clear a stricter line. A question about Nebula itself, or "thanks", no longer
+carries the project's runbooks, and a message with no subject of its own ("ok,
+continue") skips knowledge planning and retrieval entirely. The model runs through
+onnxruntime on the Core host, so project text never leaves it for scoring. It is
+fetched in the background the first time a source is indexed, pinned to one
+repository commit and verified by SHA-256 before it is loaded, and stored under
 `<data-dir>/knowledge-models` (override with `NEBULA_V3_KNOWLEDGE_MODELS_DIR`);
 `GET /api/v1/knowledge/index-status` reports its state under `reranker`. Until it is
 ready, or when `NEBULA_V3_KNOWLEDGE_RERANKER=off`, retrieval attaches the nearest
 chunks as before. On the labelled calibration set in
-`tests/v3/fixtures/knowledge_relevance_calibration.json`, every unrelated question
-attached nothing, every question sharing words with its answer kept it, and 12 of 15
-paraphrases kept theirs.
+`tests/v3/fixtures/knowledge_relevance_calibration.json`, every question sharing
+words with its answer and 14 of 15 paraphrases kept their document, and 11 of 13
+unrelated questions attached nothing.
+
+Tool-enabled provider turns in a Project with ready knowledge are also offered
+`knowledge.search`, the same search a managed harness has through its gateway: when
+the attached reference material does not answer, the model can search the Project's
+documents and Library itself. It is offered whenever knowledge is enabled for the
+turn and may reach its model (a local model, or a cloud model with sensitive-data
+permission and the knowledge confirmation), not per message, so the tool list stays
+stable for prompt caching. A cloud model's searches exclude local-only sources and
+redact secrets, results carry source and chunk ids for citation, and the search is a
+read that needs no approval.
 
 ## Context compaction
 

@@ -163,8 +163,8 @@ class ParallelismPolicy(str, Enum):
     DISTINCT_TARGET = "distinct_target"
 
 
-# Core's own bounded reads of recorded output, project files and the
-# conversation's archived messages. They change nothing, so an attempt
+# Core's own bounded reads of recorded output, project files, the
+# conversation's archived messages and the project's indexed knowledge. They change nothing, so an attempt
 # interrupted by a Core restart can run again.
 RETRIEVAL_TOOL_NAMES = frozenset(
     {
@@ -173,6 +173,7 @@ RETRIEVAL_TOOL_NAMES = frozenset(
         "workspace.search",
         "workspace.read",
         "conversation.search",
+        "knowledge.search",
     }
 )
 

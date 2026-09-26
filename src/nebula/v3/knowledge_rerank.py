@@ -16,15 +16,22 @@ knowledge never leaves the machine to be scored. Until the model is present
 and loaded, retrieval behaves as it did before; preparing it happens in the
 background and never holds up a turn.
 
-Calibration (a labelled set of 50 questions over six project documents:
-questions sharing words with their answer, paraphrases sharing none,
-questions about Nebula itself or general knowledge, and questions that share
-vocabulary with a document it cannot answer) put the keep line at a score of
--2.5, with a second route for paraphrases the embedding model already found
-(cosine similarity at least 0.40) that score at least -4.0. On that set every
-unrelated question attached nothing, every lexical question kept its document,
-and 12 of 15 paraphrases kept theirs; today's retrieval attaches documents to
-all 21 questions nothing answers.
+The gate leans toward recall, because leaving out the document that answers a
+question costs an operator more than an extra chunk. The best-scoring chunk is
+attached unless the cross-encoder confidently rejects it; any further chunk
+must clear a stricter line. Each chunk is scored against the operator's
+question and every search the retrieval planner proposed, keeping the best,
+so a paraphrase survives whichever wording the planner chose.
+
+Calibration: a labelled set of 50 questions over six project documents
+(``tests/v3/fixtures/knowledge_relevance_calibration.json``): questions
+sharing words with their answer, paraphrases sharing none, questions about
+Nebula itself or general knowledge, and questions that share vocabulary with a
+document that cannot answer them. With the lines below, every lexical question
+and 14 of 15 paraphrases kept their document, and 11 of 13 unrelated questions
+attached nothing, where today's retrieval attaches every chunk that fits to
+all of them. Questions sharing vocabulary with a document still attach its
+best chunk or two (12 chunks for 8 such questions, against 56 today).
 """
 
 from __future__ import annotations
@@ -55,16 +62,30 @@ RERANKER_MODEL = "mixedbread-ai/mxbai-rerank-xsmall-v1"
 RERANKER_REVISION = "b5c6e9da73abc3711f593f705371cdbe9e0fe422"
 RERANKER_BASE_URL = "https://huggingface.co"
 
-# A cross-encoder logit at or above this reads the chunk as answering the
-# question (see the module docstring for the calibration).
-RELEVANCE_THRESHOLD = -2.5
+# The best-scoring chunk is attached unless it scores below this: only a
+# confident rejection leaves a request without project knowledge. (A planner
+# wording seen on a real Core put a right answer at -3.08.)
+BEST_THRESHOLD = -3.1
+# Every further chunk must score at least this to be attached as well. Scores
+# are the best over the question and the planner's searches, which lifts
+# unrelated chunks too: at -2.5 a TLS question attached all seven chunks of
+# the calibration set; at -1.5 recall is unchanged and extra chunks halve.
+RELEVANCE_THRESHOLD = -1.5
 # A chunk the embedding model already placed this close to the question, and
 # that the cross-encoder does not firmly reject, is a paraphrase worth keeping.
 RESCUE_SIMILARITY = 0.40
 RESCUE_THRESHOLD = -4.0
-# Scoring costs roughly 0.1 s per chunk on a laptop CPU, so only the best few
-# candidates of the existing ranking are read.
+# The chunk the embedding model ranks nearest is attached at a lower bar still,
+# so a paraphrase the cross-encoder under-reads keeps its best evidence.
+NEAREST_SIMILARITY = 0.35
+NEAREST_THRESHOLD = -4.2
+# Scoring costs roughly 0.05 s per full-size chunk on a laptop CPU, so only the
+# best few candidates of the existing ranking are read, and re-reading short
+# chunks against the planner's searches stops after this many pairs (the
+# ranking puts the chunks those searches found first). Worst case: 20 pairs,
+# about a second.
 MAX_RERANK_CANDIDATES = 8
+MAX_RETRY_PAIRS = 12
 MAX_SEQUENCE_TOKENS = 512
 # The question is capped so the chunk always keeps most of the sequence.
 MAX_QUERY_CHARACTERS = 1_000
@@ -117,13 +138,11 @@ class Scorer(Protocol):
 class RerankCandidate:
     """A retrieved chunk as the relevance gate reads it.
 
-    ``variant`` is the planned search that found the chunk, when that was not
-    the operator's own words; ``similarity`` is the embedding cosine
-    similarity, when the chunk came from vector search.
+    ``similarity`` is the embedding cosine similarity, when the chunk came
+    from vector search.
     """
 
     text: str
-    variant: str | None = None
     similarity: float | None = None
 
 
@@ -138,15 +157,25 @@ def has_content(query: str) -> bool:
 
 
 def relevant_candidates(
-    query: str, candidates: Sequence[RerankCandidate], scorer: Scorer
+    query: str,
+    candidates: Sequence[RerankCandidate],
+    scorer: Scorer,
+    *,
+    planned: Sequence[str] = (),
 ) -> list[tuple[int, float]]:
-    """``(index, score)`` of the candidates that answer ``query``, best first.
+    """``(index, score)`` of the candidates to attach, best first.
 
-    Each chunk is read with the operator's question; one that falls short is
-    read again with the planned search that found it, and keeps the better
-    score. A chunk is kept at ``RELEVANCE_THRESHOLD``, or at
-    ``RESCUE_THRESHOLD`` when the embedding model already placed it within
-    ``RESCUE_SIMILARITY`` of the question.
+    Each chunk is scored against the operator's question; one that falls
+    short of ``RELEVANCE_THRESHOLD`` is scored again against every ``planned``
+    search (candidates in order, up to ``MAX_RETRY_PAIRS``) and keeps its best
+    score. Attached are:
+
+    * the best-scoring chunk, unless it scores below ``BEST_THRESHOLD``;
+    * every chunk at ``RELEVANCE_THRESHOLD``;
+    * a chunk within ``RESCUE_SIMILARITY`` of the question by embedding that
+      scores at least ``RESCUE_THRESHOLD``;
+    * the chunk nearest by embedding, at ``NEAREST_SIMILARITY``, when it
+      scores at least ``NEAREST_THRESHOLD``.
     """
 
     if not candidates:
@@ -155,31 +184,27 @@ def relevant_candidates(
     scores = list(scorer([(question, item.text) for item in candidates]))
     if len(scores) != len(candidates):
         raise RerankerError("the reranker returned an unexpected number of scores")
-    retry = [
-        index
-        for index, item in enumerate(candidates)
-        if scores[index] < RELEVANCE_THRESHOLD
-        and item.variant
-        and item.variant.casefold() != query.casefold()
-    ]
-    if retry:
-        second = list(
-            scorer(
-                [
-                    (
-                        str(candidates[index].variant)[:MAX_QUERY_CHARACTERS],
-                        candidates[index].text,
-                    )
-                    for index in retry
-                ]
-            )
+    searches = list(
+        dict.fromkeys(
+            item[:MAX_QUERY_CHARACTERS]
+            for item in planned
+            if item.strip() and item.casefold() != query.casefold()
         )
-        if len(second) != len(retry):
+    )
+    retry = [index for index, score in enumerate(scores) if score < RELEVANCE_THRESHOLD]
+    if retry and searches:
+        targets = [(index, search) for index in retry for search in searches][
+            :MAX_RETRY_PAIRS
+        ]
+        second = list(
+            scorer([(search, candidates[index].text) for index, search in targets])
+        )
+        if len(second) != len(targets):
             raise RerankerError("the reranker returned an unexpected number of scores")
-        for index, score in zip(retry, second, strict=True):
+        for (index, _), score in zip(targets, second, strict=True):
             scores[index] = max(scores[index], score)
-    kept = [
-        (index, score)
+    kept = {
+        index
         for index, score in enumerate(scores)
         if score >= RELEVANCE_THRESHOLD
         or (
@@ -187,8 +212,26 @@ def relevant_candidates(
             and float(candidates[index].similarity or 0.0) >= RESCUE_SIMILARITY
             and score >= RESCUE_THRESHOLD
         )
+    }
+    best = max(range(len(scores)), key=lambda index: (scores[index], -index))
+    if scores[best] >= BEST_THRESHOLD:
+        kept.add(best)
+    similar = [
+        index for index, item in enumerate(candidates) if item.similarity is not None
     ]
-    return sorted(kept, key=lambda item: (-item[1], item[0]))
+    if similar:
+        nearest = max(
+            similar, key=lambda index: (candidates[index].similarity or 0.0, -index)
+        )
+        if (
+            float(candidates[nearest].similarity or 0.0) >= NEAREST_SIMILARITY
+            and scores[nearest] >= NEAREST_THRESHOLD
+        ):
+            kept.add(nearest)
+    return sorted(
+        ((index, scores[index]) for index in kept),
+        key=lambda item: (-item[1], item[0]),
+    )
 
 
 class _OnnxCrossEncoder:
@@ -487,7 +530,10 @@ class CrossEncoderReranker:
 
 
 __all__ = [
+    "BEST_THRESHOLD",
     "MAX_RERANK_CANDIDATES",
+    "NEAREST_SIMILARITY",
+    "NEAREST_THRESHOLD",
     "RELEVANCE_THRESHOLD",
     "RERANKER_FILES",
     "RERANKER_MODEL",

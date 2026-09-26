@@ -75,9 +75,14 @@ from .browser_tools import BrowserToolPlatform, combine_tool_components
 from .browser_companion_tools import attached_session, companion_components
 from .application_model.tools import standalone_components
 from .conversation_search import CONVERSATION_SEARCH_TOOL_NAME, conversation_search_spec
+from .knowledge_search import (
+    KNOWLEDGE_SEARCH_ROUTING_INSTRUCTIONS,
+    KNOWLEDGE_SEARCH_TOOL_NAME,
+)
 from .runtime_platform import (
     conversation_search_components,
     dashboard_components,
+    knowledge_search_components,
     notes_components,
 )
 from .tool_activity import lookup_identifiers, step_brief, tool_activity_block
@@ -745,10 +750,8 @@ class _RetrievedChunk:
     local_only: bool
     score: float
     ordinal: int
-    # The planned search that found the chunk, when not the operator's words,
-    # and its embedding similarity, when vector search found it: what the
-    # relevance gate reads besides the chunk (``knowledge_rerank``).
-    variant: str | None = None
+    # Embedding similarity, when vector search found the chunk: what the
+    # relevance gate reads besides the text (``knowledge_rerank``).
     similarity: float | None = None
 
 
@@ -1460,6 +1463,11 @@ def _routing_instructions(names: Collection[str], max_active_subagents: Any) -> 
         )
         + (AGENT_MESSAGE_ROUTING_INSTRUCTIONS if "send_agent_message" in names else "")
         + (NOTES_ROUTING_INSTRUCTIONS if NOTES_WRITE_TOOL_NAME in names else "")
+        + (
+            KNOWLEDGE_SEARCH_ROUTING_INSTRUCTIONS
+            if KNOWLEDGE_SEARCH_TOOL_NAME in names
+            else ""
+        )
     )
 
 
@@ -5411,6 +5419,7 @@ class ChatService:
             if selected
         ]
         tools_enabled = bool(tool_families)
+        knowledge_search = False
         if tools_enabled:
             if engagement_id is None:
                 raise ChatConfigurationError(
@@ -5605,6 +5614,29 @@ class ChatService:
                             self.store,
                             tool_components.scope,
                             Path(tool_components.workspace),
+                        ),
+                    )
+                # Offered whenever the project's knowledge may reach this
+                # model, not per message, so the tool list stays the same from
+                # turn to turn and the provider's prefix cache holds.
+                knowledge_search = (
+                    tool_components is not None
+                    and request.include_knowledge
+                    and (
+                        provider.config.local
+                        or (
+                            profile.privacy.permits_sensitive_data
+                            and request.allow_cloud_knowledge
+                        )
+                    )
+                    and self._has_ready_knowledge(engagement_id)
+                )
+                if knowledge_search:
+                    assert tool_components is not None
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        self._knowledge_search_components(
+                            tool_components, engagement_id, provider
                         ),
                     )
             except Exception as exc:
@@ -5999,6 +6031,7 @@ class ChatService:
                     "tool_suggestions": tool_suggestions,
                     "tool_catalog": tool_catalog,
                     "conversation_search": conversation_search,
+                    "knowledge_search": knowledge_search,
                     "automation_runtime_digest": getattr(
                         tool_components, "runtime_digest", None
                     ),
@@ -11403,6 +11436,13 @@ class ChatService:
                         self.store, components.scope, Path(components.workspace)
                     ),
                 )
+            if components is not None and turn.request_snapshot.get("knowledge_search"):
+                components = combine_tool_components(
+                    components,
+                    self._knowledge_search_components(
+                        components, turn.engagement_id, provider
+                    ),
+                )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
             deferred = catalog_snapshot(turn.request_snapshot).get("deferred")
@@ -13966,6 +14006,30 @@ class ChatService:
             encode=encode, model=index.status.model, cache=self._conversation_vectors
         )
 
+    def _knowledge_search_components(
+        self,
+        components: RuntimeToolComponents | AutomationToolComponents,
+        engagement_id: str,
+        provider: ModelProvider,
+    ) -> RuntimeToolComponents:
+        # Only a model on this host may read local-only sources; a cloud
+        # model's searches leave them out and redact secrets.
+        return knowledge_search_components(
+            components.scope,
+            Path(components.workspace),
+            self.store,
+            engagement_id=engagement_id,
+            searcher=lambda engagement, query, allow_local_only, budget: (
+                self.harness_knowledge_search(
+                    engagement,
+                    query,
+                    allow_local_only=allow_local_only,
+                    token_budget=budget,
+                )
+            ),
+            allow_local_only=provider.config.local,
+        )
+
     def _conversation_search_components(
         self,
         components: RuntimeToolComponents | AutomationToolComponents,
@@ -14125,7 +14189,6 @@ class ChatService:
         # adding a newly indexed source never hides an older source.
         legacy_candidates = self._retrieve_legacy_candidates(
             engagement_id,
-            queries=queries,
             query_terms=query_terms,
             redact=redact,
         )
@@ -14174,14 +14237,11 @@ class ChatService:
             kept = relevant_candidates(
                 queries[0],
                 [
-                    RerankCandidate(
-                        text=item.text,
-                        variant=item.variant,
-                        similarity=item.similarity,
-                    )
+                    RerankCandidate(text=item.text, similarity=item.similarity)
                     for item in pool
                 ],
                 reranker.score,
+                planned=queries[1:],
             )
         except Exception as exc:
             record_diagnostic(
@@ -14277,11 +14337,6 @@ class ChatService:
                     local_only=self._source_is_local_only(source),
                     score=semantic_score + lexical_bonus,
                     ordinal=match.rank,
-                    variant=(
-                        queries[match.query_index]
-                        if 0 < match.query_index < len(queries)
-                        else None
-                    ),
                     # Chroma's cosine distance is 1 - similarity.
                     similarity=1.0 - match.distance,
                 )
@@ -14292,7 +14347,6 @@ class ChatService:
         self,
         engagement_id: str,
         *,
-        queries: list[str],
         query_terms: list[set[str]],
         redact: bool,
     ) -> list[_RetrievedChunk]:
@@ -14356,13 +14410,6 @@ class ChatService:
                     )
                     if per_query_scores:
                         score += per_query_scores[0]
-                    # The planned search that matched it best, for the
-                    # relevance gate to read it with.
-                    planned = max(
-                        range(1, len(per_query_scores)),
-                        key=lambda position: per_query_scores[position],
-                        default=0,
-                    )
                     chunk_id = str(raw.get("id") or f"{source.id}:{index + 1}")
                     chunk_page = raw.get("page")
                     if not isinstance(chunk_page, int) or chunk_page < 1:
@@ -14385,13 +14432,6 @@ class ChatService:
                             local_only=local_only,
                             score=score,
                             ordinal=ordinal,
-                            variant=(
-                                queries[planned]
-                                if planned
-                                and planned < len(queries)
-                                and per_query_scores[planned] > 0
-                                else None
-                            ),
                         )
                     )
                     ordinal += 1
