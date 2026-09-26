@@ -345,6 +345,12 @@ acceptance evidence remains required before the product-level gate is complete.
 
 ### G6 expansion: model-aware context sizing and compaction
 
+The [current context lifecycle guide](../CHAT_CONTEXT_LIFECYCLE.md) and
+[state machines](assistant-context-state-machine.md) distinguish implemented
+provider-chat behavior from the proposal and unchecked work below. In
+particular, conversation snapshots and in-turn tool checkpoints have separate
+triggers and retention guarantees.
+
 **Baseline at design approval (source inspection):** `context.py` resolved limits from
 provider-level `metadata.options.context_window` and `max_output_tokens`, not the
 selected model. Defaults are 8,192 context tokens and 2,048 reserved output tokens.
