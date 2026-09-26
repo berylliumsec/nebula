@@ -104,6 +104,32 @@
       "fonts": [
         "Geist"
       ]
+    },
+    {
+      "page": "Action states",
+      "documentation": "Provider-backed conversation and turn context states; see docs/design/assistant-context-state-machine.md",
+      "frames": [
+        {
+          "id": "132:34",
+          "name": "Conversation context states",
+          "width": 560,
+          "height": 690
+        },
+        {
+          "id": "132:48",
+          "name": "One uninterrupted turn",
+          "width": 560,
+          "height": 690
+        },
+        {
+          "id": "132:62",
+          "name": "Authority and recovery",
+          "width": 560,
+          "height": 690
+        }
+      ],
+      "overflows": [],
+      "fonts": ["Geist"]
     }
   ],
   "limitations": [

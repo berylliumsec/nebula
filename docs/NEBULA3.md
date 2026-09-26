@@ -279,6 +279,11 @@ secret redaction still apply after retrieval.
 
 ## Context compaction
 
+For the distinction between durable conversation history, what each provider
+call receives, conversation snapshots, and same-turn tool checkpoints, see the
+[conversation and context lifecycle guide](CHAT_CONTEXT_LIFECYCLE.md) and its
+[state machines](design/assistant-context-state-machine.md).
+
 Analyst chats and model-facing mission dependency context are compacted
 automatically when the estimated input approaches 75 percent of the configured
 model capacity. Provider profiles may declare `context_window` and

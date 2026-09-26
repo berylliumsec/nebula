@@ -1,10 +1,10 @@
 {
-  "change_digest": "6a098363855c69d59f86e9f57246f354a6b971ba52ce6f6d536bf84130a9fc15",
-  "reviewed_by": "Codex release review for Nebula 3.0.0-alpha.21",
-  "reason": "The release commit synchronizes version metadata and adds release notes. Three collected Python cases check every version source, the release version CLI contract, and source build metadata. The protected tag workflow supplies focused package, installation, and impacted browser gates for the accumulated changes since alpha.20.",
-  "exclusions": "No application behavior changes in this commit, so frontend, native, and PR Playwright selections are empty. Unrelated Python tests and full suites are excluded. The tag preparation workflow must review and run a focused release-impact selection against the prior successful release; physical-device and provider-diverse manual gates remain separate.",
+  "change_digest": "20bfb7b771713086f8b242dbd8ff3b5d53482103f3054a61d584e029e11fddc8",
+  "reviewed_by": "Codex documentation review for conversation and compaction lifecycle",
+  "reason": "This diff changes only Markdown documentation and the Figma state-page audit JSON. No executable source, tests, UI assets, provider contracts, or runtime behavior change. Validate Markdown links and the JSON audit locally; CI selection validates this diff-bound zero-test choice.",
+  "exclusions": "Python, frontend, native, and Playwright runtime tests are all excluded because the change has no executable behavior. No browser, real-Core, LAN, physical-device, provider, or full-suite gate is claimed for this documentation update. The live Figma frames are separately inspected for text bounds and visual fit.",
   "expected_tests": {
-    "python": 3,
+    "python": 0,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -12,11 +12,7 @@
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
-    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract",
-    "tests/v3/test_version.py::test_source_build_metadata_is_explicit_and_complete"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": []
