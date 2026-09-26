@@ -153,7 +153,9 @@ def test_every_call_of_a_tool_turn_carries_the_same_reference_bytes(tmp_path):
             super().__init__(provider_id, local=True)
             self.config.capabilities.tools = True
             self.script = [
-                _response(calls=[ToolCall(id="call-1", name="list_agents", arguments={})]),
+                _response(
+                    calls=[ToolCall(id="call-1", name="list_agents", arguments={})]
+                ),
                 # A routing response without a call: synthesis answers next.
                 _response(),
                 _response(text="No other agents; see the runner setup article."),
@@ -226,9 +228,7 @@ def test_a_resumed_turn_sends_the_reference_material_it_was_assembled_with(
     assert events[-1][0] == "done"
     sent = _turn_requests(provider)[-1]
     assert sent.messages[-1].content == assembled
-    assert (sent.instructions or "").endswith(
-        prepared.model_request.instructions or ""
-    )
+    assert (sent.instructions or "").endswith(prepared.model_request.instructions or "")
     assert "OPERATOR HELP" not in (sent.instructions or "")
     session_id = prepared.turn.session_id
     persisted = restarted.session_messages(session_id)
@@ -282,9 +282,7 @@ def test_the_compaction_estimate_counts_the_reference_material(tmp_path):
     # History that fits the target beside the question alone, and not with
     # the reference material retrieved for it too.
     room = limits.target_input_tokens - reserve - bare - reference_tokens // 2
-    history = [
-        f"Earlier finding {index} about the listener." for index in range(1, 9)
-    ]
+    history = [f"Earlier finding {index} about the listener." for index in range(1, 9)]
     history = [
         text + " padding" * max(0, (room * 3 // len(history) - len(text) - 24) // 8)
         for text in history
@@ -376,3 +374,62 @@ def test_a_context_rejection_reassembles_the_request_with_the_same_material(
     assert isinstance(current, str)
     assert current.startswith(f"{HELP_QUESTION}\n\n{HEADING}\n\n{HELP_BEGIN}")
     assert "OPERATOR HELP" not in (retried.instructions or "")
+
+
+def test_excerpts_follow_the_reference_material_and_match_only_the_operator(
+    tmp_path,
+):
+    from tests.v3.test_chat_context_assembly import (
+        EXCERPTS_HEADING,
+        MEMORY_HEADING,
+        ReportingProvider,
+        _chat,
+        _history,
+    )
+
+    store, service, session, profile, provider = _chat(
+        tmp_path,
+        lambda provider_id: ReportingProvider(provider_id),
+        history=_history(40, repeat=40),
+    )
+    # The project document names a codename the operator did not ask about.
+    store.create(
+        _source(
+            session.engagement_id,
+            text="The frostelk TLS listener answers on port 443.",
+        )
+    )
+
+    prepared = service.prepare(
+        ChatCompletionRequest(
+            session_id=session.id,
+            provider_id=profile.id,
+            messages=[
+                {"role": "user", "content": "What did we find about copperwolf?"}
+            ],
+        )
+    )
+
+    assert prepared.context_snapshot is not None
+    assert "frostelk" in prepared.reference_material
+    messages = prepared.model_request.messages
+    assert isinstance(messages[0].content, str)
+    assert messages[0].content.startswith(MEMORY_HEADING)
+    current = messages[-1].content
+    assert isinstance(current, str)
+    # The operator's words, the turn's reference material, then the archived
+    # originals retrieved for them.
+    assert current.startswith(
+        "What did we find about copperwolf?\n\n" + prepared.reference_material
+    )
+    reference_at = current.index(HEADING)
+    excerpts_at = current.index(EXCERPTS_HEADING)
+    assert reference_at < current.index("END REFERENCE DATA") < excerpts_at
+    excerpts = json.loads(current[excerpts_at:].split("\n", 1)[1])
+    assert excerpts
+    # Retrieval matched what the operator asked, not the attached document.
+    for excerpt in excerpts:
+        assert "copperwolf" in excerpt["content"]
+        assert "frostelk" not in excerpt["content"]
+    assert "OPERATOR HELP" not in (prepared.model_request.instructions or "")
+    assert "REFERENCE DATA" not in (prepared.model_request.instructions or "")

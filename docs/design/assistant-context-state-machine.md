@@ -39,8 +39,9 @@ deterministic tool-activity block with the ids that read its tools' output
 again, and the conversation's working notes follow the new operator message
 and any retrieved originals. A snapshot is derived and must cite its covered
 canonical messages. In `Request`, the memory leads the first message kept
-verbatim and retrieved originals follow the current message; the
-instructions carry neither. No canonical message is left out: moving the
+verbatim; the turn's retrieved operator help and project knowledge, then
+retrieved originals, follow the current message's own text; the
+instructions carry none of them. No canonical message is left out: moving the
 boundary compacts the messages it passes rather than dropping them. Pending
 approvals/recovery block a new user turn before this diagram begins.
 

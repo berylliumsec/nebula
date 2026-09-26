@@ -27,12 +27,20 @@ rewrites the canonical transcript or turns a derived summary into evidence.
 
 1. The operator sends user message A. `prepare_async` selects a runtime,
    assembles instructions and A, checks capacity, and starts a durable turn.
+   Nebula operator-help articles and, when the request includes project
+   knowledge, project document chunks retrieved for A travel as a labeled
+   reference block appended to A in the request, after A's own text and
+   selected context: operator help as Nebula's own product documentation,
+   project knowledge as untrusted JSON data, neither as instructions. Every
+   provider call of the turn, and a resume of it, sends the same block; the
+   stored A never contains it.
 2. The model calls a tool. Core records the step and result. On the next
    **provider call in the same turn**, `_with_tool_history` sends the same
    conversation input plus that turn's replayable tool call/result history.
 3. The assistant finishes and Core saves assistant message B. The operator
    sends message C. `_merge_history` reconstructs A, B, C from canonical
-   messages (and the selected context saved with A/C). It does **not** append
+   messages (and the selected context saved with A/C). A is replayed without
+   its reference block; C carries its own. It does **not** append
    the previous turn's raw tool transcript to the new request. B is sent with
    a **tool activity** data block rendered from its stored
    `metadata.tool_results`: for each step, the tool, status, what it acted on
@@ -79,7 +87,8 @@ allowance (see [The compactor](#the-compactor)). The effective values depend on
 model, route, output request, and profile.
 
 The estimate compared with the trigger counts everything the request will
-carry: instructions and messages, the conversation's working notes, and for
+carry: instructions and messages (the current message's reference block
+included), the conversation's working notes, and for
 a tool turn the function declarations (converted exactly as routing sends
 them), the routing instructions, and a reserve for the largest on-demand
 catalog picks the ranker could still add. Core estimates about three UTF-8 bytes per token. After each
@@ -123,9 +132,10 @@ When the estimate exceeds the 75% target, `_model_context`:
 4. Sends the memory as a leading block of the first kept message, labeled as
    derived history rather than instructions, and appends up to eight matching
    original transcript excerpts (as JSON data, within a fifth of the target and
-   the room left) after the current message's own text and selected context.
-   The conversation's working notes follow them, and within a turn the
-   tool-history checkpoint follows those.
+   the room left) after the current message's own text, selected context and
+   reference block. Excerpts are matched to the operator's words, not to the
+   reference block. The conversation's working notes follow them, and within
+   a turn the tool-history checkpoint follows those.
 5. Never leaves a message out. Every canonical message in the active
    projection is either sent verbatim or covered by the snapshot that is sent.
    Over the target, the excerpts go first; then the compaction boundary moves
@@ -138,11 +148,15 @@ When the estimate exceeds the 75% target, `_model_context`:
    compaction can reach. If compacting past a later boundary fails, the
    boundary already compacted serves when it fits capacity.
 
-The memory block is rendered from the snapshot alone, and the excerpts, which
-change every turn, come last. So between compactions each request repeats the
-previous request's instructions and messages byte for byte up to the previous
-current message, and provider prefix caches keep hitting. The stored message
-never contains its excerpts; the next turn replays it without them.
+The memory block is rendered from the snapshot alone, and what can change
+every turn (the reference block, the excerpts, then the working notes) comes
+last. Nothing retrieved for one message enters the instructions. So between
+compactions each request repeats the previous request's instructions and
+messages byte for byte up to the previous current message, and provider prefix
+caches keep hitting. The stored message never contains any of these blocks;
+the next turn replays it without them. One exception stays in the instructions: when a tool
+step failed, final synthesis adds operator help matching the observed failure
+to that request's instructions, which already differ from routing's.
 
 Snapshots are immutable, scoped to one chat session, and keyed for reuse by
 canonical source content, provider/model, and prompt version. A ready snapshot
