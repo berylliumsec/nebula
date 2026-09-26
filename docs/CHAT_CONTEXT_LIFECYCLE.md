@@ -197,14 +197,14 @@ to that request's instructions, which already differ from routing's.
 
 A tool turn whose request is served by a snapshot is also offered
 `conversation.search`, which returns matching passages of the archived
-originals. A turn may run eight searches (`TURN_SEARCH_BUDGET`). After that,
+originals. A turn may run twelve searches (`TURN_SEARCH_BUDGET`). After that,
 or after three searches in a row found nothing, Core answers a further search
-itself, without running it. The answer is an ordinary result, not an error: the
-search allowance is spent, so answer from what the searches found and say what
-could not be confirmed. The count comes from the turn's ledger, so a turn
-resumed after a restart keeps it. Answered searches spend no tool budget. Each
-counts as a routing deviation, so after three responses of nothing but such
-searches the turn stops routing and answers.
+itself, without running it. The answer is an ordinary result, not an error:
+the search did not run; answer now from the results and the working memory,
+and call a detail missing only if it is in neither. The count comes from the
+turn's ledger, so a turn resumed after a restart keeps it. Answered searches
+spend no tool budget. Each counts as a routing deviation, so after three
+responses of nothing but such searches the turn stops routing and answers.
 
 ### Background pre-compaction
 

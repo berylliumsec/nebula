@@ -62,8 +62,10 @@ def test_the_allowance_is_counted_from_the_searches_that_ran():
     assert spent["search_budget_spent"] is True
     assert spent["searches_this_turn"] == TURN_SEARCH_BUDGET
     assert spent["query"] == "next fact"
-    assert spent["results"] == []
-    assert "Answer from what the searches found" in spent["detail"]
+    # Nothing was searched, so no empty result list says nothing was found.
+    assert "results" not in spent
+    assert "did not run" in spent["detail"]
+    assert "Answer now" in spent["detail"]
 
 
 def test_searches_that_keep_finding_nothing_end_the_searching():
@@ -76,7 +78,7 @@ def test_searches_that_keep_finding_nothing_end_the_searching():
     history.append(_search_entry(9, found=0))
     spent = turn_search_budget_spent(history, "q")
     assert spent is not None
-    assert "never said it" in spent["detail"]
+    assert "never said" in spent["detail"]
     # A search that finds something resets the run of empty ones.
     history.append(_search_entry(10))
     assert turn_search_budget_spent(history, "q") is None
@@ -151,7 +153,7 @@ def test_a_search_past_the_allowance_gets_an_ordinary_result_and_the_turn_answer
         result = json.loads(entry["provider_result"])
         assert result["search_budget_spent"] is True
         assert result["searches_this_turn"] == TURN_SEARCH_BUDGET
-        assert "Answer from what the searches found" in entry["result_summary"]
+        assert "Answer now" in entry["result_summary"]
     assert all(entry["status"] == "complete" for entry in searches)
     turn = store.get(ChatTurn, prepared.turn.id)
     assert turn.status == ChatTurnStatus.COMPLETE

@@ -57,11 +57,12 @@ _DETAIL_RESERVE = 400
 # An explicit search may take a few seconds, so it embeds more of the archive
 # per call than the automatic excerpts a turn's preparation waits for.
 SEARCH_DENSE_MAX_NEW = 64
-# Searches one turn may run. A turn looks up the few details its answer needs;
-# past this it is re-reading what it found (models have searched a hundred
-# times in one turn to re-confirm a dozen facts they already had, each search
-# another provider round trip over a growing history).
-TURN_SEARCH_BUDGET = 8
+# Searches one turn may run. A turn looks up the details its answer needs, a
+# question about a dozen of them one search each; past that it is re-reading
+# what it found (models have searched a hundred times in one turn to
+# re-confirm a dozen facts they already had, each search another provider
+# round trip over a growing history).
+TURN_SEARCH_BUDGET = 12
 # Searches in a row that found nothing: the conversation most likely never
 # said it, and rewording again rarely changes that.
 TURN_EMPTY_SEARCH_LIMIT = 3
@@ -261,27 +262,27 @@ def turn_search_budget_spent(
         empty += 1
     if empty >= TURN_EMPTY_SEARCH_LIMIT:
         detail = (
-            f"The last {empty} searches of the earlier conversation found "
-            "nothing, so the conversation most likely never said it. No "
-            "further search runs this turn: tell the operator what could not "
-            "be found, and answer from what you have."
+            f"This search did not run. The last {empty} searches found "
+            "nothing, so the conversation most likely never said what you are "
+            "looking for, and no more searches run this turn. Answer now from "
+            "the results above and your working memory; say a detail is "
+            "missing only if it is in neither."
         )
     elif len(searches) >= TURN_SEARCH_BUDGET:
         detail = (
-            f"This turn has searched the earlier conversation {len(searches)} "
-            "times, its allowance, and no further search runs. Answer from "
-            "what the searches found and your working memory, and tell the "
-            "operator which details you could not confirm."
+            "This search did not run: the turn has used its allowance of "
+            f"{TURN_SEARCH_BUDGET} searches of the earlier conversation. The "
+            "results above and your working memory are what you have. Answer "
+            "now from them; say a detail is missing only if it is in neither."
         )
     else:
         return None
+    # No empty result list: nothing was searched, so nothing was not found.
     return {
         "tool": CONVERSATION_SEARCH_TOOL_NAME,
         "query": query,
         "search_budget_spent": True,
         "searches_this_turn": len(searches),
-        "result_count": 0,
-        "results": [],
         "detail": detail,
     }
 
