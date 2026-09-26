@@ -383,7 +383,11 @@ def test_tool_definitions_and_routing_instructions_count_toward_the_trigger(
     # The request as sent, tools and routing instructions included, now
     # fits the target the trigger is meant to keep.
     assert estimate_model_request(routing) <= limits.target_input_tokens
-    assert reserved >= (
+    # A compacted tool turn also declares conversation.search, so its own
+    # reserve is the probe's plus that definition.
+    assert prepared.context_reserved_tokens is not None
+    assert prepared.context_reserved_tokens > reserved
+    assert prepared.context_reserved_tokens >= (
         estimate_model_request(routing)
         - estimate_messages(routing.messages, prepared.model_request.instructions or "")
     )
