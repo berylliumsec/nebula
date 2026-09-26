@@ -849,14 +849,23 @@ def test_responses_replays_encrypted_reasoning_items_before_their_calls(tmp_path
     )
     _, service, prepared, _ = _chat(tmp_path, provider, model)
 
-    assert _run(service, prepared) == "Reading both values.\n\n" + ANSWER
+    # Commentary is preamble: saved as the turn's reasoning, not its answer.
+    message = asyncio.run(service.complete(prepared)).message
+    assert message.content == ANSWER
+    assert "Reading both values." in message.reasoning
 
     # Nothing is stored server-side, so the reasoning comes back encrypted.
     assert wire.payloads[0]["include"] == ["reasoning.encrypted_content"]
     for payload in wire.payloads[1:]:
         replay = payload["input"][3:]
         assert replay[0] == reasoning_item
-        assert replay[1] == {"role": "assistant", "content": "Reading both values."}
+        # The commentary goes back labelled, so it is not read as an answer.
+        assert replay[1] == {
+            "type": "message",
+            "role": "assistant",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Reading both values."}],
+        }
         assert [(item["type"], item["call_id"]) for item in replay[2:]] == [
             ("function_call", "call-a"),
             ("function_call", "call-b"),

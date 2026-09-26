@@ -659,7 +659,8 @@ class ModelResponse(BaseModel):
     # What the route needs back when this response's calls are replayed:
     # ``reasoning_content``/``reasoning`` text and raw ``reasoning_details``
     # (OpenAI-compatible), Anthropic ``thinking_blocks``, Responses
-    # ``reasoning_items``. ``provider_id`` and ``model`` name the route that
+    # ``reasoning_items`` (encrypted reasoning and commentary messages, in
+    # output order). ``provider_id`` and ``model`` name the route that
     # produced it; signatures are only valid for that route and model. It
     # changes nothing that is displayed.
     reasoning_state: dict[str, Any] | None = Field(
@@ -3374,6 +3375,7 @@ class OpenAIResponsesProvider(ModelProvider):
         for batch, state in _replayed_batches(request, self.config.id, model):
             # Encrypted reasoning goes back ahead of the calls it led to; with
             # nothing stored server-side it is the only copy (Codex, Vercel).
+            # Commentary rides along in output order, still in its own phase.
             items = state.get("reasoning_items") if state else None
             payload["input"].extend(items if isinstance(items, list) else [])
             if batch[0].response_text:
@@ -3502,6 +3504,7 @@ class OpenAIResponsesProvider(ModelProvider):
         _raise_responses_outcome(data)
         text_parts: list[str] = []
         summaries: list[str] = []
+        commentary: list[str] = []
         refused = False
         calls: list[ToolCall] = []
         reasoning_items: list[dict[str, Any]] = []
@@ -3553,14 +3556,32 @@ class OpenAIResponsesProvider(ModelProvider):
                 )
             elif item.get("type") == "message":
                 message_text: list[str] = []
+                message_refused = False
                 for content in item.get("content", []):
                     if content.get("type") in {"output_text", "text"}:
                         message_text.append(content.get("text", ""))
                     elif content.get("type") == "refusal":
-                        refused = True
+                        message_refused = True
                         message_text.append(content.get("refusal") or "")
-                if message_text:
-                    text_parts.append("".join(message_text))
+                refused = refused or message_refused
+                if item.get("phase") != "commentary" or message_refused:
+                    if message_text:
+                        text_parts.append("".join(message_text))
+                    continue
+                # The route labels this message as mid-turn preamble, not the
+                # answer, so it reads as reasoning. It goes back in that phase:
+                # replayed without it, the model can take it as a final answer.
+                said = "".join(message_text)
+                if said.strip():
+                    commentary.append(said)
+                    reasoning_items.append(
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "phase": "commentary",
+                            "content": [{"type": "output_text", "text": said}],
+                        }
+                    )
         if refused and not "".join(text_parts).strip():
             raise ProviderRefusalError("refusal")
         incomplete = data.get("incomplete_details")
@@ -3569,7 +3590,9 @@ class OpenAIResponsesProvider(ModelProvider):
             provider_id=self.config.id,
             model=data.get("model", model),
             text="\n\n".join(text_parts),
-            reasoning="\n\n".join(part for part in summaries if part.strip()),
+            reasoning="\n\n".join(
+                part for part in [*summaries, *commentary] if part.strip()
+            ),
             tool_calls=calls,
             usage=_responses_usage(data.get("usage")),
             # "incomplete" alone hides the output limit chat's recovery acts on.
