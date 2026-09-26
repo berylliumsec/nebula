@@ -1,10 +1,10 @@
 {
-  "change_digest": "8c1f361f8814fbcb52f4c08a4a8e38e8ea38ca2879714ed7e87067068bb48541",
+  "change_digest": "1e7eb850709cd0ea6f091e352b05df206547fd74e80160c3d7700cfb75cfe1f5",
   "reviewed_by": "Claude focused review for ctx-search-budget",
-  "reason": "conversation.search gets a per-turn allowance (8 searches, or 3 empty in a row, checked against the searches of earlier routing responses so one response's batch runs whole), counted from the turn ledger (conversation_search.turn_search_budget_spent over _turn_history, the same ledger count the catalog-discovery limit uses). Past it the routing loop answers the call itself through _refused_tool_step, which gains an ordinary-result mode: status complete, budget_class refused (no budget spent), trusted_result so the replay carries Core's text, and the existing routing-deviation limit then stops a model that keeps searching. Selected: the new test file; conversation.search tests; every file driving the sequential routing loop, refused steps and replay (tool loop, tool catalog incl. the discovery limit, mid-turn compaction, in-turn pruning, prompt cache, synthesis declarations, turn outcome history), restart recovery, tool-history memory (tool activity from stored results) and test_chat.py. Counts from pytest --collect-only. Rebased onto 1a22734.",
-  "exclusions": "No frontend, native or Playwright tests: no UI change; the answered search renders in the existing tool card as a completed call with its detail. Harness and mission paths do not offer conversation.search. Real-Core evidence (s1 retention eval, 3 repeats per build, base 517a4a5 vs branch, port 18719) is in the PR body. No full suite.",
+  "reason": "Per-turn allowances for conversation.search and knowledge.search (new search_allowance.py): 8 searches of one kind, or 3 empty in a row, counted from the turn ledger (_turn_history; the same ledger-count pattern as the catalog-discovery limit) against earlier routing responses only, so one response's batch runs whole. Past it the sequential routing loop answers the call itself through _refused_tool_step, which gains an ordinary-result mode (status complete, budget_class refused so no budget is spent, trusted_result so the replay carries Core's text); the existing routing-deviation limit stops a model that keeps searching. The answer points to tool_output.search for results cleared from context. Selected: the new test file; both search tools' tests; every file driving the sequential routing loop, refused steps and replay (tool loop, tool catalog incl. the discovery limit, mid-turn compaction, in-turn pruning, prompt cache, synthesis declarations, turn outcome history), restart recovery, tool-history memory and test_chat.py. Rebased onto 9bf066a. Counts from pytest --collect-only.",
+  "exclusions": "No frontend, native or Playwright tests: no UI change; an answered search renders in the existing tool card as a completed call with its detail. Harness and mission paths are unchanged. Real-Core evidence (s1 retention eval, same-base comparisons on port 18719) is in the PR body. No full suite.",
   "expected_tests": {
-    "python": 252,
+    "python": 262,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -15,8 +15,9 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_conversation_search_budget.py",
+    "tests/v3/test_search_allowance.py",
     "tests/v3/test_conversation_search.py",
+    "tests/v3/test_knowledge_search.py",
     "tests/v3/test_chat_tool_loop.py",
     "tests/v3/test_tool_catalog.py",
     "tests/v3/test_midturn_compaction.py",
