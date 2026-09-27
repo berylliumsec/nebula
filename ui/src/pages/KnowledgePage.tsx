@@ -16,7 +16,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import type { KnowledgeIndexStatus, KnowledgeSource } from "../api/types";
+import type { KnowledgeIndexStatus, KnowledgeModelState, KnowledgeSource } from "../api/types";
 import { ModalSurface, useConfirmation } from "../components/DialogSystem";
 import { PageHeader, PageHeaderAction } from "../components/PageHeader";
 import { StandardEmptyState } from "../components/SurfacePrimitives";
@@ -59,6 +59,58 @@ function formatModelBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
+function downloadedPercent(downloaded: number, total: number): number {
+  return Math.min(100, (downloaded / Math.max(1, total)) * 100);
+}
+
+function sentence(text: string): string {
+  const trimmed = text.trim().replace(/[.\s]+$/, "");
+  return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}.`;
+}
+
+interface KnowledgeModelBanner {
+  state: KnowledgeModelState;
+  title: string;
+  text: string;
+  progress?: { label: string; downloaded: number; total: number };
+}
+
+/** What the local models behind knowledge are doing, while either needs attention. */
+function knowledgeModelBanner(status: KnowledgeIndexStatus): KnowledgeModelBanner | undefined {
+  if (!["ready", "disabled"].includes(status.state)) {
+    return {
+      state: status.state,
+      title: status.state === "required" ? "Local semantic search" : status.state === "downloading" ? "Downloading the local retrieval model" : status.state === "preparing" ? "Preparing semantic search" : "Semantic search setup needs attention",
+      text: status.state === "required"
+        ? `Adding or reindexing a source will download the ${formatModelBytes(status.totalBytes)} ${status.model} model once. It remains on this device.`
+        : status.state === "downloading"
+          ? `${formatModelBytes(status.downloadedBytes)} of ${formatModelBytes(status.totalBytes)} downloaded · ${Math.round(downloadedPercent(status.downloadedBytes, status.totalBytes))}%`
+          : status.state === "preparing"
+            ? "Download complete. Verifying and preparing the model on this device."
+            : `${status.detail ?? "The local embedding model could not be prepared."} Check the connection and retry Add source or Reindex.`,
+      progress: status.state === "downloading" ? { label: "Embedding model download", downloaded: status.downloadedBytes, total: status.totalBytes } : undefined,
+    };
+  }
+  // The relevance model downloads once the retrieval model is in place; until
+  // it is ready, retrieval attaches the nearest knowledge without its check.
+  const reranker = status.reranker;
+  if (!reranker || !["downloading", "preparing", "error"].includes(reranker.state)) return undefined;
+  return {
+    state: reranker.state,
+    title: reranker.state === "downloading" ? "Downloading the local relevance model" : reranker.state === "preparing" ? "Preparing the local relevance model" : "Relevance check unavailable",
+    text: reranker.state === "downloading"
+      ? `${formatModelBytes(reranker.downloadedBytes)} of ${formatModelBytes(reranker.totalBytes)} downloaded · ${Math.round(downloadedPercent(reranker.downloadedBytes, reranker.totalBytes))}%`
+      : reranker.state === "preparing"
+        ? "Download complete. Verifying and preparing the model on this device."
+        : `${sentence(reranker.detail ?? "The local relevance model could not be prepared")} Knowledge still works: chats attach the nearest sources without the relevance check. Nebula tries again when knowledge is next used, 10 minutes after this failure.`,
+    progress: reranker.state === "downloading" ? { label: "Relevance model download", downloaded: reranker.downloadedBytes, total: reranker.totalBytes } : undefined,
+  };
+}
+
+function knowledgeModelsSettling(status: KnowledgeIndexStatus): boolean {
+  return ["downloading", "preparing"].includes(status.state) || ["downloading", "preparing"].includes(status.reranker?.state ?? "");
+}
+
 export function KnowledgePage() {
   const confirm = useConfirmation();
   const {
@@ -99,6 +151,29 @@ export function KnowledgePage() {
     });
     return () => controller.abort();
   }, [api, coreState]);
+
+  // Models keep downloading after the operation that started them, the
+  // relevance model especially: follow them until they settle.
+  const [statusPoll, setStatusPoll] = useState(0);
+  const modelsSettling = indexStatus ? knowledgeModelsSettling(indexStatus) : false;
+  useEffect(() => {
+    if (!api || coreState !== "online" || !modelsSettling) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void api.getKnowledgeIndexStatus(controller.signal).then(setIndexStatus).catch((pollError) => {
+        if (!controller.signal.aborted) {
+          void logCaughtDiagnostic("interface.knowledge_page.caught_failure_09", "A knowledge model status poll failed while a model was downloading.", pollError, "knowledge_page");
+        }
+      }).finally(() => {
+        if (!controller.signal.aborted) setStatusPoll((value) => value + 1);
+      });
+    }, 1000);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [api, coreState, modelsSettling, statusPoll]);
+  const modelBanner = indexStatus ? knowledgeModelBanner(indexStatus) : undefined;
 
   const withIndexStatusPolling = async <T,>(operation: () => Promise<T>): Promise<T> => {
     let polling = true;
@@ -300,18 +375,12 @@ export function KnowledgePage() {
           <PageHeaderAction label={uploading ? "Adding source…" : "Upload file"} icon={uploading ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />} disabled={!canMutate || uploading} onClick={() => inputRef.current?.click()} />
         </>}
       />
-      {indexStatus && !["ready", "disabled"].includes(indexStatus.state) && <section className={`knowledge-model-status ${indexStatus.state}`} role="status" aria-live="polite">
-        <span className="metric-icon">{["downloading", "preparing"].includes(indexStatus.state) ? <LoaderCircle className="spin" size={18} /> : <Database size={18} />}</span>
+      {modelBanner && <section className={`knowledge-model-status ${modelBanner.state}`} role="status" aria-live="polite">
+        <span className="metric-icon">{["downloading", "preparing"].includes(modelBanner.state) ? <LoaderCircle className="spin" size={18} /> : <Database size={18} />}</span>
         <div>
-          <strong>{indexStatus.state === "required" ? "Local semantic search" : indexStatus.state === "downloading" ? "Downloading the local retrieval model" : indexStatus.state === "preparing" ? "Preparing semantic search" : "Semantic search setup needs attention"}</strong>
-          <p>{indexStatus.state === "required"
-              ? `Adding or reindexing a source will download the ${formatModelBytes(indexStatus.totalBytes)} ${indexStatus.model} model once. It remains on this device.`
-              : indexStatus.state === "downloading"
-                ? `${formatModelBytes(indexStatus.downloadedBytes)} of ${formatModelBytes(indexStatus.totalBytes)} downloaded · ${Math.min(100, Math.round((indexStatus.downloadedBytes / Math.max(1, indexStatus.totalBytes)) * 100))}%`
-                : indexStatus.state === "preparing"
-                  ? "Download complete. Verifying and preparing the model on this device."
-                  : `${indexStatus.detail ?? "The local embedding model could not be prepared."} Check the connection and retry Add source or Reindex.`}</p>
-          {indexStatus.state === "downloading" && <div className="knowledge-model-progress" role="progressbar" aria-label="Embedding model download" aria-valuemin={0} aria-valuemax={indexStatus.totalBytes} aria-valuenow={indexStatus.downloadedBytes}><span style={{ width: `${Math.min(100, (indexStatus.downloadedBytes / Math.max(1, indexStatus.totalBytes)) * 100)}%` }} /></div>}
+          <strong>{modelBanner.title}</strong>
+          <p>{modelBanner.text}</p>
+          {modelBanner.progress && <div className="knowledge-model-progress" role="progressbar" aria-label={modelBanner.progress.label} aria-valuemin={0} aria-valuemax={modelBanner.progress.total} aria-valuenow={modelBanner.progress.downloaded}><span style={{ width: `${downloadedPercent(modelBanner.progress.downloaded, modelBanner.progress.total)}%` }} /></div>}
         </div>
       </section>}
       {statusMessage && <div className="knowledge-status" role="status">{uploading && <LoaderCircle className="spin" size={15} />}{statusMessage}</div>}

@@ -1206,6 +1206,14 @@ interface WireLibraryItem extends WireEntity {
   metadata?: JsonObject;
 }
 
+interface WireKnowledgeRerankerStatus extends JsonObject {
+  state: KnowledgeIndexStatus["state"];
+  model: string;
+  downloaded_bytes: number;
+  total_bytes: number;
+  detail?: string | null;
+}
+
 interface WireKnowledgeIndexStatus extends JsonObject {
   backend: string;
   state: KnowledgeIndexStatus["state"];
@@ -1213,6 +1221,7 @@ interface WireKnowledgeIndexStatus extends JsonObject {
   downloaded_bytes: number;
   total_bytes: number;
   detail?: string | null;
+  reranker?: WireKnowledgeRerankerStatus | null;
 }
 
 interface WireChatCitation extends JsonObject {
@@ -7811,6 +7820,17 @@ export class ApiClient {
       downloadedBytes: numberField(value.downloaded_bytes),
       totalBytes: numberField(value.total_bytes),
       detail: typeof value.detail === "string" ? value.detail : undefined,
+      ...(value.reranker && typeof value.reranker === "object"
+        ? {
+            reranker: {
+              state: value.reranker.state,
+              model: value.reranker.model,
+              downloadedBytes: numberField(value.reranker.downloaded_bytes),
+              totalBytes: numberField(value.reranker.total_bytes),
+              detail: typeof value.reranker.detail === "string" ? value.reranker.detail : undefined,
+            },
+          }
+        : {}),
     }));
   }
 
