@@ -470,6 +470,7 @@ class PendingProviderSubagent(NebulaModel):
     provider_profile_id: str = Field(default="", max_length=200)
     model: str = Field(default="", max_length=500)
     max_active: int | None = Field(default=None, ge=1, le=SUBAGENT_LIMIT_CEILING)
+    reasoning_effort: ReasoningEffort | None = None
 
 
 def _omitted_image_text(content: str, images: list[ChatContentBlock]) -> str:
@@ -594,6 +595,8 @@ class ChatCompletionRequest(NebulaModel):
     max_active_subagents: int | None = Field(
         default=None, ge=1, le=SUBAGENT_LIMIT_CEILING
     )
+    # When set, this level overrides the delegating model's choice for children.
+    subagent_reasoning_effort: ReasoningEffort | None = None
     # Harness chats: the provider model their subagents run on. Provider chats
     # ignore these; their children share the chat's own model.
     subagent_provider_id: str | None = Field(default=None, max_length=200)
@@ -628,6 +631,11 @@ class ChatCompletionRequest(NebulaModel):
         return {
             "provider_profile_id": self.subagent_provider_id or "",
             "model": self.subagent_model or "",
+            **(
+                {"reasoning_effort": self.subagent_reasoning_effort}
+                if self.subagent_reasoning_effort is not None
+                else {}
+            ),
             **(
                 {"max_active": self.max_active_subagents}
                 if self.max_active_subagents is not None
@@ -4588,6 +4596,7 @@ class ChatService:
                     allow_subagents=settings.allow_subagents,
                     allow_agent_messaging=settings.allow_agent_messaging,
                     max_active_subagents=settings.max_active_subagents,
+                    subagent_reasoning_effort=settings.subagent_reasoning_effort,
                     allow_cloud_tool_results=settings.allow_cloud_tool_results,
                     reasoning_effort=settings.reasoning_effort,
                     stream=True,
@@ -4919,6 +4928,7 @@ class ChatService:
                     allow_subagents=settings.allow_subagents,
                     allow_agent_messaging=settings.allow_agent_messaging,
                     max_active_subagents=settings.max_active_subagents,
+                    subagent_reasoning_effort=settings.subagent_reasoning_effort,
                     max_artifact_queries=(
                         source.max_artifact_queries if source is not None else None
                     ),
@@ -5001,6 +5011,7 @@ class ChatService:
                     allow_subagents=settings.allow_subagents,
                     allow_agent_messaging=settings.allow_agent_messaging,
                     max_active_subagents=settings.max_active_subagents,
+                    subagent_reasoning_effort=settings.subagent_reasoning_effort,
                     allow_cloud_tool_results=settings.allow_cloud_tool_results,
                     reasoning_effort=settings.reasoning_effort,
                     stream=True,
@@ -6127,6 +6138,9 @@ class ChatService:
                     "allow_agent_messaging": agent_messaging_enabled,
                     "max_active_subagents": (
                         request.max_active_subagents if subagents_enabled else None
+                    ),
+                    "subagent_reasoning_effort": (
+                        request.subagent_reasoning_effort if subagents_enabled else None
                     ),
                     "tool_suggestions": tool_suggestions,
                     "tool_catalog": tool_catalog,
@@ -14953,6 +14967,7 @@ class ChatService:
             # so the choice survives a reload like the others.
             "allow_subagents": prepared.source_request.allow_subagents,
             "max_active_subagents": prepared.source_request.max_active_subagents,
+            "subagent_reasoning_effort": prepared.source_request.subagent_reasoning_effort,
             "allow_agent_messaging": prepared.source_request.allow_agent_messaging,
         }
 

@@ -11345,7 +11345,7 @@ reloadTest("stabilization an operator allows delegation and acts on a waiting su
       await route.fulfill({ json: [savedSession] });
     } else if (path.endsWith("/chat-sessions/subagent-chat") && route.request().method() === "PATCH") {
       const body = route.request().postDataJSON();
-      savedSession = { ...savedSession, revision: savedSession.revision + 1, metadata: { ...savedSession.metadata, allow_subagents: body.allow_subagents, max_active_subagents: body.max_active_subagents } };
+      savedSession = { ...savedSession, revision: savedSession.revision + 1, metadata: { ...savedSession.metadata, allow_subagents: body.allow_subagents, max_active_subagents: body.max_active_subagents, subagent_reasoning_effort: body.subagent_reasoning_effort } };
       await route.fulfill({ json: savedSession });
     } else if (path.endsWith("/chat/sessions/subagent-chat/messages")) {
       await route.fulfill({ json: [] });
@@ -11369,10 +11369,15 @@ reloadTest("stabilization an operator allows delegation and acts on a waiting su
   await limit.fill("3");
   await expect(page.getByText("Subagents saved. Applies to your next message.", { exact: true })).toBeVisible();
   await expect(toggle).toHaveAccessibleName(/up to 3 at a time/);
+  const effort = page.getByRole("combobox", { name: "Subagent effort" });
+  await expect(effort).toHaveValue("");
+  await effort.selectOption("medium");
+  await expect(effort).toHaveValue("medium");
   await page.reload();
   await page.getByRole("button", { name: "Assistant settings" }).click();
   await expect(page.getByRole("checkbox", { name: /Subagents/ })).toBeChecked();
   await expect(page.getByRole("spinbutton", { name: "Running at once" })).toHaveValue("3");
+  await expect(page.getByRole("combobox", { name: "Subagent effort" })).toHaveValue("medium");
   await page.getByRole("button", { name: "Close assistant settings" }).click();
 
   // The parent's transcript owns the child's pending decision. Counts and
@@ -11578,7 +11583,7 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
       await route.fulfill({ json: [savedSession] });
     } else if (path.endsWith("/chat-sessions/harness-subagent-chat") && request.method() === "PATCH") {
       const body = request.postDataJSON();
-      savedSession = { ...savedSession, revision: savedSession.revision + 1, metadata: { ...savedSession.metadata, provider_subagent: body.allow_subagents ? { provider_profile_id: body.subagent_provider_id, model: body.subagent_model, max_active: body.max_active_subagents } : null } };
+      savedSession = { ...savedSession, revision: savedSession.revision + 1, metadata: { ...savedSession.metadata, provider_subagent: body.allow_subagents ? { provider_profile_id: body.subagent_provider_id, model: body.subagent_model, max_active: body.max_active_subagents, reasoning_effort: body.subagent_reasoning_effort } : null } };
       await route.fulfill({ json: savedSession });
     } else if (path.endsWith("/chat/sessions/harness-subagent-chat/subagents")) {
       await route.fulfill({ json: { session_id: "harness-subagent-chat", subagents: harnessChildren } });
@@ -11617,10 +11622,13 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
   await expect(page.getByText("Subagents saved. Applies to your next message.", { exact: true })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Subagent provider" })).toHaveValue(subagentProvider.id);
   await expect(page.getByRole("combobox", { name: "Subagent model" })).toHaveValue("deepseek/deepseek-v3.2");
+  await page.getByRole("combobox", { name: "Subagent effort" }).selectOption("high");
+  await expect(page.getByRole("combobox", { name: "Subagent effort" })).toHaveValue("high");
   await expect(page.locator(".chat-harness-subagent-status")).toContainText("Tools verified");
   await page.reload();
   await page.getByRole("button", { name: "Assistant settings" }).click();
   await expect(page.getByRole("checkbox", { name: /Provider subagents/ })).toBeChecked();
+  await expect(page.getByRole("combobox", { name: "Subagent effort" })).toHaveValue("high");
   await page.getByRole("button", { name: "Close assistant settings" }).click();
 
   // The parent request opens the same authoritative pane as a provider chat.
@@ -11641,6 +11649,7 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
     allow_subagents: true,
     subagent_provider_id: subagentProvider.id,
     subagent_model: "deepseek/deepseek-v3.2",
+    subagent_reasoning_effort: "high",
   });
   // No limit was set, so none is sent.
   expect(sent).not.toHaveProperty("max_active_subagents");

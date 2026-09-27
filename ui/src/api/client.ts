@@ -3458,6 +3458,7 @@ export function chatRequestBody(
     ...(body.hookIds?.length ? { hook_ids: body.hookIds } : {}),
     ...(body.reasoningEffort ? { reasoning_effort: body.reasoningEffort } : {}),
     ...(body.allowSubagents ? { allow_subagents: true } : {}),
+    ...(body.allowSubagents && body.subagentReasoningEffort ? { subagent_reasoning_effort: body.subagentReasoningEffort } : {}),
     ...(body.allowAgentMessaging ? { allow_agent_messaging: true } : {}),
     ...(body.allowSubagents && body.subagentProviderId && body.subagentModel
       ? { subagent_provider_id: body.subagentProviderId, subagent_model: body.subagentModel }
@@ -3468,6 +3469,7 @@ export function chatRequestBody(
         provider_profile_id: body.pendingProviderSubagent.providerId,
         model: body.pendingProviderSubagent.model,
         ...(body.pendingProviderSubagent.maxActive ? { max_active: body.pendingProviderSubagent.maxActive } : {}),
+        ...(body.pendingProviderSubagent.reasoningEffort ? { reasoning_effort: body.pendingProviderSubagent.reasoningEffort } : {}),
       },
     } : {}),
     ...(body.sshEnvironmentIds !== undefined ? { ssh_environment_ids: body.sshEnvironmentIds } : {}),
@@ -4007,15 +4009,18 @@ function mapChatTurn(value: WireChatTurn): ChatTurn {
  */
 function chatSessionSubagents(
   metadata: Record<string, unknown> | undefined,
-): Pick<ChatSessionSummary, "allowSubagents" | "subagentProviderId" | "subagentModel" | "subagentLimit"> {
+): Pick<ChatSessionSummary, "allowSubagents" | "subagentProviderId" | "subagentModel" | "subagentLimit" | "subagentReasoningEffort"> {
   const setting = metadata?.provider_subagent;
+  const savedEffort = metadata?.subagent_reasoning_effort;
+  const subagentReasoningEffort = REASONING_EFFORTS.includes(savedEffort as ReasoningEffort)
+    ? savedEffort as ReasoningEffort : undefined;
   if (setting && typeof setting === "object") {
-    const { provider_profile_id: providerId, model, max_active: limit } = setting as Record<string, unknown>;
+    const { provider_profile_id: providerId, model, max_active: limit, reasoning_effort: settingEffort } = setting as Record<string, unknown>;
     if (typeof providerId === "string" && typeof model === "string") {
-      return { allowSubagents: true, subagentProviderId: providerId, subagentModel: model, subagentLimit: subagentLimit(limit) };
+      return { allowSubagents: true, subagentProviderId: providerId, subagentModel: model, subagentLimit: subagentLimit(limit), subagentReasoningEffort: REASONING_EFFORTS.includes(settingEffort as ReasoningEffort) ? settingEffort as ReasoningEffort : subagentReasoningEffort };
     }
   }
-  return { allowSubagents: metadata?.allow_subagents === true, subagentLimit: subagentLimit(metadata?.max_active_subagents) };
+  return { allowSubagents: metadata?.allow_subagents === true, subagentLimit: subagentLimit(metadata?.max_active_subagents), subagentReasoningEffort };
 }
 
 interface WireChatSubagent {
@@ -8965,6 +8970,7 @@ export class ApiClient {
           ...(body.maxActiveSubagents !== undefined ? { max_active_subagents: body.maxActiveSubagents } : {}),
           ...(body.subagentProviderId ? { subagent_provider_id: body.subagentProviderId } : {}),
           ...(body.subagentModel ? { subagent_model: body.subagentModel } : {}),
+          ...(body.subagentReasoningEffort !== undefined ? { subagent_reasoning_effort: body.subagentReasoningEffort } : {}),
           expected_revision: body.expectedRevision,
         }),
       },
@@ -9330,6 +9336,7 @@ export class ApiClient {
     allowSubagents?: boolean;
     allowAgentMessaging?: boolean;
     maxActiveSubagents?: number;
+    subagentReasoningEffort?: ReasoningEffort;
     objective: string;
     completionCriteria: string[];
     plan?: string[];
@@ -9352,6 +9359,7 @@ export class ApiClient {
           ...(body.allowSubagents ? { allow_subagents: true } : {}),
           ...(body.allowAgentMessaging ? { allow_agent_messaging: true } : {}),
           ...(body.allowSubagents && body.maxActiveSubagents ? { max_active_subagents: body.maxActiveSubagents } : {}),
+          ...(body.allowSubagents && body.subagentReasoningEffort ? { subagent_reasoning_effort: body.subagentReasoningEffort } : {}),
           objective: body.objective,
           completion_criteria: body.completionCriteria,
           plan: body.plan ?? [],

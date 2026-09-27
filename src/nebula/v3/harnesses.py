@@ -504,8 +504,9 @@ def _gateway_subagent_tools(
             "Delegate one independent, multi-step task to a parallel subagent on the "
             "Nebula provider model chosen for this conversation. It uses this "
             "project's command runtime and MCP servers, cannot see this "
-            "conversation, and returns immediately with its id. Effort defaults "
-            "to low; pass reasoning_effort to choose another level for this task.",
+            "conversation, and returns immediately with its id. Pass "
+            "reasoning_effort for this task, or omit it for the model default. "
+            "An operator effort setting overrides this choice.",
             {
                 "type": "object",
                 "properties": {
@@ -766,6 +767,7 @@ def _harness_developer_instructions(
                 provider_subagent["model"],
                 _subagent_wait_limits(_VENDOR_HARNESS_KINDS.get(vendor))[0],
                 provider_subagent.get("max_active"),
+                provider_subagent.get("reasoning_effort"),
             )
             if provider_subagent
             and any(
@@ -9636,6 +9638,7 @@ class HarnessRuntimeService:
                 str(provider_subagent.get("provider_profile_id") or ""),
                 str(provider_subagent.get("model") or ""),
                 provider_subagent.get("max_active"),
+                provider_subagent.get("reasoning_effort"),
             )
         # Standing profile consent stands in for the per-turn confirmation.
         allow_remote_mcp = allow_remote_mcp or profile.privacy.auto_share_tool_results
@@ -10203,6 +10206,7 @@ class HarnessRuntimeService:
                 str(choice.get("provider_profile_id") or ""),
                 str(choice.get("model") or ""),
                 choice.get("max_active"),
+                choice.get("reasoning_effort"),
             )
         except (
             ChatError

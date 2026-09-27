@@ -1,4 +1,5 @@
 import type { ChatCompletionRequest } from "../api/types";
+import type { ReasoningEffort } from "../api/types";
 
 /** The composer's Subagents choice. */
 export interface ComposerSubagentChoice {
@@ -9,11 +10,12 @@ export interface ComposerSubagentChoice {
   model: string;
   /** How many subagents may run at once; absent means no limit. */
   limit?: number;
+  reasoningEffort?: ReasoningEffort;
 }
 
 type SubagentRequestFields = Pick<
   ChatCompletionRequest,
-  "allowSubagents" | "subagentProviderId" | "subagentModel" | "maxActiveSubagents" | "pendingProviderSubagent"
+  "allowSubagents" | "subagentProviderId" | "subagentModel" | "maxActiveSubagents" | "pendingProviderSubagent" | "subagentReasoningEffort"
 >;
 
 /**
@@ -26,14 +28,14 @@ type SubagentRequestFields = Pick<
  */
 export function subagentRequestFields(runtimeKind: "provider" | "harness", choice: ComposerSubagentChoice): SubagentRequestFields {
   if (runtimeKind === "provider") {
-    return { allowSubagents: choice.enabled, maxActiveSubagents: choice.enabled ? choice.limit : undefined };
+    return { allowSubagents: choice.enabled, maxActiveSubagents: choice.enabled ? choice.limit : undefined, subagentReasoningEffort: choice.enabled ? choice.reasoningEffort : undefined };
   }
   if (choice.enabled && choice.ready) {
-    return { allowSubagents: true, subagentProviderId: choice.providerId, subagentModel: choice.model, maxActiveSubagents: choice.limit };
+    return { allowSubagents: true, subagentProviderId: choice.providerId, subagentModel: choice.model, maxActiveSubagents: choice.limit, subagentReasoningEffort: choice.reasoningEffort };
   }
   if (!choice.enabled) return { allowSubagents: false };
   return {
     allowSubagents: false,
-    pendingProviderSubagent: { providerId: choice.providerId, model: choice.model, maxActive: choice.limit },
+    pendingProviderSubagent: { providerId: choice.providerId, model: choice.model, maxActive: choice.limit, reasoningEffort: choice.reasoningEffort },
   };
 }

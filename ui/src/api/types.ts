@@ -1803,6 +1803,8 @@ export interface ChatCompletionRequest {
    * provider chat, on subagentProviderId/subagentModel in a harness chat.
    */
   allowSubagents?: boolean;
+  /** Force every new child to this level; absent lets the delegating model choose. */
+  subagentReasoningEffort?: ReasoningEffort;
   /** Let this independent main agent discover and message opted-in project peers. */
   allowAgentMessaging?: boolean;
   /** Harness chats: the provider profile their subagents run on. */
@@ -1825,6 +1827,7 @@ export interface PendingProviderSubagent {
   model: string;
   /** How many subagents may run at once; absent means no limit. */
   maxActive?: number;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface ChatRuntimeSwitchPreflight {
@@ -2268,6 +2271,7 @@ export interface ChatSessionSummary {
   /** Harness chats: the provider model their subagents last ran on. */
   subagentProviderId?: Identifier;
   subagentModel?: string;
+  subagentReasoningEffort?: ReasoningEffort;
   /** The operator's running-at-once subagent limit; absent means no limit. */
   subagentLimit?: number;
   archivedAt?: string;
@@ -2604,6 +2608,7 @@ export interface ChatSessionAssistantSettingsRequest {
   maxActiveSubagents?: number | null;
   subagentProviderId?: Identifier;
   subagentModel?: string;
+  subagentReasoningEffort?: ReasoningEffort | null;
   expectedRevision?: number;
 }
 

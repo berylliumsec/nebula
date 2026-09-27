@@ -64,10 +64,13 @@ describe("provider subagents in a harness chat", () => {
       onChange={onChange}
     />);
     expect(screen.getByLabelText("Subagent model")).toHaveValue("deepseek/deepseek-v3.2");
+    expect(screen.getByRole("combobox", { name: "Subagent effort" })).toHaveValue("");
     expect(screen.getByRole("status")).toHaveTextContent("Tools verified · Subagent tool outputs are sent to OpenRouter.");
 
     await user.selectOptions(screen.getByLabelText("Subagent model"), "qwen/qwen3-coder");
     expect(onChange).toHaveBeenLastCalledWith({ enabled: true, providerId: "openrouter", model: "qwen/qwen3-coder" });
+    await user.selectOptions(screen.getByRole("combobox", { name: "Subagent effort" }), "high");
+    expect(onChange).toHaveBeenLastCalledWith({ enabled: true, providerId: "openrouter", model: "deepseek/deepseek-v3.2", reasoningEffort: "high" });
   });
 
   it("runs without a limit until the operator sets one", async () => {

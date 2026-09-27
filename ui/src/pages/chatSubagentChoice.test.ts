@@ -5,8 +5,9 @@ const choice = { enabled: true, ready: true, providerId: "openrouter", model: "d
 
 describe("the subagent fields a message carries", () => {
   it("delegates a provider chat to its own model, with the operator's limit", () => {
-    expect(subagentRequestFields("provider", choice)).toEqual({ allowSubagents: true, maxActiveSubagents: 2 });
-    expect(subagentRequestFields("provider", { ...choice, enabled: false })).toEqual({ allowSubagents: false, maxActiveSubagents: undefined });
+    expect(subagentRequestFields("provider", choice)).toEqual({ allowSubagents: true, maxActiveSubagents: 2, subagentReasoningEffort: undefined });
+    expect(subagentRequestFields("provider", { ...choice, enabled: false })).toEqual({ allowSubagents: false, maxActiveSubagents: undefined, subagentReasoningEffort: undefined });
+    expect(subagentRequestFields("provider", { ...choice, reasoningEffort: "xhigh" }).subagentReasoningEffort).toBe("xhigh");
   });
 
   it("runs a harness chat's subagents on the chosen model once it is verified", () => {
@@ -15,19 +16,21 @@ describe("the subagent fields a message carries", () => {
       subagentProviderId: "openrouter",
       subagentModel: "deepseek/deepseek-v3.2",
       maxActiveSubagents: 2,
+      subagentReasoningEffort: undefined,
     });
   });
 
   it("carries a harness choice still being verified for Core to remember, without using it", () => {
     expect(subagentRequestFields("harness", { ...choice, ready: false })).toEqual({
       allowSubagents: false,
-      pendingProviderSubagent: { providerId: "openrouter", model: "deepseek/deepseek-v3.2", maxActive: 2 },
+      pendingProviderSubagent: { providerId: "openrouter", model: "deepseek/deepseek-v3.2", maxActive: 2, reasoningEffort: undefined },
     });
     // Checked before a model is picked is still a choice to keep.
     expect(subagentRequestFields("harness", { enabled: true, ready: false, providerId: "", model: "" })).toEqual({
       allowSubagents: false,
-      pendingProviderSubagent: { providerId: "", model: "", maxActive: undefined },
+      pendingProviderSubagent: { providerId: "", model: "", maxActive: undefined, reasoningEffort: undefined },
     });
+    expect(subagentRequestFields("harness", { ...choice, ready: false, reasoningEffort: "high" }).pendingProviderSubagent?.reasoningEffort).toBe("high");
   });
 
   it("sends nothing to remember when Subagents is off", () => {

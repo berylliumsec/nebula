@@ -1,22 +1,37 @@
 {
-  "change_digest": "be217f70837db99c7620dca5938b7da90e8458a796e3042aa5ae0149d8be5ff6",
-  "reviewed_by": "Codex release metadata review",
-  "reason": "Alpha.22 release preparation changes only synchronized version metadata and release notes; selected tests verify version metadata and public updater configuration. Tagged preparation separately verifies package/install/signature/provenance contracts and reviewed browser impact.",
-  "exclusions": "No application behavior changes in this PR. Frontend, native, and Playwright tests excluded from this metadata-only diff; no full suites authorized. Local tests bounded to two minutes.",
+  "change_digest": "bc65e4fd186a2e4c531a8d304d9dfa0d179eff31793d9a7ab82917d85092b67b",
+  "reviewed_by": "Codex focused review for optional subagent effort override",
+  "reason": "The diff changes the subagent effort setting across Assistant settings, API mapping, persisted sessions, provider and harness child starts, and goal/scheduled continuations. Three collected Python files (51 cases) cover child effort precedence, effort-only PATCH, and durable continuation; three frontend files (13 cases) cover the control and wire choices. The chat-subagents catalog entries select both settings journeys across desktop, compact, mobile Chromium and mobile WebKit (16 cases), and the real-Core production/LAN setting persistence journey (1 case). Shared chat and UI files were reviewed against these paths; their unrelated behaviors are unchanged.",
+  "exclusions": "No native code changed. Unrelated assistant, provider, workspace and browser journeys and full suites are excluded. Physical mobile-device testing is unavailable locally and is not claimed by the selected emulated browser projects.",
   "expected_tests": {
-    "python": 8,
-    "frontend": 0,
+    "python": 51,
+    "frontend": 13,
     "native": 0,
-    "playwright": 0
+    "playwright": 17
   },
   "python_versions": [
     "3.12"
   ],
   "python": [
-    "tests/v3/test_version.py",
-    "tests/v3/test_tauri_release_config.py"
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_harness_provider_subagents.py",
+    "tests/v3/test_subagent_choice_sticks.py"
   ],
-  "frontend": [],
+  "frontend": [
+    "ui/src/api/chatSubagentsSettings.test.ts",
+    "ui/src/components/chat-subagents/HarnessSubagentSettings.test.tsx",
+    "ui/src/pages/chatSubagentChoice.test.ts"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "chat-subagents-core/real-core",
+    "chat-subagents/desktop",
+    "chat-subagents/compact",
+    "chat-subagents/mobile-chromium-small",
+    "chat-subagents/mobile-chromium",
+    "chat-subagents/mobile-chromium-wide",
+    "chat-subagents/mobile-webkit-small",
+    "chat-subagents/mobile-webkit",
+    "chat-subagents/mobile-webkit-wide"
+  ]
 }
