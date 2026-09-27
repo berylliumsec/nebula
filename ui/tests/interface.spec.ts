@@ -9245,6 +9245,68 @@ test("provider options explain the working ceiling beside the context window", a
   expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
 });
 
+test("knowledge model banner follows the relevance model download and explains its failure", async ({ page }, testInfo) => {
+  const MiB = 1024 * 1024;
+  let reranker: Record<string, unknown> = {
+    state: "downloading",
+    model: "mixedbread-ai/mxbai-rerank-xsmall-v1",
+    revision: "b5c6e9da73abc3711f593f705371cdbe9e0fe422",
+    downloaded_bytes: 24 * MiB,
+    total_bytes: 96 * MiB,
+    detail: null,
+  };
+  let statusReads = 0;
+  await page.route("**/api/v1/knowledge/index-status", async (route) => {
+    statusReads += 1;
+    await route.fulfill({ json: {
+      backend: "chromadb",
+      state: "ready",
+      model: "all-MiniLM-L6-v2",
+      downloaded_bytes: 80 * MiB,
+      total_bytes: 80 * MiB,
+      detail: null,
+      reranker,
+    } });
+  });
+  await openWorkspace(page, "/project?view=sources", "Knowledge");
+  const banner = page.locator(".knowledge-model-status");
+  await expect(banner).toHaveAttribute("role", "status");
+  await expect(banner).toContainText("Downloading the local relevance model");
+  await expect(banner).toContainText("24.0 MiB of 96.0 MiB downloaded · 25%");
+  const progress = banner.getByRole("progressbar", { name: "Relevance model download" });
+  await expect(progress).toHaveAttribute("aria-valuenow", String(24 * MiB));
+  const filled = () => progress.evaluate((track) => (track.firstElementChild as HTMLElement).getBoundingClientRect().width / track.getBoundingClientRect().width);
+  await expect.poll(filled).toBeCloseTo(0.25, 2);
+  const fits = () => page.evaluate(() => {
+    const element = document.querySelector(".knowledge-model-status");
+    const rect = element?.getBoundingClientRect();
+    return Boolean(rect && rect.left >= 0 && rect.right <= innerWidth + 1)
+      && document.documentElement.scrollWidth <= innerWidth + 1;
+  });
+  expect(await fits()).toBe(true);
+
+  // No upload is running: the page follows the background download itself.
+  reranker = { ...reranker, downloaded_bytes: 72 * MiB };
+  await expect(banner).toContainText("72.0 MiB of 96.0 MiB downloaded · 75%");
+  await expect.poll(filled).toBeCloseTo(0.75, 2);
+  reranker = { ...reranker, state: "error", detail: "the relevance model download failed" };
+  await expect(banner).toContainText("Relevance check unavailable");
+  await expect(banner).toContainText("The relevance model download failed. Knowledge still works: chats attach the nearest sources without the relevance check. Nebula tries again when knowledge is next used, 10 minutes after this failure.");
+  await expect(banner.getByRole("progressbar")).toHaveCount(0);
+  expect(await fits()).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("knowledge-relevance-model-failure.png") });
+
+  // A failed model is not polled; once both models are ready the banner is gone.
+  const readsAfterFailure = statusReads;
+  await page.waitForTimeout(1_500);
+  expect(statusReads).toBe(readsAfterFailure);
+  reranker = { ...reranker, state: "ready", downloaded_bytes: 96 * MiB, detail: null };
+  await openWorkspace(page, "/findings", "Findings");
+  await openWorkspace(page, "/project?view=sources", "Knowledge");
+  await expect.poll(() => statusReads).toBeGreaterThan(readsAfterFailure);
+  await expect(banner).toHaveCount(0);
+});
+
 test("stabilization audit primary mutation dialogs through the shared dialog contract", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const captureDialog = async (name: string, opener: ReturnType<Page["getByRole"]>, dialogName: string) => {

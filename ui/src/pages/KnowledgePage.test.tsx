@@ -144,3 +144,68 @@ describe("KnowledgePage inspector", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
+
+const MiB = 1024 * 1024;
+const retrievalReady = { backend: "chromadb", state: "ready", model: "all-MiniLM-L6-v2", downloadedBytes: 80 * MiB, totalBytes: 80 * MiB };
+const relevanceModel = { model: "mixedbread-ai/mxbai-rerank-xsmall-v1", totalBytes: 91.5 * MiB };
+
+describe("KnowledgePage model banner", () => {
+  beforeEach(() => {
+    workspace.api.getKnowledgeIndexStatus.mockReset();
+    workspace.knowledgeSources = [];
+  });
+
+  it("follows the relevance model's download in the banner until it is ready", async () => {
+    workspace.api.getKnowledgeIndexStatus
+      .mockResolvedValueOnce({ ...retrievalReady, reranker: { ...relevanceModel, state: "downloading", downloadedBytes: 22.875 * MiB } })
+      .mockResolvedValueOnce({ ...retrievalReady, reranker: { ...relevanceModel, state: "preparing", downloadedBytes: 91.5 * MiB } })
+      .mockResolvedValue({ ...retrievalReady, reranker: { ...relevanceModel, state: "ready", downloadedBytes: 91.5 * MiB } });
+    renderPage();
+
+    const banner = await screen.findByRole("status");
+    expect(banner).toHaveTextContent("Downloading the local relevance model");
+    expect(banner).toHaveTextContent("22.9 MiB of 91.5 MiB downloaded · 25%");
+    const progress = within(banner).getByRole("progressbar", { name: "Relevance model download" });
+    expect(progress).toHaveAttribute("aria-valuenow", String(22.875 * MiB));
+    expect(progress).toHaveAttribute("aria-valuemax", String(91.5 * MiB));
+
+    // No operation is running: the page keeps following the download itself.
+    expect(await screen.findByText("Preparing the local relevance model", {}, { timeout: 3000 })).toBeVisible();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(/local relevance model/)).not.toBeInTheDocument(), { timeout: 3000 });
+    expect(workspace.api.getKnowledgeIndexStatus).toHaveBeenCalledTimes(3);
+  });
+
+  it("explains that knowledge still works when the relevance model fails, and when it retries", async () => {
+    workspace.api.getKnowledgeIndexStatus.mockResolvedValue({
+      ...retrievalReady,
+      reranker: { ...relevanceModel, state: "error", downloadedBytes: 2 * MiB, detail: "the relevance model download failed" },
+    });
+    renderPage();
+
+    const banner = await screen.findByRole("status");
+    expect(banner).toHaveTextContent("Relevance check unavailable");
+    expect(banner).toHaveTextContent("The relevance model download failed. Knowledge still works: chats attach the nearest sources without the relevance check. Nebula tries again when knowledge is next used, 10 minutes after this failure.");
+    expect(within(banner).queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("shows the retrieval model first and nothing once both models are ready", async () => {
+    workspace.api.getKnowledgeIndexStatus.mockResolvedValueOnce({
+      ...retrievalReady,
+      state: "downloading",
+      downloadedBytes: 40 * MiB,
+      reranker: { ...relevanceModel, state: "required", downloadedBytes: 0 },
+    });
+    const { unmount } = renderPage();
+    expect(await screen.findByRole("progressbar", { name: "Embedding model download" })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent("Downloading the local retrieval model");
+    expect(screen.queryByText(/relevance model/)).not.toBeInTheDocument();
+    unmount();
+
+    workspace.api.getKnowledgeIndexStatus.mockReset();
+    workspace.api.getKnowledgeIndexStatus.mockResolvedValue({ ...retrievalReady, reranker: { ...relevanceModel, state: "ready", downloadedBytes: 91.5 * MiB } });
+    renderPage();
+    await waitFor(() => expect(workspace.api.getKnowledgeIndexStatus).toHaveBeenCalled());
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+});

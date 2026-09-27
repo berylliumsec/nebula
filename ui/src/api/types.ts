@@ -2719,13 +2719,25 @@ export interface KnowledgeUrlIngestRequest {
   url: string;
 }
 
-export interface KnowledgeIndexStatus {
-  backend: string;
-  state: "disabled" | "required" | "downloading" | "preparing" | "ready" | "error";
+export type KnowledgeModelState = "disabled" | "required" | "downloading" | "preparing" | "ready" | "error";
+
+export interface KnowledgeRerankerStatus {
+  state: KnowledgeModelState;
   model: string;
   downloadedBytes: number;
   totalBytes: number;
   detail?: string;
+}
+
+export interface KnowledgeIndexStatus {
+  backend: string;
+  state: KnowledgeModelState;
+  model: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  detail?: string;
+  /** The local relevance model that filters retrieved knowledge, when Core runs one. */
+  reranker?: KnowledgeRerankerStatus;
 }
 
 export interface HealthResponse {

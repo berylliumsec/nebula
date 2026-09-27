@@ -1867,6 +1867,37 @@ describe("ApiClient", () => {
     });
   });
 
+  it("maps the local relevance model's state beside the retrieval model's", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        backend: "chromadb",
+        state: "ready",
+        model: "all-MiniLM-L6-v2",
+        downloaded_bytes: 83_178_821,
+        total_bytes: 83_178_821,
+        detail: null,
+        reranker: {
+          state: "error",
+          model: "mixedbread-ai/mxbai-rerank-xsmall-v1",
+          revision: "b5c6e9da73abc3711f593f705371cdbe9e0fe422",
+          downloaded_bytes: 2_097_152,
+          total_bytes: 95_894_941,
+          detail: "the relevance model download failed",
+        },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ backend: "chromadb", state: "ready", model: "all-MiniLM-L6-v2", downloaded_bytes: 1, total_bytes: 1, reranker: null }), { status: 200 }));
+    const client = new ApiClient({ baseUrl: "http://127.0.0.1:8765", fetch: fetchMock });
+
+    expect((await client.getKnowledgeIndexStatus()).reranker).toEqual({
+      state: "error",
+      model: "mixedbread-ai/mxbai-rerank-xsmall-v1",
+      downloadedBytes: 2_097_152,
+      totalBytes: 95_894_941,
+      detail: "the relevance model download failed",
+    });
+    expect((await client.getKnowledgeIndexStatus()).reranker).toBeUndefined();
+  });
+
   it("renders the normalized chat SSE contract and sends durable privacy state", async () => {
     const encoder = new TextEncoder();
     const frames = [
