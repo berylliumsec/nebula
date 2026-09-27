@@ -14359,6 +14359,17 @@ class HarnessRuntimeService:
                 "query": clean_query,
                 "result_count": len(matches),
                 "matches": matches,
+                **(
+                    {
+                        "detail": (
+                            "Most relevant first; a weak excerpt matched only "
+                            "loosely and may not answer. Cite what you use as "
+                            "[source_id:chunk_id]."
+                        )
+                    }
+                    if any("relevance" in match for match in matches)
+                    else {}
+                ),
             }
         except Exception as exc:
             latest = self.store.get(ToolCall, call.id)
@@ -14385,46 +14396,87 @@ class HarnessRuntimeService:
             expected_revision=latest.revision,
         )
         if matches:
-            latest_turn = self.store.get(HarnessTurn, turn.id)
-            stored_citations = [
-                item
-                for item in latest_turn.metadata.get("citations", [])
-                if isinstance(item, dict)
-            ]
-            known = {
-                (item.get("source_id"), item.get("chunk_id"))
-                for item in stored_citations
-            }
-            new_citations = [
-                match.citation.model_dump(mode="json")
-                for match in result.matches[:8]
-                if (
-                    match.citation.source_id,
-                    match.citation.chunk_id,
-                )
-                not in known
-            ]
-            if new_citations:
-                self.store.update(
-                    HarnessTurn,
-                    latest_turn.id,
-                    {
-                        "metadata": {
-                            **latest_turn.metadata,
-                            "citations": [
-                                *stored_citations,
-                                *new_citations,
-                            ],
-                        }
-                    },
-                    expected_revision=latest_turn.revision,
-                )
+            self._record_searched_citations(turn.id, result.matches[:8])
         serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         return {
             "content": [{"type": "text", "text": serialized}],
             "structuredContent": payload,
             "isError": False,
         }
+
+    def _record_searched_citations(self, turn_id: str, matches: list[Any]) -> None:
+        """Keep a gateway search's excerpts for the answer's citations.
+
+        As for provider turns, an excerpt the relevance model labelled weak
+        is held apart and cited only if the answer refers to its chunk id
+        (``_answer_citations``); a later search ranking it higher cites it.
+        """
+
+        latest_turn = self.store.get(HarnessTurn, turn_id)
+        stored_citations = [
+            item
+            for item in latest_turn.metadata.get("citations", [])
+            if isinstance(item, dict)
+        ]
+        cited = {
+            (item.get("source_id"), item.get("chunk_id")) for item in stored_citations
+        }
+        weak = {
+            (item.get("source_id"), item.get("chunk_id")): item
+            for item in latest_turn.metadata.get("searched_weak_citations", [])
+            if isinstance(item, dict)
+        }
+        changed = False
+        for match in matches:
+            key = (match.citation.source_id, match.citation.chunk_id)
+            if key in cited:
+                continue
+            citation = match.citation.model_dump(mode="json")
+            if getattr(match, "relevance", None) == "weak":
+                if key not in weak:
+                    weak[key] = citation
+                    changed = True
+                continue
+            weak.pop(key, None)
+            stored_citations.append(citation)
+            cited.add(key)
+            changed = True
+        if changed:
+            self.store.update(
+                HarnessTurn,
+                latest_turn.id,
+                {
+                    "metadata": {
+                        **latest_turn.metadata,
+                        "citations": stored_citations,
+                        "searched_weak_citations": list(weak.values()),
+                    }
+                },
+                expected_revision=latest_turn.revision,
+            )
+
+    @staticmethod
+    def _answer_citations(turn: HarnessTurn, answer: str) -> list[ChatCitation]:
+        """A harness chat answer's citations.
+
+        What the turn attached or its searches found, and any weak search
+        result the answer refers to by chunk id.
+        """
+
+        citations = [
+            ChatCitation.model_validate(item)
+            for item in turn.metadata.get("citations", [])
+            if isinstance(item, dict)
+        ]
+        known = {(item.source_id, item.chunk_id) for item in citations}
+        for item in turn.metadata.get("searched_weak_citations", []):
+            if not isinstance(item, dict) or str(item.get("chunk_id")) not in answer:
+                continue
+            citation = ChatCitation.model_validate(item)
+            if (citation.source_id, citation.chunk_id) not in known:
+                known.add((citation.source_id, citation.chunk_id))
+                citations.append(citation)
+        return citations
 
     @staticmethod
     def _mcp_risk(tool: McpToolSnapshot) -> RiskClass:
@@ -16063,11 +16115,7 @@ class HarnessRuntimeService:
                     0,
                     round((utc_now() - chat_turn.created_at).total_seconds() * 1000),
                 ),
-                citations=[
-                    ChatCitation.model_validate(item)
-                    for item in turn.metadata.get("citations", [])
-                    if isinstance(item, dict)
-                ],
+                citations=self._answer_citations(turn, final_message),
                 metadata={"harness_turn_id": turn.id},
             )
             with self.store.transaction() as transaction:
@@ -16234,11 +16282,7 @@ class HarnessRuntimeService:
                         ),
                     ),
                     finish_reason="interrupted",
-                    citations=[
-                        ChatCitation.model_validate(item)
-                        for item in turn.metadata.get("citations", [])
-                        if isinstance(item, dict)
-                    ],
+                    citations=self._answer_citations(turn, text),
                     metadata={"harness_turn_id": turn.id, "interrupted": True},
                 )
             )

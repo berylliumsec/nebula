@@ -264,16 +264,21 @@ find candidate chunks with the local embedding index as before. A local
 cross-encoder (`mixedbread-ai/mxbai-rerank-xsmall-v1`, quantised ONNX, pinned
 by commit, size and SHA-256, downloaded in the background into a 0700 model
 directory and never waited for by a turn) then scores the best eight candidates
-against the operator's question and every planned search. The best chunk is
-attached unless the reranker confidently rejects it (`BEST_THRESHOLD`, −3.1);
-further chunks need −1.5 (`RELEVANCE_THRESHOLD`), or a lower bar when the
-embedding model already placed them close to the question. A message with no
+against the operator's question and every planned search. Up to 16
+sentence-sized windows of the candidates (`passage_windows`, those sharing word
+stems with the question or a search first, `MAX_WINDOW_PAIRS`) are scored too,
+and a chunk keeps its best window's score, so one answering sentence in an
+1,800-character chunk is not diluted by the rest. The best chunk is attached
+unless the reranker confidently rejects it (`BEST_THRESHOLD`, −2.4), with any
+chunk within 0.8 of it (`NEAR_BEST_MARGIN`); further chunks need −0.8
+(`RELEVANCE_THRESHOLD`). A message with no
 subject of its own ("thanks", "ok, continue") skips knowledge retrieval. While
 the model is unavailable, or with `NEBULA_V3_KNOWLEDGE_RERANKER=off`, retrieval
 attaches the nearest chunks as it always did. Project knowledge never leaves
 the host for reranking. On a labelled set of 50 questions the reranker keeps
-14/14 lexical and 14/15 paraphrased questions' documents and attaches nothing
-to 11/13 unrelated ones (before: all 13 attached documents).
+14/14 lexical and 15/15 paraphrased questions' documents and attaches nothing
+to 13/13 unrelated ones (before: all 13 attached documents); choosing its lines
+on 49 questions and testing the 50th, in turn, keeps 14/15 paraphrases.
 
 **`knowledge.search`** (`knowledge_search.py`). Every provider tool turn whose
 project has ready knowledge that may reach the selected model (a local model,
@@ -284,7 +289,8 @@ attachment left out. It reuses the harness gateway's search: local-only
 sources never reach a cloud model, and a cloud model gets redacted text. Its
 results are not gated but ranked, each labelled `strong`, `possible` or `weak`,
 and the chunks it delivered join the answer's citations (weak ones only when
-the answer names their chunk id). Search results, like every tool result, must
+the answer names their chunk id). A harness's gateway `knowledge.search` is
+cited the same way. Search results, like every tool result, must
 fit the 8 KiB a result may carry to the model (`tool_results.fit_model_result`
 keeps as many whole results as fit and says how many were left out).
 
