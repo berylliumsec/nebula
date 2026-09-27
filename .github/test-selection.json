@@ -1,13 +1,13 @@
 {
   "change_digest": "bc65e4fd186a2e4c531a8d304d9dfa0d179eff31793d9a7ab82917d85092b67b",
   "reviewed_by": "Codex focused review for optional subagent effort override",
-  "reason": "The diff changes the subagent effort setting across Assistant settings, API mapping, persisted sessions, provider and harness child starts, and goal/scheduled continuations. Three collected Python files (51 cases) cover child effort precedence, effort-only PATCH, and durable continuation; three frontend files (13 cases) cover the control and wire choices. The chat-subagents catalog entries select both settings journeys across desktop, compact, mobile Chromium and mobile WebKit (16 cases), and the real-Core production/LAN setting persistence journey (1 case). Shared chat and UI files were reviewed against these paths; their unrelated behaviors are unchanged.",
+  "reason": "The diff changes the subagent effort setting across Assistant settings, API mapping, persisted sessions, provider and harness child starts, and goal/scheduled continuations. Three collected Python files (51 cases) cover child effort precedence, effort-only PATCH, and durable continuation; three frontend files (13 cases) cover the control and wire choices. The chat-subagents catalog entries select both settings journeys across desktop, compact, mobile Chromium and mobile WebKit (16 cases), and real-Core production/LAN persistence and recovery journeys (2 cases). Shared chat and UI files were reviewed against these paths; their unrelated behaviors are unchanged.",
   "exclusions": "No native code changed. Unrelated assistant, provider, workspace and browser journeys and full suites are excluded. Physical mobile-device testing is unavailable locally and is not claimed by the selected emulated browser projects.",
   "expected_tests": {
     "python": 51,
     "frontend": 13,
     "native": 0,
-    "playwright": 17
+    "playwright": 18
   },
   "python_versions": [
     "3.12"
@@ -24,14 +24,14 @@
   ],
   "native": [],
   "playwright": [
-    "chat-subagents-core/real-core",
-    "chat-subagents/desktop",
-    "chat-subagents/compact",
-    "chat-subagents/mobile-chromium-small",
-    "chat-subagents/mobile-chromium",
-    "chat-subagents/mobile-chromium-wide",
-    "chat-subagents/mobile-webkit-small",
-    "chat-subagents/mobile-webkit",
-    "chat-subagents/mobile-webkit-wide"
+    "entry:chat-subagents-core/real-core",
+    "entry:chat-subagents/desktop",
+    "entry:chat-subagents/compact",
+    "entry:chat-subagents/mobile-chromium-small",
+    "entry:chat-subagents/mobile-chromium",
+    "entry:chat-subagents/mobile-chromium-wide",
+    "entry:chat-subagents/mobile-webkit-small",
+    "entry:chat-subagents/mobile-webkit",
+    "entry:chat-subagents/mobile-webkit-wide"
   ]
 }
