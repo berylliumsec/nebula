@@ -92,6 +92,7 @@ from .tool_activity import lookup_identifiers, step_brief, tool_activity_block
 from .working_notes import (
     NOTES_ROUTING_INSTRUCTIONS,
     NOTES_WRITE_TOOL_NAME,
+    block_notes_revision,
     checkpoint_notes,
     read_working_notes,
     working_notes_block,
@@ -2295,6 +2296,10 @@ def _budgeted_reasoning(
 # the request's earlier bytes, and misses the provider's prefix cache, at
 # every step.
 CLEARING_HEADROOM_STEPS = 3
+# What the memory leading a compacted conversation takes, in raw estimated
+# tokens: the compactor's smallest summary allowance, and a memory estimates
+# at about 1.2 times its output tokens (``context.ContextCompactor``).
+MIDTURN_MEMORY_TOKENS = math.ceil(1.2 * SUMMARY_FLOOR_TOKENS)
 
 
 def _step_tokens(request: ModelRequest, calibration: float | None) -> int:
@@ -2341,6 +2346,24 @@ def _with_checkpoint(
         )
     )
     return _with_trailing_block(messages, block)
+
+
+def _sent_notes_revision(messages: Sequence[ModelMessage]) -> int | None:
+    """The revision of the working notes the last operator message carries."""
+
+    if not messages or messages[-1].role != "user":
+        return None
+    content = messages[-1].content
+    text = (
+        content
+        if isinstance(content, str)
+        else "\n".join(
+            str(part.get("text") or "")
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    )
+    return block_notes_revision(text)
 
 
 def _with_trailing_block(
@@ -7018,22 +7041,35 @@ class ChatService:
             headroom += math.ceil(
                 (parts.tool_schemas + parts.tool_results) * (1 / factor - 1)
             )
-        # The headroom lowers the target only as far as the current message:
-        # a turn whose steps are large for its window compacts everything
-        # before it and runs with the room that gives, rather than keeping
-        # a conversation the headroom could never have room for.
-        headroom = max(
-            0,
-            min(
-                headroom,
-                target - reserved - estimate_messages(base.messages[-1:], instructions),
-            ),
-        )
         components = prepared.tool_components
         add_search = (
             offer_search
             and components is not None
             and CONVERSATION_SEARCH_TOOL_NAME not in components.specs
+        )
+        archive_reserved = (
+            estimate_tool_definitions(self._routing_tools([conversation_search_spec()]))
+            if add_search
+            else 0
+        )
+        # The headroom lowers the target only as far as the current message,
+        # the memory that will lead the conversation and the definition a
+        # compacted tool turn adds: a turn whose steps are large for its
+        # window compacts everything before its current message and runs
+        # with the room that gives. Lower, ``_model_context`` found the
+        # target out of reach, compacted to the capacity instead and kept
+        # most of the conversation (an 8K turn kept two of six earlier
+        # exchanges verbatim and filled the room they left with excerpts).
+        headroom = max(
+            0,
+            min(
+                headroom,
+                target
+                - reserved
+                - estimate_messages(base.messages[-1:], instructions)
+                - MIDTURN_MEMORY_TOKENS
+                - archive_reserved,
+            ),
         )
         goal = self.store.get(ChatGoal, turn.goal_id) if turn.goal_id else None
         budget = ContextCallBudget(
@@ -7075,13 +7111,7 @@ class ChatService:
                 # the request as it is, and the notes the rebuilt one carries.
                 reserved_tokens=reserved,
                 target_headroom=headroom,
-                archive_reserved_tokens=(
-                    estimate_tool_definitions(
-                        self._routing_tools([conversation_search_spec()])
-                    )
-                    if add_search
-                    else 0
-                ),
+                archive_reserved_tokens=archive_reserved,
                 calibration=prepared.estimate_calibration,
                 objective=goal.objective if goal is not None else None,
             )
@@ -7240,7 +7270,9 @@ class ChatService:
                 },
             )
         _, replay_entries = self._compacted_turn_history(
-            turn, self._request_limits(prepared.provider_profile, failed_request)
+            turn,
+            self._request_limits(prepared.provider_profile, failed_request),
+            messages=prepared.model_request.messages,
         )
         replayed = self._replayed_tool_history(prepared, turn, entries=replay_entries)
         prepared.cleared_tool_calls.update(result.call_id for result in replayed[:-1])
@@ -9227,13 +9259,25 @@ class ChatService:
         *,
         advance: bool = False,
         recent_groups: int = RECENT_RESPONSE_GROUPS,
+        messages: Sequence[ModelMessage] = (),
     ) -> tuple[TurnCheckpoint | None, list[dict[str, Any]]]:
         """The turn's checkpoint and replay, sized for the request's model.
 
         The recent window is bounded by the model's working input capacity
         too, and a checkpoint written now bounds its receipts by it and
-        carries the conversation's working notes.
+        carries the conversation's working notes, unless ``messages`` (the
+        turn's conversation) already carry that revision of them on the
+        current message the checkpoint rides on: the same notes twice cost
+        up to 8 KiB, most of a small window.
         """
+
+        sent = _sent_notes_revision(messages)
+
+        def notes() -> dict[str, Any] | None:
+            current = checkpoint_notes(read_working_notes(self.store, turn.session_id))
+            if current is not None and current.get("revision") == sent:
+                return None
+            return current
 
         return self.turn_ledger.compacted_history(
             turn,
@@ -9241,9 +9285,7 @@ class ChatService:
             recent_groups=recent_groups,
             recent_tokens=recent_window_tokens(limits.working_input_capacity),
             byte_limit=checkpoint_byte_limit(limits.working_input_capacity),
-            working_notes=lambda: checkpoint_notes(
-                read_working_notes(self.store, turn.session_id)
-            ),
+            working_notes=notes,
         )
 
     def _fold_deeper(
@@ -9271,6 +9313,7 @@ class ChatService:
             self._request_limits(prepared.provider_profile, request),
             advance=True,
             recent_groups=recent_groups,
+            messages=prepared.model_request.messages,
         )
         if checkpoint is None or checkpoint == before:
             return False
@@ -9424,7 +9467,9 @@ class ChatService:
                 turn, cleared=len(entries), entries=entries
             )
 
-        checkpoint, replay_entries = self._compacted_turn_history(turn, limits)
+        checkpoint, replay_entries = self._compacted_turn_history(
+            turn, limits, messages=request.messages
+        )
         fitted = replayed(checkpoint, replay_entries)
         if not fitted.tool_results:
             return fitted
@@ -9568,7 +9613,7 @@ class ChatService:
         candidates, earlier, clearing, plan = ladder(fitted, receipts)
         if not short and plan(target - headroom, False) is not None:
             advanced, advanced_entries = self._compacted_turn_history(
-                turn, limits, advance=True
+                turn, limits, advance=True, messages=request.messages
             )
             if advanced is not None and advanced != checkpoint:
                 checkpoint, replay_entries = advanced, advanced_entries
@@ -9581,7 +9626,11 @@ class ChatService:
         decided = choose(current, candidates, clearing, plan, folded=False)
         if decided is None:
             advanced, advanced_entries = self._compacted_turn_history(
-                turn, limits, advance=True, recent_groups=1
+                turn,
+                limits,
+                advance=True,
+                recent_groups=1,
+                messages=request.messages,
             )
             if advanced is not None and advanced != checkpoint:
                 checkpoint, replay_entries = advanced, advanced_entries
@@ -9600,33 +9649,42 @@ class ChatService:
         )
         low, drop = chosen
         dropped = thoughtless | earlier if drop else thoughtless
-        smallest = clearing(low, dropped)
-        at_smallest = measured(smallest, hard=True)
-        compactable = calibrated_estimate(
-            estimate_messages(smallest.messages[:-1]), calibration
+        # The request at its smallest: every earlier result cleared and its
+        # reasoning let go. Measured as if the checkpoint folded them too (a
+        # fold keeps a few dozen bytes of each), so a turn whose replayed
+        # receipts only need folding is not compacted.
+        smallest = clearing(len(candidates), thoughtless | earlier)
+        at_smallest = measured(
+            smallest.model_copy(update={"tool_results": smallest.tool_results[-1:]}),
+            hard=True,
         )
+        # What compacting the conversation before the current message would
+        # free: all of it but the memory that replaces it (a few short turns
+        # came back no smaller, at the cost of a call).
+        freed = calibrated_estimate(
+            estimate_messages(smallest.messages[:-1]), calibration, hard=True
+        ) - calibrated_estimate(MIDTURN_MEMORY_TOKENS, calibration, hard=True)
+        chosen_size = measured(clearing(low, dropped), hard=True)
         if (
             compact_for_room
             and not prepared.room_compacted
             and not prepared.midturn_compactions
+            and freed > 0
             and (
                 # The newest result, the one the model is deciding on, would
-                # be cleared too: worth a compaction whenever the
-                # conversation holds a step's worth.
-                (at_smallest > capacity and compactable >= prepared.tool_step_tokens)
-                # No room below the capacity for one more step, so the
-                # checkpoint would fold at every step: worth one only when
-                # the conversation holds a step's worth more than the
-                # smallest memory the compactor writes (a few short turns
-                # came back no smaller, at the cost of a call).
+                # be cleared too: worth a compaction that keeps it whole.
+                (chosen_size > capacity and freed >= chosen_size - capacity)
+                # Even at its smallest there is no room below the capacity
+                # for one more step, so the turn would fold at nearly every
+                # step: worth one that frees at least half a step.
                 or (
                     at_smallest > capacity - prepared.tool_step_tokens
-                    and compactable >= prepared.tool_step_tokens + SUMMARY_FLOOR_TOKENS
+                    and freed >= prepared.tool_step_tokens // 2
                 )
             )
         ):
             # The routing loop compacts the conversation ahead of the tool
-            # history once; this is the request to size it by.
+            # history once, sized by the request at its smallest.
             prepared.room_due = True
             return smallest
         if runs_on and not short:
@@ -9712,7 +9770,9 @@ class ChatService:
         """
 
         _, replay_entries = self._compacted_turn_history(
-            turn, self._request_limits(prepared.provider_profile, failed_request)
+            turn,
+            self._request_limits(prepared.provider_profile, failed_request),
+            messages=prepared.model_request.messages,
         )
         whole = self._replayed_tool_history(prepared, turn, entries=replay_entries)
         if [result.call_id for result in whole] != [

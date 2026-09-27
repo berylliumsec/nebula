@@ -409,14 +409,16 @@ def test_a_rejection_after_clearing_compacts_the_conversation_once_more(tmp_path
     """The retry with older results cleared was refused too: the conversation
     is compacted for one more retry; a third refusal would fail the turn."""
 
-    broker = ScanBroker()
+    # Results that leave the turn room below its target, so the conversation
+    # is still whole when the provider refuses.
+    broker = ProbeBroker()
     provider = RejectingProvider(calls=3, limit=10**9, refuse_first=2)
     store, service, prepared = _turn(tmp_path, provider, broker, history=6)
 
     completion = asyncio.run(service.complete(prepared))
 
     assert completion.message.content == ANSWER
-    assert [call.arguments["value"] for call in broker.calls] == ["1", "2", "3"]
+    assert broker.calls == ["1", "2", "3"]
     first, second = provider.rejected
     assert "context_length_recovery" not in first.metadata
     assert second.metadata["context_length_recovery"] == "cleared_tool_results"

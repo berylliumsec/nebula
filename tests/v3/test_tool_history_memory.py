@@ -98,7 +98,9 @@ def _step(step: int, status: str = "complete") -> dict:
 def test_checkpoint_receipts_say_what_each_step_did_within_a_scaled_bound(tmp_path):
     """F1: receipts were an 80-character summary under a fixed 16 KiB cap."""
 
-    assert checkpoint_byte_limit(8_192) == CHECKPOINT_BYTE_LIMIT
+    # A small window's receipts take at most 15% of its capacity (L3).
+    assert checkpoint_byte_limit(8_192) == 1_228 * 3
+    assert checkpoint_byte_limit(40_000) == CHECKPOINT_BYTE_LIMIT
     assert checkpoint_byte_limit(128_000) == CHECKPOINT_BYTE_LIMIT
     assert checkpoint_byte_limit(400_000) == 36_000
     assert checkpoint_byte_limit(1_000_000) == CHECKPOINT_BYTE_CEILING

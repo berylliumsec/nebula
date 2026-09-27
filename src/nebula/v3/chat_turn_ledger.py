@@ -33,6 +33,14 @@ CHECKPOINT_BYTE_CEILING = 64 * 1024
 # estimated token stands for (``context.estimate_tokens`` counts 3).
 _CHECKPOINT_CAPACITY_SHARE = 0.03
 _BYTES_PER_TOKEN = 3
+# The floor is 5,400 tokens: most of an 8K model's input, and on a long turn
+# the receipts outgrew a small window's capacity by themselves. Below about
+# 36,000 tokens of working capacity (where this share reaches the floor) the
+# receipts take at most this share of it instead, never less than the
+# minimum: about a dozen of the newest receipts, since the oldest successful
+# ones go first and failures last.
+_SMALL_WINDOW_CHECKPOINT_SHARE = 0.15
+CHECKPOINT_MIN_BYTES = 2 * 1024
 RECENT_RESPONSE_GROUPS = 8
 # A window of eight groups was a window of eight steps until models began
 # batching calls. Counted in groups alone, a model that batches five calls
@@ -126,10 +134,17 @@ def recent_window_tokens(input_capacity: int) -> int:
 
 
 def checkpoint_byte_limit(input_capacity: int) -> int:
-    """The receipts' byte bound for a model with ``input_capacity`` tokens."""
+    """The receipts' byte bound for a model with ``input_capacity`` tokens.
+
+    3% of the capacity between ``CHECKPOINT_BYTE_LIMIT`` and
+    ``CHECKPOINT_BYTE_CEILING``, and never more than 15% of it, down to
+    ``CHECKPOINT_MIN_BYTES``.
+    """
 
     scaled = int(input_capacity * _CHECKPOINT_CAPACITY_SHARE) * _BYTES_PER_TOKEN
-    return max(CHECKPOINT_BYTE_LIMIT, min(CHECKPOINT_BYTE_CEILING, scaled))
+    limit = max(CHECKPOINT_BYTE_LIMIT, min(CHECKPOINT_BYTE_CEILING, scaled))
+    small = int(input_capacity * _SMALL_WINDOW_CHECKPOINT_SHARE) * _BYTES_PER_TOKEN
+    return max(CHECKPOINT_MIN_BYTES, min(limit, small))
 
 
 def _without_callback_key(entry: dict[str, Any]) -> dict[str, Any]:

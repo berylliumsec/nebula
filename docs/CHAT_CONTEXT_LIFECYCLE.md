@@ -494,7 +494,12 @@ bounded transformations:
   receipts are bounded at 3% of the working input capacity, never below
   16 KiB or above 64 KiB (16 KiB up to about a 182,000-token capacity,
   about 23 KiB for a model under the working ceiling, and 64 KiB from about
-  728,000 when a larger working context was configured). Over the bound, older
+  728,000 when a larger working context was configured), and never above 15%
+  of the working capacity, down to 2 KiB: below about 36,000 tokens the
+  16 KiB floor (about 5,400 tokens) was most of an 8K window, and a long
+  turn's receipts outgrew the window by themselves (an 8K window's receipts
+  now take at most about 1,000 tokens, a dozen or more of the newest). Over
+  the bound, older
   successful receipts are dropped first, then failed ones if necessary, and
   `omitted_steps` records the count. There is no separate token cap; the
   stored `token_estimate` is the checkpoint's own estimate. The hash and
@@ -555,9 +560,10 @@ bounded transformations:
      capacity, extending each other (`chat.tool_history.capacity_ceiling`),
      and cross there by the same rules, until a crossing finds room for the
      headroom below the target again;
-  4. and when even the request at its smallest would clear the newest result,
-     or leaves no room below the capacity for one more step, the routing loop
-     compacts the conversation once (`step_room`, below).
+  4. and when the request would clear its newest result, or even at its
+     smallest (folded) leaves no room below the capacity for one more step,
+     the routing loop compacts the conversation once (`step_room`, below),
+     down to the memory and the current message.
 
   With room for the headroom a crossing advances the checkpoint first, as
   before, so the fold and the clearing are one change. A resumed turn finds
@@ -570,7 +576,9 @@ routing instructions ask for them on long or multi-step work. A checkpoint
 written during the turn carries the latest notes as `working_notes`, outside
 the receipts' byte bound, so notes written by a step that has since folded are
 not lost; until then the `notes.write` call itself is replayed with its
-arguments. When a turn starts, the conversation's current notes are appended
+arguments. It leaves them out while the current message it rides on already
+carries that revision of them (the turn's own notes block, or the one a
+mid-turn compaction rebuilt): the same notes twice cost up to 8 KiB. When a turn starts, the conversation's current notes are appended
 to the operator's message as a JSON data block, after the message's own
 content and before any checkpoint, and stay the same bytes for the whole turn.
 Notes that would push the request over hard input capacity are left out of it
@@ -600,7 +608,10 @@ results, the checkpoint, and the current working notes) plus the same headroom
 below the target that clearing leaves. With a calibration below 1 the headroom
 also covers what the request's function declarations and tool history count
 beyond it (JSON never counts below its estimate), and it lowers the target only
-as far as the current message needs. It then compacts the canonical
+as far as the current message, the memory that will lead the conversation and
+the `conversation.search` definition need. (Lowered further, the target was out
+of reach, the conversation was compacted to the capacity instead, and an 8K turn
+kept two of six earlier exchanges verbatim plus excerpts of the rest.) It then compacts the canonical
 conversation afresh into what is left (`_model_context` with
 `reuse_snapshot=False`; the input capacity is the goal when even the current
 message does not fit the target). The turn's ledger, checkpoint and replay are
@@ -613,17 +624,19 @@ messages are now served by a snapshot is also offered `conversation.search`.
 Compaction usage is charged to the turn's goal like any other compaction. Each
 cause is tried once per step:
 
-* **No room for one more step** (`step_room`): even at its smallest (every
-  earlier result cleared, earlier reasoning let go, the steps folded) the
-  request would clear its newest result, the one the model is deciding on,
-  when the conversation before the current message holds a step's worth; or
-  it leaves no room below the input capacity for one more average step, so
-  the checkpoint would fold at every step, when that conversation holds a
-  step's worth more than the smallest memory the compactor writes (1,024
-  tokens). Tried once per turn, when the turn has not compacted mid-turn
-  already, sized by the request at its smallest; routing then starts the same
-  step again (see *Small windows* above). A compaction that comes back no
-  smaller is discarded (`chat.context.midturn_compaction_not_smaller`).
+* **No room for one more step** (`step_room`): the request would clear its
+  newest result, the one the model is deciding on, and compacting the
+  conversation before the current message frees enough to keep it whole; or,
+  even at its smallest (every earlier result cleared, earlier reasoning let
+  go, measured as if folded), the request leaves no room below the input
+  capacity for one more average step, so the checkpoint would fold at nearly
+  every step, and compacting frees at least half a step. What compacting
+  frees is that conversation less the memory that replaces it (1.2 times the
+  compactor's smallest summary allowance, 1,024 tokens). Tried once per turn,
+  when the turn has not compacted mid-turn already, sized by the request at
+  its smallest; routing then starts the same step again (see *Small windows*
+  above). A compaction that comes back no smaller is discarded
+  (`chat.context.midturn_compaction_not_smaller`).
 
 * **Routing that no longer fits** (`context_full`): even with every result
   cleared, the request is over input capacity. After compaction routing starts
