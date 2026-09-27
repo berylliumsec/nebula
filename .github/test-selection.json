@@ -1,10 +1,10 @@
 {
-  "change_digest": "ea0862f6e2a23c4963ac25b089ccfcadb426778f6b2283c127b8d95d30ee2ccd",
-  "reviewed_by": "Claude focused review for fix-turn-protocol-test",
-  "reason": "Test-only change: tests/v3/test_minimal_agent_instructions.py asserted the removed finish_response tool (gone since f35c14c, when a routing response without tool calls became the answer) and has failed on main since. It now asserts the current protocol sentence. Selecting the one file proves it.",
-  "exclusions": "No source, UI, provider or runtime change; frontend, native and Playwright layers have nothing to exercise.",
+  "change_digest": "be217f70837db99c7620dca5938b7da90e8458a796e3042aa5ae0149d8be5ff6",
+  "reviewed_by": "Codex release metadata review",
+  "reason": "Alpha.22 release preparation changes only synchronized version metadata and release notes; selected tests verify version metadata and public updater configuration. Tagged preparation separately verifies package/install/signature/provenance contracts and reviewed browser impact.",
+  "exclusions": "No application behavior changes in this PR. Frontend, native, and Playwright tests excluded from this metadata-only diff; no full suites authorized. Local tests bounded to two minutes.",
   "expected_tests": {
-    "python": 5,
+    "python": 8,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -12,10 +12,9 @@
   "python_versions": [
     "3.12"
   ],
-  "python_browser": false,
-  "python_node": false,
   "python": [
-    "tests/v3/test_minimal_agent_instructions.py"
+    "tests/v3/test_version.py",
+    "tests/v3/test_tauri_release_config.py"
   ],
   "frontend": [],
   "native": [],
