@@ -1584,6 +1584,7 @@ class SubagentService:
                 )
             provider_id = str(setting.get("provider_profile_id") or "")
             model = str(setting.get("model") or "")
+            forced_effort = _known_effort(setting.get("reasoning_effort"))
             # Children use Nebula's command runtime whenever the harness
             # session has one; its vendor-native shell stays with the harness.
             runtime_snapshot = snapshot.get("command_runtime_snapshot")
@@ -1598,11 +1599,7 @@ class SubagentService:
             model = parent_turn.model
             tools_enabled = bool(snapshot.get("include_oci_tools", False))
             allow_subagents = bool(snapshot.get("allow_subagents", False))
-        forced_effort = _known_effort(
-            setting.get("reasoning_effort")
-            if parent_turn.backend == ChatBackend.HARNESS
-            else snapshot.get("subagent_reasoning_effort")
-        )
+            forced_effort = _known_effort(snapshot.get("subagent_reasoning_effort"))
         effort = forced_effort or requested_effort
         if not provider_id or not model:
             raise ToolNotPermitted(

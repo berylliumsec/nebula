@@ -1,5 +1,5 @@
 {
-  "change_digest": "bc65e4fd186a2e4c531a8d304d9dfa0d179eff31793d9a7ab82917d85092b67b",
+  "change_digest": "72f770c3fcde2388324e08b17caa006b61671a74699270d9fb3f63a0712beb8a",
   "reviewed_by": "Codex focused review for optional subagent effort override",
   "reason": "The diff changes the subagent effort setting across Assistant settings, API mapping, persisted sessions, provider and harness child starts, and goal/scheduled continuations. Three collected Python files (51 cases) cover child effort precedence, effort-only PATCH, and durable continuation; three frontend files (13 cases) cover the control and wire choices. The chat-subagents catalog entries select both settings journeys across desktop, compact, mobile Chromium and mobile WebKit (16 cases), and real-Core production/LAN persistence and recovery journeys (2 cases). Shared chat and UI files were reviewed against these paths; their unrelated behaviors are unchanged.",
   "exclusions": "No native code changed. Unrelated assistant, provider, workspace and browser journeys and full suites are excluded. Physical mobile-device testing is unavailable locally and is not claimed by the selected emulated browser projects.",
