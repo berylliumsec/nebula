@@ -1,26 +1,23 @@
 {
-  "change_digest": "c8ff21f359ec257f642f6502f764c009a0e5d2a13cf2ea546b2a4ada38b65daa",
-  "reviewed_by": "Claude focused review for ctx-reranker-progress",
-  "reason": "L1 (PLAN.md \u00a710): the Knowledge page banner (existing knowledge-model-status section and knowledge-model-progress bar, same component and styles) now also shows the local relevance model's state from GET /api/v1/knowledge/index-status `reranker`: downloading with bytes, percent and a progress bar; preparing; failed, with what still works and when it retries. It is hidden when both models are ready or the relevance model is only required/disabled, and the retrieval model's banner takes precedence. The page keeps polling index-status (1 s) while either model downloads or prepares, since the relevance model downloads in the background after the upload that started it. client.ts maps the optional reranker object; types.ts adds KnowledgeRerankerStatus. Selected: KnowledgePage.test.tsx (banner states, background polling, precedence, hidden) and client.test.ts (mapping). Playwright: a new focused area knowledge-model-status (desktop, mobile-chromium, mobile-webkit; added without a rule, like provider-options) running the new mocked test; its title is added to the mobile-chromium and mobile-webkit greps. Counts from vitest and playwright --list.",
-  "exclusions": "No Python, native or real-Core Playwright tests: Core is unchanged (the reranker status already ships in index-status). KnowledgePage.tsx otherwise falls to the whole-file desktop-interface/mobile-layout fallback, and playwright.config.ts / tests/interface.spec.ts are full_patterns; only the banner's copy and polling changed and the mobile greps gained one title, so the focused area covers it. A real first download on a scratch Core (production bundle, desktop Chromium 1440 and WebKit iPhone 13 at 390) is in the PR body. No full suite.",
+  "change_digest": "ea0862f6e2a23c4963ac25b089ccfcadb426778f6b2283c127b8d95d30ee2ccd",
+  "reviewed_by": "Claude focused review for fix-turn-protocol-test",
+  "reason": "Test-only change: tests/v3/test_minimal_agent_instructions.py asserted the removed finish_response tool (gone since f35c14c, when a routing response without tool calls became the answer) and has failed on main since. It now asserts the current protocol sentence. Selecting the one file proves it.",
+  "exclusions": "No source, UI, provider or runtime change; frontend, native and Playwright layers have nothing to exercise.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 91,
+    "python": 5,
+    "frontend": 0,
     "native": 0,
-    "playwright": 3
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/pages/KnowledgePage.test.tsx",
-    "ui/src/api/client.test.ts"
+  "python": [
+    "tests/v3/test_minimal_agent_instructions.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:knowledge-model-status"
-  ]
+  "playwright": []
 }

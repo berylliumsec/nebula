@@ -56,7 +56,9 @@ def test_chat_instructions_only_define_turn_protocol() -> None:
         )
     )
 
-    assert "finish_response" in instructions
+    # A routing response without tool calls is the answer (#501); there is no
+    # finish_response tool to call.
+    assert "A response without tool calls ends the turn." in instructions
     assert "[source_id:chunk_id]" in instructions
     assert "JSON `queries` array" in instructions
     assert not any(
