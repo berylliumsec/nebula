@@ -270,7 +270,9 @@ one-time local setup. While it runs, the page reports downloaded bytes, total si
 percentage, verification/preparation, and an actionable retry state if preparation
 fails. Core does not trigger this download during startup, so progress is always
 observable from the operator workspace. Chat asks the selected model for up to
-four bounded search queries, retrieves vector candidates from the active Project
+four bounded search queries, worded the way a document that answers would put it
+and leaving out what the message asks of the reply (such as "one sentence"),
+retrieves vector candidates from the active Project
 and the global Library, adds a small exact-term reranking bonus for security
 identifiers, and attaches no more than eight cited chunks within the knowledge
 token budget to the operator's message in the model request, as labeled untrusted

@@ -1602,8 +1602,15 @@ _FINAL_ANSWER_RETRY_LIMIT = 1
 _GOAL_FINAL_ANSWER_STALL_LIMIT = 6
 _FINAL_ANSWER_BACKOFF_CEILING_SECONDS = 30.0
 
-_RETRIEVAL_AGENT_INSTRUCTIONS = """Return a JSON `queries` array containing one
-to four searches for the operator's request."""
+# Searches worded like the answer find it: a paraphrase shares no words with
+# the document, and the operator's own words are searched besides. Told only to
+# return searches, planners repeated a message that asked for a one-sentence
+# reply as a single search, and its paraphrases lost their document.
+_RETRIEVAL_AGENT_INSTRUCTIONS = """Return a JSON `queries` array of one to four
+searches of the project's documents for what the operator's message asks about.
+Skip instructions about the reply itself, such as its length or format. Word
+most searches the way a document that answers would put it, with the terms,
+names and phrases it would likely use, rather than repeating the message."""
 # A 256-token plan without reasoning; past this the operator's own words are
 # the query, instead of the turn waiting out the provider's request timeout.
 _RETRIEVAL_PLAN_TIMEOUT_SECONDS = 30.0
