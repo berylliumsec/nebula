@@ -829,16 +829,16 @@ def test_waits_stay_below_each_harness_tool_timeout(tmp_path):
         gateway_tools=({"name": _portable_gateway_tool_name("subagent.start")},),
     )
     assert "waits up to 300 seconds" in instructions
-    assert "set reasoning_effort on subagent.start" in instructions
+    assert "Choose reasoning_effort on subagent.start" in instructions
     start = _gateway_subagent_tools(HarnessKind.GROK_ACP)["subagent.start"]
-    assert "Effort defaults to low" in start[0]
+    assert "omit it for the model default" in start[0]
     assert (
-        "Omit to use low effort"
+        "Omit for the provider model default"
         in start[1]["properties"]["reasoning_effort"]["description"]
     )
 
 
-def test_harness_subagents_default_to_low_unless_the_supervisor_selects_an_effort(
+def test_harness_subagents_use_model_choice_unless_the_operator_forces_effort(
     tmp_path,
 ):
     async def scenario() -> None:
@@ -865,7 +865,7 @@ def test_harness_subagents_default_to_low_unless_the_supervisor_selects_an_effor
             expected_revision=harness.revision,
         )
         child = chat.provider_factory(store.get(ProviderProfile, "provider"))
-        child.answers = ["Done.", "Done.", "Done."]
+        child.answers = ["Done.", "Done.", "Done.", "Done."]
         started: list[dict] = []
 
         async def delegate(connection: ScriptedConnection, prompt: str) -> str:
@@ -891,7 +891,7 @@ def test_harness_subagents_default_to_low_unless_the_supervisor_selects_an_effor
             _payload(await connection.call("subagent.wait"))
             return "Delegated."
 
-        def prepare(effort: str):
+        def prepare(effort: str, setting: dict = SETTING):
             return runtime.prepare_chat(
                 engagement_id=project.id,
                 profile_id=harness.id,
@@ -901,22 +901,25 @@ def test_harness_subagents_default_to_low_unless_the_supervisor_selects_an_effor
                 harness_session_id=None,
                 mcp_server_ids=[],
                 harness_reasoning_effort=effort,
-                provider_subagent=SETTING,
+                provider_subagent=setting,
             )
 
         adapter.script = delegate
         _, _, turn = prepare("high")
         await runtime.start_chat_turn(turn.id)
-        assert [item["reasoning_effort"] for item in started] == ["low", "high"]
+        assert [item["reasoning_effort"] for item in started] == [
+            "model default",
+            "high",
+        ]
         assert {
             request.messages[-1].content: request.reasoning_effort
             for request in child.requests
-        } == {"Map the API routes.": "low", "List the config files.": "high"}
-        assert sorted(
-            str(item.reasoning_effort) for item in store.list_entities(ChatSubagent)
-        ) == ["high", "low"]
+        } == {"Map the API routes.": None, "List the config files.": "high"}
+        assert {
+            item.reasoning_effort for item in store.list_entities(ChatSubagent)
+        } == {None, "high"}
 
-        # The harness's own level does not change the child's low default.
+        # The harness's own level does not change the child's model default.
         async def delegate_once(connection: ScriptedConnection, prompt: str) -> str:
             del prompt
             started.append(
@@ -928,9 +931,29 @@ def test_harness_subagents_default_to_low_unless_the_supervisor_selects_an_effor
         adapter.script = delegate_once
         _, _, other = prepare("max")
         await runtime.start_chat_turn(other.id)
-        assert started[-1]["reasoning_effort"] == "low"
+        assert started[-1]["reasoning_effort"] == "model default"
         assert child.requests[-1].messages[-1].content == "Count tests."
-        assert child.requests[-1].reasoning_effort == "low"
+        assert child.requests[-1].reasoning_effort is None
+
+        async def delegate_forced(connection: ScriptedConnection, prompt: str) -> str:
+            del prompt
+            started.append(
+                _payload(
+                    await connection.call(
+                        "subagent.start",
+                        task="Check the contract.",
+                        reasoning_effort="low",
+                    )
+                )
+            )
+            _payload(await connection.call("subagent.wait"))
+            return "Delegated."
+
+        adapter.script = delegate_forced
+        _, _, forced = prepare("high", {**SETTING, "reasoning_effort": "xhigh"})
+        await runtime.start_chat_turn(forced.id)
+        assert started[-1]["reasoning_effort"] == "xhigh"
+        assert child.requests[-1].reasoning_effort == "xhigh"
         await chat.shutdown()
 
     asyncio.run(scenario())

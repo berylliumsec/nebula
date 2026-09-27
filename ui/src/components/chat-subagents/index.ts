@@ -18,6 +18,7 @@ export {
   type HarnessSubagentChoice,
 } from "./HarnessSubagentSettings";
 export { SubagentLimitField, subagentLimitLabel } from "./SubagentLimitField";
+export { SubagentEffortField } from "./SubagentEffortField";
 export {
   ACTIVE_STATUSES,
   compactTokens,

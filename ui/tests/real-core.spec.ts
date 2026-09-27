@@ -4094,9 +4094,17 @@ reliabilityTest("stabilization real Core keeps the Subagents choice across refre
     await toggle.check();
     await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();
     expect((await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent).toBeTruthy();
+    const effort = page.getByRole("combobox", {name: "Subagent effort"});
+    await effort.selectOption("high");
+    await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();
+    await expect.poll(async () => (await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent.reasoning_effort).toBe("high");
     await page.reload();
     await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
     await expect(page.getByRole("checkbox", {name: /Provider subagents/})).toBeChecked();
+    await expect(page.getByRole("combobox", {name: "Subagent effort"})).toHaveValue("high");
+    await page.getByRole("combobox", {name: "Subagent effort"}).selectOption("");
+    await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();
+    await expect.poll(async () => (await (await core.api.get(`chat-sessions/${sessionId}`)).json()).metadata.provider_subagent.reasoning_effort).toBeUndefined();
 
     await toggle.uncheck();
     await expect(page.getByText("Subagents saved. Applies to your next message.", {exact: true})).toBeVisible();

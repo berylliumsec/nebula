@@ -109,7 +109,6 @@ if TYPE_CHECKING:
 # Subagents are unlimited unless the operator sets how many may run at once
 # for a conversation. The ceiling only bounds that setting.
 SUBAGENT_LIMIT_CEILING = 100
-SUBAGENT_DEFAULT_EFFORT: ReasoningEffort = "low"
 # A report's own bound (ChatSubagent.result). Delivery no longer needs a
 # smaller one: a long report reaches the parent in parts.
 RESULT_CHARACTERS = 20_000
@@ -167,8 +166,9 @@ SUBAGENT_ROUTING_INSTRUCTIONS = """
 Subagents: start_subagent delegates one independent, multi-step task to a child
 assistant with the same model and tools; it returns immediately and runs in
 parallel. Give it a complete, self-contained task. Do not delegate single
-lookups. New subagents use low reasoning effort by default. Set
-reasoning_effort on start_subagent when a task needs a different level.
+lookups. Choose reasoning_effort on start_subagent for each task; if omitted,
+the child provider uses its model default. An operator effort setting overrides
+your choice when present.
 Call wait_subagents when you need their reports before answering;
 subagents that finish after your answer report back in the conversation.
 message_subagent sends a subagent new instructions or answers its question; a
@@ -179,8 +179,8 @@ ends. Reports name what failed: the error, failed tool steps and unread
 messages."""
 
 SUBAGENT_EFFORT_DESCRIPTION = (
-    "How hard the subagent reasons. Omit to use low effort; set a different "
-    "level when this task needs it."
+    "How hard the subagent reasons. Omit for the provider model default. "
+    "An operator effort setting overrides this choice."
 )
 
 SUBAGENT_CHILD_INSTRUCTIONS = """
@@ -247,9 +247,16 @@ def harness_subagent_instructions(
     model: str,
     wait_seconds: int = HARNESS_WAIT_DEFAULT_SECONDS,
     limit: int | None = None,
+    forced_effort: str | None = None,
 ) -> str:
     """Developer instructions for a harness session with provider subagents."""
 
+    effort_instruction = (
+        f"The operator set every subagent to {forced_effort} effort. "
+        if forced_effort
+        else "Choose reasoning_effort on subagent.start for each task; "
+        "omitted means the provider model default. "
+    )
     return (
         "Provider subagents: subagent.start hands one independent, multi-step task "
         f"to a child assistant on the Nebula provider model {model} with this "
@@ -259,9 +266,8 @@ def harness_subagent_instructions(
         + ". Children "
         "cannot see this conversation, so give complete, self-contained "
         "instructions and the expected report. Do not delegate single lookups. "
-        "Children use low reasoning effort by default; set reasoning_effort "
-        "on subagent.start when a task needs a different level. "
-        "Call subagent.wait when you need their reports; it waits up to "
+        + effort_instruction
+        + "Call subagent.wait when you need their reports; it waits up to "
         f"{wait_seconds} seconds and returns anything still "
         "running, so call it again if needed. subagent.message sends a subagent "
         "new instructions or answers its question; a finished subagent starts "
@@ -1578,6 +1584,7 @@ class SubagentService:
                 )
             provider_id = str(setting.get("provider_profile_id") or "")
             model = str(setting.get("model") or "")
+            forced_effort = _known_effort(setting.get("reasoning_effort"))
             # Children use Nebula's command runtime whenever the harness
             # session has one; its vendor-native shell stays with the harness.
             runtime_snapshot = snapshot.get("command_runtime_snapshot")
@@ -1592,7 +1599,8 @@ class SubagentService:
             model = parent_turn.model
             tools_enabled = bool(snapshot.get("include_oci_tools", False))
             allow_subagents = bool(snapshot.get("allow_subagents", False))
-        effort = requested_effort or SUBAGENT_DEFAULT_EFFORT
+            forced_effort = _known_effort(snapshot.get("subagent_reasoning_effort"))
+        effort = forced_effort or requested_effort
         if not provider_id or not model:
             raise ToolNotPermitted(
                 "subagents need a provider model", rule="subagents.provider_model"
@@ -2707,6 +2715,7 @@ class SubagentService:
         provider_profile_id: str,
         model: str,
         max_active: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
         """Check a harness chat's subagent model before any turn relies on it.
 
@@ -2755,11 +2764,20 @@ class SubagentService:
             raise ChatConfigurationError(
                 f"the subagent limit must be between 1 and {SUBAGENT_LIMIT_CEILING}"
             )
+        if reasoning_effort is not None and _known_effort(reasoning_effort) is None:
+            raise ChatConfigurationError(
+                "subagent effort must be one of " + ", ".join(REASONING_EFFORTS)
+            )
         # No key means no limit, so settings saved before limits existed match.
         return {
             "provider_profile_id": profile.id,
             "model": model,
             **({"max_active": max_active} if max_active is not None else {}),
+            **(
+                {"reasoning_effort": reasoning_effort}
+                if reasoning_effort is not None
+                else {}
+            ),
         }
 
     async def wait_for(
@@ -4238,7 +4256,8 @@ def subagent_specs() -> dict[str, ToolSpec]:
             "start_subagent",
             "Delegate one independent multi-step task to a parallel subagent that "
             "uses the same model and tools. Returns immediately with its id. "
-            "Effort defaults to low; pass reasoning_effort for another level.",
+            "Pass reasoning_effort for this task, or omit it for the model default. "
+            "An operator effort setting overrides this choice.",
             {
                 "task": {
                     "type": "string",

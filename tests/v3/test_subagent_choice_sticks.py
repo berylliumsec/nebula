@@ -235,6 +235,7 @@ def test_goal_turns_keep_subagents_checked_after_the_last_send(tmp_path):
             allow_subagents=True,
             max_active_subagents=2,
             reasoning_effort="high",
+            subagent_reasoning_effort="xhigh",
         )
         assert saved["allow_subagents"] is True
         _start(goals)
@@ -246,6 +247,7 @@ def test_goal_turns_keep_subagents_checked_after_the_last_send(tmp_path):
             assert turn.goal_id is not None
             assert turn.request_snapshot.get("allow_subagents") is True
             assert turn.request_snapshot.get("max_active_subagents") == 2
+            assert turn.request_snapshot.get("subagent_reasoning_effort") == "xhigh"
             assert (
                 resolve_request_snapshot(
                     store, turn.request_snapshot, session_id=turn.session_id
@@ -255,6 +257,7 @@ def test_goal_turns_keep_subagents_checked_after_the_last_send(tmp_path):
         metadata = store.get(ChatSession, SESSION).metadata
         assert metadata["allow_subagents"] is True
         assert metadata["max_active_subagents"] == 2
+        assert metadata["subagent_reasoning_effort"] == "xhigh"
         assert metadata["reasoning_effort"] == "high"
         await chat.shutdown()
 
@@ -508,6 +511,40 @@ def test_unverified_harness_send_keeps_the_saved_subagent_choice(tmp_path):
         assert not store.get(ChatSession, chat_session.id).metadata.get(
             "provider_subagent"
         )
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_harness_effort_only_patch_updates_saved_subagent_setting(tmp_path):
+    async def scenario() -> None:
+        store, project, harness, chat, _, runtime = _setup_harness(tmp_path)
+        chat_session, _, _ = _prepare_harness_turn(
+            runtime, project, harness, "Hello.", setting=None
+        )
+        client = TestClient(create_app(store, auth_token="test-token"))
+        choice = {
+            "provider_profile_id": "provider",
+            "model": "model-unverified",
+        }
+        _patch(
+            client,
+            chat_session.id,
+            allow_subagents=True,
+            subagent_provider_id="provider",
+            subagent_model="model-unverified",
+        )
+
+        forced = _patch(client, chat_session.id, subagent_reasoning_effort="high")
+        assert forced["subagent_reasoning_effort"] == "high"
+        assert forced["provider_subagent"] == {
+            **choice,
+            "reasoning_effort": "high",
+        }
+
+        cleared = _patch(client, chat_session.id, subagent_reasoning_effort=None)
+        assert cleared["subagent_reasoning_effort"] is None
+        assert cleared["provider_subagent"] == choice
         await chat.shutdown()
 
     asyncio.run(scenario())

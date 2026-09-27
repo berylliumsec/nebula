@@ -36,6 +36,7 @@ class ScheduledTurnSettings(NamedTuple):
     allow_subagents: bool
     allow_agent_messaging: bool
     max_active_subagents: int | None
+    subagent_reasoning_effort: ReasoningEffort | None
     allow_cloud_tool_results: bool
 
 
@@ -219,6 +220,11 @@ class ChatScheduleService:
             allow_subagents=bool(chosen("allow_subagents")),
             allow_agent_messaging=bool(chosen("allow_agent_messaging")),
             max_active_subagents=subagent_limit(chosen("max_active_subagents")),
+            subagent_reasoning_effort=(
+                cast(ReasoningEffort, chosen("subagent_reasoning_effort"))
+                if chosen("subagent_reasoning_effort") in REASONING_EFFORTS
+                else None
+            ),
             # The operator already confirmed tool-result transfer for the turn
             # this occurrence continues, as subagent goal continuation does.
             allow_cloud_tool_results=tools_enabled,

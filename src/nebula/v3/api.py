@@ -916,6 +916,7 @@ class ChatSessionUpdateRequest(NebulaModel):
     mcp_server_ids: list[str] | None = Field(default=None, max_length=64)
     hook_ids: list[str] | None = Field(default=None, max_length=32)
     reasoning_effort: ReasoningEffort | None = None
+    subagent_reasoning_effort: ReasoningEffort | None = None
     allow_subagents: bool | None = None
     allow_agent_messaging: bool | None = None
     max_active_subagents: int | None = Field(default=None, ge=1, le=100)
@@ -931,6 +932,7 @@ class ChatSessionUpdateRequest(NebulaModel):
             and self.mcp_server_ids is None
             and self.hook_ids is None
             and "reasoning_effort" not in self.model_fields_set
+            and "subagent_reasoning_effort" not in self.model_fields_set
             and self.allow_subagents is None
             and self.allow_agent_messaging is None
             and "max_active_subagents" not in self.model_fields_set
@@ -10392,6 +10394,8 @@ def create_app(
             metadata["hook_ids"] = request.hook_ids
         if "reasoning_effort" in request.model_fields_set:
             metadata["reasoning_effort"] = request.reasoning_effort
+        if "subagent_reasoning_effort" in request.model_fields_set:
+            metadata["subagent_reasoning_effort"] = request.subagent_reasoning_effort
         if request.allow_agent_messaging is not None:
             if request.allow_agent_messaging and (
                 is_subagent_session(current)
@@ -10405,6 +10409,7 @@ def create_app(
         if (
             request.allow_subagents is not None
             or "max_active_subagents" in request.model_fields_set
+            or "subagent_reasoning_effort" in request.model_fields_set
             or request.subagent_provider_id is not None
             or request.subagent_model is not None
         ):
@@ -10433,6 +10438,11 @@ def create_app(
                         "provider_profile_id": provider_id,
                         "model": model,
                         **({"max_active": limit} if limit is not None else {}),
+                        **(
+                            {"reasoning_effort": metadata["subagent_reasoning_effort"]}
+                            if metadata.get("subagent_reasoning_effort") is not None
+                            else {}
+                        ),
                     }
                 else:
                     metadata.pop("provider_subagent", None)

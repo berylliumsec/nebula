@@ -1327,7 +1327,7 @@ def test_subagent_start_failure_leaves_no_child_conversation_or_duplicate_report
     asyncio.run(scenario())
 
 
-def test_subagents_default_to_low_unless_the_supervisor_selects_an_effort(
+def test_subagents_use_the_models_choice_or_provider_default_without_an_override(
     tmp_path: Path,
 ) -> None:
     async def scenario() -> None:
@@ -1384,15 +1384,15 @@ def test_subagents_default_to_low_unless_the_supervisor_selects_an_effort(
             for request in provider.child_requests
         }
         assert child_efforts == {
-            "Map the API routes.": "low",
+            "Map the API routes.": None,
             "List the config files.": "high",
         }
         records = {item.name: item for item in store.list_entities(ChatSubagent)}
         assert {name: item.reasoning_effort for name, item in records.items()} == {
-            "Routes": "low",
+            "Routes": None,
             "Config": "high",
         }
-        assert chat.subagents.view(records["Routes"])["reasoning_effort"] == "low"
+        assert chat.subagents.view(records["Routes"])["reasoning_effort"] is None
         parent = store.get(ChatTurn, parent_turn_id)
         assert [entry["status"] for entry in _history(store, parent)[:3]] == [
             "complete",
@@ -1401,10 +1401,58 @@ def test_subagents_default_to_low_unless_the_supervisor_selects_an_effort(
         ]
         # The delegating model is told which level each child got.
         started = json.loads(_history(store, parent)[0]["provider_result"])
-        assert started["reasoning_effort"] == "low"
+        assert started["reasoning_effort"] == "model default"
         assert "reasoning_effort on start_subagent" in (
             provider.parent_requests[0].instructions or ""
         )
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_operator_effort_overrides_the_supervisors_subagent_choice(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Map the API routes.",
+                    name="Routes",
+                    context=None,
+                    reasoning_effort="high",
+                ),
+                _call("p2", "wait_subagents", subagent_ids=None, mode=None),
+                _finish("p3"),
+                _response(text="Done."),
+            ],
+            child=[_response(text="Mapped.")],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        prepared = await chat.prepare_async(
+            _request(
+                project,
+                content="Split the work.",
+                allow_subagents=True,
+                subagent_reasoning_effort="medium",
+            )
+        )
+        parent_turn_id = chat.start_provider_turn(prepared)
+        await _until(
+            lambda: (
+                store.get(ChatTurn, parent_turn_id).status == ChatTurnStatus.COMPLETE
+            )
+        )
+        assert (
+            store.get(ChatTurn, parent_turn_id).request_snapshot[
+                "subagent_reasoning_effort"
+            ]
+            == "medium"
+        )
+        assert provider.child_requests[0].reasoning_effort == "medium"
+        assert store.list_entities(ChatSubagent)[0].reasoning_effort == "medium"
         await chat.shutdown()
 
     asyncio.run(scenario())

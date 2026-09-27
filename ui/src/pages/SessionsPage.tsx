@@ -28,7 +28,7 @@ import { EnvironmentTargetPicker, environmentIdsForTarget, type EnvironmentTarge
 import { sshApprovalTarget, type SshApprovalTarget } from "../sshTools";
 import { ChatResults } from "../components/ChatResults";
 import { AgentViewPanel, useStructuredResults, useUnseenCount } from "../components/structured-result";
-import { ChatSubagentAttention, ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
+import { ChatSubagentAttention, ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentEffortField, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
 import { useChatNavigation } from "./useChatNavigation";
 import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionList";
 import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
@@ -1033,6 +1033,7 @@ export function SessionsPage() {
   const [subagentModel, setSubagentModel] = useState("");
   // How many subagents may run at once; undefined is no limit.
   const [subagentLimit, setSubagentLimit] = useState<number>();
+  const [subagentReasoningEffort, setSubagentReasoningEffort] = useState<ReasoningEffort>();
 
   const [harnessesLoaded, setHarnessesLoaded] = useState(false);
   // Standing tool-sharing consent lives on the runtime profile; mirror the saved
@@ -1559,6 +1560,7 @@ export function SessionsPage() {
       setSubagentProviderId(activeChatSession.subagentProviderId ?? "");
       setSubagentModel(activeChatSession.subagentModel ?? "");
       setSubagentLimit(activeChatSession.subagentLimit);
+      setSubagentReasoningEffort(activeChatSession.subagentReasoningEffort);
       return;
     }
     setSelectedMcpIds(activeChatSession.mcpServerIds);
@@ -1566,6 +1568,7 @@ export function SessionsPage() {
     setReasoningEffort(activeChatSession.reasoningEffort ?? "");
     setAllowSubagents(activeChatSession.allowSubagents === true);
     setSubagentLimit(activeChatSession.subagentLimit);
+    setSubagentReasoningEffort(activeChatSession.subagentReasoningEffort);
   }, [activeChatSession?.id, activeChatSession?.revision]);
   const activeContextStatus = contextStatus?.ownerId === sessionId ? contextStatus : undefined;
   const contextPercent = contextUsePercent(activeContextStatus);
@@ -2304,6 +2307,7 @@ export function SessionsPage() {
       allowSubagents,
       allowAgentMessaging,
       maxActiveSubagents: allowSubagents ? subagentLimit : undefined,
+      subagentReasoningEffort: allowSubagents ? subagentReasoningEffort : undefined,
       ...draft,
     });
     setProviderGoal(created.goal);
@@ -2712,11 +2716,12 @@ export function SessionsPage() {
     }
   };
 
-  const saveSubagentChoice = async (choice: { enabled: boolean; providerId: string; model: string; limit?: number }) => {
+  const saveSubagentChoice = async (choice: { enabled: boolean; providerId: string; model: string; limit?: number; reasoningEffort?: ReasoningEffort }) => {
     setAllowSubagents(choice.enabled);
     setSubagentProviderId(choice.providerId);
     setSubagentModel(choice.model);
     setSubagentLimit(choice.limit);
+    setSubagentReasoningEffort(choice.reasoningEffort);
     setAssistantSettingsError(undefined);
     if (!api || !sessionId || assistantSettingsBusy) {
       setAssistantSettingsStatus("Subagents updated. Applies to your next message.");
@@ -2732,6 +2737,7 @@ export function SessionsPage() {
       const updated = await api.updateChatSessionAssistantSettings(sessionId, {
         allowSubagents: choice.enabled,
         maxActiveSubagents: choice.limit ?? null,
+        subagentReasoningEffort: choice.reasoningEffort ?? null,
         ...(current.backend === "harness" && choice.enabled
           ? { subagentProviderId: choice.providerId, subagentModel: choice.model }
           : {}),
@@ -2742,6 +2748,7 @@ export function SessionsPage() {
         setSubagentProviderId(updated.subagentProviderId ?? "");
         setSubagentModel(updated.subagentModel ?? "");
         setSubagentLimit(updated.subagentLimit);
+        setSubagentReasoningEffort(updated.subagentReasoningEffort);
         setAssistantSettingsStatus("Subagents saved. Applies to your next message.");
       }
     } catch (error) {
@@ -2751,6 +2758,7 @@ export function SessionsPage() {
         setSubagentProviderId(current.subagentProviderId ?? "");
         setSubagentModel(current.subagentModel ?? "");
         setSubagentLimit(current.subagentLimit);
+        setSubagentReasoningEffort(current.subagentReasoningEffort);
         setAssistantSettingsStatus("");
         setAssistantSettingsError(error instanceof Error ? error.message : "Could not save subagents.");
       }
@@ -4281,6 +4289,7 @@ export function SessionsPage() {
         providerId: subagentProviderId,
         model: subagentModel,
         limit: subagentLimit,
+        reasoningEffort: subagentReasoningEffort,
       }),
       harnessServiceTier: runtimeKind === "harness"
         ? harnessServiceTier
@@ -5306,11 +5315,11 @@ export function SessionsPage() {
                 {runtimeKind === "harness" && <HarnessSubagentSettings
                   providers={enabledProviders}
                   harnessName={selectedHarness?.name ?? "The harness"}
-                  choice={{ enabled: allowSubagents, providerId: subagentProviderId, model: subagentModel, limit: subagentLimit }}
+                  choice={{ enabled: allowSubagents, providerId: subagentProviderId, model: subagentModel, limit: subagentLimit, reasoningEffort: subagentReasoningEffort }}
                   disabled={sending || assistantSettingsBusy}
                   onChange={(choice) => void saveSubagentChoice(choice)}
                 />}
-                {runtimeKind === "provider" && <div className="chat-provider-subagents"><label className="chat-knowledge-toggle" data-guide="subagents"><input type="checkbox" checked={allowSubagents} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveSubagentChoice({ enabled: event.target.checked, providerId: "", model: "", limit: subagentLimit })} /><span><strong>Subagents</strong><small>Delegate independent work to parallel children on this model · {subagentLimitLabel(subagentLimit)}</small></span></label>{allowSubagents && <SubagentLimitField limit={subagentLimit} delegator="the assistant" disabled={sending || assistantSettingsBusy} onChange={(limit) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit })} />}</div>}
+                {runtimeKind === "provider" && <div className="chat-provider-subagents"><label className="chat-knowledge-toggle" data-guide="subagents"><input type="checkbox" checked={allowSubagents} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveSubagentChoice({ enabled: event.target.checked, providerId: "", model: "", limit: subagentLimit, reasoningEffort: subagentReasoningEffort })} /><span><strong>Subagents</strong><small>Delegate independent work to parallel children on this model · {subagentLimitLabel(subagentLimit)}</small></span></label>{allowSubagents && <SubagentEffortField effort={subagentReasoningEffort} disabled={sending || assistantSettingsBusy} onChange={(reasoningEffort) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit: subagentLimit, reasoningEffort })} />}{allowSubagents && <SubagentLimitField limit={subagentLimit} delegator="the assistant" disabled={sending || assistantSettingsBusy} onChange={(limit) => void saveSubagentChoice({ enabled: true, providerId: "", model: "", limit, reasoningEffort: subagentReasoningEffort })} />}</div>}
                 {(!activeChatSession || (!activeChatSession.isSubagent && !activeChatSession.archivedAt)) && <label className="chat-knowledge-toggle" data-guide="agent-messaging"><input type="checkbox" checked={allowAgentMessaging} disabled={sending || assistantSettingsBusy} onChange={(event) => void saveAgentMessagingChoice(event.target.checked)} /><span><strong>Agent messaging</strong><small>Coordinate with other opted-in main agents in this project. Messages appear in both conversations.</small></span></label>}
                 {runtimeKind === "provider" ? <><div className="chat-knowledge-toggle" role="status" title={commandRuntimeUnavailableReason}><ShieldCheck size={15} /><span>Command runtime<small>{canUseTools ? "run_command and process_io ready" : commandRuntimeUnavailableReason}</small></span></div><McpServerChoices api={api} projectId={engagement?.id} servers={mcpServers} selectedIds={selectedMcpIds} disabled={sending || assistantSettingsBusy} onChange={(nextIds) => void saveProviderAssistantSelections(nextIds, selectedHookIds)} /></> : <div className="chat-harness-mcp" data-guide="mcp-turn"><span>MCP servers</span>{mcpServers.length ? mcpServers.map((server) => <label className="chat-knowledge-toggle" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} disabled={composerBusy} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span>{server.name}<small>{server.tools.length} tools · {server.defaultApproval.replace("_", " ")}</small></span></label>) : <small>No enabled MCP profiles</small>}</div>}
                 </div>

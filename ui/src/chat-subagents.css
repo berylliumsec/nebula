@@ -104,6 +104,8 @@
 .chat-settings-capabilities > .chat-provider-subagents { display: grid; align-items: stretch; gap: 6px; padding: 7px 9px; }
 .chat-provider-subagents > .chat-knowledge-toggle { justify-self: start; max-width: 100%; }
 .chat-provider-subagents > .chat-knowledge-toggle > span { min-width: 0; }
+.chat-subagent-effort > label, .chat-subagent-effort > small { grid-column: 1 / -1; }
+.chat-subagent-effort > small { color: var(--muted); font-size: 11px; line-height: 1.4; }
 .chat-subagent-limit { align-items: end; }
 .chat-subagent-limit input { width: 100%; min-width: 0; height: 34px; padding: 0 9px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--text); background: color-mix(in srgb, var(--canvas) 72%, transparent); font-size: 12px; }
 .chat-subagent-limit input:hover:not(:disabled) { border-color: var(--border); }

@@ -1,7 +1,9 @@
 import type { ProviderHealth } from "../../api/types";
+import type { ReasoningEffort } from "../../api/types";
 import { providerModelVerification } from "../../api/providerCapabilities";
 import { providerDefaultModel } from "../../api/runtimeDefaults";
 import { SubagentLimitField, subagentLimitLabel } from "./SubagentLimitField";
+import { SubagentEffortField } from "./SubagentEffortField";
 
 export interface HarnessSubagentChoice {
   enabled: boolean;
@@ -9,6 +11,7 @@ export interface HarnessSubagentChoice {
   model: string;
   /** How many subagents may run at once; absent means no limit. */
   limit?: number;
+  reasoningEffort?: ReasoningEffort;
 }
 
 interface HarnessSubagentSettingsProps {
@@ -109,6 +112,11 @@ export function HarnessSubagentSettings({ providers, choice, harnessName, disabl
         </select>
       </label>
     </div>}
+    {choice.enabled && <SubagentEffortField
+      effort={choice.reasoningEffort}
+      disabled={disabled}
+      onChange={(reasoningEffort) => onChange({ ...choice, reasoningEffort })}
+    />}
     {choice.enabled && <SubagentLimitField
       limit={choice.limit}
       delegator={harnessName}
