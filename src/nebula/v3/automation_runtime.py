@@ -1459,6 +1459,8 @@ class AutomationRuntimeManager:
             and not managed.entity.network_granted
         ):
             needs_approval = True
+        if managed.scope is not None and managed.scope.bypass_permissions:
+            needs_approval = False
         if needs_approval:
             approval = self._authorize_or_request(
                 managed,
@@ -1950,7 +1952,11 @@ class AutomationRuntimeManager:
                 )
                 self._sessions[entity.id] = managed
                 self._owner_sessions[key] = entity.id
-                if scope is not None and scope.not_after is not None:
+                if (
+                    scope is not None
+                    and scope.not_after is not None
+                    and not scope.bypass_permissions
+                ):
                     managed.scope_expiry_task = create_diagnostic_task(
                         self._expire_session_at_scope_boundary(
                             entity.id, scope.not_after
@@ -2076,6 +2082,7 @@ class AutomationRuntimeManager:
             if (
                 scope is not None
                 and scope.not_after is not None
+                and not scope.bypass_permissions
                 and has_network_boundary
             ):
                 managed.scope_expiry_task = create_diagnostic_task(
@@ -2163,7 +2170,7 @@ class AutomationRuntimeManager:
     ) -> tuple[list[EgressRule], list[str]]:
         if not policy.network_enabled or scope is None:
             return [], []
-        if scope.allow_all_targets:
+        if scope.allow_all_targets or scope.bypass_permissions:
             return [
                 EgressRule(address="0.0.0.0/0", all_ports=True),
                 EgressRule(address="::/0", all_ports=True),
@@ -2182,12 +2189,14 @@ class AutomationRuntimeManager:
         if managed.policy.execution_mode == "host":
             if (
                 managed.scope
+                and not managed.scope.bypass_permissions
                 and managed.scope.not_before
                 and managed.scope.not_before > utc_now()
             ):
                 raise AutomationPolicyDenied("project scope is not active yet")
             if (
                 managed.scope
+                and not managed.scope.bypass_permissions
                 and managed.scope.not_after
                 and managed.scope.not_after <= utc_now()
             ):
@@ -2207,6 +2216,8 @@ class AutomationRuntimeManager:
             raise AutomationPolicyDenied("project networking is disabled")
         if managed.scope is None:
             raise AutomationPolicyDenied("project has no scope policy")
+        if managed.scope.bypass_permissions:
+            return
         if managed.scope.not_before and managed.scope.not_before > utc_now():
             raise AutomationPolicyDenied("project scope is not active yet")
         if managed.scope.not_after and managed.scope.not_after <= utc_now():

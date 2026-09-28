@@ -293,6 +293,8 @@ class BrowserAutomationService:
             )
         default_allowed = set(DEFAULT_AUTONOMOUS_RISKS)
         for risk in requested - default_allowed:
+            if scope.bypass_permissions:
+                continue
             if risk not in HIGH_RISK_CLASSES or not self._grant_covers(
                 scope, risk, request.targets
             ):
@@ -848,6 +850,7 @@ class BrowserAutomationService:
             PolicyRequest(
                 tool_name="browser_automation",
                 risk_class=risk,
+                network_access=True,
                 target=target,
                 action=action,
                 native_scope_authority=True,

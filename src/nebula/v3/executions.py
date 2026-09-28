@@ -876,6 +876,7 @@ class ExecutionService:
                 PolicyRequest(
                     tool_name="reviewed_code.execute_networked",
                     risk_class=RiskClass.ACTIVE_SCAN,
+                    network_access=True,
                     target=request.target,
                     ports=request.ports,
                     resolved_ips=addresses,

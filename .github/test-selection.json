@@ -1,25 +1,52 @@
 {
-  "change_digest": "1c33d1fae9bfba634a42acb55c17689ba7a6522b20daf4ea64800a391507bf24",
-  "reviewed_by": "Codex focused review for blocked hook model feedback",
-  "reason": "Blocking provider hooks should inform the model without bypassing the block. Six new Python cases verify start-hook feedback, effectful completion-hook feedback without replay, real command-hook denial, bounded and redacted feedback, and delivery to the next provider request. Nineteen existing hook-turn and payload cases check completion, streaming, failure, and cancellation regressions. Five research-result cases cover formatting-only files needed by the tree-wide CI format gate. The selected real-Core browser journey now sends a blocked start-hook turn through the UI and verifies model feedback, failed outcome, and reload on desktop and emulated mobile browsers.",
-  "exclusions": "No frontend application or native source changed, so those unit layers are empty. Unrelated command, provider, and browser journeys and all full suites are excluded. Formatting-only files have no behavior changes. The browser journey covers blocked start-hook feedback; effectful completion and command-hook feedback are covered at the Core boundary by Python tests. Physical devices are unavailable in this environment.",
+  "change_digest": "84cf2f9936d2c04ed646ed9e1fb5e01449a30875c44b3524862dfba437185c00",
+  "reviewed_by": "Codex focused review for Project permission modes and explicit policy feedback",
+  "reason": "Policy, API, MCP, browser, command runtime, harness, and UI changes make destination authorization distinct from approval and add an explicit permission bypass. Fifteen policy cases cover risk versus network effect, target and port boundaries, public DNS, time, and bypass; twelve focused Core cases cover persistence, MCP and broker classification, model-visible refusal, frozen harness permissions, command network boundaries, browser scope, and web-search disclosure. Fifty-five frontend cases cover authorization-mode confirmation, browser scope and reload, and settings hydration. Two native cases cover all-destination and bypass proxy behavior plus URL-only CONNECT. Five mocked and eight real-Core Project policy journeys cover desktop and the applicable 320/390/430 mobile Chromium/WebKit profiles, including production LAN save, authenticated re-entry, revocation, and command-session policy persistence.",
+  "exclusions": "No full Python, frontend, native, or Playwright suite was authorized. Unrelated provider, mission, SSH, and browser journeys are excluded; their shared policy boundaries are covered in the selected Core and UI cases. Native proxy tests are exact unit cases, not a packaged desktop app run. Physical-device browser checks and live Mercury behavior are outside isolated CI and require separate deployment verification. The local Python environment uses the working 3.11 repository venv; CI uses its default 3.12.",
   "expected_tests": {
-    "python": 30,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 3
+    "python": 27,
+    "frontend": 55,
+    "native": 2,
+    "playwright": 13
   },
   "python": [
-    "tests/v3/test_blocking_hook_feedback.py",
-    "tests/v3/test_native_hook_turn_ends.py",
-    "tests/v3/test_hook_assistant_message.py",
-    "tests/v3/test_research_results.py"
+    "tests/v3/test_policy.py",
+    "tests/v3/test_api_crud_validation.py::test_project_scope_persists_all_targets_and_normalizes_root_domain_urls",
+    "tests/v3/test_api_crud_validation.py::test_permission_bypass_requires_explicit_opt_in_and_is_durable",
+    "tests/v3/test_mcp_probe.py::test_open_world_mcp_is_explicitly_network_capable_and_deny_is_bypassable",
+    "tests/v3/test_tool_failures.py::test_policy_refusal_tells_the_model_why_and_what_to_change",
+    "tests/v3/test_tool_failures.py::test_broker_applies_distinct_modes_to_a_targetless_network_tool",
+    "tests/v3/test_harnesses.py::test_harness_permission_bypass_is_frozen_and_keeps_unknown_tools_denied",
+    "tests/v3/test_automation_runtime.py::test_all_target_scope_compiles_to_dual_stack_all_port_egress",
+    "tests/v3/test_automation_runtime.py::test_network_request_fails_closed_when_disabled_or_scope_is_url_only",
+    "tests/v3/test_browser_security.py::test_traffic_is_scope_bound_and_redacts_reusable_secrets",
+    "tests/v3/test_browser_security.py::test_action_requires_approval_and_rechecks_scope_revision",
+    "tests/v3/test_web_search.py::test_all_destinations_still_guards_scope_disclosure",
+    "tests/v3/test_web_search.py::test_permission_bypass_overrides_scope_disclosure_guard"
   ],
-  "frontend": [],
-  "native": [],
+  "frontend": [
+    "ui/src/components/EngagementPolicyWebSearch.test.tsx",
+    "ui/src/api/workbenchBrowser.test.ts",
+    "ui/src/components/WorkbenchBrowser.test.tsx",
+    "ui/src/components/EngagementPolicySettings.loading.test.tsx"
+  ],
+  "native": [
+    "browser_proxy::tests::native_scope_all_destinations_and_bypass_override_their_policy_gates",
+    "browser_proxy::tests::native_scope_allows_https_connect_for_a_path_only_entry"
+  ],
   "playwright": [
-    "entry:provider-native-hooks-core/assistant-real-desktop",
-    "entry:provider-native-hooks-core/assistant-real-chromium-390",
-    "entry:provider-native-hooks-core/assistant-real-webkit-390"
+    "entry:project-runtime-policy/desktop",
+    "entry:project-runtime-policy/mobile-chromium",
+    "entry:project-runtime-policy/mobile-chromium-small",
+    "entry:project-runtime-policy/mobile-webkit",
+    "entry:project-runtime-policy/mobile-webkit-wide",
+    "entry:project-runtime-policy/assistant-real-desktop",
+    "entry:project-runtime-policy/assistant-real-compact",
+    "entry:project-runtime-policy/assistant-real-chromium-320",
+    "entry:project-runtime-policy/assistant-real-chromium-390",
+    "entry:project-runtime-policy/assistant-real-chromium-430",
+    "entry:project-runtime-policy/assistant-real-webkit-320",
+    "entry:project-runtime-policy/assistant-real-webkit-390",
+    "entry:project-runtime-policy/assistant-real-webkit-430"
   ]
 }

@@ -373,7 +373,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       setError("Project scope is unavailable. Reconnect to Core, then right-click the page and try again.");
       return;
     }
-    if (currentScope.allowAllTargets || evaluateBrowserScope(request.url, currentScope).state === "in_scope") {
+    if (currentScope.bypassPermissions || currentScope.allowAllTargets || evaluateBrowserScope(request.url, currentScope).state === "in_scope") {
       setNotice({ kind: "info", message: `${new URL(request.url).origin} is already in Project scope.` });
       setError(undefined);
       return;
@@ -1761,7 +1761,7 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
     bytes: selectedExchanges[0].responseBytes === selectedExchanges[1].responseBytes ? "same" : `${selectedExchanges[0].responseBytes ?? "—"} → ${selectedExchanges[1].responseBytes ?? "—"}`,
   } : undefined;
 
-  const scopeReady = !!scope && (scope.allowAllTargets || scope.allowedCidrs.length > 0 || scope.allowedDomains.length > 0 || scope.allowedUrls.length > 0)
+  const scopeReady = !!scope && (scope.bypassPermissions || scope.allowAllTargets || scope.allowedCidrs.length > 0 || scope.allowedDomains.length > 0 || scope.allowedUrls.length > 0)
     && (!scope.notBefore || new Date(scope.notBefore).getTime() <= Date.now())
     && (!scope.notAfter || new Date(scope.notAfter).getTime() > Date.now());
   const transportControls = <InterceptionTransport enabled={!!activeSession?.interceptionEnabled} available={!!(desktop && capabilities?.interceptionProxy && activeSession?.proxyEnabled)} desktop={desktop} scopeReady={scopeReady} nativeReady={!!activeTab?.created} pending={interceptionUpdating} onToggle={() => void setInterceptionEnabled(!activeSession?.interceptionEnabled)} onSetup={() => { setResearchView("session"); setResearchOpen(true); }} />;

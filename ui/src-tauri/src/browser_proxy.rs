@@ -423,6 +423,7 @@ struct NativeProxyScope {
     allowed_urls: Vec<NativeProxyUrl>,
     allowed_ports: Vec<u16>,
     allow_all_targets: bool,
+    bypass_permissions: bool,
     not_before: Option<time::OffsetDateTime>,
     not_after: Option<time::OffsetDateTime>,
 }
@@ -436,6 +437,8 @@ pub(crate) struct NativeProxyScopeInput {
     pub(crate) allowed_urls: Vec<String>,
     pub(crate) allowed_ports: Vec<u16>,
     pub(crate) allow_all_targets: bool,
+    #[serde(default)]
+    pub(crate) bypass_permissions: bool,
     pub(crate) not_before: Option<String>,
     pub(crate) not_after: Option<String>,
 }
@@ -1071,6 +1074,7 @@ fn compile_scope(input: NativeProxyScopeInput) -> Result<NativeProxyScope, Strin
         allowed_urls,
         allowed_ports,
         allow_all_targets: input.allow_all_targets,
+        bypass_permissions: input.bypass_permissions,
         not_before,
         not_after,
     })
@@ -1100,16 +1104,24 @@ fn domain_matches(host: &str, pattern: &str) -> bool {
 }
 
 fn scope_allows_uri(scope: &NativeProxyScope, uri: &hudsucker::hyper::Uri) -> bool {
+    scope_allows_uri_for_request(scope, uri, false)
+}
+
+fn scope_allows_uri_for_request(
+    scope: &NativeProxyScope,
+    uri: &hudsucker::hyper::Uri,
+    is_connect: bool,
+) -> bool {
     let Some(scheme) = normalized_request_scheme(uri) else {
         return false;
     };
     let Some(host) = uri.host().map(str::to_ascii_lowercase) else {
         return false;
     };
-    let port = request_port(uri, &scheme);
-    if !scope.allowed_ports.is_empty() && !scope.allowed_ports.contains(&port) {
-        return false;
+    if scope.bypass_permissions {
+        return true;
     }
+    let port = request_port(uri, &scheme);
     let now = time::OffsetDateTime::now_utc();
     if scope.not_before.is_some_and(|value| now < value)
         || scope.not_after.is_some_and(|value| now >= value)
@@ -1118,6 +1130,9 @@ fn scope_allows_uri(scope: &NativeProxyScope, uri: &hudsucker::hyper::Uri) -> bo
     }
     if scope.allow_all_targets {
         return true;
+    }
+    if !scope.allowed_ports.is_empty() && !scope.allowed_ports.contains(&port) {
+        return false;
     }
     let host_allowed = host
         .parse::<IpAddr>()
@@ -1142,7 +1157,8 @@ fn scope_allows_uri(scope: &NativeProxyScope, uri: &hudsucker::hyper::Uri) -> bo
         allowed.scheme == scheme
             && allowed.host == host
             && allowed.port == port
-            && (allowed_path.is_empty()
+            && (is_connect
+                || allowed_path.is_empty()
                 || request_path == allowed_path
                 || request_path.starts_with(&format!("{allowed_path}/")))
     })
@@ -1485,7 +1501,13 @@ impl HttpHandler for CaptureHandler {
         if let Some(scope) = scope.as_ref() {
             if scope_uri
                 .as_ref()
-                .is_none_or(|uri| !scope_allows_uri(scope, uri))
+                .is_none_or(|uri| {
+                    !scope_allows_uri_for_request(
+                        scope,
+                        uri,
+                        request.method() == hudsucker::hyper::Method::CONNECT,
+                    )
+                })
             {
                 return self
                     .blocked_request(
@@ -2716,6 +2738,7 @@ mod tests {
             allowed_urls: vec!["https://specific.test/app".to_string()],
             allowed_ports: vec![443],
             allow_all_targets: false,
+            bypass_permissions: false,
             not_before: None,
             not_after: None,
         })
@@ -2743,6 +2766,58 @@ mod tests {
     }
 
     #[test]
+    fn native_scope_all_destinations_and_bypass_override_their_policy_gates() {
+        let all = compile_scope(NativeProxyScopeInput {
+            revision: 1,
+            allowed_cidrs: vec![],
+            allowed_domains: vec![],
+            allowed_urls: vec![],
+            allowed_ports: vec![443],
+            allow_all_targets: true,
+            bypass_permissions: false,
+            not_before: None,
+            not_after: None,
+        })
+        .unwrap();
+        assert!(scope_allows_uri(&all, &"https://example.test:8443/".parse().unwrap()));
+
+        let bypass = compile_scope(NativeProxyScopeInput {
+            revision: 2,
+            allowed_cidrs: vec![],
+            allowed_domains: vec![],
+            allowed_urls: vec![],
+            allowed_ports: vec![443],
+            allow_all_targets: false,
+            bypass_permissions: true,
+            not_before: None,
+            not_after: Some("2020-01-01T00:00:00Z".to_string()),
+        })
+        .unwrap();
+        assert!(scope_allows_uri(&bypass, &"https://example.test:8443/".parse().unwrap()));
+    }
+
+    #[test]
+    fn native_scope_allows_https_connect_for_a_path_only_entry() {
+        let scope = compile_scope(NativeProxyScopeInput {
+            revision: 1,
+            allowed_cidrs: vec![],
+            allowed_domains: vec![],
+            allowed_urls: vec!["https://specific.test/app".to_string()],
+            allowed_ports: vec![],
+            allow_all_targets: false,
+            bypass_permissions: false,
+            not_before: None,
+            not_after: None,
+        })
+        .unwrap();
+        let connect_uri = "https://specific.test/".parse().unwrap();
+        assert!(scope_allows_uri_for_request(&scope, &connect_uri, true));
+        assert!(!scope_allows_uri(&scope, &connect_uri));
+        assert!(scope_allows_uri(&scope, &"https://specific.test/app/page".parse().unwrap()));
+        assert!(!scope_allows_uri(&scope, &"https://specific.test/other".parse().unwrap()));
+    }
+
+    #[test]
     fn native_scope_rejects_credential_bearing_urls() {
         assert!(compile_scope_url("https://user:pass@example.test/").is_err());
         assert!(
@@ -2753,6 +2828,7 @@ mod tests {
                 allowed_urls: vec![],
                 allowed_ports: vec![],
                 allow_all_targets: false,
+                bypass_permissions: false,
                 not_before: None,
                 not_after: None,
             })

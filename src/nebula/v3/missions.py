@@ -386,9 +386,17 @@ class MissionService:
             raise MissionConfigurationError(
                 "repeating missions must be at least one hour apart"
             )
+        engagement = self.store.get(Engagement, engagement_id)
+        scope = (
+            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            if engagement.scope_policy_id
+            else ScopePolicy(engagement_id=engagement.id)
+        )
         try:
             mcp_profiles = resolve_mcp_profiles(
-                self.store, list(dict.fromkeys(mcp_server_ids or ()))
+                self.store,
+                list(dict.fromkeys(mcp_server_ids or ())),
+                bypass_permissions=scope.bypass_permissions,
             )
         except (McpProbeError, ValueError) as exc:
             raise MissionConfigurationError(str(exc)) from exc
@@ -398,7 +406,10 @@ class MissionService:
             for tool in profile.capabilities.tools
             if (not profile.enabled_tools or tool.name in profile.enabled_tools)
             and tool.name not in profile.disabled_tools
-            and profile.tool_overrides.get(tool.name) != McpApprovalMode.DENY
+            and (
+                scope.bypass_permissions
+                or profile.tool_overrides.get(tool.name) != McpApprovalMode.DENY
+            )
         ]
         selected_action_tools = [*selected_tools, *selected_mcp_tools]
         if not clean_objective:
@@ -419,7 +430,6 @@ class MissionService:
                 "API missions require a file-backed local SQLite checkpoint store"
             )
 
-        engagement = self.store.get(Engagement, engagement_id)
         profile = self.store.get(ProviderProfile, clean_provider_id)
         # Standing profile consent stands in for the per-mission confirmation.
         allow_cloud_tool_results = (

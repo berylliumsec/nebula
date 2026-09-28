@@ -58,6 +58,11 @@
       {"area":"core-connection-resilience","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization LAN connection keeps the workspace through a transient miss and recovers after confirmed loss","runtime":"mock","shard":"1/1"}
     ],
     "project-runtime-policy": [
+      {"area":"project-runtime-policy","project":"desktop","test_match":"tests/interface.spec.ts","grep":"project scope normalizes root URLs and confirms distinct authorization modes","runtime":"mock","shard":"1/1"},
+      {"area":"project-runtime-policy","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"project scope normalizes root URLs and confirms distinct authorization modes","runtime":"mock","shard":"1/1"},
+      {"area":"project-runtime-policy","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"project scope normalizes root URLs and confirms distinct authorization modes","runtime":"mock","shard":"1/1"},
+      {"area":"project-runtime-policy","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"project scope normalizes root URLs and confirms distinct authorization modes","runtime":"mock","shard":"1/1"},
+      {"area":"project-runtime-policy","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"project scope normalizes root URLs and confirms distinct authorization modes","runtime":"mock","shard":"1/1"},
       {"area":"project-runtime-policy","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
       {"area":"project-runtime-policy","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},
       {"area":"project-runtime-policy","project":"assistant-real-chromium-320","test_match":"tests/real-core.spec.ts","grep":"stabilization real Core runtime policy explains approvals and preserves frozen sessions","runtime":"real-core","shard":"1/1"},

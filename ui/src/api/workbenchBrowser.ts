@@ -207,6 +207,7 @@ export function buildBrowserScopeAddition(urlValue: string, scope: EngagementSco
       allowedUrls: addsOrigin ? [...scope.allowedUrls, origin] : scope.allowedUrls,
       allowedPorts: addsPort ? [...scope.allowedPorts, port].sort((left, right) => left - right) : scope.allowedPorts,
       allowAllTargets: scope.allowAllTargets,
+      bypassPermissions: scope.bypassPermissions,
       notBefore: scope.notBefore,
       notAfter: scope.notAfter,
       prohibitedActions: scope.prohibitedActions,
@@ -271,7 +272,8 @@ function ipv4CidrAllowed(host: string, cidrs: string[]): boolean {
 export function evaluateBrowserScope(urlValue: string | undefined, scope?: EngagementScopePolicy): BrowserScopeDecision {
   if (!scope) return { state: "unknown", label: "Scope unavailable", detail: "Project scope could not be confirmed." };
   const targetCount = scope.allowedCidrs.length + scope.allowedDomains.length + scope.allowedUrls.length;
-  if (!scope.allowAllTargets && !targetCount) return { state: "unconfigured", label: "Scope not set", detail: "No browser targets are authorized in Project scope.", revision: scope.revision };
+  if (!scope.bypassPermissions && !scope.allowAllTargets && !targetCount) return { state: "unconfigured", label: "Scope not set", detail: "No browser targets are authorized in Project scope.", revision: scope.revision };
+  if (scope.bypassPermissions) return { state: "in_scope", label: "Permission bypass", detail: `Project scope revision ${scope.revision} bypasses Nebula permissions.`, revision: scope.revision };
   const now = Date.now();
   if ((scope.notBefore && now < Date.parse(scope.notBefore)) || (scope.notAfter && now >= Date.parse(scope.notAfter))) {
     return { state: "inactive", label: "Scope inactive", detail: "The Project scope window is not currently active.", revision: scope.revision };
@@ -344,6 +346,7 @@ function nativeProxyScope(scope: EngagementScopePolicy) {
       allowedUrls: scope.allowedUrls,
       allowedPorts: scope.allowedPorts,
       allowAllTargets: scope.allowAllTargets,
+      bypassPermissions: scope.bypassPermissions,
       notBefore: scope.notBefore,
       notAfter: scope.notAfter,
   };

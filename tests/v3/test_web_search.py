@@ -147,6 +147,19 @@ def test_guard_steps_aside_once_the_project_opts_into_disclosure():
     assert scope_disclosure_conflict("acme-client.com portal", scope) is None
 
 
+def test_all_destinations_still_guards_scope_disclosure():
+    scope = _scope(allow_all_targets=True)
+    assert (
+        scope_disclosure_conflict("acme-client.com portal", scope) == "acme-client.com"
+    )
+    assert scope_disclosure_conflict("CVE-2024-3400 research", scope) is None
+
+
+def test_permission_bypass_overrides_scope_disclosure_guard():
+    scope = _scope(bypass_permissions=True)
+    assert scope_disclosure_conflict("acme-client.com portal", scope) is None
+
+
 def test_guard_reads_hosts_out_of_allowed_urls():
     scope = _scope(allowed_urls=["https://portal.acme-client.com/login"])
     assert (

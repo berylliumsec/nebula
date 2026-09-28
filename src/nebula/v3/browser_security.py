@@ -887,7 +887,9 @@ class BrowserSecurityService:
             engagement_id=session.engagement_id,
             limit=2,
         )
-        if policies and policies[0].approval_policy == AutomationApprovalPolicy.NEVER:
+        if scope.bypass_permissions or (
+            policies and policies[0].approval_policy == AutomationApprovalPolicy.NEVER
+        ):
             return self.decide_action(
                 created.id,
                 BrowserActionDecisionRequest(
@@ -1126,6 +1128,7 @@ class BrowserSecurityService:
             PolicyRequest(
                 tool_name="security_browser",
                 risk_class=risk,
+                network_access=True,
                 target=target,
                 action=action,
                 native_scope_authority=native_scope_authority,

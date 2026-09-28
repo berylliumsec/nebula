@@ -205,6 +205,7 @@ class ToolSpec(BaseModel):
     output_schema: dict[str, Any]
     risk_class: RiskClass
     network_access: bool = False
+    opaque_network_access: bool = False
     filesystem_access: str = Field(
         default="none", pattern=r"^(none|read|workspace_write)$"
     )
@@ -219,6 +220,7 @@ class ToolSpec(BaseModel):
     action: str | None = None
     cloud_transfer: bool = False
     requires_approval: bool = False
+    policy_deny_reason: str | None = None
     source_id: str | None = Field(default=None, max_length=400)
     # Readable identity for surfaces an operator reads: the ledger entry in a
     # conversation, and the approval card. ``name`` stays the runtime identity
@@ -248,17 +250,11 @@ class ToolSpec(BaseModel):
 
     @model_validator(mode="after")
     def security_contract_is_consistent(self) -> "ToolSpec":
-        network_risks = {
-            RiskClass.PASSIVE,
-            RiskClass.ACTIVE_SCAN,
-            RiskClass.CREDENTIAL_USE,
-            RiskClass.EXPLOITATION,
-            RiskClass.PERSISTENCE,
-            RiskClass.DESTRUCTIVE,
-        }
-        if self.network_access and self.risk_class not in network_risks:
-            raise ValueError("network tools must declare a network-capable risk class")
-        if self.network_access and not self.target_argument:
+        if self.opaque_network_access and not self.network_access:
+            raise ValueError("opaque network effects require network_access")
+        if self.network_access and not (
+            self.target_argument or self.opaque_network_access
+        ):
             raise ValueError("network tools require a trusted target_argument mapping")
         properties = self.input_schema.get("properties", {})
         for value in self.capture_paths:
@@ -1683,7 +1679,7 @@ class ToolBroker:
                 raise InvalidToolArguments(
                     "artifact_id is a SHA-256 digest; use the artifact ID from an authorized receipt"
                 )
-            invocation = await self._canonicalize(invocation, plugin.spec)
+            invocation = await self._canonicalize(invocation, plugin.spec, scope)
             if (
                 plugin.spec.idempotency == IdempotencyBehavior.KEY_REQUIRED
                 and not invocation.idempotency_key
@@ -1753,25 +1749,34 @@ class ToolBroker:
             raise AmbiguousToolState(
                 f"tool call {call.id} is {call.status.value}; create an explicit new retry request"
             )
-        decision = self.policy_engine.evaluate(
-            scope,
-            PolicyRequest(
-                tool_name=plugin.spec.name,
-                risk_class=plugin.spec.risk_class,
-                target=invocation.target,
-                port=invocation.port,
-                ports=_mapped_ports(plugin.spec, invocation.arguments),
-                resolved_ips=invocation.resolved_ips,
-                credential_class=invocation.credential_class,
-                writes_outside_workspace=False,
-                action=plugin.spec.action,
-                cloud_transfer=plugin.spec.cloud_transfer,
-            ),
-        )
+        if plugin.spec.policy_deny_reason and not scope.bypass_permissions:
+            decision = PolicyDecision(
+                effect=PolicyEffect.DENY,
+                reason=plugin.spec.policy_deny_reason,
+                rule="tool_policy_deny",
+            )
+        else:
+            decision = self.policy_engine.evaluate(
+                scope,
+                PolicyRequest(
+                    tool_name=plugin.spec.name,
+                    risk_class=plugin.spec.risk_class,
+                    network_access=plugin.spec.network_access,
+                    target=invocation.target,
+                    port=invocation.port,
+                    ports=_mapped_ports(plugin.spec, invocation.arguments),
+                    resolved_ips=invocation.resolved_ips,
+                    credential_class=invocation.credential_class,
+                    writes_outside_workspace=False,
+                    action=plugin.spec.action,
+                    cloud_transfer=plugin.spec.cloud_transfer,
+                ),
+            )
         if (
             decision.effect == PolicyEffect.ALLOW
             and plugin.spec.requires_approval
             and not self.auto_approve
+            and not scope.bypass_permissions
         ):
             decision = PolicyDecision(
                 effect=PolicyEffect.REQUIRE_APPROVAL,
@@ -1861,7 +1866,7 @@ class ToolBroker:
                 self._validate(
                     plugin.spec.input_schema, invocation.arguments, "edited input"
                 )
-                invocation = await self._canonicalize(invocation, plugin.spec)
+                invocation = await self._canonicalize(invocation, plugin.spec, scope)
                 # Any edit receives a fresh deterministic policy evaluation.
                 if supplied.status == ApprovalStatus.EDITED:
                     edited = self.policy_engine.evaluate(
@@ -1869,6 +1874,7 @@ class ToolBroker:
                         PolicyRequest(
                             tool_name=plugin.spec.name,
                             risk_class=plugin.spec.risk_class,
+                            network_access=plugin.spec.network_access,
                             target=invocation.target,
                             port=invocation.port,
                             ports=_mapped_ports(plugin.spec, invocation.arguments),
@@ -1989,7 +1995,7 @@ class ToolBroker:
             return result
 
     async def _canonicalize(
-        self, invocation: ToolInvocation, spec: ToolSpec
+        self, invocation: ToolInvocation, spec: ToolSpec, scope: ScopePolicy
     ) -> ToolInvocation:
         workspace = (
             self.workspace_resolver(invocation.engagement_id)
@@ -2061,7 +2067,7 @@ class ToolBroker:
             )
 
         resolved_ips: list[str] = []
-        if target:
+        if target and not (scope.allow_all_targets or scope.bypass_permissions):
             host = _target_host(target)
             try:
                 resolved_ips = [str(ipaddress.ip_address(host))]

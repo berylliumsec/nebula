@@ -908,6 +908,7 @@ class BrowserAssessmentService:
             PolicyRequest(
                 tool_name="security_browser",
                 risk_class=risk,
+                network_access=True,
                 target=target,
                 action="browser_assessment",
                 native_scope_authority=True,

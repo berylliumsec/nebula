@@ -2907,6 +2907,80 @@ def test_mcp_policy_fails_closed_and_routes_exact_approval(tmp_path):
     asyncio.run(scenario())
 
 
+def test_harness_permission_bypass_is_frozen_and_keeps_unknown_tools_denied(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, mcp, _, runtime = _runtime(tmp_path)
+        scope = store.create(
+            ScopePolicy(engagement_id=engagement.id, bypass_permissions=True)
+        )
+        engagement = store.update(
+            Engagement,
+            engagement.id,
+            {"scope_policy_id": scope.id},
+            expected_revision=engagement.revision,
+        )
+        mcp = store.update(
+            McpServerProfile,
+            mcp.id,
+            {"tool_overrides": {"read_file": McpApprovalMode.DENY}},
+            expected_revision=mcp.revision,
+        )
+        chat, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Permission bypass test",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[mcp.id],
+        )
+        session = store.get(HarnessSession, chat.harness_session_id or "")
+        assert session.metadata["scope_snapshot"]["bypass_permissions"] is True
+
+        def permission(vendor_id: str, server: str = "workspace"):
+            return HarnessPermissionRequest(
+                vendor_request_id=vendor_id,
+                category="mcp",
+                vendor_name=f"mcp__{server}__read_file",
+                server_name=server,
+                tool_name="read_file",
+                arguments={"path": "README.md"},
+            )
+
+        allowed = await runtime._request_permission(turn.id, permission("bypass"))
+        assert (await allowed.decision).allowed is True
+        assert allowed.approval_id is None
+        unknown = await runtime._request_permission(
+            turn.id, permission("unknown", "uninstalled")
+        )
+        assert (await unknown.decision).allowed is False
+
+        store.update(
+            ScopePolicy,
+            scope.id,
+            {"bypass_permissions": False},
+            expected_revision=scope.revision,
+        )
+        frozen = await runtime._request_permission(turn.id, permission("frozen"))
+        assert (await frozen.decision).allowed is True
+        new_chat, _, new_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Bounded permission test",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[mcp.id],
+        )
+        new_session = store.get(HarnessSession, new_chat.harness_session_id or "")
+        assert new_session.metadata["scope_snapshot"]["bypass_permissions"] is False
+        denied = await runtime._request_permission(new_turn.id, permission("bounded"))
+        assert (await denied.decision).allowed is False
+        assert (await denied.decision).rule == "mcp_approval_deny"
+
+    asyncio.run(scenario())
+
+
 def test_native_command_policy_denies_legacy_host_shell_capabilities(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, _, runtime = _runtime(tmp_path)

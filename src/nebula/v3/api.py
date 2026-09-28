@@ -1336,6 +1336,7 @@ class ScopePolicyUpdateRequest(NebulaModel):
     allowed_urls: list[str] = Field(default_factory=list)
     allowed_ports: list[int] = Field(default_factory=list)
     allow_all_targets: bool = False
+    bypass_permissions: bool | None = None
     not_before: datetime | None = None
     not_after: datetime | None = None
     prohibited_actions: list[str] = Field(default_factory=list)
@@ -7345,13 +7346,15 @@ def create_app(
     ) -> list[ScopeToolCandidate]:
         """Tools an operator can pin to every request, from probed MCP servers."""
 
-        store.get(Engagement, engagement_id)
+        scope = await engagement_scope(engagement_id)
         candidates: list[ScopeToolCandidate] = []
         for profile in store.list_entities(McpServerProfile, limit=1000):
             if not profile.enabled or profile.capabilities.checked_at is None:
                 continue
             # The same selection the runtime makes when it builds plugins.
-            for tool in usable_mcp_tools(profile):
+            for tool in usable_mcp_tools(
+                profile, bypass_permissions=scope.bypass_permissions
+            ):
                 candidates.append(
                     ScopeToolCandidate(
                         name=mcp_tool_runtime_name(profile.id, tool.name),
@@ -7377,6 +7380,7 @@ def create_app(
         operator_id = active_operator_id()
         payload = request.model_dump(exclude={"expected_revision", "grants"})
         for optional in (
+            "bypass_permissions",
             "tool_suggestions",
             "on_demand_tools",
             "web_search",

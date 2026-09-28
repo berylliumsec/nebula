@@ -3407,7 +3407,7 @@ test("stabilization LAN connection keeps the workspace through a transient miss 
   await expect(composer).toHaveValue("Keep this unsent draft through reconnect.");
 });
 
-test("project scope normalizes root URLs and confirms all-target mode", async ({ page }) => {
+test("project scope normalizes root URLs and confirms distinct authorization modes", async ({ page }) => {
   let durableScope = {
     ...entity,
     id: "scope-scratch",
@@ -3417,6 +3417,7 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
     allowed_urls: [] as string[],
     allowed_ports: [443],
     allow_all_targets: false,
+    bypass_permissions: false,
     not_before: null,
     not_after: null,
     prohibited_actions: [] as string[],
@@ -3444,9 +3445,9 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
   await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
   const domains = page.getByLabel("Allowed domains");
   await domains.fill("https://www.Google.com/");
-  const allTargets = page.getByLabel("All targets and ports");
+  const allTargets = page.getByRole("radio", {name: /All destinations/});
   await allTargets.check();
-  await expect(page.getByText("All-targets mode overrides the destination and port allowlists below.")).toBeVisible();
+  await expect(page.getByText("Saved destination and port entries return when Bounded mode is selected.")).toBeVisible();
   await expect(domains).toBeDisabled();
   const policyGeometry = await page.locator("#engagement-policy-settings").evaluate((section) => {
     const sectionBounds = section.getBoundingClientRect();
@@ -3489,14 +3490,25 @@ test("project scope normalizes root URLs and confirms all-target mode", async ({
   await expect(page.getByRole("status")).toContainText("Network scope updated");
   expect(durableScope.allowed_domains).toEqual(["www.google.com"]);
   expect(durableScope.allow_all_targets).toBe(true);
+  expect(durableScope.bypass_permissions).toBe(false);
 
   await openWorkspace(page, "/", "Workbench");
   await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
   await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
-  await expect(page.getByLabel("All targets and ports")).toBeChecked();
+  await expect(page.getByRole("radio", {name: /All destinations/})).toBeChecked();
   await expect(page.getByLabel("Allowed domains")).toHaveValue("www.google.com");
   await expect(page.getByLabel("Allowed domains")).toBeDisabled();
+
+  await page.getByRole("radio", {name: /Allow all/}).check();
+  await expect(page.getByRole("radio", {name: /Allow all/})).toBeChecked();
+  await page.getByRole("checkbox", {name: /^Local only Do not send/}).uncheck();
+  await page.getByRole("button", {name: "Save scope"}).click();
+  const bypassConfirmation = page.getByRole("dialog", {name: "Bypass Nebula permissions for this Project?"});
+  await expect(bypassConfirmation).toBeVisible();
+  await bypassConfirmation.getByRole("button", {name: "Allow all"}).click();
+  await expect.poll(() => durableScope.bypass_permissions).toBe(true);
+  expect(durableScope.allow_all_targets).toBe(true);
 });
 
 test("VPN settings keep upload and project routing calm at every width", async ({ page }) => {

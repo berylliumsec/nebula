@@ -35,6 +35,7 @@ class PolicyRequest(BaseModel):
 
     tool_name: str = Field(min_length=1)
     risk_class: RiskClass
+    network_access: bool = False
     target: str | None = None
     port: int | None = Field(default=None, ge=1, le=65535)
     ports: list[int] = Field(default_factory=list)
@@ -193,14 +194,6 @@ def _url_allowed(candidate: str | None, allowed_urls: list[str]) -> bool:
 class PolicyEngine:
     """Evaluate a request against a frozen engagement scope policy."""
 
-    _network_risks = {
-        RiskClass.PASSIVE,
-        RiskClass.ACTIVE_SCAN,
-        RiskClass.CREDENTIAL_USE,
-        RiskClass.EXPLOITATION,
-        RiskClass.PERSISTENCE,
-        RiskClass.DESTRUCTIVE,
-    }
     _always_approve = {
         RiskClass.CREDENTIAL_USE,
         RiskClass.EXPLOITATION,
@@ -216,6 +209,12 @@ class PolicyEngine:
         *,
         now: datetime | None = None,
     ) -> PolicyDecision:
+        if policy.bypass_permissions:
+            return PolicyDecision(
+                effect=PolicyEffect.ALLOW,
+                reason="operator-enabled Nebula permission bypass",
+                rule="permission_bypass",
+            )
         current = (now or utc_now()).astimezone(timezone.utc)
         if policy.not_before and current < policy.not_before:
             return PolicyDecision(
@@ -261,16 +260,17 @@ class PolicyEngine:
                     reason=str(exc),
                     rule="invalid_target",
                 )
-        if request.risk_class in self._network_risks:
-            if target is None:
+        if request.network_access:
+            if target is None and not policy.allow_all_targets:
                 return PolicyDecision(
                     effect=PolicyEffect.DENY,
-                    reason="network-capable tools require an explicit target",
+                    reason="this network-capable tool cannot prove its destination under bounded scope; an operator must enable all destinations or use a target-aware capability",
                     rule="target_required",
                 )
-            scope_decision = self._check_target(policy, request, target)
-            if scope_decision is not None:
-                return scope_decision
+            if target is not None:
+                scope_decision = self._check_target(policy, request, target)
+                if scope_decision is not None:
+                    return scope_decision
 
         # Approval can authorize a high-risk in-scope effect, but it can never
         # expand hard target, port, DNS, prohibition, or time boundaries.
@@ -351,7 +351,15 @@ class PolicyEngine:
         # untrusted DNS answer therefore fails closed instead of broadening scope.
         for value in request.resolved_ips:
             address = ipaddress.ip_address(value)
-            if not _ip_allowed(address, policy.allowed_cidrs):
+            # A scoped hostname may resolve to any public address. Private or
+            # local answers still need an explicit CIDR; literal IP targets
+            # already passed the CIDR check above.
+            needs_cidr = (
+                target.address is not None
+                or not (hostname_allowed or url_allowed)
+                or not address.is_global
+            )
+            if needs_cidr and not _ip_allowed(address, policy.allowed_cidrs):
                 return PolicyDecision(
                     effect=PolicyEffect.DENY,
                     reason=f"resolved address {address} is outside authorized CIDRs",

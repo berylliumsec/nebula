@@ -374,7 +374,11 @@ class RuntimePlatform:
             if self.mcp_service is None:
                 raise RuntimePlatformError("Core MCP execution service is unavailable")
             try:
-                for plugin in build_mcp_tool_plugins(self.mcp_service, mcp_profiles):
+                for plugin in build_mcp_tool_plugins(
+                    self.mcp_service,
+                    mcp_profiles,
+                    bypass_permissions=scope.bypass_permissions,
+                ):
                     registry.register(plugin)
             except Exception as exc:
                 raise RuntimePlatformError(str(exc)) from exc

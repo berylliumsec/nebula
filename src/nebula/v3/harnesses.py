@@ -146,6 +146,7 @@ from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
 from .browser_companion_tools import companion_components, companion_spec
 from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
 from .providers import REASONING_EFFORTS
+from .policy import PolicyEffect, PolicyEngine, PolicyRequest
 from .redaction import redact_text, sanitize_display_text
 from .storage import ConflictError, CorruptRecordError, NebulaStore, NotFoundError
 from .mcp import (
@@ -1319,6 +1320,7 @@ class HarnessPermissionDecision(NebulaModel):
     allowed: bool
     approval_id: str | None = None
     reason: str | None = None
+    rule: str | None = None
 
 
 class HarnessInteractionRequest(NebulaModel):
@@ -9023,8 +9025,16 @@ class HarnessRuntimeService:
                 f"service tier {resolved_service_tier!r} is not advertised for {selected_model!r}"
             )
         ids = list(dict.fromkeys(mcp_server_ids or []))
+        engagement = self.store.get(Engagement, engagement_id)
+        scope = (
+            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            if engagement.scope_policy_id
+            else ScopePolicy(id=f"scope:{engagement_id}", engagement_id=engagement_id)
+        )
         try:
-            profiles = resolve_mcp_profiles(self.store, ids)
+            profiles = resolve_mcp_profiles(
+                self.store, ids, bypass_permissions=scope.bypass_permissions
+            )
         except Exception as exc:
             raise HarnessConfigurationError(_safe_error(exc)) from exc
         snapshot = [item.model_dump(mode="json") for item in profiles]
@@ -9056,6 +9066,7 @@ class HarnessRuntimeService:
                 "service_tier": resolved_service_tier,
             },
         }
+        metadata["scope_snapshot"] = scope.model_dump(mode="json")
         if oci_snapshot is not None:
             metadata["command_runtime_snapshot"] = oci_snapshot
         session = HarnessSession(
@@ -12935,7 +12946,11 @@ class HarnessRuntimeService:
                     continue
                 if tool.name in profile.disabled_tools:
                     continue
-                if profile.tool_overrides.get(tool.name) == McpApprovalMode.DENY:
+                if profile.tool_overrides.get(
+                    tool.name
+                ) == McpApprovalMode.DENY and not session.metadata.get(
+                    "scope_snapshot", {}
+                ).get("bypass_permissions"):
                     continue
                 digest = hashlib.sha256(
                     f"{profile.id}\0{tool.name}".encode("utf-8")
@@ -13661,7 +13676,11 @@ class HarnessRuntimeService:
             detail = decision.reason or "Denied by Nebula policy"
             return {
                 "content": [{"type": "text", "text": detail}],
-                "structuredContent": {"status": "denied", "detail": detail},
+                "structuredContent": {
+                    "status": "denied",
+                    "detail": detail,
+                    "policy_rule": decision.rule,
+                },
                 "isError": True,
             }
         call = self.store.get(ToolCall, ticket.tool_call_id)
@@ -14815,9 +14834,61 @@ class HarnessRuntimeService:
         policy, server, tool, risk, rationale = self._permission_policy(
             session, request
         )
+        frozen = session.metadata.get("scope_snapshot")
+        if isinstance(frozen, dict):
+            scope = ScopePolicy.model_validate(frozen)
+        else:
+            engagement = self.store.get(Engagement, session.engagement_id)
+            scope = (
+                self.store.get(ScopePolicy, engagement.scope_policy_id)
+                if engagement.scope_policy_id
+                else ScopePolicy(engagement_id=engagement.id)
+            ).model_copy(update={"bypass_permissions": False})
+        mandatory_approval = False
+        denial_rule = (
+            "mcp_approval_deny" if request.category == "mcp" else "capability_disabled"
+        )
+        capability_enabled = (
+            server is not None
+            and tool is not None
+            and server.enabled
+            and (not server.enabled_tools or tool.name in server.enabled_tools)
+            and tool.name not in server.disabled_tools
+        )
+        if scope.bypass_permissions:
+            if request.category != "mcp" and policy == McpApprovalMode.ASK:
+                policy = McpApprovalMode.ALLOW
+                rationale = "Operator-enabled Nebula permission bypass"
+            elif request.category == "mcp" and capability_enabled:
+                policy = McpApprovalMode.ALLOW
+                rationale = "Operator-enabled Nebula permission bypass"
+        elif policy != McpApprovalMode.DENY:
+            decision = PolicyEngine().evaluate(
+                scope,
+                PolicyRequest(
+                    tool_name=(
+                        f"mcp:{server.id}:{tool.name}"
+                        if server is not None and tool is not None
+                        else request.vendor_name
+                    ),
+                    risk_class=risk,
+                    network_access=bool(tool.open_world)
+                    if request.category == "mcp" and tool is not None
+                    else False,
+                ),
+            )
+            if decision.effect == PolicyEffect.DENY:
+                policy = McpApprovalMode.DENY
+                rationale = decision.reason
+                denial_rule = decision.rule
+            elif decision.effect == PolicyEffect.REQUIRE_APPROVAL:
+                policy = McpApprovalMode.ASK
+                rationale = decision.reason
+                mandatory_approval = True
         if (
             policy == McpApprovalMode.ASK
             and session.metadata.get("approval_policy") == "never"
+            and not mandatory_approval
         ):
             policy = McpApprovalMode.ALLOW
             rationale = "Approved by the Project's no-prompt tool policy"
@@ -14852,6 +14923,7 @@ class HarnessRuntimeService:
                 "vendor_request_id": request.vendor_request_id,
                 "adapter_handoff": adapter_handoff,
                 "vendor_item_id": request.annotations.get("vendor_item_id"),
+                "policy_rule": denial_rule if policy == McpApprovalMode.DENY else None,
             },
         )
         call = self.store.reserve_tool_call(call)
@@ -14876,7 +14948,9 @@ class HarnessRuntimeService:
                 expected_revision=call.revision,
             )
             future.set_result(
-                HarnessPermissionDecision(allowed=False, reason=rationale)
+                HarnessPermissionDecision(
+                    allowed=False, reason=rationale, rule=denial_rule
+                )
             )
             return PermissionTicket(None, call.id, future)
         approval = Approval(
