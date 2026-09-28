@@ -17,7 +17,7 @@ from nebula.v3.domain import (
     ToolCall as StoredCall,
     ToolCallStatus,
 )
-from nebula.v3.policy import PolicyEngine
+from nebula.v3.policy import PolicyDecision, PolicyEffect, PolicyEngine
 from nebula.v3.providers import ToolCall
 from nebula.v3.sandbox import AnalysisOnlyRunner
 from nebula.v3.storage import NebulaStore
@@ -29,11 +29,13 @@ from nebula.v3.tools import (
     BudgetExhausted,
     CapacityReached,
     InvalidToolArguments,
+    PolicyDenied,
     StoreToolLedger,
     ToolBroker,
     ToolExecutionResult,
     ToolInvocation,
     ToolNotPermitted,
+    ToolPlugin,
     ToolRegistry,
     ToolSpec,
 )
@@ -632,3 +634,105 @@ def test_rule_refusal_is_not_permitted_and_other_failures_carry_no_limit():
     )
     assert invalid["category"] == "invalid_arguments"
     assert "limit" not in invalid
+
+
+def test_policy_refusal_tells_the_model_why_and_what_to_change():
+    reason = (
+        "this network-capable tool cannot prove its destination under bounded scope; "
+        "an operator must enable all destinations or use a target-aware capability"
+    )
+    refusal = tool_failure(
+        _spec(),
+        {"artifact_id": "receipt-id"},
+        PolicyDenied(
+            PolicyDecision(
+                effect=PolicyEffect.DENY,
+                reason=reason,
+                rule="target_required",
+            )
+        ),
+        phase="before_execution",
+    )
+    assert refusal["category"] == "permission_denied"
+    assert refusal["problem"] == reason
+    assert refusal["policy_rule"] == "target_required"
+    assert "operator" in refusal["next_action"]
+    assert refusal["side_effects"] == "none"
+    assert refusal["retry_safe"] is False
+
+
+def test_broker_applies_distinct_modes_to_a_targetless_network_tool(tmp_path):
+    store = NebulaStore(tmp_path / "policy.db")
+    store.create(Engagement(id="project", name="Project"))
+
+    class OpaqueTool(ToolPlugin):
+        def __init__(self, contract):
+            self.spec = contract
+
+        async def execute(self, invocation, runner):
+            raise AssertionError("the policy test must not execute the tool")
+
+    spec = ToolSpec(
+        name="opaque.lookup",
+        description="A connected-source lookup without a trusted target mapping.",
+        input_schema={"type": "object", "additionalProperties": False},
+        output_schema={"type": "object", "additionalProperties": True},
+        risk_class=RiskClass.LOCAL_READ,
+        network_access=True,
+        opaque_network_access=True,
+        requires_approval=True,
+    )
+    registry = ToolRegistry()
+    registry.register(OpaqueTool(spec))
+    broker = ToolBroker(
+        registry=registry,
+        policy_engine=PolicyEngine(),
+        runner=AnalysisOnlyRunner(),
+        ledger=StoreToolLedger(store, enforce_run_budget=False),
+        workspace_resolver=lambda _: tmp_path,
+    )
+
+    def invocation(call_id):
+        return ToolInvocation(
+            id=call_id,
+            engagement_id="project",
+            run_id="run-1",
+            tool_name=spec.name,
+            arguments={},
+            workspace=tmp_path,
+        )
+
+    with pytest.raises(PolicyDenied) as bounded:
+        asyncio.run(
+            broker.prepare(invocation("bounded"), ScopePolicy(engagement_id="project"))
+        )
+    assert bounded.value.decision.rule == "target_required"
+    all_destinations = asyncio.run(
+        broker.prepare(
+            invocation("all-destinations"),
+            ScopePolicy(engagement_id="project", allow_all_targets=True),
+        )
+    )
+    assert all_destinations.decision.effect == PolicyEffect.REQUIRE_APPROVAL
+    assert all_destinations.approval is not None
+    bypass = ScopePolicy(engagement_id="project", bypass_permissions=True)
+    prepared = asyncio.run(broker.prepare(invocation("bypass"), bypass))
+    assert prepared.decision.rule == "permission_bypass"
+    assert prepared.approval is None
+
+    denied_spec = spec.model_copy(
+        update={
+            "name": "opaque.denied",
+            "policy_deny_reason": "MCP policy denies this tool",
+        }
+    )
+    registry.register(OpaqueTool(denied_spec))
+    denied_call = invocation("mcp-denied").model_copy(
+        update={"tool_name": denied_spec.name}
+    )
+    with pytest.raises(PolicyDenied) as mcp_denied:
+        asyncio.run(broker.prepare(denied_call, ScopePolicy(engagement_id="project")))
+    assert mcp_denied.value.decision.rule == "tool_policy_deny"
+    bypass_call = denied_call.model_copy(update={"id": "mcp-bypass"})
+    allowed = asyncio.run(broker.prepare(bypass_call, bypass))
+    assert allowed.decision.rule == "permission_bypass"

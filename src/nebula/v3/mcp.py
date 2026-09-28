@@ -813,6 +813,8 @@ def _mcp_requires_approval(profile: McpServerProfile, tool: McpToolSnapshot) -> 
 def build_mcp_tool_plugins(
     service: McpProbeService,
     profiles: tuple[McpServerProfile, ...],
+    *,
+    bypass_permissions: bool = False,
 ) -> list[Any]:
     """Freeze selected upstream MCP tools into ordinary broker plugins."""
 
@@ -836,7 +838,17 @@ def build_mcp_tool_plugins(
                 input_schema=schema,
                 output_schema={"type": "object", "additionalProperties": True},
                 risk_class=_mcp_tool_risk(snapshot),
+                network_access=snapshot.open_world,
+                opaque_network_access=snapshot.open_world,
                 requires_approval=_mcp_requires_approval(profile, snapshot),
+                policy_deny_reason=(
+                    "MCP tool is denied by its server approval policy; an operator must change that policy"
+                    if profile.tool_overrides.get(
+                        snapshot.name, profile.default_approval
+                    )
+                    == McpApprovalMode.DENY
+                    else None
+                ),
                 source_id=f"mcp:{profile.id}",
                 display_name=mcp_tool_display_name(profile.name, snapshot.name),
             )
@@ -900,13 +912,16 @@ def build_mcp_tool_plugins(
     for profile in profiles:
         if not profile.enabled:
             raise McpProbeError(f"selected MCP server {profile.id!r} is disabled")
-        for tool in usable_mcp_tools(profile):
+        for tool in usable_mcp_tools(profile, bypass_permissions=bypass_permissions):
             plugins.append(McpToolPlugin(profile, tool))
     return plugins
 
 
 def resolve_mcp_profiles(
-    store: NebulaStore, server_ids: list[str] | tuple[str, ...]
+    store: NebulaStore,
+    server_ids: list[str] | tuple[str, ...],
+    *,
+    bypass_permissions: bool = False,
 ) -> tuple[McpServerProfile, ...]:
     """Resolve a validated, ordered MCP selection for a durable runtime snapshot."""
 
@@ -919,14 +934,16 @@ def resolve_mcp_profiles(
             raise McpProbeError(
                 f"selected MCP server {profile.id!r} must be probed before use"
             )
-        if not usable_mcp_tools(profile):
+        if not usable_mcp_tools(profile, bypass_permissions=bypass_permissions):
             raise McpProbeError(
                 f"selected MCP server {profile.id!r} exposes no enabled tools"
             )
     return profiles
 
 
-def usable_mcp_tools(profile: McpServerProfile) -> list[McpToolSnapshot]:
+def usable_mcp_tools(
+    profile: McpServerProfile, *, bypass_permissions: bool = False
+) -> list[McpToolSnapshot]:
     """The probed tools an operator left on: enabled, not disabled, not denied."""
 
     return [
@@ -934,12 +951,18 @@ def usable_mcp_tools(profile: McpServerProfile) -> list[McpToolSnapshot]:
         for tool in profile.capabilities.tools
         if (not profile.enabled_tools or tool.name in profile.enabled_tools)
         and tool.name not in profile.disabled_tools
-        and profile.tool_overrides.get(tool.name) != McpApprovalMode.DENY
+        and (
+            bypass_permissions
+            or profile.tool_overrides.get(tool.name) != McpApprovalMode.DENY
+        )
     ]
 
 
 def catalog_mcp_profiles(
-    store: NebulaStore, *, exclude: Collection[str] = ()
+    store: NebulaStore,
+    *,
+    exclude: Collection[str] = (),
+    bypass_permissions: bool = False,
 ) -> tuple[McpServerProfile, ...]:
     """Every other usable server, offered on demand next to the selected ones.
 
@@ -958,7 +981,7 @@ def catalog_mcp_profiles(
                 if profile.id not in skip
                 and profile.enabled
                 and profile.capabilities.checked_at is not None
-                and usable_mcp_tools(profile)
+                and usable_mcp_tools(profile, bypass_permissions=bypass_permissions)
             ),
             key=lambda profile: (profile.name, profile.id),
         )

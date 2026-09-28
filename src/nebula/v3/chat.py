@@ -5481,7 +5481,17 @@ class ChatService:
         mcp_profiles: tuple[McpServerProfile, ...] = ()
         if request.mcp_server_ids:
             try:
-                mcp_profiles = resolve_mcp_profiles(self.store, request.mcp_server_ids)
+                selected_engagement = self.store.get(Engagement, engagement_id)
+                selected_scope = (
+                    self.store.get(ScopePolicy, selected_engagement.scope_policy_id)
+                    if selected_engagement.scope_policy_id
+                    else ScopePolicy(engagement_id=selected_engagement.id)
+                )
+                mcp_profiles = resolve_mcp_profiles(
+                    self.store,
+                    request.mcp_server_ids,
+                    bypass_permissions=selected_scope.bypass_permissions,
+                )
             except (McpProbeError, ValueError) as exc:
                 raise ChatConfigurationError(str(exc)) from exc
         ssh_environments: tuple[SshEnvironment, ...] = ()
@@ -10601,7 +10611,11 @@ class ChatService:
         )
         if not on_demand_enabled(scope):
             return ()
-        return catalog_mcp_profiles(self.store, exclude={item.id for item in selected})
+        return catalog_mcp_profiles(
+            self.store,
+            exclude={item.id for item in selected},
+            bypass_permissions=scope.bypass_permissions,
+        )
 
     def _web_search_selected(self, engagement_id: str | None) -> bool:
         """Whether this project opted into the local search runtime.

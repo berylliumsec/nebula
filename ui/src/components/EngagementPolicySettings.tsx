@@ -94,6 +94,7 @@ export function EngagementPolicySettings() {
   const [allowedUrls, setAllowedUrls] = useState("");
   const [allowedPorts, setAllowedPorts] = useState("");
   const [allowAllTargets, setAllowAllTargets] = useState(false);
+  const [bypassPermissions, setBypassPermissions] = useState(false);
   const [notBefore, setNotBefore] = useState("");
   const [notAfter, setNotAfter] = useState("");
   const [prohibitedActions, setProhibitedActions] = useState("");
@@ -132,6 +133,7 @@ export function EngagementPolicySettings() {
     setAllowedUrls(next.allowedUrls.join("\n"));
     setAllowedPorts(formatAllowedPorts(next.allowedPorts));
     setAllowAllTargets(next.allowAllTargets);
+    setBypassPermissions(next.bypassPermissions === true);
     setNotBefore(inputDate(next.notBefore));
     setNotAfter(inputDate(next.notAfter));
     setProhibitedActions(next.prohibitedActions.join("\n"));
@@ -251,7 +253,19 @@ export function EngagementPolicySettings() {
       setValidationError("Maximum concurrency must be a whole number from 1 through 256.");
       return;
     }
-    if (allowAllTargets && !scope.allowAllTargets) {
+    if (bypassPermissions && localOnly) {
+      setValidationError("Turn off Local only before enabling Allow all. This mode permits remote data transfer.");
+      return;
+    }
+    if (bypassPermissions && !scope.bypassPermissions) {
+      const approved = await confirm({
+        title: "Bypass Nebula permissions for this Project?",
+        message: <>Enabled tools will run without Nebula target, port, time-window, prohibited-action, MCP approval, or prompt checks. Remote data transfer can occur. Direct harness sessions keep their launch mode; provider turns read the current Project mode. Operating-system and Mercury controls still apply.</>,
+        confirmLabel: "Allow all",
+        tone: "danger",
+      });
+      if (!approved || revision !== loadRevision.current) return;
+    } else if (allowAllTargets && !scope.allowAllTargets) {
       const approved = await confirm({
         title: "Allow every network target and port?",
         message: <>This removes destination and port boundaries for Browser actions and project-scoped networking. Time windows, prohibited actions, privacy controls, and high-risk approval requirements still apply. Existing allowlist entries are retained for when you turn this mode off.</>,
@@ -268,6 +282,7 @@ export function EngagementPolicySettings() {
         allowedUrls: lines(allowedUrls),
         allowedPorts: ports,
         allowAllTargets,
+        bypassPermissions,
         notBefore: start,
         notAfter: end,
         prohibitedActions: lines(prohibitedActions),
@@ -346,8 +361,12 @@ export function EngagementPolicySettings() {
       <form className="panel policy-form" onSubmit={(event) => void saveScope(event)}>
         <header className="panel-header compact"><div><h3>Network scope</h3><p>DNS plus TCP egress only; URL paths alone cannot authorize shell networking.</p></div><ShieldCheck size={18} /></header>
         <fieldset className="policy-form-body" aria-label="Network scope settings" disabled={!policyReady || Boolean(saving) || previewMode}>
-          <label className="provider-consent"><input type="checkbox" checked={allowAllTargets} onChange={(event) => setAllowAllTargets(event.target.checked)} /><span><strong>All targets and ports</strong><small>Unrestricted target mode for authorized operators. Time windows, prohibited actions, privacy controls, and high-risk approvals remain enforced.</small></span></label>
-          {allowAllTargets && <InlineValidationNotice message="All-targets mode overrides the destination and port allowlists below. Their saved values are retained and become authoritative again when this mode is turned off." />}
+          <div role="radiogroup" aria-label="Project authorization mode">
+            <label className="provider-consent"><input type="radio" name="project-authorization-mode" checked={!allowAllTargets && !bypassPermissions} onChange={() => { setAllowAllTargets(false); setBypassPermissions(false); }} /><span><strong>Bounded</strong><small>Use the saved destinations, time window, denies, and approvals.</small></span></label>
+            <label className="provider-consent"><input type="radio" name="project-authorization-mode" checked={allowAllTargets && !bypassPermissions} onChange={() => { setAllowAllTargets(true); setBypassPermissions(false); }} /><span><strong>All destinations</strong><small>Override destination and port lists; other Nebula permissions remain.</small></span></label>
+            <label className="provider-consent"><input type="radio" name="project-authorization-mode" checked={bypassPermissions} onChange={() => { setAllowAllTargets(true); setBypassPermissions(true); }} /><span><strong>Allow all</strong><small>Bypass Nebula permission checks for enabled tools. Operating-system and Mercury controls remain.</small></span></label>
+          </div>
+          {allowAllTargets && <InlineValidationNotice message="Saved destination and port entries return when Bounded mode is selected." />}
           <label>Allowed domains<textarea rows={4} value={allowedDomains} placeholder="example.com\nhttps://www.example.org" disabled={allowAllTargets} onChange={(event) => setAllowedDomains(event.target.value)} /><small>Hostnames and root HTTP(S) URLs are equivalent here. Paths belong in URL-only scope.</small></label>
           <label>Allowed CIDRs<textarea rows={4} value={allowedCidrs} placeholder="203.0.113.0/24" disabled={allowAllTargets} onChange={(event) => setAllowedCidrs(event.target.value)} /></label>
           <label>Allowed TCP ports<input value={allowedPorts} placeholder="80, 443, 8000-8100" disabled={allowAllTargets} onChange={(event) => setAllowedPorts(event.target.value)} /></label>

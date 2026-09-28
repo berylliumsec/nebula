@@ -11,6 +11,7 @@ from nebula.v3 import mcp
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     McpCapabilitySnapshot,
+    McpApprovalMode,
     McpServerProfile,
     McpToolSnapshot,
     McpTransport,
@@ -287,6 +288,19 @@ def test_mcp_plugin_carries_a_readable_name_beside_its_runtime_name(tmp_path):
     assert plugin.spec.name == mcp_tool_runtime_name(profile.id, "scan")
     assert plugin.spec.name != plugin.spec.display_name
     assert plugin.spec.display_name == "remote · scan"
+
+
+def test_open_world_mcp_is_explicitly_network_capable_and_deny_is_bypassable(tmp_path):
+    profile, service = _http_service(tmp_path, startup=0.2, tool=0.5)
+    denied = profile.model_copy(update={"default_approval": McpApprovalMode.DENY})
+    [bounded] = build_mcp_tool_plugins(service, (denied,))
+    assert bounded.spec.policy_deny_reason is not None
+
+    [plugin] = build_mcp_tool_plugins(service, (denied,), bypass_permissions=True)
+    assert plugin.spec.network_access is True
+    assert plugin.spec.opaque_network_access is True
+    assert plugin.spec.policy_deny_reason is not None
+    assert plugin.spec.target_argument is None
 
 
 def test_mcp_display_name_stays_bounded_and_single_line(tmp_path):

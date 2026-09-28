@@ -636,9 +636,17 @@ def scope_disclosure_conflict(query: str, scope: ScopePolicy) -> str | None:
     model decides mid-turn.
     """
 
-    if scope.web_search_discloses_scope:
+    if scope.bypass_permissions or scope.web_search_discloses_scope:
         return None
     lowered = query.lower()
+    if scope.allow_all_targets:
+        match = re.search(
+            r"(?<![\w-])(?:[a-z0-9-]+\.)+[a-z]{2,63}(?![\w-])|"
+            r"\b(?:\d{1,3}\.){3}\d{1,3}\b|\b[0-9a-f:]{3,}:[0-9a-f:]+\b",
+            lowered,
+        )
+        if match:
+            return match.group(0)
     for host in _scope_hosts(scope):
         # A leading dot is allowed so a subdomain of an in-scope domain still
         # counts; a leading word character or hyphen is not, so a longer

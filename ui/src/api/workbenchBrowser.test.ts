@@ -84,6 +84,14 @@ describe("Workbench browser scope decisions", () => {
       notAfter: "2000-01-01T00:00:00Z",
     }).state).toBe("inactive");
   });
+
+  it("lets explicit permission bypass override destination, port, and time checks", () => {
+    expect(evaluateBrowserScope("https://outside.example:9443/", {
+      ...scope,
+      bypassPermissions: true,
+      notAfter: "2000-01-01T00:00:00Z",
+    })).toMatchObject({state: "in_scope"});
+  });
 });
 
 describe("Workbench browser scope additions", () => {

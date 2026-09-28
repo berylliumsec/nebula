@@ -337,6 +337,7 @@ export interface EngagementScopePolicy {
   allowedUrls: string[];
   allowedPorts: number[];
   allowAllTargets: boolean;
+  bypassPermissions?: boolean;
   notBefore?: string;
   notAfter?: string;
   prohibitedActions: string[];

@@ -2023,6 +2023,7 @@ interface WireEngagementScope extends JsonObject {
   allowed_urls?: string[];
   allowed_ports?: number[];
   allow_all_targets?: boolean;
+  bypass_permissions?: boolean;
   not_before?: string | null;
   not_after?: string | null;
   prohibited_actions?: string[];
@@ -4463,6 +4464,7 @@ function mapEngagementScope(value: WireEngagementScope): EngagementScopePolicy {
     allowedUrls: value.allowed_urls ?? [],
     allowedPorts: value.allowed_ports ?? [],
     allowAllTargets: value.allow_all_targets === true,
+    bypassPermissions: value.bypass_permissions === true,
     notBefore: value.not_before ?? undefined,
     notAfter: value.not_after ?? undefined,
     prohibitedActions: value.prohibited_actions ?? [],
@@ -7027,6 +7029,7 @@ export class ApiClient {
           allowed_urls: body.allowedUrls,
           allowed_ports: body.allowedPorts,
           allow_all_targets: body.allowAllTargets,
+          bypass_permissions: body.bypassPermissions,
           not_before: body.notBefore || null,
           not_after: body.notAfter || null,
           prohibited_actions: body.prohibitedActions,

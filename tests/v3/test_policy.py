@@ -40,6 +40,7 @@ def test_active_hostname_requires_pinned_dns_and_rejects_mixed_answers():
     request = PolicyRequest(
         tool_name="scan.tcp",
         risk_class=RiskClass.ACTIVE_SCAN,
+        network_access=True,
         target="https://app.example.test/health",
         resolved_ips=["10.40.2.3"],
     )
@@ -69,6 +70,7 @@ def test_an_approval_reason_cannot_override_an_out_of_scope_target():
         PolicyRequest(
             tool_name="scan.and.export",
             risk_class=RiskClass.ACTIVE_SCAN,
+            network_access=True,
             target="203.0.113.80",
             port=443,
             writes_outside_workspace=True,
@@ -88,6 +90,7 @@ def test_scope_enforces_ports_domains_and_wildcard_apex_boundaries():
             PolicyRequest(
                 tool_name="recon.headers",
                 risk_class=RiskClass.PASSIVE,
+                network_access=True,
                 target=target,
                 port=port,
             ),
@@ -108,6 +111,7 @@ def test_explicit_all_target_mode_bypasses_only_target_and_port_boundaries():
         PolicyRequest(
             tool_name="recon.headers",
             risk_class=RiskClass.PASSIVE,
+            network_access=True,
             target="https://outside.example:9443/",
             port=9443,
         ),
@@ -118,6 +122,7 @@ def test_explicit_all_target_mode_bypasses_only_target_and_port_boundaries():
         PolicyRequest(
             tool_name="delete.production",
             risk_class=RiskClass.PASSIVE,
+            network_access=True,
             target="https://outside.example/",
         ),
         now=NOW,
@@ -132,6 +137,7 @@ def test_active_scans_run_without_grants_but_cannot_expand_scope():
     matching = PolicyRequest(
         tool_name="scan.tcp",
         risk_class=RiskClass.ACTIVE_SCAN,
+        network_access=True,
         target="10.40.2.3",
         port=443,
     )
@@ -169,6 +175,82 @@ def test_high_risk_actions_always_pause_for_approval(risk):
     decision = PolicyEngine().evaluate(_scope(), request, now=NOW)
     assert decision.effect == PolicyEffect.REQUIRE_APPROVAL
     assert decision.rule == "high_risk"
+
+
+def test_network_effect_not_risk_class_requires_a_target_in_bounded_mode():
+    engine = PolicyEngine()
+    opaque_network = PolicyRequest(
+        tool_name="mcp.remote_lookup",
+        risk_class=RiskClass.LOCAL_READ,
+        network_access=True,
+    )
+    bounded = engine.evaluate(_scope(), opaque_network, now=NOW)
+    assert bounded.effect == PolicyEffect.DENY
+    assert bounded.rule == "target_required"
+    assert "all destinations" in bounded.reason
+
+    all_destinations = engine.evaluate(
+        _scope(allow_all_targets=True), opaque_network, now=NOW
+    )
+    assert all_destinations.effect == PolicyEffect.ALLOW
+    assert (
+        engine.evaluate(
+            _scope(allow_all_targets=True),
+            opaque_network.model_copy(update={"risk_class": RiskClass.CREDENTIAL_USE}),
+            now=NOW,
+        ).effect
+        == PolicyEffect.REQUIRE_APPROVAL
+    )
+    assert (
+        engine.evaluate(
+            _scope(),
+            PolicyRequest(
+                tool_name="local.credentials", risk_class=RiskClass.CREDENTIAL_USE
+            ),
+            now=NOW,
+        ).effect
+        == PolicyEffect.REQUIRE_APPROVAL
+    )
+
+
+def test_bypass_overrides_nebula_scope_and_approval_but_not_local_only_validation():
+    engine = PolicyEngine()
+    scope = _scope(
+        bypass_permissions=True,
+        allow_all_targets=False,
+        not_after=NOW - timedelta(hours=1),
+        prohibited_actions=["mcp.remote_lookup"],
+    )
+    decision = engine.evaluate(
+        scope,
+        PolicyRequest(
+            tool_name="mcp.remote_lookup",
+            risk_class=RiskClass.CREDENTIAL_USE,
+            network_access=True,
+            writes_outside_workspace=True,
+        ),
+        now=NOW,
+    )
+    assert decision.effect == PolicyEffect.ALLOW
+    assert decision.rule == "permission_bypass"
+    with pytest.raises(ValueError, match="Local only"):
+        _scope(bypass_permissions=True, local_only=True)
+
+
+def test_allowed_public_domain_dns_does_not_require_a_matching_cidr():
+    request = PolicyRequest(
+        tool_name="scan.tcp",
+        risk_class=RiskClass.ACTIVE_SCAN,
+        network_access=True,
+        target="app.example.test",
+        port=443,
+        resolved_ips=["8.8.8.8"],
+    )
+    assert (
+        PolicyEngine().evaluate(_scope(), request, now=NOW).effect == PolicyEffect.ALLOW
+    )
+    private = request.model_copy(update={"resolved_ips": ["192.168.1.2"]})
+    assert PolicyEngine().evaluate(_scope(), private, now=NOW).rule == "dns_rebinding"
 
 
 def test_time_local_only_prohibited_action_and_workspace_boundaries(tmp_path):

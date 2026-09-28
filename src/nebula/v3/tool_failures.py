@@ -285,6 +285,32 @@ def tool_failure(
             "with an authorized action, or explain the blocker to the operator. "
             "Do not repeat the same denied call."
         )
+    elif isinstance(error, PolicyDenied):
+        rule = error.decision.rule
+        safe_reasons = {
+            "time_window",
+            "local_only",
+            "prohibited_action",
+            "target_required",
+            "target_scope",
+            "port_scope",
+            "invalid_target",
+            "dns_rebinding",
+            "dns_resolution_required",
+            "tool_policy_deny",
+            "approval_expired",
+            "approval_decision",
+        }
+        problem = (
+            sanitize_display_text(redact_text(error.decision.reason))[:500]
+            if rule in safe_reasons
+            else "The call was denied by an access or approval rule."
+        )
+        action = (
+            "Ask the operator to change Project permissions or use a target-aware capability; do not retry unchanged."
+            if rule == "target_required"
+            else "Ask the operator to change the cited policy or choose an authorized action; do not retry unchanged."
+        )
     elif denied:
         problem = "The call was denied by an access or approval rule."
         action = "Request access or choose an authorized action; do not repeat the denied call."
@@ -363,6 +389,8 @@ def tool_failure(
     if isinstance(error, ToolLimitReached):
         # Core's own numbers, the only detail of a refusal the model reads.
         result["limit"] = error.limit
+    if isinstance(error, PolicyDenied):
+        result["policy_rule"] = error.decision.rule
     if isinstance(error, ProjectHookPolicyDenied):
         stdout, stdout_truncated = _hook_output_for_model(error.hook_stdout)
         stderr, stderr_truncated = _hook_output_for_model(error.hook_stderr)

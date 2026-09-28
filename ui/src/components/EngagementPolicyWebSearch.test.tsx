@@ -109,3 +109,50 @@ describe("web search opt-in on a project", () => {
     expect(link).toHaveAttribute("href", "#web-search-runtime-settings");
   });
 });
+
+describe("Project authorization mode", () => {
+  it("keeps all destinations separate from permission bypass", async () => {
+    const user = userEvent.setup();
+    fixture.api.getEngagementScope.mockResolvedValue(scope({allowAllTargets: true}));
+    render(view());
+    const allDestinations = await screen.findByRole("radio", {name: /All destinations/});
+    await waitFor(() => expect(allDestinations).toBeEnabled());
+    expect(allDestinations).toBeChecked();
+    expect(screen.getByRole("radio", {name: /Allow all/})).not.toBeChecked();
+    await user.click(screen.getByRole("button", {name: /Save scope/i}));
+    await waitFor(() => expect(fixture.api.updateEngagementScope).toHaveBeenCalled());
+    expect(fixture.api.updateEngagementScope.mock.calls[0][1]).toMatchObject({
+      allowAllTargets: true,
+      bypassPermissions: false,
+    });
+  });
+
+  it("requires an explicit confirmation before saving Allow all", async () => {
+    const user = userEvent.setup();
+    render(view());
+    const bypass = await screen.findByRole("radio", {name: /Allow all/});
+    await waitFor(() => expect(bypass).toBeEnabled());
+    await user.click(bypass);
+    await user.click(screen.getByRole("button", {name: /Save scope/i}));
+    expect(await screen.findByRole("dialog", {name: /Bypass Nebula permissions/})).toBeVisible();
+    expect(fixture.api.updateEngagementScope).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", {name: "Allow all"}));
+    await waitFor(() => expect(fixture.api.updateEngagementScope).toHaveBeenCalled());
+    expect(fixture.api.updateEngagementScope.mock.calls[0][1]).toMatchObject({
+      allowAllTargets: true,
+      bypassPermissions: true,
+    });
+  });
+
+  it("refuses Allow all while Local only is enabled", async () => {
+    const user = userEvent.setup();
+    fixture.api.getEngagementScope.mockResolvedValue(scope({localOnly: true}));
+    render(view());
+    const bypass = await screen.findByRole("radio", {name: /Allow all/});
+    await waitFor(() => expect(bypass).toBeEnabled());
+    await user.click(bypass);
+    await user.click(screen.getByRole("button", {name: /Save scope/i}));
+    expect(await screen.findByText(/Turn off Local only before enabling Allow all/)).toBeVisible();
+    expect(fixture.api.updateEngagementScope).not.toHaveBeenCalled();
+  });
+});

@@ -49,6 +49,27 @@ def test_project_scope_persists_all_targets_and_normalizes_root_domain_urls(api)
     assert loaded.json()["allow_all_targets"] is True
 
 
+def test_permission_bypass_requires_explicit_opt_in_and_is_durable(api):
+    client, store = api
+    engagement = store.create(Engagement(name="Permission modes"))
+    endpoint = f"/api/v1/engagements/{engagement.id}/scope"
+    all_destinations = client.put(
+        endpoint, headers=_auth(), json={"allow_all_targets": True}
+    )
+    assert all_destinations.status_code == 200
+    assert all_destinations.json()["bypass_permissions"] is False
+
+    bypass = client.put(endpoint, headers=_auth(), json={"bypass_permissions": True})
+    assert bypass.status_code == 200
+    assert client.get(endpoint, headers=_auth()).json()["bypass_permissions"] is True
+    retained = client.put(endpoint, headers=_auth(), json={"allowed_ports": [443]})
+    assert retained.json()["bypass_permissions"] is True
+
+    invalid = client.put(endpoint, headers=_auth(), json={"local_only": True})
+    assert invalid.status_code == 422
+    assert client.get(endpoint, headers=_auth()).json()["bypass_permissions"] is True
+
+
 @pytest.fixture
 def api(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")
