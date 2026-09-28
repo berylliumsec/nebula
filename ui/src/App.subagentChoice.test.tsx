@@ -102,7 +102,7 @@ function renderApp(route: string) {
 
 async function openAssistantSettings(user: ReturnType<typeof userEvent.setup>) {
   if (!screen.queryByRole("dialog", { name: "Assistant settings" })) {
-    await user.click(screen.getByRole("button", { name: "Assistant settings" }));
+    await user.click(await screen.findByRole("button", { name: "Assistant settings" }));
   }
   return screen.findByRole("dialog", { name: "Assistant settings" });
 }
@@ -115,6 +115,49 @@ describe("the Subagents choice", () => {
   });
 
   afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps the last Assistant choices for a new chat and after reopening the project", { timeout: 20_000 }, async () => {
+    const user = userEvent.setup();
+    const defaults: Wire = {
+      backend: null, provider_id: null, harness_id: null, model: null,
+      reasoning_effort: null, harness_reasoning_effort: null, harness_service_tier: null,
+      harness_mode: null, mcp_server_ids: [], hook_ids: [], allow_subagents: false,
+      subagent_provider_id: null, subagent_model: null, max_active_subagents: null,
+      subagent_reasoning_effort: null, allow_agent_messaging: false,
+    };
+    core((path, init) => {
+      if (path.endsWith("/engagements")) return json([{ ...project, assistant_defaults: defaults }]);
+      if (path.endsWith("/engagements/engagement-1/assistant-defaults")) {
+        if (init?.method === "PATCH") Object.assign(defaults, (JSON.parse(String(init.body)) as { changes: Wire }).changes);
+        return json(defaults);
+      }
+      return undefined;
+    });
+    const first = renderApp("/sessions");
+    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }, { timeout: 5_000 }));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await openAssistantSettings(user);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Reasoning effort" }), "high");
+    await waitFor(() => expect(defaults.reasoning_effort).toBe("high"));
+    await user.click(screen.getByRole("checkbox", { name: /Subagents/ }));
+    await user.click(screen.getByRole("checkbox", { name: /Agent messaging/ }));
+    await waitFor(() => expect(defaults.allow_agent_messaging).toBe(true));
+
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await openAssistantSettings(user);
+    expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("high");
+    expect(screen.getByRole("checkbox", { name: /Subagents/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Agent messaging/ })).toBeChecked();
+
+    first.unmount();
+    renderApp("/sessions");
+    await user.click(await screen.findByRole("tab", { name: /Analyst chat/ }, { timeout: 5_000 }));
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    await openAssistantSettings(user);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveValue("high"));
+    expect(screen.getByRole("checkbox", { name: /Subagents/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Agent messaging/ })).toBeChecked();
+  });
 
   it("stays checked on a goal conversation created before the first message", { timeout: 20_000 }, async () => {
     let sessions: Wire[] = [];

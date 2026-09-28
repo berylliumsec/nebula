@@ -41,6 +41,7 @@ import type {
   DebugSessionStart,
   DeviceCapabilitySnapshot,
   CredentialStatus,
+  AssistantDefaults,
   EngagementSummary,
   EngagementCreateRequest,
   ExecutionCapabilities,
@@ -468,6 +469,26 @@ interface WireEngagement extends WireEntity {
   tags?: string[];
   workspace_path?: string | null;
   metadata?: JsonObject;
+  assistant_defaults?: WireAssistantDefaults;
+}
+
+interface WireAssistantDefaults {
+  backend: AssistantDefaults["backend"];
+  provider_id: string | null;
+  harness_id: string | null;
+  model: string | null;
+  reasoning_effort: AssistantDefaults["reasoningEffort"];
+  harness_reasoning_effort: string | null;
+  harness_service_tier: string | null;
+  harness_mode: string | null;
+  mcp_server_ids: string[];
+  hook_ids: string[];
+  allow_subagents: boolean;
+  subagent_provider_id: string | null;
+  subagent_model: string | null;
+  max_active_subagents: number | null;
+  subagent_reasoning_effort: AssistantDefaults["subagentReasoningEffort"];
+  allow_agent_messaging: boolean;
 }
 
 interface WireBrowserIdentity extends WireEntity {
@@ -2237,8 +2258,49 @@ function mapEngagement(value: WireEngagement): EngagementSummary {
     createdAt: value.created_at,
     updatedAt: value.updated_at,
     scopeAssetCount: numberField(value.metadata?.scope_asset_count),
+    assistantDefaults: value.assistant_defaults ? mapAssistantDefaults(value.assistant_defaults) : undefined,
   };
 }
+
+function mapAssistantDefaults(value: WireAssistantDefaults): AssistantDefaults {
+  return {
+    backend: value.backend,
+    providerId: value.provider_id,
+    harnessId: value.harness_id,
+    model: value.model,
+    reasoningEffort: value.reasoning_effort,
+    harnessReasoningEffort: value.harness_reasoning_effort,
+    harnessServiceTier: value.harness_service_tier,
+    harnessMode: value.harness_mode,
+    mcpServerIds: value.mcp_server_ids,
+    hookIds: value.hook_ids,
+    allowSubagents: value.allow_subagents,
+    subagentProviderId: value.subagent_provider_id,
+    subagentModel: value.subagent_model,
+    maxActiveSubagents: value.max_active_subagents,
+    subagentReasoningEffort: value.subagent_reasoning_effort,
+    allowAgentMessaging: value.allow_agent_messaging,
+  };
+}
+
+const assistantDefaultWireKeys: Record<keyof AssistantDefaults, keyof WireAssistantDefaults> = {
+  backend: "backend",
+  providerId: "provider_id",
+  harnessId: "harness_id",
+  model: "model",
+  reasoningEffort: "reasoning_effort",
+  harnessReasoningEffort: "harness_reasoning_effort",
+  harnessServiceTier: "harness_service_tier",
+  harnessMode: "harness_mode",
+  mcpServerIds: "mcp_server_ids",
+  hookIds: "hook_ids",
+  allowSubagents: "allow_subagents",
+  subagentProviderId: "subagent_provider_id",
+  subagentModel: "subagent_model",
+  maxActiveSubagents: "max_active_subagents",
+  subagentReasoningEffort: "subagent_reasoning_effort",
+  allowAgentMessaging: "allow_agent_messaging",
+};
 
 function mapTerminalRecordingTools(
   value: WireTerminalRecordingTools,
@@ -5847,6 +5909,20 @@ export class ApiClient {
     return this.listAll<WireEngagement>("engagements", signal).then((items) =>
       page(items.map(mapEngagement)),
     );
+  }
+
+  getEngagementAssistantDefaults(id: string, signal?: AbortSignal): Promise<AssistantDefaults> {
+    return this.request<WireAssistantDefaults>(`engagements/${encodeURIComponent(id)}/assistant-defaults`, { signal }).then(mapAssistantDefaults);
+  }
+
+  updateEngagementAssistantDefaults(id: string, changes: Partial<AssistantDefaults>): Promise<AssistantDefaults> {
+    const wireChanges = Object.fromEntries(
+      Object.entries(changes).map(([key, value]) => [assistantDefaultWireKeys[key as keyof AssistantDefaults], value]),
+    );
+    return this.request<WireAssistantDefaults>(`engagements/${encodeURIComponent(id)}/assistant-defaults`, {
+      method: "PATCH",
+      body: JSON.stringify({ changes: wireChanges }),
+    }).then(mapAssistantDefaults);
   }
 
   async deleteArchivedEngagement(id: string): Promise<void> {

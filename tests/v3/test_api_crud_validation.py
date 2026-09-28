@@ -70,6 +70,53 @@ def test_permission_bypass_requires_explicit_opt_in_and_is_durable(api):
     assert client.get(endpoint, headers=_auth()).json()["bypass_permissions"] is True
 
 
+def test_assistant_defaults_are_project_scoped_and_patch_independently(api):
+    client, store = api
+    first = store.create(Engagement(name="First"))
+    second = store.create(Engagement(name="Second"))
+    endpoint = f"/api/v1/engagements/{first.id}/assistant-defaults"
+
+    saved = client.patch(
+        endpoint,
+        headers=_auth(),
+        json={
+            "changes": {
+                "backend": "provider",
+                "provider_id": "provider-1",
+                "model": "chosen-model",
+                "mcp_server_ids": ["mcp-1"],
+                "allow_subagents": True,
+            }
+        },
+    )
+    assert saved.status_code == 200
+    assert saved.json()["model"] == "chosen-model"
+    assert saved.json()["mcp_server_ids"] == ["mcp-1"]
+
+    patched = client.patch(
+        endpoint,
+        headers=_auth(),
+        json={"changes": {"allow_agent_messaging": True}},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["model"] == "chosen-model"
+    assert patched.json()["allow_subagents"] is True
+    assert client.get(endpoint, headers=_auth()).json() == patched.json()
+    assert store.get(Engagement, first.id).assistant_defaults.model == "chosen-model"
+    assert (
+        client.get(
+            f"/api/v1/engagements/{second.id}/assistant-defaults", headers=_auth()
+        ).json()["model"]
+        is None
+    )
+
+    invalid = client.patch(
+        endpoint, headers=_auth(), json={"changes": {"not_a_setting": True}}
+    )
+    assert invalid.status_code == 422
+    assert client.get(endpoint, headers=_auth()).json() == patched.json()
+
+
 @pytest.fixture
 def api(tmp_path):
     store = NebulaStore(tmp_path / "nebula.db")

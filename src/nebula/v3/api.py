@@ -255,6 +255,7 @@ from .domain import (
     ActionDescriptor,
     ActionIntent,
     ActionResolutionRequest,
+    AssistantDefaults,
     Artifact,
     BrowserAction,
     BrowserAssessment,
@@ -7319,6 +7320,49 @@ def create_app(
         if result.engagement_id != engagement_id:
             raise NotFoundError(f"scope_imports entity not found: {scope_import_id}")
         return require_scope_import_service().discard(scope_import_id)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/assistant-defaults",
+        response_model=AssistantDefaults,
+        tags=["engagements"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_assistant_defaults(engagement_id: str) -> AssistantDefaults:
+        return store.get(Engagement, engagement_id).assistant_defaults
+
+    @app.patch(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/assistant-defaults",
+        response_model=AssistantDefaults,
+        tags=["engagements"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def update_assistant_defaults(
+        engagement_id: str, request: PatchRequest
+    ) -> AssistantDefaults:
+        unknown = set(request.changes) - set(AssistantDefaults.model_fields)
+        if unknown:
+            raise ValueError(f"unknown assistant defaults: {sorted(unknown)}")
+        for _ in range(3):
+            engagement = store.get(Engagement, engagement_id)
+            values = engagement.assistant_defaults.model_dump(mode="json")
+            values.update(request.changes)
+            defaults = AssistantDefaults.model_validate(values)
+            if defaults == engagement.assistant_defaults:
+                return defaults
+            try:
+                updated = store.update(
+                    Engagement,
+                    engagement_id,
+                    {"assistant_defaults": defaults.model_dump(mode="json")},
+                    expected_revision=engagement.revision,
+                )
+                return updated.assistant_defaults
+            except ConflictError:
+                # diagnostic-expected: a concurrent project edit is retried below.
+                continue
+        raise ConflictError(
+            "assistant defaults changed concurrently; retry the selection"
+        )
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/scope",

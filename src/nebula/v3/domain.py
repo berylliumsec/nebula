@@ -890,6 +890,25 @@ class ScopePolicy(Entity):
         return self
 
 
+class AssistantDefaults(NebulaModel):
+    backend: ChatBackend | None = None
+    provider_id: str | None = Field(default=None, max_length=200)
+    harness_id: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=500)
+    reasoning_effort: str | None = Field(default=None, max_length=20)
+    harness_reasoning_effort: str | None = Field(default=None, max_length=100)
+    harness_service_tier: str | None = Field(default=None, max_length=100)
+    harness_mode: str | None = Field(default=None, max_length=100)
+    mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+    hook_ids: list[str] = Field(default_factory=list, max_length=64)
+    allow_subagents: bool = False
+    subagent_provider_id: str | None = Field(default=None, max_length=200)
+    subagent_model: str | None = Field(default=None, max_length=500)
+    max_active_subagents: int | None = Field(default=None, ge=1, le=32)
+    subagent_reasoning_effort: str | None = Field(default=None, max_length=20)
+    allow_agent_messaging: bool = False
+
+
 class Engagement(Entity):
     entity_kind: ClassVar[str] = "engagements"
     name: str = Field(min_length=1, max_length=300)
@@ -900,6 +919,7 @@ class Engagement(Entity):
     owner_id: str | None = None
     tags: list[str] = Field(default_factory=list)
     workspace_path: str | None = Field(default=None, max_length=4096)
+    assistant_defaults: AssistantDefaults = Field(default_factory=AssistantDefaults)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("workspace_path")
