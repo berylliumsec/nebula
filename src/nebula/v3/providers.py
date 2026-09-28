@@ -4260,6 +4260,8 @@ class OpenAICompatibleProvider(ModelProvider):
             if allowed:
                 # Operator-selected upstream providers: never route elsewhere.
                 payload["provider"] = {**payload.get("provider", {}), "only": allowed}
+            if self.openrouter_require_zdr:
+                payload["provider"] = {**payload.get("provider", {}), "zdr": True}
             payload["reasoning"] = _openrouter_reasoning(
                 request,
                 set(self.config.model_parameters.get(model, ())),
@@ -4523,10 +4525,16 @@ class OpenAICompatibleProvider(ModelProvider):
                             upstream = openrouter_upstream_providers(directory.json())
                     except ValueError:  # diagnostic-expected: reported below when an allowlist needs the directory; routing is unaffected
                         directory_failure = "was unreadable"
+                    zdr_routes = (
+                        await self._openrouter_zdr_endpoint_tags(client)
+                        if not response.is_error and self.openrouter_require_zdr
+                        else None
+                    )
                     served: set[str] | None = None
                     if (
                         not response.is_error
                         and self.openrouter_allowed_providers
+                        and not self.openrouter_require_zdr
                         and directory_failure is None
                     ):
                         served = await self._openrouter_models_served_by(
@@ -4578,7 +4586,24 @@ class OpenAICompatibleProvider(ModelProvider):
                     for item in descriptors
                 ]
                 detail = "Account model catalog loaded; inference is not yet verified."
-                if served is not None:
+                if zdr_routes is not None:
+                    allowed = set(self.openrouter_allowed_providers)
+                    eligible_models = {
+                        model_id
+                        for model_id, tag in zdr_routes
+                        if not allowed or tag.split("/", 1)[0] in allowed
+                    }
+                    descriptors = [
+                        item for item in descriptors
+                        if item.id in eligible_models
+                        or item.alias_target in eligible_models
+                    ]
+                    detail = (
+                        "Showing account models with ZDR endpoints"
+                        + (" at the allowed upstream providers" if allowed else "")
+                        + "; inference is not yet verified."
+                    )
+                elif served is not None:
                     descriptors = [item for item in descriptors if item.id in served]
                     detail = (
                         "Showing only models served by the allowed upstream providers; "
@@ -4617,8 +4642,12 @@ class OpenAICompatibleProvider(ModelProvider):
                 provider_id=self.config.id,
                 healthy=False,
                 detail=(
-                    "OpenRouter model discovery failed after bounded retries. "
-                    "Check the connection and refresh."
+                    (
+                        "OpenRouter model or ZDR endpoint discovery failed after bounded retries. "
+                        if self.openrouter_require_zdr
+                        else "OpenRouter model discovery failed after bounded retries. "
+                    )
+                    + "Check the connection and refresh."
                 ),
             )
 
@@ -4646,6 +4675,31 @@ class OpenAICompatibleProvider(ModelProvider):
                 break
             params = {**params, "offset": offset}
         return models
+
+    async def _openrouter_zdr_endpoint_tags(
+        self, client: httpx.AsyncClient
+    ) -> set[tuple[str, str]]:
+        """Fetch exact model and endpoint tags eligible for provider-side ZDR."""
+
+        response = await client.get(self._path("/v1/endpoints/zdr"), timeout=10.0)
+        if response.is_error:
+            raise ProviderError(
+                f"OpenRouter ZDR endpoint discovery failed (HTTP {response.status_code})"
+            )
+        payload = response.json()
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) or not rows or len(rows) > 10_000:
+            raise ValueError("Invalid OpenRouter ZDR endpoint directory")
+        routes = {
+            (row["model_id"], row["tag"])
+            for row in rows
+            if isinstance(row, dict)
+            and isinstance(row.get("model_id"), str)
+            and isinstance(row.get("tag"), str)
+        }
+        if not routes:
+            raise ValueError("Invalid OpenRouter ZDR endpoint directory")
+        return routes
 
     async def _openrouter_models_served_by(
         self, client: httpx.AsyncClient, directory: set[str]
@@ -4711,6 +4765,12 @@ class OpenAICompatibleProvider(ModelProvider):
             )
         )
 
+    @property
+    def openrouter_require_zdr(self) -> bool:
+        """Provider-side ZDR is opt-in for each OpenRouter profile."""
+
+        return self.config.options.get("openrouter_zdr") is True
+
     async def openrouter_route_limits(self, model: str) -> list[ModelRouteDescriptor]:
         """Load the exact automatic-routing endpoint set for one model."""
 
@@ -4730,20 +4790,48 @@ class OpenAICompatibleProvider(ModelProvider):
             async with asyncio.timeout(15):
                 async with self._client(self._headers()) as client:
                     response = await client.get(self._path(endpoint), timeout=10.0)
+                    zdr_routes = (
+                        await self._openrouter_zdr_endpoint_tags(client)
+                        if not response.is_error and self.openrouter_require_zdr
+                        else None
+                    )
             if response.is_error:
                 raise ProviderError(
                     f"OpenRouter endpoint discovery failed (HTTP {response.status_code})"
                 )
-            routes = openrouter_model_routes(response.json(), model=model)
+            payload = response.json()
+            if zdr_routes is not None and isinstance(payload, dict):
+                data = payload.get("data")
+                if isinstance(data, dict) and isinstance(data.get("endpoints"), list):
+                    payload = {
+                        **payload,
+                        "data": {
+                            **data,
+                            "endpoints": [
+                                item for item in data["endpoints"]
+                                if isinstance(item, dict)
+                                and (model, item.get("tag")) in zdr_routes
+                            ],
+                        },
+                    }
+            routes = openrouter_model_routes(payload, model=model)
             allowed = self.openrouter_allowed_providers
             if allowed:
                 routes = [route for route in routes if route.provider_slug in allowed]
                 if not routes:
+                    if self.openrouter_require_zdr:
+                        raise ProviderError(
+                            "No ZDR OpenRouter endpoints serve this model at the allowed upstream providers"
+                        )
                     raise ProviderError(
                         "None of the allowed OpenRouter providers serve this model; "
                         "choose another model or allow more providers"
                     )
             if not routes:
+                if self.openrouter_require_zdr:
+                    raise ProviderError(
+                        "No ZDR OpenRouter endpoints serve this model under the profile's upstream policy"
+                    )
                 if model.startswith("~"):
                     raise ProviderError(
                         "OpenRouter alias models publish no endpoints of their own; "

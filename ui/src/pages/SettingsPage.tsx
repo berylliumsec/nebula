@@ -135,6 +135,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>([]);
   const [upstreamProviderIds, setUpstreamProviderIds] = useState<string[]>([]);
+  const [openrouterZdr, setOpenrouterZdr] = useState(false);
   const [upstreamQuery, setUpstreamQuery] = useState("");
   const [upstreamDirectory, setUpstreamDirectory] = useState<UpstreamProviderOption[]>([]);
   const [upstreamDirectoryState, setUpstreamDirectoryState] = useState<"idle" | "loading" | "ready" | "failed">("idle");
@@ -335,6 +336,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setAvailableModels([]);
     setSelectedModelIds([]);
     setUpstreamProviderIds([]);
+    setOpenrouterZdr(false);
     setUpstreamQuery("");
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
     setCredentialSystemd("");
@@ -364,6 +366,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setAvailableModels(detected.models);
     setSelectedModelIds([]);
     setUpstreamProviderIds([]);
+    setOpenrouterZdr(false);
     setUpstreamQuery("");
     setCredentialEnv("");
     setCredentialSystemd("");
@@ -397,6 +400,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     ])]);
     setSelectedModelIds(provider.modelAllowlist);
     setUpstreamProviderIds(stringList(provider.options?.openrouter_providers));
+    setOpenrouterZdr(provider.options?.openrouter_zdr === true);
     setUpstreamQuery("");
     setCredentialEnv(provider.credentialEnv ?? "");
     setCredentialSystemd(provider.credentialRef?.startsWith("systemd:")
@@ -428,6 +432,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     setAvailableModels([]);
     setSelectedModelIds([]);
     setUpstreamProviderIds([]);
+    setOpenrouterZdr(false);
     setUpstreamQuery("");
     setCredentialEnv(entry.suggestedKeyEnv ?? "");
     setCredentialSystemd("");
@@ -463,6 +468,8 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
     if (dialogProviderType === "openrouter") {
       if (upstreamProviderIds.length) options.openrouter_providers = upstreamProviderIds;
       else delete options.openrouter_providers;
+      if (openrouterZdr) options.openrouter_zdr = true;
+      else delete options.openrouter_zdr;
     }
     const parsedContextWindow = contextWindow ? Number(contextWindow) : undefined;
     const parsedMaxOutputTokens = maxOutputTokens ? Number(maxOutputTokens) : undefined;
@@ -888,6 +895,7 @@ export function SettingsPage({ embeddedTarget }: SettingsPageProps = {}) {
             {credentialSecret && (vault.available
               ? <label className="provider-consent"><input type="checkbox" checked={sessionCredential} onChange={(event) => setSessionCredential(event.target.checked)} /><span><strong>Use for this Nebula session only</strong><small>When off, Core saves the secret in the operating-system credential vault. It is never returned or stored in the database.</small></span></label>
               : <p className="provider-dialog-note">{vaultUnavailableNote(vault.state, "credential")}</p>)}
+            {dialogProviderType === "openrouter" && <label className="provider-consent"><input type="checkbox" checked={openrouterZdr} onChange={(event) => setOpenrouterZdr(event.target.checked)} /><span><strong>Require zero data retention (ZDR)</strong><small>Route this profile only through endpoints that do not retain prompts or responses. Fewer models may be available.</small></span></label>}
             {dialogProviderType === "openrouter" && <UpstreamProviderPicker
               catalog={upstreamDirectory.length ? upstreamDirectory : upstreamCatalog(editingProvider?.metadata)}
               directoryState={upstreamDirectoryState}

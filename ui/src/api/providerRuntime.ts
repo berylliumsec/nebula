@@ -26,10 +26,15 @@ export function providerWithDiscoveredModels(
   next: ProviderHealth,
 ): ProviderHealth {
   // Discovery belongs to the endpoint it ran against.
+  const sameOpenRouterPolicy = previous?.providerType !== "openrouter" || (
+    previous.options.openrouter_zdr === next.options.openrouter_zdr
+    && JSON.stringify(previous.options.openrouter_providers ?? []) === JSON.stringify(next.options.openrouter_providers ?? [])
+  );
   const checked = previous?.lastCheckedAt
     && previous.id === next.id
     && previous.endpoint === next.endpoint
     && previous.providerType === next.providerType
+    && sameOpenRouterPolicy
     ? previous
     : undefined;
   const available = checked ? discoveredModels(checked) : [];

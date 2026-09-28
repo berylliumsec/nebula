@@ -103,6 +103,27 @@ describe("providerWithDiscoveredModels", () => {
     expect(folded.lastCheckedAt).toBeUndefined();
   });
 
+  it.each([
+    ["ZDR", { openrouter_providers: ["wafer"], openrouter_zdr: true }],
+    ["allowed upstreams", { openrouter_providers: ["relace"] }],
+  ])("drops old OpenRouter discovery when %s changes", (_change, options) => {
+    const previous = checked({
+      providerType: "openrouter",
+      options: { openrouter_providers: ["wafer"] },
+    });
+    const next = profile({
+      providerType: "openrouter",
+      options,
+    });
+
+    const folded = providerWithDiscoveredModels(previous, next);
+
+    expect(folded.models).toEqual([]);
+    expect(folded.availableModels).toEqual([]);
+    expect(folded.state).toBe("unchecked");
+    expect(folded.lastCheckedAt).toBeUndefined();
+  });
+
   it("uses the profile read when nothing was discovered yet", () => {
     expect(providerWithDiscoveredModels(undefined, profile({ modelAllowlist: ["saved"], models: ["saved"] })).models).toEqual(["saved"]);
     expect(providerWithDiscoveredModels(profile(), profile()).lastCheckedAt).toBeUndefined();
