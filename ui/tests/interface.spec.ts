@@ -9245,6 +9245,28 @@ test("provider options explain the working ceiling beside the context window", a
   expect(await dialog.evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
 });
 
+test("OpenRouter profile policy offers ZDR and allowed upstreams", async ({ page }) => {
+  await page.route("**/api/v1/provider-catalog", route => route.fulfill({ json: [{
+    flavor: "openrouter", adapter: "openai_compatible", display_name: "OpenRouter",
+    local: false, default_base_url: "https://openrouter.ai/api/v1",
+    suggested_key_env: "OPENROUTER_API_KEY", support_tier: "native",
+  }] }));
+  await page.route("**/api/v1/providers/openrouter/upstream-providers", route => route.fulfill({ json: [
+    { name: "Relace", slug: "relace" }, { name: "Wafer", slug: "wafer" },
+  ] }));
+  await openWorkspace(page, "/settings#models-settings", "Settings");
+  await page.getByRole("button", { name: "Add provider" }).click();
+  const dialog = page.getByRole("dialog", { name: "Add model provider" });
+  const zdr = dialog.getByRole("checkbox", { name: /Require zero data retention/ });
+  await expect(zdr).not.toBeChecked();
+  await zdr.check();
+  await dialog.locator(".upstream-providers > summary").click();
+  await dialog.getByRole("checkbox", { name: "Relace" }).check();
+  await expect(dialog.getByRole("checkbox", { name: "Wafer" })).not.toBeChecked();
+  await expect(dialog.getByLabel("Allowed upstream providers")).toContainText("Relace");
+  expect(await dialog.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+});
+
 test("knowledge model banner follows the relevance model download and explains its failure", async ({ page }, testInfo) => {
   const MiB = 1024 * 1024;
   let reranker: Record<string, unknown> = {

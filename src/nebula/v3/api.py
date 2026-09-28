@@ -13078,6 +13078,26 @@ def _invalidate_provider_verification(
     changed = _provider_contract_fingerprint(current) != _provider_contract_fingerprint(
         candidate
     )
+    old_options = current.metadata.get("options") or {}
+    new_options = candidate.metadata.get("options") or {}
+    routing_changed = (
+        current.provider_type == "openrouter"
+        and candidate.provider_type == "openrouter"
+        and any(
+            old_options.get(key) != new_options.get(key)
+            for key in ("openrouter_providers", "openrouter_zdr")
+        )
+    )
+    metadata = dict(candidate.metadata)
+    if routing_changed:
+        # The cached model catalog and endpoint limits describe the previous
+        # routing policy. Refreshing health will rebuild the eligible catalog.
+        for key in (
+            "model_descriptors",
+            "model_catalog_revision",
+            "route_catalog_revision",
+        ):
+            metadata.pop(key, None)
     verifications = {} if changed else current.capability_verifications
     has_verified_model = any(
         item.status == ProviderVerificationStatus.VERIFIED
@@ -13086,6 +13106,7 @@ def _invalidate_provider_verification(
     )
     return candidate.model_copy(
         update={
+            "metadata": metadata,
             "capability_verifications": verifications,
             "capabilities": candidate.capabilities.model_copy(
                 update={

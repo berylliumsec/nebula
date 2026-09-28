@@ -273,6 +273,63 @@ async function stopLocalModelStub(stub: LocalModelStub): Promise<void> {
   });
 }
 
+test("assistant upgrade OpenRouter policy persists through production LAN reload", async ({ page }) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const created = await api.post("providers", { data: {
+      name: "OpenRouter policy",
+      provider_type: "openrouter",
+      endpoint: "https://openrouter.ai/api/v1",
+      enabled: true,
+      is_local: false,
+      metadata: { options: {} },
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    const profile = await created.json() as { id: string };
+    const pairingApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const pairingResponse = await pairingApi.post("auth/pairings", { data: { name: "OpenRouter policy browser" } });
+    expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+    const pairing = await pairingResponse.json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("OpenRouter policy browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+
+    await page.goto(`${core.origin}/settings#models-settings`);
+    await page.getByRole("button", { name: "Edit OpenRouter policy" }).click();
+    let dialog = page.getByRole("dialog", { name: "Edit OpenRouter policy" });
+    await dialog.getByRole("checkbox", { name: /Require zero data retention/ }).check();
+    await dialog.locator(".upstream-providers > summary").click();
+    await dialog.getByRole("button", { name: "JSON" }).click();
+    await dialog.getByRole("textbox", { name: "Upstream provider allowlist JSON" }).fill('["relace"]');
+    await dialog.getByRole("button", { name: "Save provider" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(async () => {
+      const read = await api.get(`providers/${profile.id}`);
+      if (!read.ok()) return null;
+      return (await read.json() as { metadata: { options?: Record<string, unknown> } }).metadata.options;
+    }).toEqual({ openrouter_zdr: true, openrouter_providers: ["relace"] });
+
+    await page.reload();
+    await page.getByRole("button", { name: "Edit OpenRouter policy" }).click();
+    dialog = page.getByRole("dialog", { name: "Edit OpenRouter policy" });
+    await expect(dialog.getByRole("checkbox", { name: /Require zero data retention/ })).toBeChecked();
+    await expect(dialog.getByLabel("Allowed upstream providers")).toContainText("Relace");
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
 test("assistant upgrade real Core retains editable goal skills through source loss", async ({ page }) => {
   test.setTimeout(90_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });

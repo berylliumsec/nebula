@@ -1,8 +1,8 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProviderCatalogEntry } from "../api/types";
+import type { ProviderCatalogEntry, ProviderHealth } from "../api/types";
 import { DialogProvider } from "../components/DialogSystem";
 import { SettingsPage } from "./SettingsPage";
 
@@ -50,12 +50,20 @@ vi.mock("../components/TypeSafeIntegrationSettings", () => ({ TypeSafeIntegratio
 vi.mock("../components/EngagementPolicySettings", () => ({ EngagementPolicySettings: () => null }));
 vi.mock("../components/ReleaseSettingsPanel", () => ({ ReleaseSettingsPanel: () => null }));
 vi.mock("../components/DevicePairingSettings", () => ({ DevicePairingSettings: () => null }));
-vi.mock("../components/ProviderHealthCard", () => ({ ProviderHealthCard: () => null }));
+vi.mock("../components/ProviderHealthCard", () => ({ ProviderHealthCard: ({ provider, onEdit }: { provider: { name: string }; onEdit: (provider: unknown) => void }) => <button type="button" onClick={() => onEdit(provider)}>Edit {provider.name}</button> }));
 vi.mock("../components/CompactSettingsList", () => ({ CompactSettingsList: () => <div>Compact settings list</div> }));
 vi.mock("../components/SettingsSaveFeedback", () => ({ announceSettingsSaved: vi.fn(), SettingsSaveFeedback: () => null }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 const openai: ProviderCatalogEntry = { flavor: "openai", adapter: "openai", displayName: "OpenAI", local: false, defaultBaseUrl: "https://api.openai.com/v1", suggestedKeyEnv: "OPENAI_API_KEY", supportTier: "native" };
+const openrouter: ProviderCatalogEntry = { flavor: "openrouter", adapter: "openai_compatible", displayName: "OpenRouter", local: false, defaultBaseUrl: "https://openrouter.ai/api/v1", suggestedKeyEnv: "OPENROUTER_API_KEY", supportTier: "native" };
+const savedOpenrouter: ProviderHealth = {
+  id: "openrouter-profile", revision: 3, name: "OpenRouter", providerType: "openrouter", kind: "commercial", local: false,
+  state: "healthy", enabled: true, endpoint: "https://openrouter.ai/api/v1", models: ["author/model"], modelAllowlist: [],
+  defaultModel: "author/model", credentialEnv: "OPENROUTER_API_KEY", permitsSensitiveData: false, autoShareToolResults: false,
+  residency: [], options: { openrouter_zdr: true, openrouter_providers: ["relace"] }, metadata: {},
+  modelCount: 1, privacy: "cloud", capabilities: [],
+};
 
 function NavigateButton({ to }: { to: string }) {
   const navigate = useNavigate();
@@ -78,6 +86,7 @@ describe("settings page section routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     workspace.providerCatalog = [openai] as never[];
+    workspace.providers = [] as never[];
     window.history.replaceState(null, "", "/");
   });
 
@@ -124,6 +133,7 @@ describe("settings page dialogs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     workspace.providerCatalog = [openai] as never[];
+    workspace.providers = [] as never[];
     window.history.replaceState(null, "", "/");
   });
 
@@ -146,6 +156,48 @@ describe("settings page dialogs", () => {
     reject(new Error("The provider rejected the credential."));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("The provider rejected the credential.");
     expect(within(dialog).getByRole("button", { name: "Close provider dialog" })).toBeEnabled();
+  });
+
+  it("saves OpenRouter ZDR and allowed upstreams as profile options", async () => {
+    workspace.providerCatalog = [openrouter] as never[];
+    workspace.addProvider.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderSettings("/settings#provider-settings");
+
+    await user.click(screen.getByRole("button", { name: "Add provider" }));
+    const dialog = screen.getByRole("dialog", { name: "Add model provider" });
+    expect(within(dialog).getByRole("checkbox", { name: /Require zero data retention/ })).not.toBeChecked();
+    await user.click(within(dialog).getByRole("checkbox", { name: /Require zero data retention/ }));
+    await user.click(within(dialog).getByRole("button", { name: "JSON" }));
+    fireEvent.change(within(dialog).getByRole("textbox", { name: "Upstream provider allowlist JSON" }), { target: { value: '["relace"]' } });
+    await user.click(within(dialog).getByRole("button", { name: "Add provider" }));
+
+    await waitFor(() => expect(workspace.addProvider).toHaveBeenCalledWith(expect.objectContaining({
+      providerType: "openrouter",
+      options: expect.objectContaining({ openrouter_zdr: true, openrouter_providers: ["relace"] }),
+    })));
+  });
+
+  it("loads the saved routing policy and can clear both options", async () => {
+    workspace.providerCatalog = [openrouter] as never[];
+    workspace.providers = [savedOpenrouter] as never[];
+    workspace.updateProvider.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderSettings("/settings#provider-settings");
+
+    await user.click(screen.getByRole("button", { name: "Edit OpenRouter" }));
+    const dialog = screen.getByRole("dialog", { name: "Edit OpenRouter" });
+    const zdr = within(dialog).getByRole("checkbox", { name: /Require zero data retention/ });
+    expect(zdr).toBeChecked();
+    expect(within(dialog).getByLabelText("Allowed upstream providers")).toHaveTextContent("relace");
+    await user.click(zdr);
+    await user.click(within(dialog).getByRole("button", { name: "Allow any provider" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save provider" }));
+
+    await waitFor(() => expect(workspace.updateProvider).toHaveBeenCalledWith(
+      savedOpenrouter.id,
+      expect.objectContaining({ options: {} }),
+    ));
   });
 
   it("describes the output default Core sizes from the model", async () => {

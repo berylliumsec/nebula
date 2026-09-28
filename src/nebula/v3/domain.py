@@ -2766,6 +2766,12 @@ class ProviderProfile(Entity):
             raise ValueError("default model must be present in model_allowlist")
         options = self.metadata.get("options", {})
         if isinstance(options, dict):
+            if (
+                self.provider_type == "openrouter"
+                and "openrouter_zdr" in options
+                and type(options["openrouter_zdr"]) is not bool
+            ):
+                raise ValueError("provider option openrouter_zdr must be a boolean")
             for key in ("context_window", "max_output_tokens"):
                 value = options.get(key)
                 if value is not None and (

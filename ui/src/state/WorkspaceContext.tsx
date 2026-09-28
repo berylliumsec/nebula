@@ -631,6 +631,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         const result = await api.refreshProviderHealth(id);
         setProviders((current) => current.map((provider) => provider.id === id
           ? (() => {
+              if (result.providerRevision !== undefined && result.providerRevision < provider.revision) return provider;
               const selectableModels = result.healthy
                 ? provider.modelAllowlist.length
                   ? result.models.filter((model) => provider.modelAllowlist.includes(model))
