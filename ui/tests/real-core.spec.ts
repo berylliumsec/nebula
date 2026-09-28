@@ -4176,6 +4176,51 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
 });
 
 const reliabilityTest = test.extend({serviceWorkers: "block"});
+
+reliabilityTest("assistant upgrade new chat reuses saved Assistant settings after reload", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "settings");
+  try {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const projects = await (await core.api.get("engagements")).json() as Array<{id: string}>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Assistant defaults acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Assistant defaults acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    const settings = page.getByRole("dialog", {name: "Assistant settings"});
+    await settings.getByRole("combobox", {name: "Chat runtime"}).selectOption("harness");
+    await settings.getByRole("combobox", {name: "Chat harness model"}).selectOption("fixture-next");
+    await settings.getByRole("combobox", {name: "Harness reasoning effort"}).selectOption("high");
+    await settings.getByRole("checkbox", {name: /Agent messaging/}).check();
+    await expect.poll(async () => {
+      const saved = await (await core.api.get(`engagements/${projectId}/assistant-defaults`)).json() as {model: string; harness_reasoning_effort: string; allow_agent_messaging: boolean};
+      return [saved.model, saved.harness_reasoning_effort, saved.allow_agent_messaging];
+    }).toEqual(["fixture-next", "high", true]);
+    await settings.getByRole("button", {name: "Close assistant settings"}).click();
+
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await expect(settings.getByRole("combobox", {name: "Chat harness model"})).toHaveValue("fixture-next");
+    await expect(settings.getByRole("combobox", {name: "Harness reasoning effort"})).toHaveValue("high");
+    await expect(settings.getByRole("checkbox", {name: /Agent messaging/})).toBeChecked();
+    await settings.getByRole("button", {name: "Close assistant settings"}).click();
+
+    await page.reload();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await expect(settings.getByRole("combobox", {name: "Chat harness model"})).toHaveValue("fixture-next");
+    await expect(settings.getByRole("combobox", {name: "Harness reasoning effort"})).toHaveValue("high");
+    await expect(settings.getByRole("checkbox", {name: /Agent messaging/})).toBeChecked();
+    await testInfo.attach("assistant-defaults-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), projectId}), contentType: "application/json"});
+  } finally {await core.stop();}
+});
 reliabilityTest("stabilization real Core keeps the Subagents choice across refresh", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");

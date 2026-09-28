@@ -118,6 +118,26 @@ export interface EngagementSummary {
   createdAt: string;
   updatedAt: string;
   scopeAssetCount: number;
+  assistantDefaults?: AssistantDefaults;
+}
+
+export interface AssistantDefaults {
+  backend: "provider" | "harness" | null;
+  providerId: string | null;
+  harnessId: string | null;
+  model: string | null;
+  reasoningEffort: ReasoningEffort | null;
+  harnessReasoningEffort: string | null;
+  harnessServiceTier: string | null;
+  harnessMode: string | null;
+  mcpServerIds: string[];
+  hookIds: string[];
+  allowSubagents: boolean;
+  subagentProviderId: string | null;
+  subagentModel: string | null;
+  maxActiveSubagents: number | null;
+  subagentReasoningEffort: ReasoningEffort | null;
+  allowAgentMessaging: boolean;
 }
 
 export interface EngagementCreateRequest {
