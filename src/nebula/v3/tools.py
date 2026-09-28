@@ -1459,8 +1459,9 @@ def register_artifact_retrieval_tools(
     registry: ToolRegistry,
     *,
     output_service: ToolOutputService,
+    include_workspace: bool = True,
 ) -> None:
-    """Install the four trusted, bounded retrieval capabilities."""
+    """Install bounded output reads, and optionally workspace reads."""
 
     common_output = {"type": "object", "additionalProperties": True}
 
@@ -1611,6 +1612,8 @@ def register_artifact_retrieval_tools(
         ),
     ]
     for name, description, input_schema, handler in definitions:
+        if not include_workspace and name.startswith("workspace."):
+            continue
         registry.register(
             InvocationAnalysisTool(
                 ToolSpec(

@@ -87,6 +87,7 @@ from .runtime_platform import (
     dashboard_components,
     knowledge_search_components,
     notes_components,
+    output_retrieval_components,
 )
 from .tool_activity import lookup_identifiers, step_brief, tool_activity_block
 from .working_notes import (
@@ -5782,6 +5783,10 @@ class ChatService:
                             tool_components, engagement_id, provider
                         ),
                     )
+                if tool_components is not None and self.artifact_store is not None:
+                    tool_components = output_retrieval_components(
+                        self.store, self.artifact_store, tool_components
+                    )
             except Exception as exc:
                 record_caught_exception(
                     "chat",
@@ -10942,6 +10947,60 @@ class ChatService:
             }
             model_result = failure
         waiting_callback = bool(receipt and receipt.results_url and receipt.process_id)
+        result_artifact_id = result.result_artifact_id
+        if (
+            not waiting_callback
+            and result_artifact_id is None
+            and not model_result.get("artifacts")
+            and spec is not None
+            and spec.name not in RETRIEVAL_TOOL_NAMES
+            and call_id is not None
+            and self.artifact_store is not None
+        ):
+            # A graph, browser or MCP result can be small enough to have no
+            # command artifact. Save the exact bounded provider result before
+            # replacing it with a receipt, so the lookup never changes meaning.
+            try:
+                call = self.store.get(ToolCall, call_id)
+                existing = next(
+                    (
+                        artifact
+                        for artifact in self.store.list_tool_call_artifacts(
+                            call.engagement_id, call.id
+                        )
+                        if artifact.metadata.get("kind") == "tool_result"
+                        and self.artifact_store.verify(artifact)
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    output_artifact = existing
+                else:
+                    output_artifact = self.artifact_store.put_bytes(
+                        serialize_model_result(model_result).encode("utf-8"),
+                        engagement_id=call.engagement_id,
+                        filename=f"tool-call-{call.id}-result.json",
+                        media_type="application/json",
+                        source=f"tool:{spec.name}@{spec.version}:result",
+                        metadata={
+                            "tool_call_id": call.id,
+                            "kind": "tool_result",
+                            "searchable": True,
+                        },
+                    )
+                    self.store.create(output_artifact)
+                result_artifact_id = output_artifact.id
+            except Exception as exc:
+                # Without a readable artifact, _default_receipt_call_ids
+                # leaves the result whole. A storage failure cannot silently
+                # remove the only provider-visible copy.
+                record_caught_exception(
+                    "chat",
+                    "chat.tool_result_artifact.unavailable",
+                    "A tool result could not be saved for compact replay.",
+                    exc,
+                    stage="tool-result-artifact",
+                )
         fields = {
             "status": (
                 "waiting_callback"
@@ -10953,7 +11012,7 @@ class ChatService:
             "provider_result": serialize_model_result(model_result),
             "trusted_result": receipt is None,
             "evidence_ids": result.evidence_ids,
-            "result_artifact_id": result.result_artifact_id,
+            "result_artifact_id": result_artifact_id,
             "artifacts": model_result.get("artifacts", []),
             "result_summary": self._result_summary(model_result),
             "process_id": receipt.process_id if receipt else None,
@@ -11922,6 +11981,10 @@ class ChatService:
                     self._knowledge_search_components(
                         components, turn.engagement_id, provider
                     ),
+                )
+            if components is not None and self.artifact_store is not None:
+                components = output_retrieval_components(
+                    self.store, self.artifact_store, components
                 )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")

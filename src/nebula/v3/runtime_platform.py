@@ -88,6 +88,48 @@ def project_auto_approves_tools(store: NebulaStore, engagement_id: str) -> bool:
     )
 
 
+def output_retrieval_components(
+    store: NebulaStore,
+    artifact_store: ArtifactStore,
+    base: RuntimeToolComponents,
+) -> RuntimeToolComponents:
+    """Offer artifact lookup to chats whose selected runtime has no output tools."""
+
+    from .browser_tools import combine_tool_components
+
+    registry = ToolRegistry()
+    register_artifact_retrieval_tools(
+        registry,
+        output_service=ToolOutputService(store, artifact_store),
+        include_workspace=False,
+    )
+    missing = {
+        spec.name: spec
+        for spec in registry.specs()
+        if spec.name not in base.specs
+    }
+    if not missing:
+        return base
+    broker = ToolBroker(
+        registry=registry,
+        policy_engine=PolicyEngine(),
+        runner=AnalysisOnlyRunner(),
+        ledger=StoreToolLedger(store),
+        workspace_resolver=lambda _engagement_id: Path(base.workspace),
+        auto_approve=project_auto_approves_tools(store, base.scope.engagement_id),
+    )
+    return combine_tool_components(
+        base,
+        RuntimeToolComponents(
+            broker=broker,
+            scope=base.scope,
+            workspace=base.workspace,
+            specs=missing,
+            runtime_digest="",
+        ),
+    )
+
+
 class RuntimePlatformError(RuntimeError):
     """The local Kali runtime or its runner cannot satisfy a request."""
 

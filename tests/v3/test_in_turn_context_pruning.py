@@ -14,9 +14,18 @@ import httpx
 import pytest
 
 from nebula.v3 import chat as chat_module
+from nebula.v3.artifacts import ArtifactStore
 from nebula.v3 import context as context_module
 from nebula.v3.context import estimate_model_request, resolve_context_limits
-from nebula.v3.domain import ChatTurn, ChatTurnStatus, ProviderProfile
+from nebula.v3.domain import (
+    ChatTurn,
+    ChatTurnStatus,
+    ProviderProfile,
+    RiskClass,
+    ToolCall as StoredToolCall,
+    ToolCallOrigin,
+    ToolCallStatus,
+)
 from nebula.v3.providers import (
     ModelCapabilities,
     ModelRequest,
@@ -26,14 +35,16 @@ from nebula.v3.providers import (
     ToolCall,
     ToolChoice,
 )
+from nebula.v3.runtime_platform import output_retrieval_components
 from nebula.v3.tool_results import (
     MAX_EXCERPT_BYTES,
     NetworkPortObservation,
     ToolArtifactRef,
     ToolResultReceipt,
     ToolResultStatus,
+    ToolOutputService,
 )
-from nebula.v3.tools import ToolExecutionResult
+from nebula.v3.tools import ToolExecutionResult, ToolSpec
 from tests.v3.test_chat_tool_loop import ScriptedProvider, _prepared, _response
 
 ANSWER = "Every scanned host is summarised above."
@@ -271,6 +282,73 @@ def test_tool_output_is_a_receipt_until_explicitly_read(tmp_path):
     later = next_request()
     assert later.tool_results[-2].output["output_cleared"] is True
     assert later.tool_results[-2].output["summary"] == "Permission denied"
+
+
+def test_result_without_command_artifact_gets_readable_receipt(tmp_path):
+    """Graph and other non-command results are persisted before compact replay."""
+
+    store, _service, prepared, _ = _prepared(tmp_path, [], ScanBroker())
+    artifacts = ArtifactStore(tmp_path / "result-artifacts")
+    service = chat_module.ChatService(store, artifact_store=artifacts)
+    store.create(
+        StoredToolCall(
+            id="graph-call",
+            engagement_id="project",
+            run_id="turn",
+            origin=ToolCallOrigin.CHAT,
+            chat_session_id="session",
+            tool_name="model.search",
+            risk_class=RiskClass.PASSIVE,
+            status=ToolCallStatus.COMPLETE,
+        )
+    )
+    result = {"objects": [{"id": "host-1", "name": "example.test"}], "total": 1}
+    spec = ToolSpec(
+        name="model.search",
+        description="Search the project graph.",
+        input_schema={"type": "object"},
+        output_schema={"type": "object"},
+        risk_class=RiskClass.PASSIVE,
+    )
+    fields, waiting = service._tool_result_entry(
+        ToolExecutionResult(output=result), spec=spec, call_id="graph-call"
+    )
+    assert not waiting
+    artifact_id = fields["result_artifact_id"]
+    assert isinstance(artifact_id, str)
+    repeated, _ = service._tool_result_entry(
+        ToolExecutionResult(output=result), spec=spec, call_id="graph-call"
+    )
+    assert repeated["result_artifact_id"] == artifact_id
+    assert len(store.list_tool_call_artifacts("project", "graph-call")) == 1
+    capabilities = output_retrieval_components(
+        store, artifacts, prepared.tool_components
+    )
+    assert {"tool_output.search", "tool_output.read"} <= set(capabilities.specs)
+    assert "workspace.read" not in capabilities.specs
+    receipt = service._with_tool_history(
+        prepared,
+        store.get(ChatTurn, "turn").model_copy(
+            update={
+                "tool_history": [{
+                    "model_call_id": "model-call",
+                    "tool_call_id": "graph-call",
+                    "response_group": "graph",
+                    "name": "model.search",
+                    "arguments": {"query": "host"},
+                    **fields,
+                }]
+            }
+        ),
+        prepared.model_request,
+    ).tool_results[0].output
+    assert receipt["output_cleared"] is True
+    assert receipt["artifact_ids"] == [artifact_id]
+    assert "example.test" not in json.dumps(receipt)
+    original = ToolOutputService(store, artifacts).read(
+        engagement_id="project", owner_id="turn", artifact_id=artifact_id
+    )
+    assert "example.test" in original["lines"][0]["text"]
 
 
 def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):

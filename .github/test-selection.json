@@ -1,10 +1,10 @@
 {
-  "change_digest": "a660d8cb97d09dea732d6072bced75daed289c4a06b9cfe4199921baf090c94f",
-  "reviewed_by": "Codex focused review for compact provider tool receipts",
-  "reason": "The Core change sends compact receipts for completed retrievable tool results, preserves the first failure and explicit lookup excerpt, and retains current browser screenshots. Eight collected context-pruning tests cover receipt delivery, explicit read, failure detail, context avoidance and capacity; 44 chat routing and reasoning replay cases cover provider wire batches and screenshot attachment; ten tool-history memory cases cover checkpoints, cross-turn history, and retrieval access.",
-  "exclusions": "No UI or native source changed. Frontend and browser layout tests do not inspect model-facing request payloads, so they are excluded. Unrelated backend tests and full suites are excluded. Real-Core/production browser acceptance will be reported separately from selected unit/integration tests.",
+  "change_digest": "24722793bd70c85355c3fcb75bae7e2e800730539535540ff9c452dd002fe4f3",
+  "reviewed_by": "Codex focused review for complete provider tool receipts",
+  "reason": "The Core change persists completed tool results without command artifacts, exposes authorized bounded output retrieval in graph-only and other provider chats, and sends compact receipts by default. Ninety collected Python tests cover receipt delivery and context, tool routing and reasoning, same-session output authorization, workspace output retrieval, and failures. The added regression proves a graph result is persisted and readable before its first compact replay.",
+  "exclusions": "No UI or native source changed. Frontend and browser layout tests do not inspect model-facing request payloads, so they are excluded. Unrelated backend tests and full suites are excluded. An isolated real-Core provider-wire run will verify the actual model request; production deployment and physical-device browser acceptance are outside this branch change.",
   "expected_tests": {
-    "python": 62,
+    "python": 90,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -16,7 +16,9 @@
     "tests/v3/test_in_turn_context_pruning.py",
     "tests/v3/test_chat_tool_loop.py",
     "tests/v3/test_reasoning_replay.py",
-    "tests/v3/test_tool_history_memory.py"
+    "tests/v3/test_tool_history_memory.py",
+    "tests/v3/test_workspace_tool_search.py",
+    "tests/v3/test_tool_failures.py"
   ],
   "frontend": [],
   "native": [],
