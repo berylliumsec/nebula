@@ -11,6 +11,7 @@ from nebula.v3.chat import (
     ChatConfigurationError,
     ChatRuntimeSwitchRequest,
     ChatService,
+    _goal_time_instruction,
 )
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalUpdate, GoalWrite
 from nebula.v3.context import estimate_model_request
@@ -48,6 +49,95 @@ def setup_goal(tmp_path):
         )
     )
     return store, ChatGoalService(store)
+
+
+def test_goal_time_limit_requires_at_least_thirty_minutes(tmp_path):
+    _, goals = setup_goal(tmp_path)
+    with pytest.raises(ValidationError, match="time_budget_seconds"):
+        GoalCreate(
+            objective="Short goal",
+            completion_criteria=["Done"],
+            time_budget_seconds=1799,
+        )
+    draft = goals.create(
+        "session",
+        GoalCreate(
+            objective="Timed goal",
+            completion_criteria=["Done"],
+            time_budget_seconds=1800,
+        ),
+    )
+    assert goals.read("session").time_budget_seconds == 1800
+    with pytest.raises(ValidationError, match="time_budget_seconds"):
+        GoalUpdate(
+            expected_revision=draft.revision,
+            objective=draft.objective,
+            completion_criteria=draft.completion_criteria,
+            time_budget_seconds=1799,
+        )
+
+
+def test_goal_time_reminders_use_active_time_and_escalate_at_five_minutes(tmp_path):
+    _, goals = setup_goal(tmp_path)
+    draft = goals.create(
+        "session",
+        GoalCreate(
+            objective="Timed goal",
+            completion_criteria=["Done"],
+            time_budget_seconds=1800,
+        ),
+    )
+    now = utc_now()
+    assert _goal_time_instruction(draft, now) == ""
+    running = goals.write(
+        "session", GoalWrite(expected_revision=draft.revision, action="start")
+    )
+    ten_minute_goal = running.model_copy(
+        update={"active_since": now - timedelta(minutes=20)}
+    )
+    assert "Wind down over the next few turns" in _goal_time_instruction(
+        ten_minute_goal, now
+    )
+    five_minute_goal = running.model_copy(
+        update={"active_since": now - timedelta(minutes=25)}
+    )
+    reminder = _goal_time_instruction(five_minute_goal, now)
+    assert "5 minutes or less" in reminder
+    assert "clean up" in reminder
+    assert (
+        _goal_time_instruction(
+            running.model_copy(update={"active_since": now - timedelta(minutes=30)}),
+            now,
+        )
+        == ""
+    )
+
+
+def test_five_minute_reminder_reaches_the_provider_request(tmp_path):
+    store, goals = setup_goal(tmp_path)
+    draft = goals.create(
+        "session",
+        GoalCreate(
+            objective="Timed goal",
+            completion_criteria=["Clean handoff"],
+            time_budget_seconds=1800,
+        ),
+    )
+    running = goals.write(
+        "session", GoalWrite(expected_revision=draft.revision, action="start")
+    )
+    store.update(
+        ChatGoal,
+        running.id,
+        {"elapsed_seconds": 25 * 60, "active_since": utc_now()},
+        expected_revision=running.revision,
+    )
+    chat = ChatService(
+        store, provider_factory=lambda _: FakeProvider("provider", local=False)
+    )
+    prepared = chat.prepare(_goal_request(running.id, "Continue"))
+    assert "5 minutes or less" in prepared.model_request.instructions
+    assert "clean up" in prepared.model_request.instructions
 
 
 def test_goal_content_can_be_edited_before_and_after_start(tmp_path):
@@ -567,7 +657,7 @@ def test_active_time_budget_pauses_before_dispatch_and_excludes_paused_time(tmp_
         GoalCreate(
             objective="Finish within active time",
             completion_criteria=["No dispatch after expiry"],
-            time_budget_seconds=10,
+            time_budget_seconds=1800,
         ),
     )
     running = goals.write(
@@ -576,7 +666,7 @@ def test_active_time_budget_pauses_before_dispatch_and_excludes_paused_time(tmp_
     running = store.update(
         ChatGoal,
         running.id,
-        {"active_since": utc_now() - timedelta(seconds=12)},
+        {"active_since": utc_now() - timedelta(seconds=1802)},
         expected_revision=running.revision,
     )
     provider = FakeProvider("provider", local=False)
@@ -598,7 +688,7 @@ def test_active_time_budget_pauses_before_dispatch_and_excludes_paused_time(tmp_
 
     exhausted = goals.get("session")
     assert exhausted.status == ChatGoalStatus.PAUSED
-    assert exhausted.elapsed_seconds >= 12
+    assert exhausted.elapsed_seconds >= 1802
     assert exhausted.active_since is None
     assert provider.requests == []
 
@@ -707,7 +797,7 @@ def test_paused_wall_time_does_not_consume_active_goal_budget(tmp_path, monkeypa
         GoalCreate(
             objective="Count active time only",
             completion_criteria=["Paused time is excluded"],
-            time_budget_seconds=10,
+            time_budget_seconds=1800,
         ),
     )
 

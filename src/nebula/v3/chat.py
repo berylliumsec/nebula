@@ -2001,6 +2001,31 @@ _GOAL_CONTINUE_INSTRUCTION = (
     "evidence. If it is not complete, continue making concrete progress toward "
     "the goal now. Do not stop merely to report status."
 )
+
+
+def _goal_time_instruction(goal: ChatGoal, now: datetime) -> str:
+    """Tell the model when a goal's active-time limit is approaching."""
+
+    if goal.time_budget_seconds is None:
+        return ""
+    remaining = goal.time_budget_seconds - goal.active_elapsed_seconds(now)
+    if remaining <= 0:
+        return ""
+    if remaining <= 5 * 60:
+        return (
+            "\n\nGoal time reminder: 5 minutes or less of active time remain. "
+            "Finish the current work, clean up any in-progress changes, and "
+            "give the operator a concise handoff before Core pauses the goal."
+        )
+    if remaining <= 10 * 60:
+        return (
+            "\n\nGoal time reminder: 10 minutes or less of active time remain. "
+            "Wind down over the next few turns, clean up in-progress work, "
+            "and prepare a concise handoff before Core pauses the goal."
+        )
+    return ""
+
+
 _REPLAYED_CALL_REFUSAL = (
     "This call already ran; its result is above. Use that result instead of "
     "calling it again, or answer directly."
@@ -5467,6 +5492,7 @@ class ChatService:
                 ensure_ascii=False,
             )
             instructions += goal_snapshot_instruction(self.store, goal)
+            instructions += _goal_time_instruction(goal, utc_now())
         project_instructions = self._project_instructions(engagement_id)
         instructions += project_instructions_text(project_instructions)
         instructions += skill_instructions(skill_snapshots)

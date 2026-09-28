@@ -79,6 +79,32 @@ it("creates a durable draft from explicit objective and criteria", async () => {
   expect(onChange).toHaveBeenCalledWith(draft);
 });
 
+it("requires a 30 minute active time limit and saves it in seconds", async () => {
+  const createChatGoal = vi.fn().mockResolvedValue({ ...draft, timeBudgetSeconds: 1800 });
+  const api = { createChatGoal } as unknown as ApiClient;
+  render(<DialogProvider><ProviderGoalPanel api={api} sessionId="session" onChange={vi.fn()} /></DialogProvider>);
+  fireEvent.click(screen.getByRole("button", { name: "Add goal" }));
+  fireEvent.change(screen.getByLabelText("Objective"), { target: { value: "Finish on time" } });
+  fireEvent.change(screen.getByLabelText("Completion criteria"), { target: { value: "Clean handoff" } });
+  fireEvent.click(screen.getByText("Limits", { exact: true }));
+  const timeLimit = screen.getByLabelText("Active time limit (minutes, 30 minimum)");
+  fireEvent.change(timeLimit, { target: { value: "29" } });
+  expect(screen.getByRole("button", { name: "Save draft" })).toBeDisabled();
+  fireEvent.change(timeLimit, { target: { value: "30" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  await waitFor(() => expect(createChatGoal).toHaveBeenCalledWith("session", {
+    objective: "Finish on time",
+    completionCriteria: ["Clean handoff"],
+    plan: [],
+    timeBudgetSeconds: 1800,
+  }));
+});
+
+it("shows the saved active time remaining", () => {
+  render(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={{ ...draft, status: "paused", elapsedSeconds: 1200, timeBudgetSeconds: 1800 }} onChange={vi.fn()} /></DialogProvider>);
+  expect(screen.getByText("10m left")).toBeVisible();
+});
+
 it("creates the conversation with its goal before the first message", async () => {
   const onCreate = vi.fn().mockResolvedValue(draft);
   const onChange = vi.fn();
