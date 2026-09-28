@@ -170,6 +170,9 @@ RETRIEVAL_TOOL_NAMES = frozenset(
     {
         "tool_output.search",
         "tool_output.read",
+        "research_result_catalog",
+        "research_result_search",
+        "research_result_read",
         "workspace.search",
         "workspace.read",
         "conversation.search",

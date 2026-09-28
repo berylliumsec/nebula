@@ -56,6 +56,7 @@ from .tool_results import (
     WorkspaceOutputService,
     artifact_ref,
 )
+from .research_results import ResearchResultService
 from .tools import (
     AmbiguousToolState,
     ApprovalRequired,
@@ -199,6 +200,42 @@ def command_specs(
             },
             output_schema=common_output,
             risk_class=RiskClass.LOCAL_READ,
+            budget_class="artifact_query",
+        ),
+        ToolSpec(
+            name="research_result_catalog",
+            parallelism=ParallelismPolicy.SAFE_READ,
+            description="List indexed, skipped, and incomplete artifacts for a durable research result handle.",
+            input_schema={"type": "object", "properties": {
+                "handle": {"type": "string", "minLength": 1, "maxLength": 160},
+            }, "required": ["handle"], "additionalProperties": False},
+            output_schema=common_output, risk_class=RiskClass.LOCAL_READ,
+            budget_class="artifact_query",
+        ),
+        ToolSpec(
+            name="research_result_search",
+            parallelism=ParallelismPolicy.SAFE_READ,
+            description="Search a durable research result by literal text or supported typed filters.",
+            input_schema={"type": "object", "properties": {
+                "handle": {"type": "string", "minLength": 1, "maxLength": 160},
+                "text": {"type": ["string", "null"], "minLength": 1, "maxLength": 4096},
+                "filters": {"type": "object", "additionalProperties": {"type": "string"}},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                "cursor": {"type": ["string", "null"]},
+            }, "required": ["handle"], "additionalProperties": False},
+            output_schema=common_output, risk_class=RiskClass.LOCAL_READ,
+            budget_class="artifact_query",
+        ),
+        ToolSpec(
+            name="research_result_read",
+            parallelism=ParallelismPolicy.SAFE_READ,
+            description="Read one hash-bound research result match with at most five context lines.",
+            input_schema={"type": "object", "properties": {
+                "handle": {"type": "string", "minLength": 1, "maxLength": 160},
+                "match_id": {"type": "string", "minLength": 1, "maxLength": 100},
+                "context_lines": {"type": "integer", "minimum": 0, "maximum": 5},
+            }, "required": ["handle", "match_id"], "additionalProperties": False},
+            output_schema=common_output, risk_class=RiskClass.LOCAL_READ,
             budget_class="artifact_query",
         ),
         ToolSpec(
@@ -592,6 +629,11 @@ class AutomationBroker:
         return durable
 
     def _retrieve(self, invocation: ToolInvocation) -> dict[str, Any]:
+        if invocation.tool_name.startswith("research_result_"):
+            return ResearchResultService().query(
+                invocation.tool_name.removeprefix("research_result_"),
+                invocation.arguments,
+            )
         if invocation.tool_name == "tool_output.search":
             return self.output_service.search(
                 engagement_id=invocation.engagement_id,

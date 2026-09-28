@@ -121,9 +121,15 @@ def test_background_command_issues_lan_results_url_and_api_key(tmp_path):
         replay = client.post(
             f"/api/v1/automation-processes/{started.process_id}/results",
             headers={"X-Nebula-Api-Key": started.results_api_key},
+            json={"status": "complete", "summary": "scan finished", "exit_code": 0},
+        )
+        assert replay.status_code == 200, replay.text
+        changed = client.post(
+            f"/api/v1/automation-processes/{started.process_id}/results",
+            headers={"X-Nebula-Api-Key": started.results_api_key},
             json={"status": "complete", "summary": "again"},
         )
-        assert replay.status_code == 409
+        assert changed.status_code == 409
 
     asyncio.run(scenario())
 
