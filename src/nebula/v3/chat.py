@@ -1579,9 +1579,10 @@ _CHAT_TOOL_INSTRUCTIONS = (
     """Answer the operator's request. Call supplied functions when their results
 are needed, and include helpful prose when appropriate. Request several
 independent functions in the same response; keep a call that needs an earlier
-result for a later response. Nebula runs a batch one call at a time and replays
-every result. A response without tool calls ends the turn. Tool results can be
-inspected with tool_output.search and tool_output.read."""
+result for a later response. Nebula runs a batch one call at a time. A response
+without tool calls ends the turn. Completed tool output with a retrieval path
+arrives as a compact receipt. Explicit bounded lookups and failures show their
+result once; later requests carry receipts. Read the artifact again if needed."""
     + BROWSER_MODEL_WORKFLOW
 )
 
@@ -2198,11 +2199,11 @@ def _replays_restart_unknown(
 def _cleared_tool_result(
     entry: Mapping[str, Any], output: dict[str, Any] | str
 ) -> dict[str, Any] | str:
-    """The receipt an older result is replayed as once a turn outgrows the window.
+    """The receipt an earlier result is replayed as after its first response.
 
     It keeps what the step was and where its full output is, as opencode's
     "[Old tool result content cleared]" and Codex's mid-turn compaction keep a
-    turn going. A result already smaller than its receipt stays as it is.
+    turn going. The receipt never carries the earlier output itself.
     """
 
     artifact_ids: list[str] = []
@@ -2215,15 +2216,16 @@ def _cleared_tool_result(
     result_artifact_id = entry.get("result_artifact_id")
     if isinstance(result_artifact_id, str) and result_artifact_id not in artifact_ids:
         artifact_ids.append(result_artifact_id)
-    note = (
-        "This earlier output was cleared from the request to fit the model's "
-        "context window. "
-        + (
-            "Use tool_output.search with this tool_call_id, or tool_output.read "
-            "with one of these artifact_ids, to see it again."
-            if artifact_ids
-            else "Call the tool again if its output is still needed."
-        )
+    arguments = entry.get("arguments")
+    if entry.get("name") == "tool_output.read" and isinstance(arguments, dict):
+        read_artifact_id = arguments.get("artifact_id")
+        if isinstance(read_artifact_id, str) and read_artifact_id not in artifact_ids:
+            artifact_ids.append(read_artifact_id)
+    note = "This output is represented by a compact receipt in this request. " + (
+        "Use tool_output.search with this tool_call_id, or tool_output.read "
+        "with one of these artifact_ids, to see it again."
+        if artifact_ids
+        else "Call the tool again if its output is still needed."
     )
     receipt: dict[str, Any] = {
         "status": str(entry.get("status") or "complete")[:100],
@@ -2239,8 +2241,42 @@ def _cleared_tool_result(
     )
     if found:
         receipt["found"] = found
-    whole = output if isinstance(output, str) else json.dumps(output, sort_keys=True)
-    return receipt if len(json.dumps(receipt)) < len(whole) else output
+    return receipt
+
+
+def _retrievable_tool_result(entry: Mapping[str, Any]) -> bool:
+    """Whether a compact replay still gives the model a way to inspect output."""
+
+    return bool(
+        entry.get("name") in RETRIEVAL_TOOL_NAMES
+        or entry.get("result_artifact_id")
+        or any(
+            isinstance(ref, dict) and ref.get("artifact_id")
+            for ref in entry.get("artifacts") or []
+        )
+    )
+
+
+def _default_receipt_call_ids(entries: Sequence[Mapping[str, Any]]) -> set[str]:
+    """Show ordinary tool receipts; show explicit lookups whole for one batch."""
+
+    if not entries:
+        return set()
+    newest = entries[-1]
+    newest_group = newest.get("response_group") or f"call:{newest.get('model_call_id')}"
+    return {
+        str(entry["model_call_id"])
+        for entry in entries
+        if _retrievable_tool_result(entry)
+        and (
+            (
+                entry.get("status") == "complete"
+                and entry.get("name") not in RETRIEVAL_TOOL_NAMES
+            )
+            or (entry.get("response_group") or f"call:{entry.get('model_call_id')}")
+            != newest_group
+        )
+    }
 
 
 def _reasoning_group(result: ModelToolResult) -> str:
@@ -9396,14 +9432,14 @@ class ChatService:
         *,
         compact_for_room: bool = False,
     ) -> ModelRequest:
-        """``request`` carrying the turn's results, the oldest cut to fit the window.
+        """``request`` carrying the latest results and receipts for earlier ones.
 
-        Every step re-sends the results before it, so a long turn outgrows any
-        finite window. Instead of failing with all its work unseen, the turn
-        replays its oldest results as receipts (``_cleared_tool_result``).
-        Every call keeps a result, so ids, batches and replayed reasoning are
-        unchanged. The newest result stays whole past the target while the
-        request fits the capacity: it is the one the model is deciding on.
+        Completed ordinary results with a retrieval path arrive as receipts.
+        Bounded lookups and failures are shown for the response that follows
+        their batch, then replayed as receipts (``_cleared_tool_result``).
+        Results without a retrieval path stay whole until capacity requires
+        clearing. Every call keeps a result, so ids, batches and replayed
+        reasoning are unchanged.
 
         Steps that left the recent window are folded into the turn's
         checkpoint (``ChatTurnLedger.compacted_history``), which advances in
@@ -9488,9 +9524,15 @@ class ChatService:
         checkpoint, replay_entries = self._compacted_turn_history(
             turn, limits, messages=request.messages
         )
+        sticky.update(_default_receipt_call_ids(replay_entries))
         fitted = replayed(checkpoint, replay_entries)
         if not fitted.tool_results:
             return fitted
+        # A browser capture's image travels on its result, not in its text.
+        # Keep that result available while it carries the current screenshot.
+        sticky.difference_update(
+            result.call_id for result in fitted.tool_results if result.attachments
+        )
         receipts = receipts_for(replay_entries)
         current = cleared(fitted, receipts, sticky)
         prepared.tool_step_tokens = _step_tokens(fitted, calibration)

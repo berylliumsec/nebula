@@ -160,6 +160,119 @@ def _checkpointed(request: ModelRequest) -> bool:
     )
 
 
+def test_tool_output_is_a_receipt_until_explicitly_read(tmp_path):
+    """A lookup excerpt is visible once; ordinary output is a receipt from start."""
+
+    store, service, prepared, _ = _prepared(tmp_path, [], ScanBroker())
+    turn = store.get(ChatTurn, "turn")
+    artifact_id = "artifact-1"
+    entries = [
+        {
+            "step": 0,
+            "model_call_id": "call-command",
+            "tool_call_id": "tool-command",
+            "response_group": "command",
+            "name": "safe_read",
+            "arguments": {"value": "one"},
+            "status": "complete",
+            "trusted_result": True,
+            "provider_result": json.dumps({"output": "large command output " * 200}),
+            "result_summary": "Command completed",
+            "result_artifact_id": artifact_id,
+        }
+    ]
+
+    def next_request():
+        current = turn.model_copy(update={"tool_history": list(entries)})
+        return service._with_tool_history(prepared, current, prepared.model_request)
+
+    first = next_request()
+    assert first.tool_results[0].output["output_cleared"] is True
+    assert first.tool_results[0].output["artifact_ids"] == [artifact_id]
+    assert "large command output" not in json.dumps(first.tool_results[0].output)
+
+    entries.append(
+        {
+            "step": 1,
+            "model_call_id": "call-read",
+            "tool_call_id": "tool-read",
+            "response_group": "read",
+            "name": "tool_output.read",
+            "arguments": {"artifact_id": artifact_id},
+            "status": "complete",
+            "trusted_result": True,
+            "provider_result": json.dumps({"lines": [{"text": "requested excerpt"}]}),
+            "result_summary": "Result fields: lines",
+        }
+    )
+    second = next_request()
+    assert second.tool_results[0].output["output_cleared"] is True
+    assert second.tool_results[1].output["lines"][0]["text"] == "requested excerpt"
+
+    entries.append(
+        {
+            "step": 2,
+            "model_call_id": "call-later",
+            "tool_call_id": "tool-later",
+            "response_group": "later",
+            "name": "safe_read",
+            "arguments": {"value": "two"},
+            "status": "complete",
+            "trusted_result": True,
+            "provider_result": json.dumps({"output": "later output " * 200}),
+            "result_summary": "Later command completed",
+            "result_artifact_id": "artifact-2",
+        }
+    )
+    third = next_request()
+    assert [result.output["output_cleared"] for result in third.tool_results] == [
+        True,
+        True,
+        True,
+    ]
+    assert third.tool_results[1].output["artifact_ids"] == [artifact_id]
+    assert "requested excerpt" not in json.dumps(third.tool_results[1].output)
+    assert "requested excerpt" in entries[1]["provider_result"]
+
+    entries.append(
+        {
+            "step": 3,
+            "model_call_id": "call-failed",
+            "tool_call_id": "tool-failed",
+            "response_group": "failed",
+            "name": "safe_read",
+            "arguments": {"value": "three"},
+            "status": "failed",
+            "trusted_result": True,
+            "provider_result": json.dumps({"detail": "Permission denied"}),
+            "result_summary": "Permission denied",
+            "result_artifact_id": "artifact-3",
+        }
+    )
+    failure = next_request()
+    assert failure.tool_results[-1].output["detail"] == "Permission denied"
+    assert failure.tool_results[-1].is_error is True
+
+    entries.append(
+        {
+            "step": 4,
+            "model_call_id": "call-after-failure",
+            "tool_call_id": "tool-after-failure",
+            "response_group": "after-failure",
+            "name": "safe_read",
+            "arguments": {"value": "four"},
+            "status": "complete",
+            "trusted_result": True,
+            "provider_result": json.dumps({"output": "final output"}),
+            "result_summary": "Final command completed",
+            "result_artifact_id": "artifact-4",
+        }
+    )
+    later = next_request()
+    assert later.tool_results[-2].output["output_cleared"] is True
+    assert later.tool_results[-2].output["summary"] == "Permission denied"
+
+
 def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
     """HIST-3: 20 × 7 KB results on a 32K window used to fail after 13 calls."""
 
@@ -185,9 +298,8 @@ def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
     routing = [r for r in requests if r.tool_choice == ToolChoice.AUTO]
     synthesis = [r for r in requests if r.tool_choice == ToolChoice.NONE]
     assert len(routing) == 21 and len(synthesis) == 1
-    # Before checkpointing every prior call is replayed. Once the deterministic
-    # checkpoint is present, the newest calls after it remain full: at least
-    # the latest eight provider groups. The routing instructions never change.
+    # Every call stays in the protocol until it is checkpointed, but ordinary
+    # outputs are receipts even in the newest group.
     assert len({request.instructions for request in routing}) == 1
     for step, request in enumerate(routing):
         expected = [f"call-{index}" for index in range(1, step + 1)]
@@ -198,28 +310,20 @@ def test_long_tool_turn_clears_old_results_instead_of_failing(tmp_path):
             assert _checkpointed(request)
     for request in (routing[-1], synthesis[0]):
         results = request.tool_results
-        cleared = [result for result in results if _cleared(result)]
-        # Checkpointing can make receipt clearing unnecessary. Otherwise the
-        # oldest replayed results are the cleared ones and the newest are whole.
-        if not cleared:
-            assert _checkpointed(request)
-            assert results[-1].output["observations"]
-            continue
-        assert len(cleared) < len(results)
-        assert results[: len(cleared)] == cleared
-        assert results[-1].output["observations"]
-        first = cleared[0].output
+        scans = [result for result in results if result.name == "safe_read"]
+        assert scans and all(_cleared(result) for result in scans)
+        first = scans[0].output
         first_entry = next(
             entry
             for entry in turn.tool_history
-            if entry["model_call_id"] == results[0].call_id
+            if entry["model_call_id"] == scans[0].call_id
         )
         assert first["tool_call_id"] == first_entry["tool_call_id"]
         assert first["artifact_ids"] == [first_entry["result_artifact_id"]]
         assert first["summary"] == first_entry["result_summary"]
         assert "tool_output.read" in first["note"]
         assert "tool_output.search" in first["note"]
-        assert not cleared[0].is_error
+        assert not scans[0].is_error
 
 
 def test_routing_that_cannot_fit_answers_from_results_instead_of_failing(
@@ -331,14 +435,8 @@ def _text_stream(text: str) -> httpx.Response:
     )
 
 
-def test_context_rejection_after_a_tool_step_clears_results_and_retries(tmp_path):
-    """ROUTE-13: a server smaller than its configured window rejects step 3.
-
-    The server holds one whole result. Routing step 3 carries two, is
-    rejected with a 400, and is sent once more with the older result cleared.
-    That result stays cleared for the rest of the turn, so the synthesis is
-    not rejected again. No tool runs twice.
-    """
+def test_default_receipts_avoid_context_rejection_after_tool_steps(tmp_path):
+    """Two large durable results fit a smaller server when sent as receipts."""
 
     accepted: list[dict] = []
     rejected: list[dict] = []
@@ -404,17 +502,14 @@ def test_context_rejection_after_a_tool_step_clears_results_and_retries(tmp_path
     assert done[-1]["message"]["content"] == ANSWER
     assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
     assert [call.arguments["value"] for call in broker.calls] == ["1", "2"]
-    # Routing step 3 was rejected once and retried; the synthesis kept the
-    # result that retry cleared. OpenAI-compatible automatic routing omits
-    # tool_choice on the wire.
-    assert [body.get("tool_choice") for body in rejected] == [None]
-    retried = [
+    assert not rejected
+    later = [
         body
         for body in accepted
         if sum(message["role"] == "tool" for message in body["messages"]) == 2
     ]
-    assert [body.get("tool_choice") for body in retried] == [None, "none"]
-    for body in retried:
+    assert [body.get("tool_choice") for body in later] == [None, "none"]
+    for body in later:
         first, second = [
             json.loads(message["content"])
             for message in body["messages"]
@@ -422,7 +517,8 @@ def test_context_rejection_after_a_tool_step_clears_results_and_retries(tmp_path
         ]
         assert first["output_cleared"] is True
         assert first["artifact_ids"] == ["artifact-1"]
-        assert second["observations"]
+        assert second["output_cleared"] is True
+        assert second["artifact_ids"] == ["artifact-2"]
         # The calls are replayed unchanged, under their own ids.
         calls = [
             call["id"]
@@ -590,7 +686,7 @@ def test_a_large_window_clears_tool_results_at_the_working_ceiling(
     assert max(estimate_model_request(req) for req in routing) < 2 * 12_000
 
 
-def test_a_configured_window_above_the_ceiling_keeps_tool_results_whole(
+def test_a_configured_window_above_the_ceiling_still_uses_default_receipts(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(context_module, "WORKING_CONTEXT_CEILING", 12_000)
@@ -608,8 +704,6 @@ def test_a_configured_window_above_the_ceiling_keeps_tool_results_whole(
         for request in _turn_requests(provider)
         if request.tool_choice == ToolChoice.AUTO
     ]
-    # The operator opted into the whole window: no result is cleared (the
-    # checkpoint still folds the oldest steps, as on any window), and requests
-    # grow past the ceiling.
-    assert not any(_cleared(r) for req in routing for r in req.tool_results)
-    assert max(estimate_model_request(req) for req in routing) > 2 * 12_000
+    # A larger configured window no longer opts back into repeated output.
+    assert all(_cleared(r) for req in routing for r in req.tool_results)
+    assert max(estimate_model_request(req) for req in routing) < 2 * 12_000
