@@ -1,22 +1,25 @@
 {
-  "change_digest": "d946a3ac4374e226655f547a1c1dbc946a9f9aaca610b540a55ba19ff04e1efc",
-  "reviewed_by": "Codex focused review for configurable OpenRouter profile routing",
-  "reason": "The diff adds an opt-in ZDR setting beside the existing OpenRouter upstream allowlist, filters account model discovery and endpoint limits by the saved policy, and invalidates route evidence when that policy changes. Seven collected Python cases cover payload isolation, account and endpoint filtering, failure closure, stale metadata and option validation. Twenty-one frontend cases across Settings and provider runtime cover dialog state, save behavior and stale discovery after policy changes. Three catalogued Playwright runs cover the visible settings control at desktop and emulated mobile widths across Chromium and WebKit. One real-Core production LAN browser run covers save, durable reload and screen state. The shared WorkspaceContext change rejects late health responses older than the saved profile revision; the provider runtime cases and real-Core journey cover its surrounding state contract.",
-  "exclusions": "No native code changed. Unrelated provider, chat, workspace and browser journeys and full suites are excluded. Physical mobile-device testing is unavailable locally and is not claimed by the selected emulated browser projects.",
+  "change_digest": "fd9d07d4474c1ab59a7277b2798dd4254e3c0997059bc99190d563c56fd8e0c7",
+  "reviewed_by": "Codex focused review for durable research result callback retrieval",
+  "reason": "The diff adds fixed result catalog, search, and read tools to callback turns and makes identical process result callbacks idempotent. Sixty-three selected Python cases cover command tool registration, retrieval validation, persisted callback handling, and automation runtime behavior. The callback browser journey checks the existing compact endpoint and resumed assistant activity on desktop and emulated mobile browsers. The real Core LAN reload check covers durable waiting-turn presentation after reconnect.",
+  "exclusions": "No UI source, frontend unit behavior, or native Nebula code changed, so those layers are empty. Unrelated provider, workspace, and browser journeys and full suites are excluded. Browser tests use emulation; physical mobile-device testing is not claimed. The real Core test covers retained activity visibility, while the Python integration tests cover exact webhook replay and retrieval tool availability.",
   "expected_tests": {
-    "python": 7,
-    "frontend": 21,
+    "python": 63,
+    "frontend": 0,
     "native": 0,
-    "playwright": 4
+    "playwright": 7
   },
-  "python_versions": ["3.12"],
-  "python": ["tests/v3/test_openrouter_profile_policy.py"],
-  "frontend": ["ui/src/pages/SettingsPage.test.tsx", "ui/src/api/providerRuntime.test.ts"],
+  "python": [
+    "tests/v3/test_automation_runtime.py",
+    "tests/v3/test_process_results_webhook.py",
+    "tests/v3/test_research_results.py"
+  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:openrouter-profile-policy/desktop",
-    "entry:openrouter-profile-policy/mobile-chromium",
-    "entry:openrouter-profile-policy/mobile-webkit",
-    "entry:openrouter-profile-policy-core/real-core"
+    "entry:automation-callback/desktop",
+    "entry:automation-callback/mobile-chromium-ledger-390",
+    "entry:automation-callback/mobile-webkit",
+    "entry:live-tool-activity/assistant-real-desktop"
   ]
 }
