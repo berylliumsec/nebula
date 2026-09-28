@@ -819,6 +819,35 @@ test("assistant upgrade real Core provider selections survive reload and restart
     const restoredSettings = page.getByRole("dialog", { name: "Assistant settings" });
     await expect(restoredSettings.getByRole("checkbox", { name: /Persist workspace/ })).toBeChecked();
     await expect(restoredSettings.getByRole("checkbox", { name: /restart-tools/ })).toBeChecked();
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
+
+    await writeProjectHook(workspaceRoot, "start-block", {
+      name: "Start block",
+      events: ["chat.turn.started"],
+      script: "#!/bin/sh\nprintf 'Review workspace owner\\n'\nprintf 'Bearer browser-secret-token\\n' >&2\nexit 3\n",
+      failurePolicy: "block",
+    });
+    await page.reload();
+    await page.getByRole("button", { name: "New chat", exact: true }).click();
+    await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
+    const blockedSettings = page.getByRole("dialog", { name: "Assistant settings" });
+    await blockedSettings.getByRole("checkbox", { name: /Start block/ }).check();
+    const persistSelection = blockedSettings.getByRole("checkbox", { name: /Persist workspace/ });
+    if (await persistSelection.isChecked()) await persistSelection.uncheck();
+    await page.getByRole("button", { name: "Close assistant settings" }).click();
+    await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Check this workspace before answering");
+    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    const blockedOutcome = page.locator(".chat-message.assistant .assistant-markdown").last();
+    await expect(blockedOutcome).toContainText("Model guidance after start-hook feedback", { timeout: 30_000 });
+    await expect(blockedOutcome).toContainText("the turn remained blocked");
+    await expect.poll(() => modelStub.requests.some(body => {
+      const messages = JSON.stringify(body.messages ?? []);
+      return messages.includes("stdout: Review workspace owner")
+        && messages.includes("stderr: Bearer [REDACTED]")
+        && !messages.includes("browser-secret-token");
+    })).toBe(true);
+    await page.reload();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Model guidance after start-hook feedback", { timeout: 20_000 });
   } finally {
     await api.dispose();
     await stopLocalModelStub(modelStub);

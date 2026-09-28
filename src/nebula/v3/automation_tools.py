@@ -43,7 +43,7 @@ from .domain import (
     ToolCallStatus,
 )
 from .missions import MissionComponents, MissionConfigurationError
-from .native_hooks import NativeHookError, run_project_tool_hooks
+from .native_hooks import NativeHookBlocked, NativeHookError, run_project_tool_hooks
 from .orchestration import SpecialistRole
 from .providers import ModelProvider
 from .storage import NebulaStore
@@ -63,6 +63,7 @@ from .tools import (
     RETRIEVAL_TOOL_NAMES,
     InvalidToolArguments,
     PolicyDenied,
+    ProjectHookPolicyDenied,
     StoreToolLedger,
     ToolBrokerError,
     ToolExecutionResult,
@@ -206,36 +207,61 @@ def command_specs(
             name="research_result_catalog",
             parallelism=ParallelismPolicy.SAFE_READ,
             description="List indexed, skipped, and incomplete artifacts for a durable research result handle.",
-            input_schema={"type": "object", "properties": {
-                "handle": {"type": "string", "minLength": 1, "maxLength": 160},
-            }, "required": ["handle"], "additionalProperties": False},
-            output_schema=common_output, risk_class=RiskClass.LOCAL_READ,
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "minLength": 1, "maxLength": 160},
+                },
+                "required": ["handle"],
+                "additionalProperties": False,
+            },
+            output_schema=common_output,
+            risk_class=RiskClass.LOCAL_READ,
             budget_class="artifact_query",
         ),
         ToolSpec(
             name="research_result_search",
             parallelism=ParallelismPolicy.SAFE_READ,
             description="Search a durable research result by literal text or supported typed filters.",
-            input_schema={"type": "object", "properties": {
-                "handle": {"type": "string", "minLength": 1, "maxLength": 160},
-                "text": {"type": ["string", "null"], "minLength": 1, "maxLength": 4096},
-                "filters": {"type": "object", "additionalProperties": {"type": "string"}},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                "cursor": {"type": ["string", "null"]},
-            }, "required": ["handle"], "additionalProperties": False},
-            output_schema=common_output, risk_class=RiskClass.LOCAL_READ,
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "text": {
+                        "type": ["string", "null"],
+                        "minLength": 1,
+                        "maxLength": 4096,
+                    },
+                    "filters": {
+                        "type": "object",
+                        "additionalProperties": {"type": "string"},
+                    },
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "cursor": {"type": ["string", "null"]},
+                },
+                "required": ["handle"],
+                "additionalProperties": False,
+            },
+            output_schema=common_output,
+            risk_class=RiskClass.LOCAL_READ,
             budget_class="artifact_query",
         ),
         ToolSpec(
             name="research_result_read",
             parallelism=ParallelismPolicy.SAFE_READ,
             description="Read one hash-bound research result match with at most five context lines.",
-            input_schema={"type": "object", "properties": {
-                "handle": {"type": "string", "minLength": 1, "maxLength": 160},
-                "match_id": {"type": "string", "minLength": 1, "maxLength": 100},
-                "context_lines": {"type": "integer", "minimum": 0, "maximum": 5},
-            }, "required": ["handle", "match_id"], "additionalProperties": False},
-            output_schema=common_output, risk_class=RiskClass.LOCAL_READ,
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "handle": {"type": "string", "minLength": 1, "maxLength": 160},
+                    "match_id": {"type": "string", "minLength": 1, "maxLength": 100},
+                    "context_lines": {"type": "integer", "minimum": 0, "maximum": 5},
+                },
+                "required": ["handle", "match_id"],
+                "additionalProperties": False,
+            },
+            output_schema=common_output,
+            risk_class=RiskClass.LOCAL_READ,
             budget_class="artifact_query",
         ),
         ToolSpec(
@@ -486,6 +512,20 @@ class AutomationBroker:
         if call.status == ToolCallStatus.PROPOSED:
             try:
                 await self._run_tool_hooks(invocation, call.id, "tool.before")
+            except NativeHookBlocked as exc:
+                await self.ledger.transition(
+                    call, ToolCallStatus.DENIED, error=str(exc)
+                )
+                raise ProjectHookPolicyDenied(
+                    PolicyDecision(
+                        effect=PolicyEffect.DENY,
+                        reason=str(exc),
+                        rule="project_native_hook",
+                    ),
+                    hook_id=exc.execution.hook_id,
+                    stdout=exc.execution.stdout,
+                    stderr=exc.execution.stderr,
+                ) from exc
             except (NativeHookError, OSError) as exc:
                 await self.ledger.transition(
                     call, ToolCallStatus.DENIED, error=str(exc)

@@ -40,6 +40,17 @@ class NativeHookError(RuntimeError):
     """A safe, operator-actionable native-hook failure."""
 
 
+class NativeHookBlocked(NativeHookError):
+    """A command was denied by a completed project hook attempt."""
+
+    def __init__(self, execution: NativeHookExecution) -> None:
+        self.execution = execution
+        super().__init__(
+            f"required project hook {execution.hook_id!r} did not complete: "
+            f"{execution.error or execution.status}"
+        )
+
+
 class _HookProcessOutcome(TypedDict):
     status: Literal["complete", "failed", "timed_out"]
     error: str | None
@@ -515,10 +526,7 @@ async def run_project_tool_hooks(
                         exc,
                         stage=event_name,
                     )
-            raise NativeHookError(
-                f"required project hook {snapshot.id!r} did not complete: "
-                f"{outcome.error or outcome.status}"
-            )
+            raise NativeHookBlocked(outcome)
     return executions
 
 
@@ -526,6 +534,7 @@ __all__ = [
     "HOOK_EVENTS",
     "NativeHookDescriptor",
     "NativeHookError",
+    "NativeHookBlocked",
     "NativeHookExecution",
     "NativeHookManifest",
     "NativeHookRunner",

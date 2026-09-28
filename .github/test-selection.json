@@ -1,25 +1,25 @@
 {
-  "change_digest": "fd9d07d4474c1ab59a7277b2798dd4254e3c0997059bc99190d563c56fd8e0c7",
-  "reviewed_by": "Codex focused review for durable research result callback retrieval",
-  "reason": "The diff adds fixed result catalog, search, and read tools to callback turns and makes identical process result callbacks idempotent. Sixty-three selected Python cases cover command tool registration, retrieval validation, persisted callback handling, and automation runtime behavior. The callback browser journey checks the existing compact endpoint and resumed assistant activity on desktop and emulated mobile browsers. The real Core LAN reload check covers durable waiting-turn presentation after reconnect.",
-  "exclusions": "No UI source, frontend unit behavior, or native Nebula code changed, so those layers are empty. Unrelated provider, workspace, and browser journeys and full suites are excluded. Browser tests use emulation; physical mobile-device testing is not claimed. The real Core test covers retained activity visibility, while the Python integration tests cover exact webhook replay and retrieval tool availability.",
+  "change_digest": "1c33d1fae9bfba634a42acb55c17689ba7a6522b20daf4ea64800a391507bf24",
+  "reviewed_by": "Codex focused review for blocked hook model feedback",
+  "reason": "Blocking provider hooks should inform the model without bypassing the block. Six new Python cases verify start-hook feedback, effectful completion-hook feedback without replay, real command-hook denial, bounded and redacted feedback, and delivery to the next provider request. Nineteen existing hook-turn and payload cases check completion, streaming, failure, and cancellation regressions. Five research-result cases cover formatting-only files needed by the tree-wide CI format gate. The selected real-Core browser journey now sends a blocked start-hook turn through the UI and verifies model feedback, failed outcome, and reload on desktop and emulated mobile browsers.",
+  "exclusions": "No frontend application or native source changed, so those unit layers are empty. Unrelated command, provider, and browser journeys and all full suites are excluded. Formatting-only files have no behavior changes. The browser journey covers blocked start-hook feedback; effectful completion and command-hook feedback are covered at the Core boundary by Python tests. Physical devices are unavailable in this environment.",
   "expected_tests": {
-    "python": 63,
+    "python": 30,
     "frontend": 0,
     "native": 0,
-    "playwright": 7
+    "playwright": 3
   },
   "python": [
-    "tests/v3/test_automation_runtime.py",
-    "tests/v3/test_process_results_webhook.py",
+    "tests/v3/test_blocking_hook_feedback.py",
+    "tests/v3/test_native_hook_turn_ends.py",
+    "tests/v3/test_hook_assistant_message.py",
     "tests/v3/test_research_results.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:automation-callback/desktop",
-    "entry:automation-callback/mobile-chromium-ledger-390",
-    "entry:automation-callback/mobile-webkit",
-    "entry:live-tool-activity/assistant-real-desktop"
+    "entry:provider-native-hooks-core/assistant-real-desktop",
+    "entry:provider-native-hooks-core/assistant-real-chromium-390",
+    "entry:provider-native-hooks-core/assistant-real-webkit-390"
   ]
 }

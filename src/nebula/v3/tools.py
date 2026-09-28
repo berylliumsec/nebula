@@ -86,6 +86,18 @@ class PolicyDenied(ToolBrokerError):
         self.decision = decision
 
 
+class ProjectHookPolicyDenied(PolicyDenied):
+    """A project hook denied a command before it ran; its output is untrusted."""
+
+    def __init__(
+        self, decision: PolicyDecision, *, hook_id: str, stdout: str, stderr: str
+    ) -> None:
+        super().__init__(decision)
+        self.hook_id = hook_id
+        self.hook_stdout = stdout
+        self.hook_stderr = stderr
+
+
 class ToolNotPermitted(PolicyDenied):
     """A call this caller or conversation may not make, refused before it ran.
 
@@ -2194,6 +2206,7 @@ __all__ = [
     "IdempotencyBehavior",
     "InvalidToolArguments",
     "PolicyDenied",
+    "ProjectHookPolicyDenied",
     "PreparedToolCall",
     "StoreToolLedger",
     "ToolBroker",
