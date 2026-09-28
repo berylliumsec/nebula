@@ -72,24 +72,40 @@ def test_zdr_catalog_intersects_account_models_with_exact_allowed_endpoints():
         if path == "/api/v1/key":
             return httpx.Response(200, json={"data": {}})
         if path == "/api/v1/models/user":
-            return httpx.Response(200, json={"data": [
-                {"id": "author/model"}, {"id": "author/other"},
-                {"id": "private/account-only"},
-            ]})
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"id": "author/model"},
+                        {"id": "author/other"},
+                        {"id": "private/account-only"},
+                    ]
+                },
+            )
         if path == "/api/v1/providers":
-            return httpx.Response(200, json={"data": [
-                {"name": "Relace", "slug": "relace"},
-                {"name": "Wafer", "slug": "wafer"},
-            ]})
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"name": "Relace", "slug": "relace"},
+                        {"name": "Wafer", "slug": "wafer"},
+                    ]
+                },
+            )
         if path == "/api/v1/endpoints/zdr":
-            return httpx.Response(200, json=_zdr_rows(
-                ("author/model", "wafer/fp8"),
-                ("author/other", "relace/fp8"),
-                ("outside/account", "relace/fp8"),
-            ))
+            return httpx.Response(
+                200,
+                json=_zdr_rows(
+                    ("author/model", "wafer/fp8"),
+                    ("author/other", "relace/fp8"),
+                    ("outside/account", "relace/fp8"),
+                ),
+            )
         raise AssertionError(path)
 
-    health = asyncio.run(_provider(zdr=True, allowed=("relace",), handler=handler).health())
+    health = asyncio.run(
+        _provider(zdr=True, allowed=("relace",), handler=handler).health()
+    )
 
     assert health.healthy is True
     assert health.models == ["author/other"]
@@ -119,24 +135,34 @@ def test_zdr_catalog_fails_closed_when_endpoint_directory_fails():
 def test_route_limits_intersect_exact_zdr_tags_and_allowed_upstreams():
     def handler(request):
         if request.url.path == "/api/v1/endpoints/zdr":
-            return httpx.Response(200, json=_zdr_rows(
-                ("author/model", "relace/zdr"),
-                ("author/model", "wafer/zdr"),
-                ("author/other", "relace/other"),
-            ))
+            return httpx.Response(
+                200,
+                json=_zdr_rows(
+                    ("author/model", "relace/zdr"),
+                    ("author/model", "wafer/zdr"),
+                    ("author/other", "relace/other"),
+                ),
+            )
         assert request.url.path.endswith("/models/author/model/endpoints")
-        return httpx.Response(200, json={"data": {
-            "id": "author/model",
-            "endpoints": [
-                _endpoint("relace/zdr"),
-                _endpoint("relace/ordinary"),
-                _endpoint("wafer/zdr"),
-            ],
-        }})
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "id": "author/model",
+                    "endpoints": [
+                        _endpoint("relace/zdr"),
+                        _endpoint("relace/ordinary"),
+                        _endpoint("wafer/zdr"),
+                    ],
+                }
+            },
+        )
 
-    routes = asyncio.run(_provider(
-        zdr=True, allowed=("relace",), handler=handler
-    ).openrouter_route_limits("author/model"))
+    routes = asyncio.run(
+        _provider(
+            zdr=True, allowed=("relace",), handler=handler
+        ).openrouter_route_limits("author/model")
+    )
 
     assert [(route.provider_slug, route.context_window) for route in routes] == [
         ("relace", 128_000)
@@ -147,29 +173,48 @@ def test_route_limits_reject_when_allowed_upstream_has_no_zdr_endpoint():
     def handler(request):
         if request.url.path == "/api/v1/endpoints/zdr":
             return httpx.Response(200, json=_zdr_rows(("author/model", "wafer/zdr")))
-        return httpx.Response(200, json={"data": {
-            "id": "author/model", "endpoints": [_endpoint("relace/ordinary")],
-        }})
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "id": "author/model",
+                    "endpoints": [_endpoint("relace/ordinary")],
+                }
+            },
+        )
 
     with pytest.raises(ProviderError, match="No ZDR OpenRouter endpoints"):
-        asyncio.run(_provider(
-            zdr=True, allowed=("relace",), handler=handler
-        ).openrouter_route_limits("author/model"))
+        asyncio.run(
+            _provider(
+                zdr=True, allowed=("relace",), handler=handler
+            ).openrouter_route_limits("author/model")
+        )
 
 
 def test_policy_change_discards_old_catalog_and_verification():
     current = ProviderProfile(
-        name="OpenRouter", provider_type="openrouter", metadata={
+        name="OpenRouter",
+        provider_type="openrouter",
+        metadata={
             "options": {"openrouter_providers": ["wafer"]},
-            "model_descriptors": [{"id": "author/model", "route_limits": [{"provider_slug": "wafer"}]}],
-            "model_catalog_revision": "old", "route_catalog_revision": "old",
+            "model_descriptors": [
+                {"id": "author/model", "route_limits": [{"provider_slug": "wafer"}]}
+            ],
+            "model_catalog_revision": "old",
+            "route_catalog_revision": "old",
         },
     )
-    candidate = current.model_copy(update={
-        "metadata": {**current.metadata, "options": {
-            "openrouter_providers": ["relace"], "openrouter_zdr": True,
-        }}
-    })
+    candidate = current.model_copy(
+        update={
+            "metadata": {
+                **current.metadata,
+                "options": {
+                    "openrouter_providers": ["relace"],
+                    "openrouter_zdr": True,
+                },
+            }
+        }
+    )
 
     updated = _invalidate_provider_verification(current, candidate)
 
@@ -181,6 +226,10 @@ def test_policy_change_discards_old_catalog_and_verification():
 
 def test_zdr_option_requires_a_boolean():
     with pytest.raises(ValueError, match="openrouter_zdr must be a boolean"):
-        ProviderProfile(name="OpenRouter", provider_type="openrouter", metadata={
-            "options": {"openrouter_zdr": "true"},
-        })
+        ProviderProfile(
+            name="OpenRouter",
+            provider_type="openrouter",
+            metadata={
+                "options": {"openrouter_zdr": "true"},
+            },
+        )

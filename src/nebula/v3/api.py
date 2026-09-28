@@ -13092,7 +13092,11 @@ def _invalidate_provider_verification(
     if routing_changed:
         # The cached model catalog and endpoint limits describe the previous
         # routing policy. Refreshing health will rebuild the eligible catalog.
-        for key in ("model_descriptors", "model_catalog_revision", "route_catalog_revision"):
+        for key in (
+            "model_descriptors",
+            "model_catalog_revision",
+            "route_catalog_revision",
+        ):
             metadata.pop(key, None)
     verifications = {} if changed else current.capability_verifications
     has_verified_model = any(

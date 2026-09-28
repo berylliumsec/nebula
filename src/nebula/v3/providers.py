@@ -4594,7 +4594,8 @@ class OpenAICompatibleProvider(ModelProvider):
                         if not allowed or tag.split("/", 1)[0] in allowed
                     }
                     descriptors = [
-                        item for item in descriptors
+                        item
+                        for item in descriptors
                         if item.id in eligible_models
                         or item.alias_target in eligible_models
                     ]
@@ -4808,7 +4809,8 @@ class OpenAICompatibleProvider(ModelProvider):
                         "data": {
                             **data,
                             "endpoints": [
-                                item for item in data["endpoints"]
+                                item
+                                for item in data["endpoints"]
                                 if isinstance(item, dict)
                                 and (model, item.get("tag")) in zdr_routes
                             ],
