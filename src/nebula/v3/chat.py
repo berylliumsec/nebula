@@ -5481,16 +5481,18 @@ class ChatService:
         mcp_profiles: tuple[McpServerProfile, ...] = ()
         if request.mcp_server_ids:
             try:
-                selected_engagement = self.store.get(Engagement, engagement_id)
-                selected_scope = (
-                    self.store.get(ScopePolicy, selected_engagement.scope_policy_id)
-                    if selected_engagement.scope_policy_id
-                    else ScopePolicy(engagement_id=selected_engagement.id)
-                )
+                bypass_permissions = False
+                if engagement_id:
+                    selected_engagement = self.store.get(Engagement, engagement_id)
+                    if selected_engagement.scope_policy_id:
+                        selected_scope = self.store.get(
+                            ScopePolicy, selected_engagement.scope_policy_id
+                        )
+                        bypass_permissions = selected_scope.bypass_permissions
                 mcp_profiles = resolve_mcp_profiles(
                     self.store,
                     request.mcp_server_ids,
-                    bypass_permissions=selected_scope.bypass_permissions,
+                    bypass_permissions=bypass_permissions,
                 )
             except (McpProbeError, ValueError) as exc:
                 raise ChatConfigurationError(str(exc)) from exc
