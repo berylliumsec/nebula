@@ -93,6 +93,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   const [plan, setPlan] = useState("");
   const [tokenBudget, setTokenBudget] = useState("");
   const [timeBudget, setTimeBudget] = useState("");
+  const invalidTimeBudget = timeBudget !== "" && (!Number.isInteger(Number(timeBudget)) || Number(timeBudget) < 30);
   const [stepBudget, setStepBudget] = useState("");
   const [childBudget, setChildBudget] = useState("");
   const [transition, setTransition] = useState<"block" | "complete">();
@@ -177,7 +178,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
 
   const create = async () => {
     const completionCriteria = criteria.split("\n").map(item => item.trim()).filter(Boolean);
-    if (!objective.trim() || !completionCriteria.length || busy) return;
+    if (!objective.trim() || !completionCriteria.length || invalidTimeBudget || busy) return;
     setBusy(true); setError(undefined);
     try {
       const draft: ProviderGoalDraft = {
@@ -218,7 +219,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   const saveGoal = async () => {
     if (!goal || !sessionId || busy) return;
     const completionCriteria = criteria.split("\n").map(item => item.trim()).filter(Boolean);
-    if (!objective.trim() || !completionCriteria.length) return;
+    if (!objective.trim() || !completionCriteria.length || invalidTimeBudget) return;
     setBusy(true); setError(undefined);
     try {
       onChange(await api.updateChatGoal(sessionId, {
@@ -317,11 +318,11 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
       <label>Plan<textarea value={plan} placeholder="One optional step per line" onChange={event => setPlan(event.target.value)} /></label>
       <details><summary>Limits</summary><div className="chat-goal-limits">
         <label>Token budget<input type="number" min="1" value={tokenBudget} onChange={event => setTokenBudget(event.target.value)} /></label>
-        <label>Time budget (minutes)<input type="number" min="1" value={timeBudget} onChange={event => setTimeBudget(event.target.value)} /></label>
+        <label>Active time limit (minutes, 30 minimum)<input type="number" min="30" step="1" value={timeBudget} onChange={event => setTimeBudget(event.target.value)} /></label>
         <label>Step budget<input type="number" min="1" value={stepBudget} onChange={event => setStepBudget(event.target.value)} /></label>
         <label>Child budget<input type="number" min="0" value={childBudget} onChange={event => setChildBudget(event.target.value)} /></label>
       </div></details>
-      <div><button className="button secondary" type="button" onClick={() => setExpanded(false)}>Cancel</button><button className="button primary" type="button" disabled={busy || !objective.trim() || !criteria.trim()} onClick={() => void create()}>{busy ? <LoaderCircle className="spin" size={14} /> : <Flag size={14} />} Save draft</button></div>
+      <div><button className="button secondary" type="button" onClick={() => setExpanded(false)}>Cancel</button><button className="button primary" type="button" disabled={busy || invalidTimeBudget || !objective.trim() || !criteria.trim()} onClick={() => void create()}>{busy ? <LoaderCircle className="spin" size={14} /> : <Flag size={14} />} Save draft</button></div>
     </div>}
     {error && <p role="alert">{error}</p>}
   </section>;
@@ -335,7 +336,7 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
   const displayedTokens = goal.usage.totalTokens + liveTokens;
   const tokenLabel = liveTokens > 0 ? `~${displayedTokens.toLocaleString()} tokens` : `${displayedTokens.toLocaleString()} tokens`;
   return <section className={`chat-goal-panel${detailsOpen ? "" : " is-collapsed"}`} aria-label="Conversation goal" data-guide="goal-panel">
-    <header><button className="chat-goal-toggle" type="button" aria-expanded={detailsOpen} aria-controls="chat-goal-details" aria-label={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} title={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} onClick={() => setDetailsOpen(value => !value)}><ChevronDown size={17} aria-hidden="true" /></button><span className="chat-goal-heading"><Flag size={15} aria-hidden="true" /><strong title={goal.objective}>{goal.objective}</strong></span><small><span className={`chat-goal-status ${goal.status}`}>{goal.status.replaceAll("_", " ")}</span><span className="chat-goal-step">step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""}</span><span title={liveTokens > 0 ? "Estimated while this turn streams; Core replaces it with exact provider usage when the turn settles." : undefined}>{tokenLabel}</span><span>{Math.floor(activeSeconds(goal, tick))}s active</span>{goal.childBudget !== undefined && <span>{goal.childrenStarted}/{goal.childBudget} children</span>}<span>{goal.skillSnapshots.length} skills</span></small></header>
+    <header><button className="chat-goal-toggle" type="button" aria-expanded={detailsOpen} aria-controls="chat-goal-details" aria-label={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} title={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} onClick={() => setDetailsOpen(value => !value)}><ChevronDown size={17} aria-hidden="true" /></button><span className="chat-goal-heading"><Flag size={15} aria-hidden="true" /><strong title={goal.objective}>{goal.objective}</strong></span><small><span className={`chat-goal-status ${goal.status}`}>{goal.status.replaceAll("_", " ")}</span><span className="chat-goal-step">step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""}</span><span title={liveTokens > 0 ? "Estimated while this turn streams; Core replaces it with exact provider usage when the turn settles." : undefined}>{tokenLabel}</span><span>{Math.floor(activeSeconds(goal, tick))}s active</span>{goal.timeBudgetSeconds !== undefined && <span>{Math.max(0, Math.ceil((goal.timeBudgetSeconds - activeSeconds(goal, tick)) / 60))}m left</span>}{goal.childBudget !== undefined && <span>{goal.childrenStarted}/{goal.childBudget} children</span>}<span>{goal.skillSnapshots.length} skills</span></small></header>
     {goal.blockedReason && <p role="status">{goal.blockedReason}</p>}
     <div id="chat-goal-details" hidden={!detailsOpen} className="chat-goal-details">
     {!terminal && <div className="chat-goal-actions">
@@ -350,11 +351,11 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
       <label>Plan<textarea value={plan} placeholder="One optional step per line" onChange={event => setPlan(event.target.value)} /></label>
       <details><summary>Limits</summary><div className="chat-goal-limits">
         <label>Token budget<input type="number" min="1" value={tokenBudget} onChange={event => setTokenBudget(event.target.value)} /></label>
-        <label>Time budget (minutes)<input type="number" min="1" value={timeBudget} onChange={event => setTimeBudget(event.target.value)} /></label>
+        <label>Active time limit (minutes, 30 minimum)<input type="number" min="30" step="1" value={timeBudget} onChange={event => setTimeBudget(event.target.value)} /></label>
         <label>Step budget<input type="number" min="1" value={stepBudget} onChange={event => setStepBudget(event.target.value)} /></label>
         <label>Child budget<input type="number" min="0" value={childBudget} onChange={event => setChildBudget(event.target.value)} /></label>
       </div></details>
-      <div><button className="button quiet" type="button" disabled={busy} onClick={() => setEditingGoal(false)}>Back</button><button className="button primary" type="button" disabled={busy || !objective.trim() || !criteria.trim()} onClick={() => void saveGoal()}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : null} Save changes</button></div>
+      <div><button className="button quiet" type="button" disabled={busy} onClick={() => setEditingGoal(false)}>Back</button><button className="button primary" type="button" disabled={busy || invalidTimeBudget || !objective.trim() || !criteria.trim()} onClick={() => void saveGoal()}>{busy ? <LoaderCircle className="spin" size={14} aria-hidden="true" /> : null} Save changes</button></div>
     </div>}
     {editingSkills && !terminal && <div className="chat-goal-form">
       <fieldset><legend>Goal skills</legend>{skillOptions.length ? skillOptions.map(skill => <label key={skill.path}><input type="checkbox" checked={selectedSkillPaths.includes(skill.path)} onChange={event => setSelectedSkillPaths(current => event.target.checked ? [...current, skill.path] : current.filter(path => path !== skill.path))} /> <span><strong>{skill.name}</strong> <small>{skill.source} · {skill.path}{goal.skillSnapshots.some(item => item.path === skill.path) && !(skills ?? []).some(item => item.path === skill.path) ? " · retained snapshot; source unavailable" : ""}</small></span></label>) : <p>No skills are currently available.</p>}</fieldset>

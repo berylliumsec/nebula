@@ -1,30 +1,24 @@
 {
-  "change_digest": "2ecad5aecc8ff225cdb12955fce9967992ccf888f8f616bb6fd5b346a12c9f1b",
-  "reviewed_by": "Codex focused review for durable project Assistant defaults",
-  "reason": "New-chat settings are now stored on the project in Core and restored only for fresh conversations. The selected Core API case covers patch validation, independent fields, durability and project isolation. Seven frontend cases cover runtime fallback plus the Assistant settings modal, new-chat reset, and remount behavior. Eight real-Core production-LAN journeys exercise save, New chat, refresh, and the persisted controls in desktop Chromium and emulated mobile Chromium/WebKit at 320/390/430 px boundaries.",
-  "exclusions": "No full Python, frontend, native, or Playwright suite was authorized. Existing conversation streaming, provider execution, desktop packaging, and unrelated workspace journeys are excluded because this change only writes project defaults and reads them for unattached chats; existing-session settings remain session-owned. Native code is unchanged. Physical-device browser testing is unavailable; mobile checks are emulated. The real-Core journey uses an inert harness fixture and does not send a model turn.",
+  "change_digest": "cfa8e6a1883a868818360c2bc471515be0cff51fb538b2025e1f3c9a4c60fd27",
+  "reviewed_by": "Codex focused review for goal active-time limits and model reminders",
+  "reason": "The goal schema, provider instructions, and goal panel change. The selected Core goal file covers 30-minute validation, active-time accounting, 10- and 5-minute reminders, provider instruction delivery, and expiry pause. The panel file covers create/edit and countdown rendering. The selected production real-Core goal lifecycle journey covers the saved limit, refresh, start, pause, resume, desktop and mobile LAN browser entry.",
+  "exclusions": "No full suite was authorized. Unrelated provider, project, native, and browser journeys are excluded. Native runtime is untouched. Physical-device browser testing is unavailable here; the selected mobile projects use emulation. The real-Core journey uses a local model stub and does not prove live third-party provider behavior.",
   "expected_tests": {
-    "python": 1,
-    "frontend": 7,
+    "python": 23,
+    "frontend": 19,
     "native": 0,
-    "playwright": 8
+    "playwright": 3
   },
   "python": [
-    "tests/v3/test_api_crud_validation.py::test_assistant_defaults_are_project_scoped_and_patch_independently"
+    "tests/v3/test_chat_goals.py"
   ],
   "frontend": [
-    "ui/src/api/assistantDefaults.test.ts",
-    "ui/src/App.subagentChoice.test.tsx"
+    "ui/src/components/ProviderGoalPanel.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:assistant-defaults/assistant-real-desktop",
-    "entry:assistant-defaults/assistant-real-compact",
-    "entry:assistant-defaults/assistant-real-chromium-320",
-    "entry:assistant-defaults/assistant-real-chromium-390",
-    "entry:assistant-defaults/assistant-real-chromium-430",
-    "entry:assistant-defaults/assistant-real-webkit-320",
-    "entry:assistant-defaults/assistant-real-webkit-390",
-    "entry:assistant-defaults/assistant-real-webkit-430"
+    "entry:provider-goal-lifecycle-core/assistant-real-desktop",
+    "entry:provider-goal-lifecycle-core/assistant-real-chromium-390",
+    "entry:provider-goal-lifecycle-core/assistant-real-webkit-390"
   ]
 }

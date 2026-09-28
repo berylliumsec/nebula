@@ -41,7 +41,7 @@ class GoalCreate(BaseModel):
     completion_criteria: list[str] = Field(min_length=1, max_length=50)
     plan: list[str] = Field(default_factory=list, max_length=200)
     token_budget: int | None = Field(default=None, ge=1)
-    time_budget_seconds: int | None = Field(default=None, ge=1)
+    time_budget_seconds: int | None = Field(default=None, ge=30 * 60)
     step_budget: int | None = Field(default=None, ge=1)
     child_budget: int | None = Field(default=None, ge=0, le=CHAT_GOAL_CHILD_LIMIT)
 
