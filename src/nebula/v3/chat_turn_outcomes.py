@@ -102,6 +102,17 @@ def turn_outcome_text(
                     candidate,
                 ]
             )
+    start_resolution = turn.request_snapshot.get("start_hook_resolution")
+    if isinstance(start_resolution, dict):
+        candidate = _clip(str(start_resolution.get("candidate") or ""), 3_500)
+        if candidate:
+            lines.extend(
+                [
+                    "Model guidance after start-hook feedback "
+                    "(the turn remained blocked):",
+                    candidate,
+                ]
+            )
     steps = [
         entry
         for entry in (turn.tool_history if history is None else history)

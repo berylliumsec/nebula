@@ -1627,17 +1627,28 @@ class AutomationRuntimeManager:
         if not isinstance(expected, str) or not hmac.compare_digest(expected, provided):
             raise AutomationPolicyDenied("invalid results API key")
         if execution.metadata.get("results_received"):
-            effective_exit = request.exit_code if request.exit_code is not None else (0 if request.status == "complete" else 1)
-            recorded_status = "complete" if execution.status == CommandExecutionStatus.COMPLETED else "failed"
+            effective_exit = (
+                request.exit_code
+                if request.exit_code is not None
+                else (0 if request.status == "complete" else 1)
+            )
+            recorded_status = (
+                "complete"
+                if execution.status == CommandExecutionStatus.COMPLETED
+                else "failed"
+            )
             if (
                 recorded_status == request.status
                 and execution.exit_code == effective_exit
                 and execution.metadata.get("results_summary") == request.summary
                 and (execution.metadata.get("results_output") or {}) == request.output
-                and (execution.metadata.get("results_stdout") or "") == request.stdout[: 64 * 1024]
+                and (execution.metadata.get("results_stdout") or "")
+                == request.stdout[: 64 * 1024]
             ):
                 return execution
-            raise ConflictError("different results were already recorded for this process")
+            raise ConflictError(
+                "different results were already recorded for this process"
+            )
         if execution.status not in {
             CommandExecutionStatus.RUNNING,
             CommandExecutionStatus.INTERRUPTED,
