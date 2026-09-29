@@ -10562,6 +10562,7 @@ def create_app(
             harness_session_id = harness_runtime.fork_session(
                 source.harness_session_id,
                 reason=f"conversation fork through {request.through_message_id}",
+                allow_active=request.side_chat,
             ).id
         try:
             return chat_service().fork_session(

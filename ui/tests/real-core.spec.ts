@@ -3079,6 +3079,63 @@ test("assistant upgrade side chat inherits Core history and replies independentl
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });
 
+test("assistant upgrade side chat opens during a running Core turn with its saved question", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub({streamDelayMs: 20_000});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const providerResponse = await api.post("providers", {data: {name: "Active side chat", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const response = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Original research question"}], include_knowledge: false, stream: false}});
+    expect(response.ok(), await response.text()).toBe(true);
+    const parent = await response.json() as {session_id: string};
+    const pairingApi = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    const pairing = await (await pairingApi.post("auth/pairings", {data: {name: "Active side chat browser"}})).json() as {secret: string; confirmation_code: string};
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Active side chat browser");
+    await page.getByRole("button", {name: "Pair device"}).click();
+    await expect(coreReady(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}`);
+    const main = page.locator(".session-workspace > .chat-panel");
+    await expect(main.locator(".chat-message.operator")).toContainText("Original research question");
+    await main.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Question sent while the main turn runs");
+    await main.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(main.getByRole("button", {name: "Stop response", exact: true})).toBeVisible({timeout: 20_000});
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      await page.getByRole("button", {name: "Conversation actions"}).click();
+      const action = page.getByRole("menuitem", {name: /Open side chat/});
+      await expect(action).toBeEnabled();
+      await action.click();
+    } else {
+      const action = page.getByRole("button", {name: "Open side chat", exact: true});
+      await expect(action).toBeEnabled();
+      await action.click();
+    }
+    const side = page.getByRole("region", {name: "Side chat"});
+    await expect(side).toBeVisible({timeout: 10_000});
+    const parentPending = await (await api.get(`chat/sessions/${parent.session_id}/pending-turn?view=status`)).json() as {status: string} | null;
+    expect(parentPending?.status).toBe("routing");
+    await expect(side.getByRole("button", {name: "Inherited history · 3 messages"})).toBeVisible();
+    const sideId = new URL(page.url()).searchParams.get("sideChat");
+    expect(sideId).toBeTruthy();
+    const sideMessages = await (await api.get(`chat/sessions/${sideId}/messages`)).json() as Array<{content: string; source_message_id?: string}>;
+    expect(sideMessages.map(item => item.content)).toEqual([
+      "Original research question", "Real Core retained the exact research context.",
+      "Question sent while the main turn runs",
+    ]);
+    expect(sideMessages.every(item => Boolean(item.source_message_id))).toBe(true);
+    await expect.poll(async () => (await (await api.get(`chat/sessions/${parent.session_id}/pending-turn`)).json()), {timeout: 30_000}).toBeNull();
+    await page.reload();
+    await expect(side).toBeVisible({timeout: 20_000});
+    await expect(side.getByRole("button", {name: "Inherited history · 3 messages"})).toBeVisible();
+    await testInfo.attach("active-side-chat-real-core", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), parentId: parent.session_id, sideId}), contentType: "application/json"});
+  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+});
+
 test("assistant upgrade production LAN names an active durable conversation", async () => {
   test.setTimeout(90_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});

@@ -13367,7 +13367,7 @@ class ChatService:
         """Create an independent transcript branch with explicit provenance."""
 
         source = self.store.get(ChatSession, session_id)
-        if self.pending_turn(session_id) is not None:
+        if not side_chat and self.pending_turn(session_id) is not None:
             raise ChatHistoryConflict(
                 "conversation cannot be forked while a response is active"
             )
@@ -13455,7 +13455,7 @@ class ChatService:
             fork,
             boundary.sequence - (1 if before_message_id else 0),
         )
-        if source.backend == ChatBackend.PROVIDER:
+        if source.backend == ChatBackend.PROVIDER and not side_chat:
             try:
                 goal = ChatGoalService(self.store).get(source.id)
             except (

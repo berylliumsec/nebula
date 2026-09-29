@@ -9222,14 +9222,24 @@ class HarnessRuntimeService:
             expected_revision=replacement.revision,
         )
 
-    def fork_session(self, session_id: str, *, reason: str) -> HarnessSession:
-        """Create a public, independent vendor session branch."""
+    def fork_session(
+        self, session_id: str, *, reason: str, allow_active: bool = False
+    ) -> HarnessSession:
+        """Create a vendor branch; side chats may snapshot an active source.
+
+        The new session starts without an external vendor binding, and the
+        copied chat messages are handed off when its first turn begins.
+        """
 
         session = self.store.get(HarnessSession, session_id)
-        if session.status in {
-            HarnessSessionStatus.RUNNING,
-            HarnessSessionStatus.WAITING_APPROVAL,
-        }:
+        if (
+            session.status
+            in {
+                HarnessSessionStatus.RUNNING,
+                HarnessSessionStatus.WAITING_APPROVAL,
+            }
+            and not allow_active
+        ):
             raise HarnessStateError(
                 "harness session cannot be forked while a turn is active"
             )
