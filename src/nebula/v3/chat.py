@@ -2003,6 +2003,18 @@ _GOAL_CONTINUE_INSTRUCTION = (
 )
 
 
+_GOAL_TIME_FIVE_MINUTE_REMINDER = (
+    "\n\nGoal time reminder: 5 minutes or less of active time remain. "
+    "Finish the current work, clean up any in-progress changes, and "
+    "give the operator a concise handoff before Core pauses the goal."
+)
+_GOAL_TIME_TEN_MINUTE_REMINDER = (
+    "\n\nGoal time reminder: 10 minutes or less of active time remain. "
+    "Wind down over the next few turns, clean up in-progress work, "
+    "and prepare a concise handoff before Core pauses the goal."
+)
+
+
 def _goal_time_instruction(goal: ChatGoal, now: datetime) -> str:
     """Tell the model when a goal's active-time limit is approaching."""
 
@@ -2012,17 +2024,9 @@ def _goal_time_instruction(goal: ChatGoal, now: datetime) -> str:
     if remaining <= 0:
         return ""
     if remaining <= 5 * 60:
-        return (
-            "\n\nGoal time reminder: 5 minutes or less of active time remain. "
-            "Finish the current work, clean up any in-progress changes, and "
-            "give the operator a concise handoff before Core pauses the goal."
-        )
+        return _GOAL_TIME_FIVE_MINUTE_REMINDER
     if remaining <= 10 * 60:
-        return (
-            "\n\nGoal time reminder: 10 minutes or less of active time remain. "
-            "Wind down over the next few turns, clean up in-progress work, "
-            "and prepare a concise handoff before Core pauses the goal."
-        )
+        return _GOAL_TIME_TEN_MINUTE_REMINDER
     return ""
 
 
@@ -4333,6 +4337,18 @@ class ChatService:
                 stage="callback-recovery",
             )
         try:
+            timed_waits = await asyncio.to_thread(self._goal_time_wait_candidates)
+            for turn in timed_waits:
+                await self.subagents._resume_waiting_turn(turn)
+        except Exception as exc:
+            record_caught_exception(
+                "chat",
+                "chat.goal_time_wait_tick_failed",
+                "A timed subagent wait could not resume; the next pass retries.",
+                exc,
+                stage="goal-time-reminder",
+            )
+        try:
             await asyncio.to_thread(self.reconcile_stale_approved_tool_calls)
         except Exception as exc:
             record_caught_exception(
@@ -6425,6 +6441,7 @@ class ChatService:
         recoveries: list[str] = []
         while True:
             try:
+                request = self._with_current_goal_time_instruction(prepared, request)
                 self._record_provider_request(prepared, request)
                 response = await prepared.provider.complete(request)
                 break
@@ -6442,6 +6459,58 @@ class ChatService:
                 )
         self._record_provider_response(prepared, response)
         return response
+
+    def _with_current_goal_time_instruction(
+        self, prepared: PreparedChat, request: ModelRequest
+    ) -> ModelRequest:
+        """Refresh a timed goal's warning at each model step of a long turn."""
+
+        turn = prepared.turn
+        if turn is None or turn.goal_id is None:
+            return request
+        goal = self.store.get(ChatGoal, turn.goal_id)
+        instructions = request.instructions or ""
+        for old in (
+            _GOAL_TIME_TEN_MINUTE_REMINDER,
+            _GOAL_TIME_FIVE_MINUTE_REMINDER,
+        ):
+            instructions = instructions.replace(old, "")
+        instructions += _goal_time_instruction(goal, utc_now())
+        if instructions == (request.instructions or ""):
+            return request
+        updated = request.model_copy(update={"instructions": instructions})
+        return self._fit_turn_goal_request(prepared, updated)
+
+    def _goal_time_wait_due(self, turn: ChatTurn, now: datetime) -> bool:
+        """A parked subagent wait crossed a goal warning threshold."""
+
+        if turn.goal_id is None:
+            return False
+        goal = self.store.get(ChatGoal, turn.goal_id)
+        if goal.status != ChatGoalStatus.RUNNING or goal.time_budget_seconds is None:
+            return False
+        before = goal.active_elapsed_seconds(turn.updated_at)
+        after = goal.active_elapsed_seconds(now)
+        return any(
+            before < goal.time_budget_seconds - seconds <= after
+            for seconds in (10 * 60, 5 * 60)
+        )
+
+    def _goal_time_wait_candidates(self) -> list[ChatTurn]:
+        """Read only parked subagent waits that need a timed goal reminder."""
+
+        now = utc_now()
+        found: list[ChatTurn] = []
+        for turn in self.store.iter_readable_entities(
+            ChatTurn, {"status": ChatTurnStatus.WAITING_CALLBACK.value}
+        ):
+            if turn.backend != ChatBackend.PROVIDER or turn.goal_id is None:
+                continue
+            if self.subagents.pending_wait(turn) is None:
+                continue
+            if self._goal_time_wait_due(turn, now):
+                found.append(turn)
+        return found
 
     @staticmethod
     def _record_provider_request(prepared: PreparedChat, request: ModelRequest) -> None:
@@ -6872,6 +6941,7 @@ class ChatService:
         while True:
             output_started = False
             try:
+                request = self._with_current_goal_time_instruction(prepared, request)
                 self._record_provider_request(prepared, request)
                 async for event in prepared.provider.stream(request):
                     if (
@@ -11537,7 +11607,8 @@ class ChatService:
         entry: dict[str, Any],
         wait: dict[str, Any],
     ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
-        if not self.subagents.wait_ready(wait):
+        time_reminder_due = self._goal_time_wait_due(turn, utc_now())
+        if not self.subagents.wait_ready(wait) and not time_reminder_due:
             yield (
                 "callback_required",
                 {
@@ -11552,6 +11623,9 @@ class ChatService:
             )
             return
         output, summary = self.subagents.wait_result(wait)
+        if time_reminder_due:
+            output["goal_time_reminder"] = True
+            summary += "; goal time reminder due"
         entry.update(
             {
                 "status": "complete",

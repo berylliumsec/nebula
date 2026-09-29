@@ -5,6 +5,7 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+import nebula.v3.chat as chat_module
 import nebula.v3.chat_goals as chat_goals_module
 from nebula.v3.chat import (
     ChatCompletionRequest,
@@ -138,6 +139,104 @@ def test_five_minute_reminder_reaches_the_provider_request(tmp_path):
     prepared = chat.prepare(_goal_request(running.id, "Continue"))
     assert "5 minutes or less" in prepared.model_request.instructions
     assert "clean up" in prepared.model_request.instructions
+
+
+def test_long_goal_turn_receives_updated_reminders_at_each_model_step(tmp_path):
+    store, goals = setup_goal(tmp_path)
+    draft = goals.create(
+        "session",
+        GoalCreate(
+            objective="Long running research",
+            completion_criteria=["Give a clean handoff"],
+            time_budget_seconds=1800,
+        ),
+    )
+    running = goals.write(
+        "session", GoalWrite(expected_revision=draft.revision, action="start")
+    )
+    provider = FakeProvider("provider", local=False)
+    chat = ChatService(store, provider_factory=lambda _: provider)
+    prepared = chat.prepare(_goal_request(running.id, "Keep working"))
+    request = prepared.model_request
+    assert "Goal time reminder:" not in request.instructions
+
+    async def scenario() -> None:
+        await chat._complete_with_context_recovery(prepared, request)
+        assert "Goal time reminder:" not in provider.requests[-1].instructions
+
+        goal = goals.get("session")
+        store.update(
+            ChatGoal,
+            goal.id,
+            {"elapsed_seconds": 20 * 60, "active_since": utc_now()},
+            expected_revision=goal.revision,
+        )
+        await chat._complete_with_context_recovery(prepared, request)
+        ten_minute_request = provider.requests[-1]
+        assert "Wind down over the next few turns" in ten_minute_request.instructions
+
+        goal = goals.get("session")
+        store.update(
+            ChatGoal,
+            goal.id,
+            {"elapsed_seconds": 25 * 60, "active_since": utc_now()},
+            expected_revision=goal.revision,
+        )
+        await chat._complete_with_context_recovery(prepared, ten_minute_request)
+        five_minute_request = provider.requests[-1]
+        assert "5 minutes or less" in five_minute_request.instructions
+        assert "10 minutes or less" not in five_minute_request.instructions
+        assert five_minute_request.instructions.count("Goal time reminder:") == 1
+
+        async for _ in chat._stream_with_context_recovery(prepared, request):
+            pass
+        assert "5 minutes or less" in provider.requests[-1].instructions
+        assert len(store.list_entities(ChatTurn, engagement_id="project")) == 1
+
+    asyncio.run(scenario())
+
+
+def test_parked_subagent_wait_becomes_due_at_goal_reminder(tmp_path, monkeypatch):
+    store, goals = setup_goal(tmp_path)
+    draft = goals.create(
+        "session",
+        GoalCreate(
+            objective="Wait for research",
+            completion_criteria=["Handoff before time runs out"],
+            time_budget_seconds=1800,
+        ),
+    )
+    running = goals.write(
+        "session", GoalWrite(expected_revision=draft.revision, action="start")
+    )
+    chat = ChatService(
+        store, provider_factory=lambda _: FakeProvider("provider", local=False)
+    )
+    prepared = chat.prepare(_goal_request(running.id, "Wait for the child"))
+    turn = chat._save_tool_step(
+        prepared.turn,
+        {
+            "tool_call_id": "wait-1",
+            "name": "wait_subagents",
+            "status": "waiting_callback",
+            "subagent_wait": {"ids": ["child-1"], "mode": "any"},
+        },
+        status=ChatTurnStatus.WAITING_CALLBACK,
+    )
+    assert chat._goal_time_wait_candidates() == []
+    wait_started = turn.updated_at
+    monkeypatch.setattr(
+        chat_module, "utc_now", lambda: wait_started + timedelta(minutes=20)
+    )
+    assert [item.id for item in chat._goal_time_wait_candidates()] == [turn.id]
+    assert not chat._goal_time_wait_due(
+        turn.model_copy(update={"updated_at": wait_started + timedelta(minutes=21)}),
+        wait_started + timedelta(minutes=22),
+    )
+    assert chat._goal_time_wait_due(
+        turn.model_copy(update={"updated_at": wait_started + timedelta(minutes=21)}),
+        wait_started + timedelta(minutes=25),
+    )
 
 
 def test_goal_content_can_be_edited_before_and_after_start(tmp_path):

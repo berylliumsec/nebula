@@ -1,20 +1,18 @@
 {
-  "change_digest": "cfa8e6a1883a868818360c2bc471515be0cff51fb538b2025e1f3c9a4c60fd27",
-  "reviewed_by": "Codex focused review for goal active-time limits and model reminders",
-  "reason": "The goal schema, provider instructions, and goal panel change. The selected Core goal file covers 30-minute validation, active-time accounting, 10- and 5-minute reminders, provider instruction delivery, and expiry pause. The panel file covers create/edit and countdown rendering. The selected production real-Core goal lifecycle journey covers the saved limit, refresh, start, pause, resume, desktop and mobile LAN browser entry.",
-  "exclusions": "No full suite was authorized. Unrelated provider, project, native, and browser journeys are excluded. Native runtime is untouched. Physical-device browser testing is unavailable here; the selected mobile projects use emulation. The real-Core journey uses a local model stub and does not prove live third-party provider behavior.",
+  "change_digest": "3a377873821c4669b7d021dfc0819e930033fc2fe119140ae7d36f6649447f3c",
+  "reviewed_by": "Codex focused review for in-turn goal time reminders",
+  "reason": "Core provider dispatch and parked subagent waits change for timed goals. The selected goal tests cover thresholds, first-turn delivery, a single long turn receiving updated 10- and 5-minute reminders on successive provider calls, and a parked wait becoming due at those thresholds. The selected real-Core goal lifecycle journey checks the operator entry and saved goal across desktop and mobile browser profiles.",
+  "exclusions": "No full suite was authorized. UI source and native runtime are unchanged, so frontend and native unit tests are excluded. Unrelated chat and browser journeys are excluded. The selected browser projects use emulation; no physical device is available. The focused long-turn regression uses a fake provider and does not prove a third-party provider's behavior.",
   "expected_tests": {
-    "python": 23,
-    "frontend": 19,
+    "python": 25,
+    "frontend": 0,
     "native": 0,
     "playwright": 3
   },
   "python": [
     "tests/v3/test_chat_goals.py"
   ],
-  "frontend": [
-    "ui/src/components/ProviderGoalPanel.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
     "entry:provider-goal-lifecycle-core/assistant-real-desktop",
