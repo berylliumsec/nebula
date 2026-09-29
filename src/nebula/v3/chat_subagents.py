@@ -3546,7 +3546,9 @@ class SubagentService:
         ):  # diagnostic-expected: the turn was deleted with its conversation
             return
         wait = self.pending_wait(latest)
-        if wait is None or not self.wait_ready(wait):
+        if wait is None or not (
+            self.wait_ready(wait) or self.chat._goal_time_wait_due(latest, utc_now())
+        ):
             return
         if self.chat.has_active_provider_turn(latest.id):
             return
