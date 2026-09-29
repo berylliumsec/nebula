@@ -1,8 +1,8 @@
 {
-  "change_digest": "3a377873821c4669b7d021dfc0819e930033fc2fe119140ae7d36f6649447f3c",
-  "reviewed_by": "Codex focused review for in-turn goal time reminders",
-  "reason": "Core provider dispatch and parked subagent waits change for timed goals. The selected goal tests cover thresholds, first-turn delivery, a single long turn receiving updated 10- and 5-minute reminders on successive provider calls, and a parked wait becoming due at those thresholds. The selected real-Core goal lifecycle journey checks the operator entry and saved goal across desktop and mobile browser profiles.",
-  "exclusions": "No full suite was authorized. UI source and native runtime are unchanged, so frontend and native unit tests are excluded. Unrelated chat and browser journeys are excluded. The selected browser projects use emulation; no physical device is available. The focused long-turn regression uses a fake provider and does not prove a third-party provider's behavior.",
+  "change_digest": "899017a6579a41abdcdef2a69803c2aa437bfa37009131953feacf5c676a0cab",
+  "reviewed_by": "Codex focused review for overdue in-turn goal handoff",
+  "reason": "The change supplies an overdue provider instruction and wakes timed subagent waits that begin after the limit, so a long turn can hand off even if it missed both warning thresholds. The selected goal tests cover successive requests through overdue state and parked waits before and after expiry. The selected real-Core goal browser entries cover the operator lifecycle on desktop and mobile.",
+  "exclusions": "No full suite was authorized. UI and native source are unchanged, so frontend and native unit tests are excluded. Unrelated provider and browser journeys are excluded. The selected browser projects use emulation; no physical device is available. The focused instruction regression uses a fake provider and does not prove third-party provider compliance.",
   "expected_tests": {
     "python": 25,
     "frontend": 0,
