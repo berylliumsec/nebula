@@ -2008,6 +2008,11 @@ _GOAL_TIME_FIVE_MINUTE_REMINDER = (
     "Finish the current work, clean up any in-progress changes, and "
     "give the operator a concise handoff before Core pauses the goal."
 )
+_GOAL_TIME_OVERDUE_REMINDER = (
+    "\n\nGoal time reminder: the active-time limit has passed. "
+    "Do not start new work. Clean up in-progress changes and give the "
+    "operator a concise handoff now."
+)
 _GOAL_TIME_TEN_MINUTE_REMINDER = (
     "\n\nGoal time reminder: 10 minutes or less of active time remain. "
     "Wind down over the next few turns, clean up in-progress work, "
@@ -2022,7 +2027,7 @@ def _goal_time_instruction(goal: ChatGoal, now: datetime) -> str:
         return ""
     remaining = goal.time_budget_seconds - goal.active_elapsed_seconds(now)
     if remaining <= 0:
-        return ""
+        return _GOAL_TIME_OVERDUE_REMINDER
     if remaining <= 5 * 60:
         return _GOAL_TIME_FIVE_MINUTE_REMINDER
     if remaining <= 10 * 60:
@@ -6473,6 +6478,7 @@ class ChatService:
         for old in (
             _GOAL_TIME_TEN_MINUTE_REMINDER,
             _GOAL_TIME_FIVE_MINUTE_REMINDER,
+            _GOAL_TIME_OVERDUE_REMINDER,
         ):
             instructions = instructions.replace(old, "")
         instructions += _goal_time_instruction(goal, utc_now())
@@ -6491,6 +6497,10 @@ class ChatService:
             return False
         before = goal.active_elapsed_seconds(turn.updated_at)
         after = goal.active_elapsed_seconds(now)
+        if before >= goal.time_budget_seconds:
+            # A turn that waited again after expiry still needs the overdue
+            # handoff instruction on its next provider step.
+            return True
         return any(
             before < goal.time_budget_seconds - seconds <= after
             for seconds in (10 * 60, 5 * 60)

@@ -105,13 +105,12 @@ def test_goal_time_reminders_use_active_time_and_escalate_at_five_minutes(tmp_pa
     reminder = _goal_time_instruction(five_minute_goal, now)
     assert "5 minutes or less" in reminder
     assert "clean up" in reminder
-    assert (
-        _goal_time_instruction(
-            running.model_copy(update={"active_since": now - timedelta(minutes=30)}),
-            now,
-        )
-        == ""
+    overdue = _goal_time_instruction(
+        running.model_copy(update={"active_since": now - timedelta(minutes=30)}),
+        now,
     )
+    assert "active-time limit has passed" in overdue
+    assert "Do not start new work" in overdue
 
 
 def test_five_minute_reminder_reaches_the_provider_request(tmp_path):
@@ -188,9 +187,22 @@ def test_long_goal_turn_receives_updated_reminders_at_each_model_step(tmp_path):
         assert "10 minutes or less" not in five_minute_request.instructions
         assert five_minute_request.instructions.count("Goal time reminder:") == 1
 
+        goal = goals.get("session")
+        store.update(
+            ChatGoal,
+            goal.id,
+            {"elapsed_seconds": 30 * 60, "active_since": utc_now()},
+            expected_revision=goal.revision,
+        )
+        await chat._complete_with_context_recovery(prepared, five_minute_request)
+        overdue_request = provider.requests[-1]
+        assert "active-time limit has passed" in overdue_request.instructions
+        assert "5 minutes or less" not in overdue_request.instructions
+        assert overdue_request.instructions.count("Goal time reminder:") == 1
+
         async for _ in chat._stream_with_context_recovery(prepared, request):
             pass
-        assert "5 minutes or less" in provider.requests[-1].instructions
+        assert "active-time limit has passed" in provider.requests[-1].instructions
         assert len(store.list_entities(ChatTurn, engagement_id="project")) == 1
 
     asyncio.run(scenario())
@@ -236,6 +248,10 @@ def test_parked_subagent_wait_becomes_due_at_goal_reminder(tmp_path, monkeypatch
     assert chat._goal_time_wait_due(
         turn.model_copy(update={"updated_at": wait_started + timedelta(minutes=21)}),
         wait_started + timedelta(minutes=25),
+    )
+    assert chat._goal_time_wait_due(
+        turn.model_copy(update={"updated_at": wait_started + timedelta(minutes=31)}),
+        wait_started + timedelta(minutes=32),
     )
 
 
