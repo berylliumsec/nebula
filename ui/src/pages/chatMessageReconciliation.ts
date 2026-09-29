@@ -16,6 +16,8 @@ export interface ReconciledConversationMessage extends ChatMessage {
   approvalWaitMs?: number;
   state: ConversationMessageState;
   durable: boolean;
+  /** Present on history copied into a fork, including a side chat. */
+  sourceMessageId?: string;
   recoveredHarnessTurn?: boolean;
   detail?: string;
   sequence?: number;

@@ -3029,6 +3029,56 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });
 
+test("assistant upgrade side chat inherits Core history and replies independently after reload", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub({streamDelayMs: 20});
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const providerResponse = await api.post("providers", {data: {name: "Side chat acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const response = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Original research question"}], include_knowledge: false, stream: false}});
+    expect(response.ok(), await response.text()).toBe(true);
+    const parent = await response.json() as {session_id: string};
+    const pairingApi = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    const pairing = await (await pairingApi.post("auth/pairings", {data: {name: "Side chat browser"}})).json() as {secret: string; confirmation_code: string};
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Side chat browser");
+    await page.getByRole("button", {name: "Pair device"}).click();
+    await expect(coreReady(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}`);
+    await expect(page.locator(".session-workspace > .chat-panel .chat-message.operator")).toContainText("Original research question");
+    await page.getByRole("button", {name: "Open side chat", exact: true}).click();
+    const side = page.getByRole("region", {name: "Side chat"});
+    await expect(side).toBeVisible();
+    await expect(side.getByRole("button", {name: "Inherited history · 2 messages"})).toBeVisible();
+    const sideId = new URL(page.url()).searchParams.get("sideChat");
+    expect(sideId).toBeTruthy();
+    await side.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Independent follow-up");
+    await side.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up", {timeout: 30_000});
+    await expect(page.locator(".session-workspace > .chat-panel")).not.toContainText("Independent follow-up");
+    const sessions = await (await api.get("chat-sessions")).json() as Array<{id: string; parent_session_id?: string; metadata?: Record<string, unknown>}>;
+    expect(sessions.find(item => item.id === sideId)).toMatchObject({parent_session_id: parent.session_id, metadata: {side_chat: true}});
+    const sideMessages = await (await api.get(`chat/sessions/${sideId}/messages`)).json() as Array<{content: string; source_message_id?: string}>;
+    expect(sideMessages.filter(item => item.source_message_id).length).toBe(2);
+    expect(sideMessages.some(item => item.content.includes("Independent follow-up"))).toBe(true);
+    await page.reload();
+    await expect(side).toBeVisible({timeout: 20_000});
+    await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up");
+    await expect(page.locator(".session-workspace > .chat-panel")).not.toContainText("Independent follow-up");
+    await side.getByRole("button", {name: "Close side chat"}).click();
+    if (await page.getByRole("button", {name: "Show conversations"}).isVisible()) await page.getByRole("button", {name: "Show conversations"}).click();
+    await page.locator(`.session-select[data-session-id="${sideId}"]`).click();
+    await expect(side).toBeVisible();
+    await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up");
+    await testInfo.attach("side-chat-real-core", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), parentId: parent.session_id, sideId}), contentType: "application/json"});
+  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+});
+
 test("assistant upgrade production LAN names an active durable conversation", async () => {
   test.setTimeout(90_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});

@@ -954,6 +954,7 @@ class ChatSessionForkRequest(NebulaModel):
     through_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     before_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     title: str | None = Field(default=None, min_length=1, max_length=300)
+    side_chat: bool = False
 
 
 class ChatSessionRewindRequest(NebulaModel):
@@ -10568,6 +10569,7 @@ def create_app(
                 through_message_id=request.through_message_id,
                 before_message_id=request.before_message_id,
                 title=request.title,
+                side_chat=request.side_chat,
                 harness_session_id=harness_session_id,
             )
         except Exception:  # diagnostic-expected: the failure is re-raised once the vendor branch is discarded

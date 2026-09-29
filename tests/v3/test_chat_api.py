@@ -331,11 +331,29 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     )
     assert fork.status_code == 201
     assert fork.json()["parent_session_id"] == session_id
+    assert fork.json()["metadata"]["side_chat"] is False
     copied = client.get(
         f"/api/v1/chat/sessions/{fork.json()['id']}/messages", headers=_auth()
     ).json()
     assert len(copied) == 1
     assert copied[0]["source_message_id"] == boundary.id
+
+    side = client.post(
+        f"/api/v1/chat/sessions/{session_id}/fork",
+        headers=_auth(),
+        json={
+            "through_message_id": boundary.id,
+            "title": "Side chat",
+            "side_chat": True,
+        },
+    )
+    assert side.status_code == 201
+    assert side.json()["metadata"]["side_chat"] is True
+    assert side.json()["parent_session_id"] == session_id
+    side_messages = client.get(
+        f"/api/v1/chat/sessions/{side.json()['id']}/messages", headers=_auth()
+    ).json()
+    assert [message["source_message_id"] for message in side_messages] == [boundary.id]
 
 
 def test_chat_session_rewind_edits_in_place_without_forking(tmp_path, monkeypatch):

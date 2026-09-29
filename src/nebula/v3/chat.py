@@ -983,6 +983,7 @@ _FORK_PRIVATE_METADATA_KEYS = frozenset(
         "subagent_parent_session_id",
         "subagent_parent_turn_id",
         "temporary_assistant",
+        "side_chat",
     }
 )
 
@@ -13360,6 +13361,7 @@ class ChatService:
         through_message_id: str | None = None,
         before_message_id: str | None = None,
         title: str | None = None,
+        side_chat: bool = False,
         harness_session_id: str | None = None,
     ) -> ChatSession:
         """Create an independent transcript branch with explicit provenance."""
@@ -13411,6 +13413,7 @@ class ChatService:
                     "forked_from_session_id": source.id,
                     "forked_from_message_id": boundary.id,
                     "workspace_is_shared": True,
+                    "side_chat": side_chat,
                     "branch_before_message": bool(before_message_id),
                     "harness_context_handoff_pending": (
                         source.backend == ChatBackend.HARNESS

@@ -1,29 +1,23 @@
 {
-  "change_digest": "99aa3b004b59a3fd1fce7dc8c98af0dfb9ec0db7fa08486f0029bfaaf8dca132",
-  "reviewed_by": "Codex focused review for live subagent sidebar refresh",
-  "reason": "The changed session page now rereads durable conversations while the sidebar is visible. Five sidebar grouping unit cases and the two focused sidebar browser journeys in each desktop/mobile profile cover live child discovery, nesting, selection, responsive controls, and reload. The existing real-Core sidebar journey covers durable lineage.",
-  "exclusions": "No Core or native source changed. Unrelated Assistant journeys and full suites are excluded. The real-Core fixture starts with existing children; creation during a live provider turn and physical-device use are not proven by this selection.",
-  "expected_tests": {
-    "python": 0,
-    "frontend": 5,
-    "native": 0,
-    "playwright": 17
-  },
+  "change_digest": "7aa08414e0abd8bb53753ea01b7f116659880e9ce0763b4a9e226de5aef934ad",
+  "reviewed_by": "Codex focused side chat history and split-pane review",
+  "reason": "The one backend contract test proves copied history and side-chat metadata without altering ordinary forks. The selected browser journey checks the toolbar entry, equal and adjustable desktop panes, reload, mobile single-pane layout, inherited-history disclosure, and accessibility in permanent Chromium and WebKit profiles. The real-Core production LAN journey checks durable lineage, independent reply, and reload through the operator controls.",
+  "exclusions": "No native source changed. Reconciliation only gains a source-message field, so no unrelated frontend unit suite is selected. Existing search, terminal, subagent, and broad assistant journeys are excluded. Device profiles are browser emulation; physical-device testing is unavailable.",
+  "expected_tests": {"python": 1, "frontend": 0, "native": 0, "playwright": 9},
+  "python_versions": ["3.11"],
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/pages/conversationSidebar.test.ts"
-  ],
+  "python": ["tests/v3/test_chat_api.py::test_chat_image_upload_preview_and_arbitrary_message_fork"],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:subagent-sidebar/desktop",
-    "entry:subagent-sidebar/compact",
-    "entry:subagent-sidebar/mobile-chromium-small",
-    "entry:subagent-sidebar/mobile-chromium-ledger-390",
-    "entry:subagent-sidebar/mobile-chromium-wide",
-    "entry:subagent-sidebar/mobile-webkit-small",
-    "entry:subagent-sidebar/mobile-webkit",
-    "entry:subagent-sidebar/mobile-webkit-wide",
-    "entry:subagent-sidebar/assistant-real-desktop"
+    "entry:side-chat/desktop",
+    "entry:side-chat/compact",
+    "entry:side-chat/mobile-chromium-small",
+    "entry:side-chat/mobile-chromium-ledger-390",
+    "entry:side-chat/mobile-chromium-wide",
+    "entry:side-chat/mobile-webkit-small",
+    "entry:side-chat/mobile-webkit",
+    "entry:side-chat/mobile-webkit-wide",
+    "entry:side-chat/assistant-real-desktop"
   ]
 }
