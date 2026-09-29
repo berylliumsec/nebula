@@ -2415,6 +2415,38 @@ export function SessionsPage() {
     return () => { controller.abort(); sessionActivityPollRef.current = undefined; window.removeEventListener("focus", poll.poke); };
   }, [conversationPanelOpen, mobileListOpen, refreshSessionActivity, view]);
 
+  // Subagent conversations are saved while the parent turn is still running.
+  // The inspector follows their runtime state; the visible sidebar must also
+  // follow Core's durable conversation list, including background parents.
+  useEffect(() => {
+    if (!api || !engagement || coreState !== "online" || view !== "chat" || (!conversationPanelOpen && !mobileListOpen)) return;
+    const controller = new AbortController();
+    const requestedEngagementId = engagement.id;
+    const poll = startVisiblePoll({
+      intervalMs: SESSION_ACTIVITY_POLL_MS,
+      maxIntervalMs: SESSION_ACTIVITY_IDLE_POLL_MS,
+      signal: controller.signal,
+      immediate: false,
+      read: async (signal): Promise<PollOutcome> => {
+        try {
+          const page = await api.listChatSessions(requestedEngagementId, signal);
+          if (signal.aborted || activeEngagementIdRef.current !== requestedEngagementId) return "stop";
+          setSessions(current => {
+            const next = reconcileListedSessions(current, page.items);
+            return sameJson(current, next) ? current : next;
+          });
+          return Object.values(sessionActivityReadRef.current?.value ?? {}).includes("working") ? "active" : "idle";
+        } catch (error) {
+          if (signal.aborted) return "stop";
+          void logCaughtDiagnostic("interface.sessions_page.sidebar_refresh_failed", "Conversations could not be refreshed.", error, "sessions_page");
+          return "active";
+        }
+      },
+    });
+    window.addEventListener("focus", poll.poke);
+    return () => { controller.abort(); window.removeEventListener("focus", poll.poke); };
+  }, [api, engagement, coreState, view, conversationPanelOpen, mobileListOpen]);
+
   const resetConversation = (open: boolean, options: { discardDraft?: boolean } = {}) => {
     previewOwnerRef.current = "";
     restoredScrollRef.current = undefined;

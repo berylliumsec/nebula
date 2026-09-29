@@ -2888,6 +2888,33 @@ reloadTest("assistant upgrade nests subagents beneath a collapsed main conversat
   expect(accessibility.violations).toEqual([]);
 });
 
+reloadTest("assistant upgrade sidebar follows subagents created during an active turn", async ({ page }) => {
+  const parent = { ...entity, id: "live-sidebar-parent", engagement_id: "scratch-project", title: "Active investigation", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
+  const child = { ...entity, id: "live-sidebar-child", engagement_id: "scratch-project", title: "Subagent · New research", backend: "provider", provider_profile_id: "provider-a", parent_session_id: parent.id, model: "model-a", metadata: { subagent_id: "live-subagent" } };
+  let childSaved = false;
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions") && route.request().method() === "GET") {
+      return route.fulfill({ json: childSaved ? [child, parent] : [parent] });
+    }
+    if (path.endsWith("/chat/session-activity")) {
+      return route.fulfill({ json: [{ session_id: parent.id, state: "working", turn_id: "active-turn" }] });
+    }
+    await route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const sidebar = page.getByRole("complementary", { name: "Conversations" });
+  const show = page.getByRole("button", { name: (page.viewportSize()?.width ?? 1440) <= 760 ? "Open conversations" : "Show conversations" });
+  if (await show.isVisible()) await show.click();
+  await expect(sidebar.locator('[data-session-id="live-sidebar-parent"]')).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "Expand 1 subagent for Active investigation" })).toHaveCount(0);
+
+  childSaved = true;
+  await expect(sidebar.getByRole("button", { name: "Expand 1 subagent for Active investigation" })).toBeVisible({ timeout: 15_000 });
+  await sidebar.getByRole("button", { name: "Expand 1 subagent for Active investigation" }).click();
+  await expect(sidebar.locator('[data-session-id="live-sidebar-child"]')).toBeVisible();
+});
+
 test("stabilization conversation bulk delete reconciles stale rows and preserves the blocking diagnostic", async ({ page }, testInfo) => {
   let deleteStarted = false;
   const active = { ...entity, id: "conversation-active", engagement_id: "scratch-project", title: "Active investigation", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} };
