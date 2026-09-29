@@ -108,6 +108,8 @@ def test_a_command_stream_redaction_leaves_unchanged_is_stored_once(tmp_path):
     assert execution.redacted_stdout_artifact_id == execution.stdout_artifact_id
     assert execution.redacted_stderr_artifact_id == execution.stderr_artifact_id
     assert [item.kind for item in result.receipt.artifacts] == ["stdout", "stderr"]
+    assert "storage-waste-marker" in result.receipt.output_preview[0].text
+    assert result.receipt.next_actions == []
 
     # Search reads the stream once, so each match comes back once.
     found = ToolOutputService(store, artifacts).search(
@@ -262,6 +264,26 @@ def test_an_mcp_result_is_stored_once_without_stream_placeholders(tmp_path):
     assert [item.kind for item in recorded.receipt.artifacts] == ["mcp_content"]
     assert len(recorded.evidence_ids) == 1
     assert recorded.result_artifact_id is not None
+
+
+def test_small_process_stream_is_previewed_with_artifact_retained(tmp_path):
+    recorded, kinds = _record(
+        tmp_path,
+        ToolExecutionResult(
+            output={},
+            stdout="finished: 2 items\n",
+            observed_stdout_bytes=18,
+            exit_code=0,
+            execution={"runtime": "process"},
+        ),
+        name="fixture.run_command",
+    )
+    assert "stdout" in kinds and "receipt" in kinds
+    assert recorded.receipt.output_preview[0].text == "finished: 2 items\n"
+    assert recorded.receipt.output_preview[0].artifact_id == next(
+        ref.artifact_id for ref in recorded.receipt.artifacts if ref.kind == "stdout"
+    )
+    assert recorded.receipt.next_actions == []
 
 
 def test_structured_content_the_text_does_not_carry_is_kept(tmp_path):

@@ -57,6 +57,7 @@ from .tool_results import (
     WebResultObservation,
     WorkspaceOutputService,
     artifact_ref,
+    small_output_preview,
     bytes_are_searchable,
 )
 
@@ -988,6 +989,7 @@ class StoreToolEvidenceRecorder:
         }
         artifact_entities: list[Artifact] = []
         references = []
+        stream_artifacts = []
         warnings: list[str] = []
 
         async def store_stream(
@@ -1039,15 +1041,15 @@ class StoreToolEvidenceRecorder:
                 )
             stored_items.append(stored)
             artifact_entities.append(stored.artifact)
-            references.append(
-                artifact_ref(
-                    stored.artifact,
-                    kind=kind,
-                    observed_byte_count=observed or stored.artifact.size,
-                    searchable=searchable,
-                    truncated=truncated,
-                )
+            reference = artifact_ref(
+                stored.artifact,
+                kind=kind,
+                observed_byte_count=observed or stored.artifact.size,
+                searchable=searchable,
+                truncated=truncated,
             )
+            references.append(reference)
+            stream_artifacts.append((stored.artifact, reference))
 
         # MCP servers, web search and the built-ins run no process: their
         # empty stream placeholders were two artifacts and two receipt
@@ -1329,6 +1331,7 @@ class StoreToolEvidenceRecorder:
             warnings.append(
                 f"{warning_count - len(warnings)} additional warnings are available in execution diagnostics"
             )
+        preview = small_output_preview(self.artifact_store, stream_artifacts)
         receipt = ToolResultReceipt(
             tool_call_id=call.id,
             tool_name=spec.name,
@@ -1343,6 +1346,8 @@ class StoreToolEvidenceRecorder:
                 duration_seconds=result.execution.get("duration_seconds"),
             ),
             artifacts=model_references,
+            output_preview=preview,
+            next_actions=[] if preview else ["tool_output.search", "tool_output.read"],
             truncated=truncated,
             incomplete=incomplete,
             parser=ToolParserReceipt(
@@ -1509,7 +1514,7 @@ def register_artifact_retrieval_tools(
     ] = [
         (
             "tool_output.search",
-            "Search output artifacts from a prior tool call.",
+            "Search output artifacts from a prior tool call. context_lines must be 0-5; match_limit must be 1-100.",
             {
                 "type": "object",
                 "properties": {
