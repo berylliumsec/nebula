@@ -1,5 +1,5 @@
 {
-  "change_digest": "198302735ebe6b13c4d6a0be14d5d2e30375323aca948661ff0a97f84c9596a8",
+  "change_digest": "79d5b60b2226eff250593ea984f1f8d1c32389502d81a22bb09d1de50a530503",
   "reviewed_by": "Codex focused active side chat and goal isolation review",
   "reason": "Provider and harness API cases check active-turn snapshots, unchanged parent turns, independent harness sessions, and side-chat goal isolation while preserving ordinary fork behavior. The existing side-chat browser case covers entry, retry, adjustable layout, reload, and accessibility at desktop and 320/390/430 px mobile widths. Real-Core LAN cases cover durable independent replies and opening the side chat during an active provider stream on desktop Chromium and 390 px Chromium/WebKit.",
   "exclusions": "No native source changed. The UI change is an API-backed interaction without a separate deterministic frontend transformation, so no frontend unit test is selected. Unrelated chat, terminal, search, and provider suites are excluded. Mobile projects emulate devices; physical-device testing is unavailable.",

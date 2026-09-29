@@ -9232,10 +9232,14 @@ class HarnessRuntimeService:
         """
 
         session = self.store.get(HarnessSession, session_id)
-        if session.status in {
-            HarnessSessionStatus.RUNNING,
-            HarnessSessionStatus.WAITING_APPROVAL,
-        } and not allow_active:
+        if (
+            session.status
+            in {
+                HarnessSessionStatus.RUNNING,
+                HarnessSessionStatus.WAITING_APPROVAL,
+            }
+            and not allow_active
+        ):
             raise HarnessStateError(
                 "harness session cannot be forked while a turn is active"
             )

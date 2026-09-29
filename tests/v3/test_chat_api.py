@@ -362,49 +362,96 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
 def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path):
     store = NebulaStore(tmp_path / "active-provider-side-chat.db")
     engagement = store.create(Engagement(name="Active side chat"))
-    profile = store.create(ProviderProfile(
-        name="Local provider", provider_type="vllm", is_local=True,
-        model_allowlist=["model-a"], privacy={"local_only": True},
-    ))
-    parent = store.create(ChatSession(
-        engagement_id=engagement.id, title="Parent", backend=ChatBackend.PROVIDER,
-        provider_profile_id=profile.id, model="model-a",
-    ))
-    goal = store.create(ChatGoal(
-        engagement_id=engagement.id, session_id=parent.id,
-        objective="Finish parent investigation", completion_criteria=["Report findings"],
-    ))
-    earlier = store.create(ChatMessage(
-        engagement_id=engagement.id, session_id=parent.id, sequence=1,
-        role=ChatRole.USER, content="Earlier question",
-    ))
-    current = store.create(ChatMessage(
-        engagement_id=engagement.id, session_id=parent.id, sequence=2,
-        role=ChatRole.USER, content="Question sent during the active turn",
-    ))
-    active = store.create(ChatTurn(
-        engagement_id=engagement.id, session_id=parent.id, goal_id=goal.id,
-        provider_profile_id=profile.id, model="model-a", status=ChatTurnStatus.ROUTING,
-    ))
+    profile = store.create(
+        ProviderProfile(
+            name="Local provider",
+            provider_type="vllm",
+            is_local=True,
+            model_allowlist=["model-a"],
+            privacy={"local_only": True},
+        )
+    )
+    parent = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Parent",
+            backend=ChatBackend.PROVIDER,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    goal = store.create(
+        ChatGoal(
+            engagement_id=engagement.id,
+            session_id=parent.id,
+            objective="Finish parent investigation",
+            completion_criteria=["Report findings"],
+        )
+    )
+    earlier = store.create(
+        ChatMessage(
+            engagement_id=engagement.id,
+            session_id=parent.id,
+            sequence=1,
+            role=ChatRole.USER,
+            content="Earlier question",
+        )
+    )
+    current = store.create(
+        ChatMessage(
+            engagement_id=engagement.id,
+            session_id=parent.id,
+            sequence=2,
+            role=ChatRole.USER,
+            content="Question sent during the active turn",
+        )
+    )
+    active = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=parent.id,
+            goal_id=goal.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+        )
+    )
     client = TestClient(create_app(store, auth_token="test-token"))
     endpoint = f"/api/v1/chat/sessions/{parent.id}/fork"
 
-    ordinary = client.post(endpoint, headers=_auth(), json={"through_message_id": current.id})
+    ordinary = client.post(
+        endpoint, headers=_auth(), json={"through_message_id": current.id}
+    )
     assert ordinary.status_code == 409
-    side = client.post(endpoint, headers=_auth(), json={
-        "through_message_id": current.id, "side_chat": True,
-    })
+    side = client.post(
+        endpoint,
+        headers=_auth(),
+        json={
+            "through_message_id": current.id,
+            "side_chat": True,
+        },
+    )
     assert side.status_code == 201, side.text
     side_id = side.json()["id"]
     assert side.json()["metadata"]["side_chat"] is True
     copied = client.get(f"/api/v1/chat/sessions/{side_id}/messages", headers=_auth())
-    assert [item["source_message_id"] for item in copied.json()] == [earlier.id, current.id]
-    assert store.find_entities(ChatGoal, {"session_id": side_id}, engagement_id=engagement.id) == []
+    assert [item["source_message_id"] for item in copied.json()] == [
+        earlier.id,
+        current.id,
+    ]
+    assert (
+        store.find_entities(
+            ChatGoal, {"session_id": side_id}, engagement_id=engagement.id
+        )
+        == []
+    )
     assert store.get(ChatGoal, goal.id).session_id == parent.id
     assert store.get(ChatTurn, active.id).status == ChatTurnStatus.ROUTING
 
     store.update(ChatTurn, active.id, {"status": ChatTurnStatus.COMPLETE})
-    ordinary = client.post(endpoint, headers=_auth(), json={"through_message_id": current.id})
+    ordinary = client.post(
+        endpoint, headers=_auth(), json={"through_message_id": current.id}
+    )
     assert ordinary.status_code == 201, ordinary.text
     ordinary_goals = store.find_entities(
         ChatGoal, {"session_id": ordinary.json()["id"]}, engagement_id=engagement.id
@@ -416,30 +463,57 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
 def test_side_chat_snapshots_active_harness_with_independent_vendor_session(tmp_path):
     store = NebulaStore(tmp_path / "active-harness-side-chat.db")
     engagement = store.create(Engagement(name="Active harness side chat"))
-    vendor = store.create(HarnessSession(
-        engagement_id=engagement.id, harness_profile_id="harness-1", model="model-a",
-        status=HarnessSessionStatus.RUNNING,
-    ))
-    parent = store.create(ChatSession(
-        engagement_id=engagement.id, title="Harness parent", backend=ChatBackend.HARNESS,
-        harness_profile_id="harness-1", harness_session_id=vendor.id, model="model-a",
-    ))
-    current = store.create(ChatMessage(
-        engagement_id=engagement.id, session_id=parent.id, sequence=1,
-        role=ChatRole.USER, content="Question sent during the active harness turn",
-    ))
-    active = store.create(ChatTurn(
-        engagement_id=engagement.id, session_id=parent.id, backend=ChatBackend.HARNESS,
-        model="model-a", status=ChatTurnStatus.ROUTING,
-    ))
+    vendor = store.create(
+        HarnessSession(
+            engagement_id=engagement.id,
+            harness_profile_id="harness-1",
+            model="model-a",
+            status=HarnessSessionStatus.RUNNING,
+        )
+    )
+    parent = store.create(
+        ChatSession(
+            engagement_id=engagement.id,
+            title="Harness parent",
+            backend=ChatBackend.HARNESS,
+            harness_profile_id="harness-1",
+            harness_session_id=vendor.id,
+            model="model-a",
+        )
+    )
+    current = store.create(
+        ChatMessage(
+            engagement_id=engagement.id,
+            session_id=parent.id,
+            sequence=1,
+            role=ChatRole.USER,
+            content="Question sent during the active harness turn",
+        )
+    )
+    active = store.create(
+        ChatTurn(
+            engagement_id=engagement.id,
+            session_id=parent.id,
+            backend=ChatBackend.HARNESS,
+            model="model-a",
+            status=ChatTurnStatus.ROUTING,
+        )
+    )
     client = TestClient(create_app(store, auth_token="test-token"))
     endpoint = f"/api/v1/chat/sessions/{parent.id}/fork"
 
-    ordinary = client.post(endpoint, headers=_auth(), json={"through_message_id": current.id})
+    ordinary = client.post(
+        endpoint, headers=_auth(), json={"through_message_id": current.id}
+    )
     assert ordinary.status_code == 409
-    side = client.post(endpoint, headers=_auth(), json={
-        "through_message_id": current.id, "side_chat": True,
-    })
+    side = client.post(
+        endpoint,
+        headers=_auth(),
+        json={
+            "through_message_id": current.id,
+            "side_chat": True,
+        },
+    )
     assert side.status_code == 201, side.text
     side_id = side.json()["id"]
     child_vendor_id = side.json()["harness_session_id"]
@@ -447,7 +521,10 @@ def test_side_chat_snapshots_active_harness_with_independent_vendor_session(tmp_
     assert side.json()["metadata"]["harness_context_handoff_pending"] is True
     copied = client.get(f"/api/v1/chat/sessions/{side_id}/messages", headers=_auth())
     assert [item["source_message_id"] for item in copied.json()] == [current.id]
-    assert store.get(HarnessSession, child_vendor_id).status == HarnessSessionStatus.STARTING
+    assert (
+        store.get(HarnessSession, child_vendor_id).status
+        == HarnessSessionStatus.STARTING
+    )
     assert store.get(HarnessSession, vendor.id).status == HarnessSessionStatus.RUNNING
     assert store.get(ChatTurn, active.id).status == ChatTurnStatus.ROUTING
 
