@@ -341,7 +341,11 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     side = client.post(
         f"/api/v1/chat/sessions/{session_id}/fork",
         headers=_auth(),
-        json={"through_message_id": boundary.id, "title": "Side chat", "side_chat": True},
+        json={
+            "through_message_id": boundary.id,
+            "title": "Side chat",
+            "side_chat": True,
+        },
     )
     assert side.status_code == 201
     assert side.json()["metadata"]["side_chat"] is True

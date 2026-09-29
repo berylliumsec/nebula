@@ -1,5 +1,5 @@
 {
-  "change_digest": "7726aeb8813cd761988d89faedc04bc9c7c64d3600c1b8f21c558168193ca9e0",
+  "change_digest": "7aa08414e0abd8bb53753ea01b7f116659880e9ce0763b4a9e226de5aef934ad",
   "reviewed_by": "Codex focused side chat history and split-pane review",
   "reason": "The one backend contract test proves copied history and side-chat metadata without altering ordinary forks. The selected browser journey checks the toolbar entry, equal and adjustable desktop panes, reload, mobile single-pane layout, inherited-history disclosure, and accessibility in permanent Chromium and WebKit profiles. The real-Core production LAN journey checks durable lineage, independent reply, and reload through the operator controls.",
   "exclusions": "No native source changed. Reconciliation only gains a source-message field, so no unrelated frontend unit suite is selected. Existing search, terminal, subagent, and broad assistant journeys are excluded. Device profiles are browser emulation; physical-device testing is unavailable.",
