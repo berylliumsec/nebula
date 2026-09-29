@@ -317,7 +317,12 @@ _GATEWAY_RETRIEVAL_SCHEMAS: dict[str, dict[str, Any]] = {
             "query": {"type": "string", "minLength": 1, "maxLength": 512},
             "mode": {"type": "string", "enum": ["literal", "regex"]},
             "case_sensitive": {"type": "boolean"},
-            "context_lines": {"type": "integer", "minimum": 0, "maximum": 5},
+            "context_lines": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5,
+                "description": "Maximum 5 context lines.",
+            },
             "match_limit": {"type": "integer", "minimum": 1, "maximum": 100},
             "cursor": {"type": ["string", "null"]},
         },
@@ -332,7 +337,12 @@ _GATEWAY_RETRIEVAL_SCHEMAS: dict[str, dict[str, Any]] = {
                 "description": "Artifact ID from an authorized tool result receipt; sha256 is a content digest, not an artifact ID.",
             },
             "starting_line": {"type": "integer", "minimum": 1},
-            "line_count": {"type": "integer", "minimum": 1, "maximum": 200},
+            "line_count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200,
+                "description": "Maximum 200 lines; follow continuation for more.",
+            },
         },
         "required": ["artifact_id"],
         "additionalProperties": False,
@@ -12917,8 +12927,9 @@ class HarnessRuntimeService:
                             f"{spec.description}\n\nNebula command-runtime capability "
                             f"{actual_name}. "
                             + "Raw stdout/stderr are captured as immutable artifacts. The "
-                            "result is a nebula.tool-result/v2 receipt; inspect it with "
-                            "tool_output.search or tool_output.read. Nebula supplies "
+                            "result is a nebula.tool-result/v2 receipt. Use its "
+                            "complete redacted output_preview when present; otherwise "
+                            "inspect with tool_output.search or tool_output.read. Nebula supplies "
                             "idempotency internally; never add idempotency_key or _meta."
                             + foreground_note
                         )[:10_000],

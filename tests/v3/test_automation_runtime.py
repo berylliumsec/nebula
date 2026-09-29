@@ -1918,6 +1918,88 @@ def test_unreadable_command_receipt_preserves_exit_and_partial_artifacts(tmp_pat
         assert stream.read() == b"useful result\n"
 
 
+def test_small_command_output_is_redacted_in_receipt_without_extra_read(tmp_path):
+    from types import SimpleNamespace
+
+    manager, store, artifacts, engagement, _ = runtime(tmp_path)
+    raw = b"result: ready\nBearer abcdefghijklmnop123456\n"
+    out = store.create(
+        artifacts.put_bytes(
+            raw,
+            engagement_id=engagement.id,
+            filename="stdout",
+            media_type="text/plain",
+        )
+    )
+    execution = store.create(
+        CommandExecution(
+            engagement_id=engagement.id,
+            session_id="session",
+            process_id="process",
+            command="synthetic fixture only",
+            command_sha256="a" * 64,
+            runtime_digest="sha256:" + "b" * 64,
+            policy_revision=1,
+            status=CommandExecutionStatus.COMPLETED,
+            exit_code=0,
+            stdout_artifact_id=out.id,
+            observed_stdout_bytes=out.size,
+        )
+    )
+    receipt = AutomationBroker(
+        manager=manager, store=store, output_service=ToolOutputService(store, artifacts)
+    )._receipt("call", "run_command", SimpleNamespace(execution_id=execution.id))
+    assert receipt.output_preview[0].artifact_id == out.id
+    assert receipt.output_preview[0].text == "result: ready\nBearer [REDACTED]\n"
+    assert receipt.next_actions == []
+    with artifacts.open(out) as stream:
+        assert stream.read() == raw
+
+
+def test_large_or_truncated_command_output_stays_artifact_only(tmp_path):
+    from types import SimpleNamespace
+
+    manager, store, artifacts, engagement, _ = runtime(tmp_path)
+    out = store.create(
+        artifacts.put_bytes(b"x" * 4097, engagement_id=engagement.id, filename="stdout")
+    )
+    execution = store.create(
+        CommandExecution(
+            engagement_id=engagement.id,
+            session_id="session",
+            process_id="process",
+            command="synthetic fixture only",
+            command_sha256="a" * 64,
+            runtime_digest="sha256:" + "b" * 64,
+            policy_revision=1,
+            status=CommandExecutionStatus.COMPLETED,
+            exit_code=0,
+            stdout_artifact_id=out.id,
+            observed_stdout_bytes=out.size,
+        )
+    )
+    broker = AutomationBroker(
+        manager=manager, store=store, output_service=ToolOutputService(store, artifacts)
+    )
+    receipt = broker._receipt(
+        "call", "run_command", SimpleNamespace(execution_id=execution.id)
+    )
+    assert receipt.output_preview == []
+    assert "tool_output.read" in receipt.next_actions
+    truncated = store.update(
+        CommandExecution,
+        execution.id,
+        {"stdout_truncated": True},
+        expected_revision=execution.revision,
+    )
+    assert (
+        broker._receipt(
+            "call", "run_command", SimpleNamespace(execution_id=truncated.id)
+        ).output_preview
+        == []
+    )
+
+
 def test_capture_directory_is_removed_once_output_is_delivered(tmp_path):
     async def scenario():
         manager, _store, _artifacts, engagement, _sessions = runtime(tmp_path)

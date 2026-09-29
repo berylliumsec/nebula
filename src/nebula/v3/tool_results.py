@@ -16,7 +16,16 @@ from enum import Enum
 from pathlib import Path
 from time import monotonic
 from collections.abc import Sequence
-from typing import Annotated, Any, BinaryIO, Iterator, Literal, Protocol, TypeAlias
+from typing import (
+    Annotated,
+    Any,
+    BinaryIO,
+    Iterator,
+    Literal,
+    Protocol,
+    TypeAlias,
+    cast,
+)
 
 import regex  # type: ignore[import-untyped]
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -32,6 +41,7 @@ MAX_CAPTURE_BYTES = 100 * 1024 * 1024
 MAX_GENERATED_FILES = 256
 MAX_GENERATED_BYTES = 100 * 1024 * 1024
 MAX_EXCERPT_BYTES = 8 * 1024
+MAX_INLINE_OUTPUT_BYTES = 4 * 1024
 MAX_READ_LINES = 200
 MAX_REGEX_PATTERN = 512
 DEFAULT_REGEX_DEADLINE_SECONDS = 0.25
@@ -93,6 +103,16 @@ class ToolArtifactRef(BaseModel):
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     searchable: bool = False
     truncated: bool = False
+
+
+class ToolOutputPreview(BaseModel):
+    """A complete, redacted small stream. The artifact remains authoritative."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str
+    kind: Literal["stdout", "stderr"]
+    text: str
 
 
 class ToolParserReceipt(BaseModel):
@@ -167,6 +187,7 @@ class ToolResultReceipt(BaseModel):
     observations: list[ToolObservation] = Field(default_factory=list, max_length=100)
     timing: ToolTimingReceipt = Field(default_factory=ToolTimingReceipt)
     artifacts: list[ToolArtifactRef] = Field(default_factory=list, max_length=12)
+    output_preview: list[ToolOutputPreview] = Field(default_factory=list, max_length=2)
     truncated: bool = False
     incomplete: bool = False
     parser: ToolParserReceipt = Field(default_factory=ToolParserReceipt)
@@ -189,7 +210,10 @@ class ToolResultReceipt(BaseModel):
         return None
 
     def as_model_result(self) -> dict[str, Any]:
-        return self.model_dump(mode="json", by_alias=True)
+        result = self.model_dump(mode="json", by_alias=True)
+        if not self.output_preview:
+            result.pop("output_preview")
+        return result
 
 
 def artifact_ref(
@@ -219,6 +243,61 @@ def artifact_ref(
         searchable=searchable,
         truncated=truncated,
     )
+
+
+def small_output_preview(
+    artifact_store: ArtifactStore,
+    streams: list[tuple[Artifact, ToolArtifactRef]],
+) -> list[ToolOutputPreview]:
+    """Inline only complete, searchable streams that fit one bounded receipt.
+
+    Use the same display redaction as explicit artifact reads. If any nonempty
+    stream does not fit, leave all output in artifacts so the model cannot
+    mistake a partial preview for a complete command result.
+    """
+
+    candidates = [
+        (artifact, ref)
+        for artifact, ref in streams
+        if ref.kind in {"stdout", "stderr"}
+        and (ref.byte_count or ref.observed_byte_count)
+    ]
+    if (
+        not candidates
+        or len(candidates) > 2
+        or any(
+            not ref.searchable
+            or ref.truncated
+            or ref.observed_byte_count != ref.byte_count
+            for _, ref in candidates
+        )
+    ):
+        return []
+    if sum(ref.byte_count for _, ref in candidates) > MAX_INLINE_OUTPUT_BYTES:
+        return []
+    previews: list[ToolOutputPreview] = []
+    try:
+        for artifact, ref in candidates:
+            with artifact_store.open(artifact) as stream:
+                raw = stream.read(MAX_INLINE_OUTPUT_BYTES + 1)
+            if len(raw) != ref.byte_count or b"\x00" in raw:
+                return []
+            safe = redacted_display(raw.decode("utf-8", errors="replace"))
+            previews.append(
+                ToolOutputPreview(
+                    artifact_id=ref.artifact_id,
+                    kind=cast(Literal["stdout", "stderr"], ref.kind),
+                    text=safe,
+                )
+            )
+    except OSError:  # diagnostic-expected: optional preview failure leaves artifact retrieval available.
+        return []
+    if (
+        sum(len(item.text.encode("utf-8")) for item in previews)
+        > MAX_INLINE_OUTPUT_BYTES
+    ):
+        return []
+    return previews
 
 
 def _media_type_is_searchable(media_type: str) -> bool:

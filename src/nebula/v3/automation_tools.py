@@ -55,6 +55,7 @@ from .tool_results import (
     ToolOutputService,
     WorkspaceOutputService,
     artifact_ref,
+    small_output_preview,
 )
 from .research_results import ResearchResultService
 from .tools import (
@@ -163,7 +164,7 @@ def command_specs(
         ToolSpec(
             name="tool_output.search",
             parallelism=ParallelismPolicy.SAFE_READ,
-            description="Search immutable output from a completed command.",
+            description="Search immutable output from a completed command. context_lines must be 0-5; match_limit must be 1-100.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -185,7 +186,7 @@ def command_specs(
         ToolSpec(
             name="tool_output.read",
             parallelism=ParallelismPolicy.SAFE_READ,
-            description="Read a bounded redacted excerpt from one command artifact.",
+            description="Read a bounded redacted excerpt from one command artifact. line_count must be 1-200; use continuation for more.",
             input_schema={
                 "type": "object",
                 "properties": {
@@ -700,6 +701,7 @@ class AutomationBroker:
             else call_id
         )
         refs = []
+        stream_artifacts = []
         artifact_streams: tuple[tuple[str | None, ArtifactKind], ...] = (
             (execution.stdout_artifact_id, "stdout"),
             (execution.stderr_artifact_id, "stderr"),
@@ -708,22 +710,22 @@ class AutomationBroker:
             if identifier is None:
                 continue
             artifact = self.store.get(Artifact, identifier)
-            refs.append(
-                artifact_ref(
-                    artifact,
-                    kind=kind,
-                    observed_byte_count=(
-                        execution.observed_stdout_bytes
-                        if kind == "stdout"
-                        else execution.observed_stderr_bytes
-                    ),
-                    truncated=(
-                        execution.stdout_truncated
-                        if kind == "stdout"
-                        else execution.stderr_truncated
-                    ),
-                )
+            ref = artifact_ref(
+                artifact,
+                kind=kind,
+                observed_byte_count=(
+                    execution.observed_stdout_bytes
+                    if kind == "stdout"
+                    else execution.observed_stderr_bytes
+                ),
+                truncated=(
+                    execution.stdout_truncated
+                    if kind == "stdout"
+                    else execution.stderr_truncated
+                ),
             )
+            refs.append(ref)
+            stream_artifacts.append((artifact, ref))
         failed = execution.status in {
             CommandExecutionStatus.FAILED,
             CommandExecutionStatus.TIMED_OUT,
@@ -750,6 +752,13 @@ class AutomationBroker:
             except OSError:
                 # diagnostic-expected: optional error hint; the original failed receipt remains visible.
                 pass  # The original receipt and artifact reference remain authoritative.
+        preview = (
+            []
+            if running
+            else small_output_preview(
+                self.output_service.artifact_store, stream_artifacts
+            )
+        )
         return ToolResultReceipt(
             tool_call_id=receipt_call_id,
             tool_name=name,
@@ -773,14 +782,19 @@ class AutomationBroker:
                 ),
             ),
             artifacts=refs,
+            output_preview=preview,
             truncated=execution.stdout_truncated or execution.stderr_truncated,
             incomplete=running or unreadable,
             warnings=(
-                ["Process output is available through artifact tools."] if refs else []
+                ["Process output is available through artifact tools."]
+                if refs and not preview
+                else []
             ),
             next_actions=(
                 [PROCESS_IO_NAME]
                 if running
+                else []
+                if preview
                 else ["tool_output.search", "tool_output.read"]
             ),
         )

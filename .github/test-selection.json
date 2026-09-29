@@ -1,22 +1,27 @@
 {
-  "change_digest": "899017a6579a41abdcdef2a69803c2aa437bfa37009131953feacf5c676a0cab",
-  "reviewed_by": "Codex focused review for overdue in-turn goal handoff",
-  "reason": "The change supplies an overdue provider instruction and wakes timed subagent waits that begin after the limit, so a long turn can hand off even if it missed both warning thresholds. The selected goal tests cover successive requests through overdue state and parked waits before and after expiry. The selected real-Core goal browser entries cover the operator lifecycle on desktop and mobile.",
-  "exclusions": "No full suite was authorized. UI and native source are unchanged, so frontend and native unit tests are excluded. Unrelated provider and browser journeys are excluded. The selected browser projects use emulation; no physical device is available. The focused instruction regression uses a fake provider and does not prove third-party provider compliance.",
+  "change_digest": "7e6b01ec841eceb03df16fc38adee433ef2fcd8b7ef15b7d1e474b2155a1f648",
+  "reviewed_by": "Codex focused review for command output efficiency",
+  "reason": "Command receipts now include a complete bounded redacted preview of small process streams, with artifact-only fallback and provider guidance. Selected Python cases cover local and generic recorders, redaction, fallback, chat instructions, and harness receipts. The real-Core live-tool-activity browser journey checks the visible activity and refresh path on desktop and mobile. The additional command-broker case executes a command and checks that its receipt carries the preview.",
+  "exclusions": "No full suite was authorized. Frontend and native source are unchanged, so those unit layers are excluded. Unrelated provider and browser journeys are excluded. Browser projects use emulation, not physical devices. The selected browser journey checks activity presentation; a production command-result workflow is verified separately after deployment.",
   "expected_tests": {
-    "python": 25,
+    "python": 6,
     "frontend": 0,
     "native": 0,
     "playwright": 3
   },
   "python": [
-    "tests/v3/test_chat_goals.py"
+    "tests/v3/test_automation_runtime.py::test_small_command_output_is_redacted_in_receipt_without_extra_read",
+    "tests/v3/test_automation_runtime.py::test_large_or_truncated_command_output_stays_artifact_only",
+    "tests/v3/test_storage_waste.py::test_small_process_stream_is_previewed_with_artifact_retained",
+    "tests/v3/test_chat_tool_loop.py::test_tool_turn_prompts_never_claim_the_turn_has_no_tools",
+    "tests/v3/test_harnesses.py::test_harness_gateway_captures_upstream_mcp_and_returns_only_receipt",
+    "tests/v3/test_storage_waste.py::test_a_command_stream_redaction_leaves_unchanged_is_stored_once"
   ],
   "frontend": [],
   "native": [],
   "playwright": [
-    "entry:provider-goal-lifecycle-core/assistant-real-desktop",
-    "entry:provider-goal-lifecycle-core/assistant-real-chromium-390",
-    "entry:provider-goal-lifecycle-core/assistant-real-webkit-390"
+    "entry:live-tool-activity/assistant-real-desktop",
+    "entry:live-tool-activity/assistant-real-chromium-390",
+    "entry:live-tool-activity/assistant-real-webkit-390"
   ]
 }
