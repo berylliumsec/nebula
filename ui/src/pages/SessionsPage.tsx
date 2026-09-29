@@ -3613,16 +3613,23 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat }: { em
 
   const openSideChat = async () => {
     if (sideChatId) { closeSideChat(); return; }
-    const boundary = [...messages].reverse().find(message => message.durable);
-    if (!api || !sessionId || !boundary || sideChatBusy || sending || authoritativeState?.busy) return;
+    if (!api || !sessionId || sideChatBusy) return;
+    const sourceSessionId = sessionId;
     setSideChatBusy(true);
     setChatError(undefined);
     try {
-      const source = sessions.find(item => item.id === sessionId);
-      const fork = await api.forkChatSession(sessionId, boundary.id, `Side chat · ${source?.title ?? "Conversation"}`.slice(0, 300), undefined, true);
+      // Core saves the operator's message before an active turn streams. The
+      // rendered transcript can still hold that message as an optimistic row.
+      const history = await api.listChatMessages(sourceSessionId);
+      const boundary = history[history.length - 1];
+      if (!boundary) throw new Error("No saved message is available yet. Retry once the turn starts.");
+      const source = sessions.find(item => item.id === sourceSessionId);
+      const fork = await api.forkChatSession(sourceSessionId, boundary.id, `Side chat · ${source?.title ?? "Conversation"}`.slice(0, 300), undefined, true);
       setSessions(current => [fork, ...current.filter(item => item.id !== fork.id)]);
-      setChatTerminalOpen(false);
-      updateSearchParams(params => params.set("sideChat", fork.id));
+      if (latestSearchParams().get("session") === sourceSessionId) {
+        setChatTerminalOpen(false);
+        updateSearchParams(params => params.set("sideChat", fork.id));
+      }
       try { await refreshSessions(); }
       catch (error) {
         void logCaughtDiagnostic("interface.sessions_page.side_chat_list", "Side chat opened, but the conversation list could not refresh.", error, "sessions_page");
@@ -5428,7 +5435,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat }: { em
             title={sideChatId ? "Close side chat; its conversation is saved" : "Open a side chat with the saved conversation history"}
             aria-expanded={Boolean(sideChatId)}
             aria-controls="workbench-side-chat"
-            disabled={!sideChatId && (!sessionId || !messages.some(message => message.durable) || sending || Boolean(authoritativeState?.busy) || sideChatBusy)}
+            disabled={!sideChatId && (!api || !sessionId || sideChatBusy)}
             onClick={() => void openSideChat()}>{sideChatBusy ? <LoaderCircle className="spin" size={18} aria-hidden="true" /> : <MessageSquarePlus size={18} aria-hidden="true" />}</button>}
           {view === "chat" && <button className="icon-button subtle" type="button"
             aria-label={sessionInspectorOpen ? "Hide session details" : "Show session details"}
@@ -5837,7 +5844,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat }: { em
               <button ref={mobileConversationActionsRef} className="icon-button subtle" type="button" aria-label="Conversation actions" title="Conversation actions" aria-haspopup="menu" aria-expanded={mobileConversationMenuOpen} aria-controls={mobileConversationMenuOpen ? "mobile-conversation-actions" : undefined} onClick={() => setMobileConversationMenuOpen((open) => !open)}><MoreHorizontal size={20} aria-hidden="true" /></button>
               {mobileConversationMenuOpen && <div className="mobile-conversation-menu-panel" id="mobile-conversation-actions" role="menu" aria-label="Conversation actions">
                 {conversationOpen && <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setTranscriptSearchOpen(true); }}><Search size={17} aria-hidden="true" /><span><strong>Search messages</strong><small>Messages and bookmarks</small></span></button>}
-                <button className="workbench-menu-item" type="button" role="menuitem" disabled={!sideChatId && (!sessionId || !messages.some(message => message.durable) || sending || Boolean(authoritativeState?.busy) || sideChatBusy)} onClick={() => { setMobileConversationMenuOpen(false); void openSideChat(); }}><MessageSquarePlus size={17} aria-hidden="true" /><span><strong>{sideChatId ? "Close side chat" : "Open side chat"}</strong><small>{sideChatId ? "Conversation stays saved" : "Continue with this history separately"}</small></span></button>
+                <button className="workbench-menu-item" type="button" role="menuitem" disabled={!sideChatId && (!api || !sessionId || sideChatBusy)} onClick={() => { setMobileConversationMenuOpen(false); void openSideChat(); }}><MessageSquarePlus size={17} aria-hidden="true" /><span><strong>{sideChatId ? "Close side chat" : "Open side chat"}</strong><small>{sideChatId ? "Conversation stays saved" : "Continue with this history separately"}</small></span></button>
                 <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setSessionInspectorOpen(true); }}><PanelRight size={17} aria-hidden="true" /><span><strong>Session details</strong><small>Context and results</small></span></button>
                 {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} triggerVariant="menu" />}
                 <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setFullScreen(true); }}><Maximize2 size={17} aria-hidden="true" /><span><strong>Focus mode</strong><small>Hide navigation</small></span></button>
