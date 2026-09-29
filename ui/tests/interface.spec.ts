@@ -4784,6 +4784,102 @@ test("assistant upgrade keeps a short operator message's actions on top and clic
   await expect(page.getByRole("button", { name: "Open parent" })).toBeVisible();
 });
 
+test("assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation", async ({ page }) => {
+  await installTruthfulCore(page);
+  const provider = {
+    ...entity, id: "side-chat-provider", name: "Side chat provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["side-model"], capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "side-model" },
+  };
+  const parent = { ...entity, id: "side-parent", engagement_id: "scratch-project", title: "Main research", backend: "provider", provider_profile_id: provider.id, model: "side-model", metadata: {} };
+  const side = { ...parent, id: "side-child", title: "Side chat · Main research", parent_session_id: parent.id, forked_from_message_id: "parent-answer", metadata: { side_chat: true } };
+  const question = { ...entity, id: "parent-question", engagement_id: "scratch-project", session_id: parent.id, sequence: 1, role: "user", content: "What did we find?", citations: [], metadata: {} };
+  const answer = { ...question, id: "parent-answer", sequence: 2, role: "assistant", content: "The release needs a rollback plan." };
+  let forkPayload: Record<string, unknown> | undefined;
+  let forkAttempts = 0;
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({ json: [provider] });
+    if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["side-model"] } });
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: [parent, ...(forkPayload ? [side] : [])] });
+    if (path.endsWith(`/chat/sessions/${parent.id}/fork`) && request.method() === "POST") {
+      forkAttempts += 1;
+      if (forkAttempts === 1) return route.fulfill({ status: 503, json: { detail: "Side chat temporarily unavailable" } });
+      forkPayload = request.postDataJSON();
+      return route.fulfill({ status: 201, json: side });
+    }
+    if (path.endsWith(`/chat/sessions/${parent.id}/messages`)) return route.fulfill({ json: [question, answer] });
+    if (path.endsWith(`/chat/sessions/${side.id}/messages`)) return route.fulfill({ json: [
+      { ...question, id: "side-question", session_id: side.id, source_message_id: question.id },
+      { ...answer, id: "side-answer", session_id: side.id, source_message_id: answer.id },
+    ] });
+    if (path.endsWith("/pending-turn")) return route.fulfill({ json: null });
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${parent.id}`, "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  if (mobile) {
+    await page.getByRole("button", { name: "Conversation actions" }).click();
+    await page.getByRole("menuitem", { name: /Open side chat/ }).click();
+  } else {
+    await page.getByRole("button", { name: "Open side chat", exact: true }).click();
+  }
+  await expect(page.getByRole("alert").filter({ hasText: "Side chat temporarily unavailable" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Side chat" })).toHaveCount(0);
+  if (mobile) {
+    await page.getByRole("button", { name: "Conversation actions" }).click();
+    await page.getByRole("menuitem", { name: /Open side chat/ }).click();
+  } else {
+    await page.getByRole("button", { name: "Open side chat", exact: true }).click();
+  }
+  await expect.poll(() => forkPayload).toMatchObject({ through_message_id: answer.id, side_chat: true });
+  await expect(page).toHaveURL(new RegExp(`session=${parent.id}.*sideChat=${side.id}`));
+  const sidePane = page.getByRole("region", { name: "Side chat" });
+  await expect(sidePane).toBeVisible();
+  await expect(sidePane.getByRole("button", { name: "Inherited history · 2 messages" })).toBeVisible();
+  await expect(sidePane.locator(".chat-message")).toHaveCount(0);
+  await sidePane.getByRole("button", { name: "Inherited history · 2 messages" }).click();
+  await expect(sidePane.locator(".chat-message")).toHaveCount(2);
+  await sidePane.getByRole("button", { name: "Inherited history · 2 messages" }).click();
+  if ((page.viewportSize()?.width ?? 1440) > 1100) {
+    const resize = page.getByRole("separator", { name: "Resize side chat" });
+    await expect(resize).toBeVisible();
+    const widths = async () => page.locator(".session-workspace.side-chat-open > .chat-panel, .side-chat-pane").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
+    const initial = await widths();
+    expect(Math.abs(initial[0] - initial[1])).toBeLessThanOrEqual(2);
+    await resize.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(async () => (await widths())[0]).toBeGreaterThan(initial[0]);
+    const keyboardWidth = (await widths())[0];
+    const handle = await resize.boundingBox();
+    expect(handle).not.toBeNull();
+    await page.mouse.move(handle!.x + handle!.width / 2, handle!.y + handle!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle!.x + handle!.width / 2 + 60, handle!.y + handle!.height / 2);
+    await page.mouse.up();
+    await expect.poll(async () => (await widths())[0]).toBeGreaterThan(keyboardWidth);
+    await page.reload();
+    await expect(sidePane).toBeVisible();
+    await expect.poll(async () => (await widths())[0]).toBeGreaterThan(initial[0]);
+  } else {
+    await expect(page.getByRole("separator", { name: "Resize side chat" })).toBeHidden();
+    const sideWidth = await sidePane.evaluate(node => node.getBoundingClientRect().width);
+    const workspaceWidth = await page.locator(".session-workspace.side-chat-open").evaluate(node => node.getBoundingClientRect().width);
+    expect(Math.abs(sideWidth - workspaceWidth)).toBeLessThanOrEqual(2);
+  }
+  expect((await new AxeBuilder({ page }).include("#workbench-side-chat").analyze()).violations).toEqual([]);
+  await sidePane.getByRole("button", { name: (page.viewportSize()?.width ?? 1440) <= 1100 ? "Back to parent conversation" : "Close side chat" }).click();
+  await expect(sidePane).toHaveCount(0);
+  await expect(page).not.toHaveURL(/sideChat=/);
+  if (mobile) await page.getByRole("button", { name: "Open conversations", exact: true }).click();
+  else if (await page.getByRole("button", { name: "Show conversations" }).isVisible()) await page.getByRole("button", { name: "Show conversations" }).click();
+  await page.locator(`.session-select[data-session-id="${side.id}"]`).click();
+  await expect(sidePane).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`session=${parent.id}.*sideChat=${side.id}`));
+});
+
 test("New chat detaches from an in-flight saved conversation load", async ({ page }) => {
   const savedSessionId = "chat-loading-while-detaching";
   await page.route("**/api/v1/**", async (route) => {

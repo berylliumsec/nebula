@@ -3598,6 +3598,7 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     harnessSessionId: value.harness_session_id ?? undefined,
     parentSessionId: value.parent_session_id ?? undefined,
     isSubagent: typeof value.metadata?.subagent_id === "string" && value.metadata.subagent_id.length > 0,
+    isSideChat: value.metadata?.side_chat === true,
     forkedFromMessageId: value.forked_from_message_id ?? undefined,
     model: value.model ?? undefined,
     toolsEnabled: value.metadata?.tools_enabled === true,
@@ -9101,6 +9102,7 @@ export class ApiClient {
     throughMessageId: string | undefined,
     title?: string,
     beforeMessageId?: string,
+    sideChat = false,
   ): Promise<ChatSessionSummary> {
     return this.request<WireChatSession>(
       `chat/sessions/${encodeURIComponent(sessionId)}/fork`,
@@ -9110,6 +9112,7 @@ export class ApiClient {
           through_message_id: throughMessageId,
           before_message_id: beforeMessageId,
           title,
+          side_chat: sideChat,
         }),
       },
     ).then(mapChatSession);

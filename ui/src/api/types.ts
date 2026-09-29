@@ -2278,6 +2278,8 @@ export interface ChatSessionSummary {
   parentSessionId?: Identifier;
   /** Core marks delegated subagent sessions separately from ordinary branches. */
   isSubagent?: boolean;
+  /** Core marks side chats separately from ordinary transcript branches. */
+  isSideChat?: boolean;
   forkedFromMessageId?: Identifier;
   model?: string;
   toolsEnabled: boolean;

@@ -102,6 +102,17 @@
       {"area":"subagent-sidebar","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade nests subagents beneath a collapsed main conversation|assistant upgrade sidebar follows subagents created during an active turn","runtime":"mock","shard":"1/1"},
       {"area":"subagent-sidebar","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade real Core nests durable subagent conversations","runtime":"real-core","shard":"1/1"}
     ],
+    "side-chat": [
+      {"area":"side-chat","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat","project":"compact","test_match":"tests/interface.spec.ts","grep":"assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade side chat toolbar inherits saved history and restores an adjustable parallel conversation","runtime":"mock","shard":"1/1"},
+      {"area":"side-chat","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade side chat inherits Core history and replies independently after reload","runtime":"real-core","shard":"1/1"}
+    ],
     "ssh-environments": [
       {"area":"ssh-environments","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"ssh environments list config hosts","runtime":"real-core","shard":"1/1"},
       {"area":"ssh-environments","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"ssh environments list config hosts","runtime":"real-core","shard":"1/1"},
