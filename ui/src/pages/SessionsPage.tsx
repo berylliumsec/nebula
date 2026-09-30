@@ -33,6 +33,7 @@ import { AgentViewPanel, useStructuredResults, useUnseenCount } from "../compone
 import { ChatSubagentAttention, ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentEffortField, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
 import { useChatNavigation } from "./useChatNavigation";
 import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionList";
+import { sideChatForConversation } from "./sideChatSelection";
 import { providerTurnFollowAction, transcriptShowsTurn } from "./providerTurnFollow";
 import { groupSidebarConversations } from "./conversationSidebar";
 import { subagentRequestFields } from "./chatSubagentChoice";
@@ -869,7 +870,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   } = useWorkbenchDrafts();
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedSessionId = searchParams.get(embeddedSideChat ? "sideChat" : "session") ?? "";
-  const sideChatId = embeddedSideChat ? "" : searchParams.get("sideChat") ?? "";
+  const requestedSideChatId = embeddedSideChat ? "" : searchParams.get("sideChat") ?? "";
   // The URL is the only authority for the Workbench view, so every control on
   // screen was rendered from the location it writes back to. Deep links that
   // omit `view` (a conversation or mission) keep the view the URL last named.
@@ -888,6 +889,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   const openUnattachedChatView = () => updateSearchParams(params => {
     params.set("view", (sessionViewFromParam(params.get("view")) ?? view) === "browser" ? "browser" : "chat");
     params.delete(embeddedSideChat ? "sideChat" : "session");
+    if (!embeddedSideChat) params.delete("sideChat");
   }, { replace: true });
   const consumedSelectionHandoff = useRef<string | null>(null);
   const clearSubmittedContext = () => {
@@ -900,6 +902,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     updateSearchParams(params => {
       if (!preserveSurface && !embeddedSideChat) params.set("view", params.get("view") === "browser" ? "browser" : "chat");
       if (params.get("handoff") === consumedSelectionHandoff.current) params.delete("handoff");
+      if (!embeddedSideChat && params.get("session") !== id) params.delete("sideChat");
       params.set(embeddedSideChat ? "sideChat" : "session", id);
     }, { replace: true });
   };
@@ -1030,6 +1033,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   const [archivingSessionId, setArchivingSessionId] = useState<string>();
   const [archivedGroupOpen, setArchivedGroupOpen] = useState(false);
   const [sessionId, setSessionId] = useState("");
+  const [sideChatLookup, setSideChatLookup] = useState<{ engagementId: string; parentId: string; items: ChatSessionSummary[] }>();
+  // A side chat may be rendered only beside the conversation that owns it.
+  // Core is authoritative for that ownership; an unverified URL is never enough.
+  const sideChatId = !embeddedSideChat && requestedSessionId === sessionId
+    && sideChatLookup !== undefined && sideChatLookup.engagementId === engagement?.id && sideChatLookup.parentId === sessionId
+    && sideChatForConversation(sideChatLookup.items, sessionId, requestedSideChatId)?.id === requestedSideChatId
+    ? requestedSideChatId : "";
   useEffect(() => {
     const selected = sessions.find(session => session.id === sessionId);
     const parent = selected?.isSubagent ? sessions.find(session => session.id === selected.parentSessionId) : undefined;
@@ -1252,16 +1262,6 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   const [showInheritedHistory, setShowInheritedHistory] = useState(false);
   const [sideChatBusy, setSideChatBusy] = useState(false);
   const [sideChatError, setSideChatError] = useState<string>();
-  useEffect(() => {
-    if (embeddedSideChat || !api || !sideChatId) return;
-    const renew = () => { void api.keepTemporaryChatAlive(sideChatId).catch(error => {
-      void logCaughtDiagnostic("interface.sessions_page.side_chat_keepalive", "A temporary side chat could not renew its lease.", error, "sessions_page");
-    }); };
-    renew();
-    const timer = window.setInterval(renew, 5 * 60_000);
-    window.addEventListener("focus", renew);
-    return () => { window.clearInterval(timer); window.removeEventListener("focus", renew); };
-  }, [api, embeddedSideChat, sideChatId]);
   useEffect(() => setShowInheritedHistory(false), [sessionId]);
   const [replacedMessages, setReplacedMessages] = useState<PersistedChatMessage[]>([]);
   const [messageEdit, setMessageEdit] = useState<MessageEdit>();
@@ -2305,6 +2305,32 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       });
     return () => controller.abort();
   }, [api, coreState, engagement, embeddedSideChat, requestedSessionId]);
+
+  useEffect(() => {
+    if (embeddedSideChat || !api || !engagement || !sessionId
+      || requestedSessionId !== sessionId || view !== "chat") return;
+    const parentId = sessionId;
+    const engagementId = engagement.id;
+    const controller = new AbortController();
+    void api.listConversationSideChats(parentId, controller.signal).then((items) => {
+      if (controller.signal.aborted || activeEngagementIdRef.current !== engagementId) return;
+      setSideChatLookup({engagementId, parentId, items});
+      const current = latestSearchParams();
+      if (current.get("session") !== parentId) return;
+      const selected = sideChatForConversation(items, parentId, current.get("sideChat"));
+      if ((current.get("sideChat") ?? "") === (selected?.id ?? "")) return;
+      updateSearchParams(params => {
+        if (params.get("session") !== parentId) return;
+        if (selected) params.set("sideChat", selected.id);
+        else params.delete("sideChat");
+      }, {replace: true});
+    }).catch((error) => {
+      if (controller.signal.aborted) return;
+      void logCaughtDiagnostic("interface.sessions_page.side_chat_restore", "The side chat for this conversation could not be loaded.", error, "sessions_page");
+      setChatError("Could not restore this conversation's side chat. Retry from the side chat button.");
+    });
+    return () => controller.abort();
+  }, [api, coreState, embeddedSideChat, engagement?.id, requestedSessionId, sessionId, updateSearchParams, view]);
 
   useEffect(() => {
     return () => {
@@ -3638,6 +3664,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   const closeSideChat = async () => {
     if (!api || !sideChatId || sideChatBusy) return;
     const closingId = sideChatId;
+    const closingParentId = sessionId;
     setSideChatBusy(true);
     setSideChatError(undefined);
     try {
@@ -3648,12 +3675,16 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
         draftStore.clear(chatDraftStorageKey(engagement.id, closingId));
         clearChatFollowUps(sessionStorage, chatFollowUpStorageKey(engagement.id, closingId));
       }
+      setSideChatLookup(current => current?.parentId === closingParentId
+        ? {...current, items: current.items.filter(item => item.id !== closingId)} : current);
       if (latestSearchParams().get("sideChat") === closingId) {
         updateSearchParams(params => params.delete("sideChat"));
       }
-      requestAnimationFrame(() => sideChatButtonRef.current?.focus());
+      if (latestSearchParams().get("session") === closingParentId) {
+        requestAnimationFrame(() => sideChatButtonRef.current?.focus());
+      }
     } catch (error) {
-      void logCaughtDiagnostic("interface.sessions_page.side_chat_discard", "The temporary side chat could not be discarded.", error, "sessions_page");
+      void logCaughtDiagnostic("interface.sessions_page.side_chat_discard", "The side chat could not be discarded.", error, "sessions_page");
       setSideChatError(error instanceof Error ? error.message : "Could not close the side chat. Retry.");
     } finally {
       setSideChatBusy(false);
@@ -3661,7 +3692,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   };
 
   const unavailableSideChat = () => {
-    setChatError("This temporary side chat is no longer available. Open a new one from the parent conversation.");
+    setChatError("This side chat is no longer available. Open a new one from its conversation.");
+    setSideChatLookup(current => current
+      ? {...current, items: current.items.filter(item => item.id !== requestedSideChatId)} : current);
     updateSearchParams(params => params.delete("sideChat"), {replace: true});
   };
 
@@ -3674,6 +3707,17 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     setSideChatError(undefined);
     setChatError(undefined);
     try {
+      // Look up the durable side chat before forking, including when an earlier
+      // restore failed or another browser opened it after this page loaded.
+      const existing = sideChatForConversation(await api.listConversationSideChats(sourceSessionId), sourceSessionId);
+      if (existing) {
+        if (latestSearchParams().get("session") === sourceSessionId) {
+          setSideChatLookup({engagementId: existing.engagementId, parentId: sourceSessionId, items: [existing]});
+          setChatTerminalOpen(false);
+          updateSearchParams(params => params.set("sideChat", existing.id));
+        }
+        return;
+      }
       // Core saves the operator's message before an active turn streams. The
       // rendered transcript can still hold that message as an optimistic row.
       const history = await api.listChatMessages(sourceSessionId);
@@ -3681,10 +3725,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       if (!boundary) throw new Error("No saved message is available yet. Retry once the turn starts.");
       const source = sessions.find(item => item.id === sourceSessionId);
       const fork = await api.forkChatSession(sourceSessionId, boundary.id, `Side chat · ${source?.title ?? "Conversation"}`.slice(0, 300), undefined, true);
-      // The main conversation may have changed while the fork was in flight.
-      // Keep the new pane beside whichever conversation is selected now.
-      setChatTerminalOpen(false);
-      updateSearchParams(params => params.set("sideChat", fork.id));
+      // A delayed fork belongs to its source conversation, even if the
+      // operator selected another main conversation while Core was saving it.
+      if (latestSearchParams().get("session") === sourceSessionId) {
+        setSideChatLookup({engagementId: fork.engagementId, parentId: sourceSessionId, items: [fork]});
+        setChatTerminalOpen(false);
+        updateSearchParams(params => params.set("sideChat", fork.id));
+      }
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions_page.side_chat", "Side chat creation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not open a side chat. Retry from the conversation toolbar.");
@@ -3853,7 +3900,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       }, { replace: true });
     }).catch((error) => {
       if (!controller.signal.aborted && !(error instanceof ApiError && error.status === 404)) {
-        void logCaughtDiagnostic("interface.sessions_page.legacy_side_chat", "A temporary side-chat link could not be resolved.", error, "sessions_page");
+        void logCaughtDiagnostic("interface.sessions_page.legacy_side_chat", "A side-chat link could not be resolved.", error, "sessions_page");
       }
     });
     return () => controller.abort();
@@ -5493,7 +5540,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
             onClick={() => setChatTerminalOpen(!chatTerminalOpen)}><SquareTerminal size={18} aria-hidden="true" /></button>}
           {view === "chat" && !embeddedSideChat && <button ref={sideChatButtonRef} className="icon-button subtle" type="button"
             aria-label={sideChatId ? "Close side chat" : "Open side chat"}
-            title={sideChatId ? "Close and discard the temporary side chat" : "Open a temporary side chat with this conversation's saved history"}
+            title={sideChatId ? "Close and discard this side chat" : "Open a side chat for this conversation"}
             aria-expanded={Boolean(sideChatId)}
             aria-controls="workbench-side-chat"
             disabled={sideChatBusy || (!sideChatId && (!api || !sessionId))}
@@ -5795,10 +5842,10 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     const parentTitle = sessions.find(item => item.id === activeChatSession?.parentSessionId)?.title ?? "Parent conversation";
     return <section className="side-chat-pane" id="workbench-side-chat" role="region" aria-label="Side chat">
       <header className="side-chat-header">
-        <button className="icon-button subtle side-chat-back" type="button" aria-label="Close side chat" title="Close and discard temporary side chat" disabled={sideChatClosing} onClick={onCloseSideChat}><ChevronLeft size={18} aria-hidden="true" /></button>
+        <button className="icon-button subtle side-chat-back" type="button" aria-label="Close side chat" title="Close and discard this side chat" disabled={sideChatClosing} onClick={onCloseSideChat}><ChevronLeft size={18} aria-hidden="true" /></button>
         <div><strong>Side chat</strong><small title={activeChatSession?.title}>{activeChatSession?.title.replace(/^Side chat · /, "") ?? "Loading conversation…"}</small></div>
         <button className="icon-button subtle side-chat-conversations" type="button" aria-label="Choose main conversation" title="Choose main conversation" aria-expanded={sideChatConversationListOpen} aria-controls="workbench-conversations" onClick={onShowConversations}><PanelLeft size={18} aria-hidden="true" /></button>
-        <button className="icon-button subtle side-chat-close" type="button" aria-label="Close side chat" title="Close and discard temporary side chat" disabled={sideChatClosing} onClick={onCloseSideChat}>{sideChatClosing ? <LoaderCircle className="spin" size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}</button>
+        <button className="icon-button subtle side-chat-close" type="button" aria-label="Close side chat" title="Close and discard this side chat" disabled={sideChatClosing} onClick={onCloseSideChat}>{sideChatClosing ? <LoaderCircle className="spin" size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}</button>
       </header>
       {sideChatCloseError && <DiagnosticErrorNotice error={sideChatCloseError} fallback="Could not close the side chat. Retry." compact />}
       <div className="side-chat-context">
@@ -5906,7 +5953,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
               <button ref={mobileConversationActionsRef} className="icon-button subtle" type="button" aria-label="Conversation actions" title="Conversation actions" aria-haspopup="menu" aria-expanded={mobileConversationMenuOpen} aria-controls={mobileConversationMenuOpen ? "mobile-conversation-actions" : undefined} onClick={() => setMobileConversationMenuOpen((open) => !open)}><MoreHorizontal size={20} aria-hidden="true" /></button>
               {mobileConversationMenuOpen && <div className="mobile-conversation-menu-panel" id="mobile-conversation-actions" role="menu" aria-label="Conversation actions">
                 {conversationOpen && <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setTranscriptSearchOpen(true); }}><Search size={17} aria-hidden="true" /><span><strong>Search messages</strong><small>Messages and bookmarks</small></span></button>}
-                <button className="workbench-menu-item" type="button" role="menuitem" disabled={sideChatBusy || (!sideChatId && (!api || !sessionId))} onClick={() => { setMobileConversationMenuOpen(false); void openSideChat(); }}><MessageSquarePlus size={17} aria-hidden="true" /><span><strong>{sideChatId ? "Close side chat" : "Open side chat"}</strong><small>{sideChatId ? "Discard temporary chat" : "Explore this history temporarily"}</small></span></button>
+                <button className="workbench-menu-item" type="button" role="menuitem" disabled={sideChatBusy || (!sideChatId && (!api || !sessionId))} onClick={() => { setMobileConversationMenuOpen(false); void openSideChat(); }}><MessageSquarePlus size={17} aria-hidden="true" /><span><strong>{sideChatId ? "Close side chat" : "Open side chat"}</strong><small>{sideChatId ? "Discard this side chat" : "Keep a side chat with this conversation"}</small></span></button>
                 <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setSessionInspectorOpen(true); }}><PanelRight size={17} aria-hidden="true" /><span><strong>Session details</strong><small>Context and results</small></span></button>
                 {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} triggerVariant="menu" />}
                 <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setFullScreen(true); }}><Maximize2 size={17} aria-hidden="true" /><span><strong>Focus mode</strong><small>Hide navigation</small></span></button>

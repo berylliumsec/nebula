@@ -8979,6 +8979,11 @@ export class ApiClient {
     return this.request<WireChatSession>(`chat-sessions/${encodeURIComponent(sessionId)}`, {signal}).then(mapChatSession);
   }
 
+  listConversationSideChats(sessionId: string, signal?: AbortSignal): Promise<ChatSessionSummary[]> {
+    return this.request<WireChatSession[]>(`chat/sessions/${encodeURIComponent(sessionId)}/side-chats`, {signal})
+      .then((items) => items.map(mapChatSession));
+  }
+
   listChatSessionActivity(
     engagementId: string,
     signal?: AbortSignal,

@@ -4825,6 +4825,8 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   let forkPayload: Record<string, unknown> | undefined;
   let forkAttempts = 0;
   let discardAttempts = 0;
+  let sideCreated = false;
+  let sideDiscarded = false;
   await page.context().route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -4832,9 +4834,12 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
     if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["side-model"] } });
     if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: [parent, other] });
     if (path.endsWith(`/chat-sessions/${side.id}`) && request.method() === "GET") return route.fulfill({ json: side });
+    if (path.endsWith(`/chat/sessions/${parent.id}/side-chats`) && request.method() === "GET") return route.fulfill({ json: sideCreated && !sideDiscarded ? [side] : [] });
+    if (path.endsWith(`/chat/sessions/${other.id}/side-chats`) && request.method() === "GET") return route.fulfill({ json: [] });
     if (path.endsWith(`/chat/temporary-sessions/${side.id}`) && request.method() === "DELETE") {
       discardAttempts += 1;
       if (discardAttempts === 1) return route.fulfill({ status: 503, json: { detail: "Could not discard side chat" } });
+      sideDiscarded = true;
       return route.fulfill({ status: 204 });
     }
     if (path.endsWith(`/chat/temporary-sessions/${side.id}/keepalive`) && request.method() === "POST") return route.fulfill({ status: 204 });
@@ -4842,6 +4847,7 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
       forkAttempts += 1;
       if (forkAttempts === 1) return route.fulfill({ status: 503, json: { detail: "Side chat temporarily unavailable" } });
       forkPayload = request.postDataJSON();
+      sideCreated = true;
       return route.fulfill({ status: 201, json: side });
     }
     if (path.endsWith(`/chat/sessions/${parent.id}/messages`)) return route.fulfill({ json: [question, answer] });
@@ -4893,18 +4899,29 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   }
   if (mobile) await otherConversation.tap();
   else await otherConversation.click();
-  await expect(page).toHaveURL(new RegExp(`session=${other.id}.*sideChat=${side.id}`));
-  await expect(sidePane).toBeVisible();
-  await expect(sideDraft).toHaveValue("Keep this side chat open");
+  await expect(page).toHaveURL(new RegExp(`session=${other.id}`));
+  await expect(page).not.toHaveURL(/sideChat=/);
+  await expect(sidePane).toHaveCount(0);
   expect(discardAttempts).toBe(0);
   // WebKit's full reload bypasses this fixture's mocked API routes. The
   // real-Core journey checks reload against a production server instead.
   if (!testInfo.project.name.startsWith("mobile-webkit")) {
     await page.reload();
-    await expect(sidePane).toBeVisible();
-    await expect(page).toHaveURL(new RegExp(`session=${other.id}.*sideChat=${side.id}`));
+    await expect(sidePane).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`session=${other.id}`));
+    await expect(page).not.toHaveURL(/sideChat=/);
     expect(discardAttempts).toBe(0);
   }
+  const parentConversation = page.locator(`.session-select[data-session-id="${parent.id}"]`);
+  await page.locator(".session-workspace > .chat-panel").waitFor();
+  if (mobile) await page.getByRole("button", { name: "Open conversations" }).click();
+  else if (!(await parentConversation.isVisible())) await page.getByRole("button", { name: "Show conversations" }).click();
+  await parentConversation.waitFor({state: "visible"});
+  if (mobile) await parentConversation.tap();
+  else await parentConversation.click();
+  await expect(page).toHaveURL(new RegExp(`session=${parent.id}.*sideChat=${side.id}`));
+  await expect(sidePane).toBeVisible();
+  await expect(sideDraft).toHaveValue("Keep this side chat open");
   if ((page.viewportSize()?.width ?? 1440) > 760) {
     const resize = page.getByRole("separator", { name: "Resize side chat" });
     await expect(resize).toBeVisible();

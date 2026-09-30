@@ -25,14 +25,13 @@ def is_temporary_chat(chat: ChatSession) -> bool:
 
 
 def temporary_chat_expired(chat: ChatSession) -> bool:
-    # A side pane renews its lease every five minutes while it is open. An
-    # abandoned tab should not leave a visible or long-lived conversation.
-    lifetime = (
-        timedelta(minutes=30)
-        if chat.metadata.get("side_chat") is True
-        else timedelta(days=1)
+    # Side chats belong to their parent conversation until the operator closes
+    # them. Only detached Ask Nebula popups have an abandonment lease.
+    return (
+        chat.metadata.get("side_chat") is not True
+        and chat.metadata.get("temporary_assistant") is True
+        and chat.updated_at + timedelta(days=1) < utc_now()
     )
-    return is_temporary_chat(chat) and chat.updated_at + lifetime < utc_now()
 
 
 class TemporaryChatRequest(BaseModel):
@@ -100,6 +99,25 @@ def temporary_chat_router(store, chat_service, harness_runtime):
                 await task
 
     router = APIRouter(tags=["chat"], lifespan=lifespan)
+
+    @router.get(
+        "/chat/sessions/{session_id}/side-chats", response_model=list[ChatSession]
+    )
+    async def list_side_chats(session_id: str):
+        try:
+            parent = store.get(ChatSession, session_id)
+        except NotFoundError:
+            raise HTTPException(404, "Conversation not found") from None
+        return [
+            chat
+            for chat in store.find_entities(
+                ChatSession,
+                {"parent_session_id": session_id},
+                engagement_id=parent.engagement_id,
+                newest_first=True,
+            )
+            if chat.metadata.get("side_chat") is True
+        ]
 
     @router.post(
         "/chat/temporary-sessions", response_model=ChatSession, status_code=201
