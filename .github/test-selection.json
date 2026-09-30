@@ -1,34 +1,40 @@
 {
-  "change_digest": "264b5479e0af2ee67f858fd27754742271ebc73a5ac91f9677290e7cc80838fa",
-  "reviewed_by": "Codex file navigation search review",
-  "reason": "Files and Code expose visible search icons; the bounded workspace search API returns directories, and selecting a result opens its folder or file. One backend case, both affected component files, eight production LAN mock browser profiles, and one isolated real-Core production LAN journey cover the search and navigation path.",
-  "exclusions": "No native runtime changed. The split-pane storage edit classifies an existing expected fallback and changes no runtime behavior, so it needs no extra journey. Unrelated backend, frontend, and browser suites are excluded. Physical-device testing is unavailable; permanent mobile browser profiles provide emulated coverage.",
+  "change_digest": "4e9901ee7c9e6edcbc4308d57755d26886e4fe94e5d688861fe44ab5afd6d811",
+  "reviewed_by": "Codex side chat lifecycle review",
+  "reason": "Temporary side chats must remain beside the parent at desktop and compact widths, inherit only saved parent messages without goals, decisions, tools, project instructions, or vendor settings, stay out of project conversations, survive refresh while open, and discard on close or after lease expiry. Five backend cases cover provider and harness history-only forks and lifecycle; eight mock browser profiles cover geometry, resize, accessibility, and close retry; five production real-Core journeys cover desktop and compact split, refresh, legacy direct links, and opening during an active parent turn on desktop and mobile engines.",
+  "exclusions": "No native code or isolated frontend unit logic changed, so native and frontend selections are empty. The production UI build and selected browser journeys cover the changed client workflow. Unrelated chat, provider, harness, and full suites are excluded.",
   "expected_tests": {
-    "python": 1,
-    "frontend": 40,
+    "python": 5,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 13
   },
   "python_versions": [
     "3.11"
   ],
+  "python_node": false,
   "python": [
-    "tests/v3/test_workspace.py::test_workspace_search_is_recursive_bounded_and_never_follows_symlinks"
+    "tests/v3/test_chat_api.py::test_side_chat_snapshots_active_provider_turn_without_copying_goal",
+    "tests/v3/test_chat_api.py::test_side_chat_snapshots_active_harness_with_independent_vendor_session",
+    "tests/v3/test_temporary_chat.py::test_side_chat_is_hidden_leased_and_discarded_without_touching_parent",
+    "tests/v3/test_temporary_chat.py::test_abandoned_side_chat_expires_before_popup_chat",
+    "tests/v3/test_temporary_chat.py::test_discarding_running_side_reply_cancels_only_side_turn"
   ],
-  "frontend": [
-    "ui/src/components/WorkspacePanel.test.tsx",
-    "ui/src/components/CodeEditorPanel.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:editor-files-scroll/desktop",
-    "entry:editor-files-scroll/compact",
-    "entry:editor-files-scroll/mobile-chromium-small",
-    "entry:editor-files-scroll/mobile-chromium-ledger-390",
-    "entry:editor-files-scroll/mobile-chromium-wide",
-    "entry:editor-files-scroll/mobile-webkit-small",
-    "entry:editor-files-scroll/mobile-webkit",
-    "entry:editor-files-scroll/mobile-webkit-wide",
-    "entry:file-search-real-core/real-core"
+    "entry:side-chat/desktop",
+    "entry:side-chat/compact",
+    "entry:side-chat/mobile-chromium-small",
+    "entry:side-chat/mobile-chromium-ledger-390",
+    "entry:side-chat/mobile-chromium-wide",
+    "entry:side-chat/mobile-webkit-small",
+    "entry:side-chat/mobile-webkit",
+    "entry:side-chat/mobile-webkit-wide",
+    "entry:side-chat/assistant-real-desktop",
+    "entry:side-chat/assistant-real-compact",
+    "entry:side-chat-active/assistant-real-desktop",
+    "entry:side-chat-active/assistant-real-chromium-390",
+    "entry:side-chat-active/assistant-real-webkit-390"
   ]
 }

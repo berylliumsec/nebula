@@ -9213,6 +9213,29 @@ def create_app(
     )
     async def create_chat_completion(request: ChatCompletionRequest) -> Any:
         if request.session_id:
+            selected_chat = store.get(ChatSession, request.session_id)
+            if selected_chat.metadata.get("side_chat") is True:
+                # The side pane is a history-only conversation. A stale tab or
+                # direct API caller cannot attach the parent's project tools,
+                # knowledge, goals, decisions, or selected context to its turn.
+                request = request.model_copy(
+                    update={
+                        "goal_id": None,
+                        "skill": None,
+                        "harness_skill": None,
+                        "mcp_server_ids": [],
+                        "ssh_environment_ids": [],
+                        "hook_ids": [],
+                        "context_attachments": [],
+                        "include_knowledge": False,
+                        "allow_cloud_knowledge": False,
+                        "tools_enabled": False,
+                        "allow_subagents": False,
+                        "allow_agent_messaging": False,
+                        "pending_provider_subagent": None,
+                        "allow_cloud_tool_results": False,
+                    }
+                )
             unarchive_chat_session(store, request.session_id)
         if request.backend == ChatBackend.HARNESS:
             engagement_id = request.engagement_id
@@ -10563,11 +10586,21 @@ def create_app(
                 raise HarnessStateError(
                     "harness conversation has no vendor session to branch"
                 )
-            harness_session_id = harness_runtime.fork_session(
-                source.harness_session_id,
-                reason=f"conversation fork through {request.through_message_id}",
-                allow_active=request.side_chat,
-            ).id
+            if request.side_chat:
+                # A side pane receives the saved chat transcript through the
+                # handoff path, not the parent's vendor settings or runtime.
+                harness_session_id = harness_runtime.create_session(
+                    engagement_id=source.engagement_id,
+                    profile_id=source.harness_profile_id or "",
+                    model=source.model,
+                    mcp_server_ids=[],
+                    tools_enabled=False,
+                ).id
+            else:
+                harness_session_id = harness_runtime.fork_session(
+                    source.harness_session_id,
+                    reason=f"conversation fork through {request.through_message_id}",
+                ).id
         try:
             return chat_service().fork_session(
                 session_id,

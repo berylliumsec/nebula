@@ -24,6 +24,17 @@ def is_temporary_chat(chat: ChatSession) -> bool:
     )
 
 
+def temporary_chat_expired(chat: ChatSession) -> bool:
+    # A side pane renews its lease every five minutes while it is open. An
+    # abandoned tab should not leave a visible or long-lived conversation.
+    lifetime = (
+        timedelta(minutes=30)
+        if chat.metadata.get("side_chat") is True
+        else timedelta(days=1)
+    )
+    return is_temporary_chat(chat) and chat.updated_at + lifetime < utc_now()
+
+
 class TemporaryChatRequest(BaseModel):
     engagement_id: str = Field(min_length=1, max_length=200)
     session_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -67,8 +78,7 @@ def temporary_chat_router(store, chat_service, harness_runtime):
             expired = [
                 row.id
                 for row in store.iter_readable_entities(ChatSession)
-                if is_temporary_chat(row)
-                and row.updated_at + timedelta(days=1) < utc_now()
+                if temporary_chat_expired(row)
             ]
             for session_id in expired:
                 try:

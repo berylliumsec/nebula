@@ -3071,9 +3071,15 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     await page.getByRole("button", {name: "Open side chat", exact: true}).click();
     const side = page.getByRole("region", {name: "Side chat"});
     await expect(side).toBeVisible();
+    const parentPanel = page.locator(".session-workspace.side-chat-open > .chat-panel");
+    await expect(parentPanel).toBeVisible();
+    const widths = await page.locator(".session-workspace.side-chat-open > .chat-panel, .side-chat-pane").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
+    expect(widths).toHaveLength(2);
+    expect(Math.abs(widths[0] - widths[1])).toBeLessThanOrEqual(2);
     await expect(side.getByRole("button", {name: "Inherited history · 2 messages"})).toBeVisible();
     const sideId = new URL(page.url()).searchParams.get("sideChat");
     expect(sideId).toBeTruthy();
+    await expect(page.locator(`.session-select[data-session-id="${sideId}"]`)).toHaveCount(0);
     await side.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Independent follow-up");
     await side.getByRole("button", {name: "Send message", exact: true}).click();
     await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up", {timeout: 30_000});
@@ -3089,6 +3095,9 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     await expect(side).toBeVisible({timeout: 20_000});
     await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up");
     await expect(page.locator(".session-workspace > .chat-panel")).not.toContainText("Independent follow-up");
+    await page.goto(`${core.origin}/?view=chat&session=${sideId}`);
+    await expect(page).toHaveURL(new RegExp(`session=${parent.session_id}.*sideChat=${sideId}`));
+    await expect(side).toBeVisible();
     await side.getByRole("button", {name: "Close side chat"}).click();
     await expect(side).toHaveCount(0);
     await expect(page).not.toHaveURL(/sideChat=/);

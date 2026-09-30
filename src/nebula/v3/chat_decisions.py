@@ -12,13 +12,19 @@ from .storage import ConflictError
 
 
 def decisions_for(store, session_id, project_id):
+    side_chat = bool(
+        session_id
+        and store.get(ChatSession, session_id).metadata.get("side_chat") is True
+    )
     with store.database.session() as database:
         rows = database.scalars(
             select(EntityRow)
             .where(
                 EntityRow.kind == "chat_decisions",
                 EntityRow.engagement_id == project_id,
-                or_(
+                EntityRow.chat_session_id == session_id
+                if side_chat
+                else or_(
                     EntityRow.chat_session_id == session_id,
                     EntityRow.payload["scope"].as_string() == "project",
                 ),

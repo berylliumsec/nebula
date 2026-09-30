@@ -4852,9 +4852,11 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   await sidePane.getByRole("button", { name: "Inherited history · 2 messages" }).click();
   await expect(sidePane.locator(".chat-message")).toHaveCount(2);
   await sidePane.getByRole("button", { name: "Inherited history · 2 messages" }).click();
-  if ((page.viewportSize()?.width ?? 1440) > 1100) {
+  if ((page.viewportSize()?.width ?? 1440) > 760) {
     const resize = page.getByRole("separator", { name: "Resize side chat" });
     await expect(resize).toBeVisible();
+    await expect(page.locator(".session-workspace.side-chat-open > .chat-panel")).toBeVisible();
+    if ((page.viewportSize()?.width ?? 1440) <= 1100) await expect(page.locator(".session-list")).toBeHidden();
     const widths = async () => page.locator(".session-workspace.side-chat-open > .chat-panel, .side-chat-pane").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
     const initial = await widths();
     expect(Math.abs(initial[0] - initial[1])).toBeLessThanOrEqual(2);
@@ -4879,10 +4881,10 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
     expect(Math.abs(sideWidth - workspaceWidth)).toBeLessThanOrEqual(2);
   }
   expect((await new AxeBuilder({ page }).include("#workbench-side-chat").analyze()).violations).toEqual([]);
-  await sidePane.getByRole("button", { name: (page.viewportSize()?.width ?? 1440) <= 1100 ? "Back to parent conversation" : "Close side chat" }).click();
+  await sidePane.getByRole("button", { name: (page.viewportSize()?.width ?? 1440) <= 760 ? "Back to parent conversation" : "Close side chat" }).click();
   await expect(sidePane).toBeVisible();
   await expect(sidePane.getByRole("alert").filter({ hasText: "Could not discard side chat" })).toBeVisible();
-  await sidePane.getByRole("button", { name: (page.viewportSize()?.width ?? 1440) <= 1100 ? "Back to parent conversation" : "Close side chat" }).click();
+  await sidePane.getByRole("button", { name: (page.viewportSize()?.width ?? 1440) <= 760 ? "Back to parent conversation" : "Close side chat" }).click();
   await expect(sidePane).toHaveCount(0);
   expect(discardAttempts).toBe(2);
   await expect(page).not.toHaveURL(/sideChat=/);

@@ -4,8 +4,6 @@
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
 }
-.session-list-item.side-open { background: var(--blue-muted); }
-.session-list-item.side-chat-item .session-select strong::before { color: var(--blue); content: "↳ "; }
 .session-workspace.side-chat-open > .conversation-toolbar { grid-column: 1; grid-row: 1; min-width: 0; }
 .session-workspace.side-chat-open > :is(.chat-panel, .chat-empty-state) { grid-column: 1; grid-row: 2; min-width: 0; min-height: 0; }
 .side-chat-divider { position: relative; z-index: 3; grid-column: 2; grid-row: 1 / span 2; min-height: 0; background: var(--border-soft); }
@@ -32,7 +30,14 @@
 .side-chat-pane .chat-composer { min-width: 0; }
 .side-chat-pane :is(.side-chat-parent-link, .side-chat-history-toggle):focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
-@media (max-width: 1100px) {
+/* Keep both conversations visible in ordinary desktop windows. Give the
+   split the conversation-list width when the window is constrained. */
+@media (min-width: 761px) and (max-width: 1100px) {
+  .session-layout.chat.side-chat-active.conversation-panel-open { grid-template-columns: minmax(0, 1fr); }
+  .session-layout.chat.side-chat-active > .session-list { display: none; }
+}
+
+@media (max-width: 760px) {
   .session-layout.chat .session-workspace.side-chat-open { grid-template-columns: minmax(0, 1fr) !important; grid-template-rows: minmax(0, 1fr); }
   .session-workspace.side-chat-open > :is(.conversation-toolbar, .chat-panel, .chat-empty-state, .side-chat-divider) { display: none; }
   .session-workspace.side-chat-open > .side-chat-pane { grid-column: 1; grid-row: 1; border-left: 0; }

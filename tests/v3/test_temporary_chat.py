@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, Mock
+from datetime import timedelta
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -13,9 +14,10 @@ from nebula.v3.domain import (
     ChatTurnStatus,
     Engagement,
     HarnessSession,
+    utc_now,
 )
 from nebula.v3.storage import NebulaStore, NotFoundError
-from nebula.v3.temporary_chat import temporary_chat_router
+from nebula.v3.temporary_chat import temporary_chat_expired, temporary_chat_router
 
 
 @pytest.fixture
@@ -157,6 +159,17 @@ def test_discarding_running_side_reply_cancels_only_side_turn(popup):
     with pytest.raises(NotFoundError):
         store.get(ChatTurn, side_turn.id)
     assert store.get(ChatTurn, parent_turn.id).status == ChatTurnStatus.ROUTING
+
+
+def test_abandoned_side_chat_expires_before_popup_chat(popup):
+    store, client, _ = popup
+    side = ChatService(store).fork_session(
+        "main", through_message_id="message", side_chat=True
+    )
+    popup_chat = store.get(ChatSession, create(client))
+    old = utc_now() - timedelta(minutes=31)
+    assert temporary_chat_expired(side.model_copy(update={"updated_at": old}))
+    assert not temporary_chat_expired(popup_chat.model_copy(update={"updated_at": old}))
 
 
 def test_cannot_discard_main_or_copy_another_project(popup):
