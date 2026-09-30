@@ -1,11 +1,11 @@
 {
-  "change_digest": "db8d400a8b697ff2abcc91192fccc96f4ebc8659a45a3d2d947e47fede4b3097",
-  "reviewed_by": "Codex side chat navigation review",
-  "reason": "The side chat remains open while the main conversation changes, and its header opens the conversation drawer when the side pane covers the main toolbar. The selected interface journey checks list navigation, draft retention, reload, explicit discard and responsive layout in the existing desktop and mobile browser profiles. The real Core journey checks that the temporary session and its messages remain available after changing the main conversation, then disappear only after explicit close.",
-  "exclusions": "No backend or native source changed, so Python and native tests are excluded. There is no isolated unit or component transformation; the regression is URL navigation and Core-backed pane lifecycle, exercised through the selected Playwright journeys. Mocked WebKit full reload is excluded because it bypasses this fixture's API routes; the selected production real-Core journey checks reload. Unrelated UI areas and full suites are excluded.",
+  "change_digest": "79c6151966ee107333e3cf9fbe3b9354f61a0c4906af6557d51c045566282757",
+  "reviewed_by": "Codex side chat parent ownership review",
+  "reason": "Core now discovers side chats by parent conversation and retains them until explicit close. The UI displays a side chat only beside its parent, restores it on return and reload, and clears a stale side-chat URL on another conversation. The selected backend file covers discovery, expiry, and discard; the focused unit file covers ownership selection; the existing side-chat Playwright entries cover navigation, draft retention, and durable real-Core behavior. A comment in chat.py classifies an existing expected missing-goal handler for the repository diagnostic audit. In api.py, unarchiving uses the already loaded chat ID so mypy can prove it is a string. Neither CI repair changes behavior.",
+  "exclusions": "Native code is unchanged. Unrelated backend and UI journeys and full suites are excluded; the chat.py and api.py CI repairs do not change behavior. Mocked WebKit full reload is excluded because it bypasses this fixture's API routes; the selected production real-Core journey checks reload. Browser and device coverage applies only to the side-chat journey.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 11,
+    "frontend": 3,
     "native": 0,
     "playwright": 10
   },
@@ -14,8 +14,12 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [],
+  "python": [
+    "tests/v3/test_temporary_chat.py"
+  ],
+  "frontend": [
+    "ui/src/pages/sideChatSelection.test.ts"
+  ],
   "native": [],
   "playwright": [
     "entry:side-chat/desktop",

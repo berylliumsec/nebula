@@ -90,7 +90,7 @@ def test_snapshot_is_independent_hidden_and_discarded(popup):
     assert len(ChatService(store).session_messages("main")) == 1
 
 
-def test_side_chat_is_hidden_leased_and_discarded_without_touching_parent(popup):
+def test_side_chat_is_hidden_and_discarded_without_touching_parent(popup):
     from nebula.v3.search import project_search_document
 
     store, client, _ = popup
@@ -98,6 +98,9 @@ def test_side_chat_is_hidden_leased_and_discarded_without_touching_parent(popup)
         "main", through_message_id="message", side_chat=True
     )
     assert side.parent_session_id == "main"
+    assert [
+        row["id"] for row in client.get("/chat/sessions/main/side-chats").json()
+    ] == [side.id]
     assert [row.id for row in store.list_entities(ChatSession)] == ["main"]
     assert store.count(ChatSession) == 1
     assert store.overview("p")["counts"]["chat_sessions"] == 1
@@ -124,6 +127,7 @@ def test_side_chat_is_hidden_leased_and_discarded_without_touching_parent(popup)
     assert store.get(ChatSession, side.id).revision == before.revision + 1
     assert client.delete(f"/chat/temporary-sessions/{side.id}").status_code == 204
     assert client.delete(f"/chat/temporary-sessions/{side.id}").status_code == 204
+    assert client.get("/chat/sessions/main/side-chats").json() == []
     with pytest.raises(NotFoundError):
         store.get(ChatSession, side.id)
     assert [row.id for row in store.list_entities(ChatSession)] == ["main"]
@@ -161,15 +165,53 @@ def test_discarding_running_side_reply_cancels_only_side_turn(popup):
     assert store.get(ChatTurn, parent_turn.id).status == ChatTurnStatus.ROUTING
 
 
-def test_abandoned_side_chat_expires_before_popup_chat(popup):
+def test_side_chat_remains_until_closed_while_popup_expires(popup):
     store, client, _ = popup
     side = ChatService(store).fork_session(
         "main", through_message_id="message", side_chat=True
     )
     popup_chat = store.get(ChatSession, create(client))
-    old = utc_now() - timedelta(minutes=31)
-    assert temporary_chat_expired(side.model_copy(update={"updated_at": old}))
-    assert not temporary_chat_expired(popup_chat.model_copy(update={"updated_at": old}))
+    old = utc_now() - timedelta(days=2)
+    assert not temporary_chat_expired(side.model_copy(update={"updated_at": old}))
+    assert temporary_chat_expired(popup_chat.model_copy(update={"updated_at": old}))
+
+
+def test_side_chat_discovery_is_scoped_to_its_parent(popup):
+    store, client, _ = popup
+    store.create(
+        ChatSession(
+            id="second",
+            engagement_id="p",
+            title="Second",
+            provider_profile_id="provider",
+            model="m",
+        )
+    )
+    store.create(
+        ChatMessage(
+            id="second-message",
+            engagement_id="p",
+            session_id="second",
+            sequence=1,
+            role="user",
+            content="Second history",
+        )
+    )
+    service = ChatService(store)
+    first_side = service.fork_session(
+        "main", through_message_id="message", side_chat=True
+    )
+    second_side = service.fork_session(
+        "second", through_message_id="second-message", side_chat=True
+    )
+    create(client)  # A popup is hidden but is not a side chat.
+    assert [
+        row["id"] for row in client.get("/chat/sessions/main/side-chats").json()
+    ] == [first_side.id]
+    assert [
+        row["id"] for row in client.get("/chat/sessions/second/side-chats").json()
+    ] == [second_side.id]
+    assert client.get("/chat/sessions/missing/side-chats").status_code == 404
 
 
 def test_cannot_discard_main_or_copy_another_project(popup):

@@ -6713,6 +6713,7 @@ class ChatService:
                 self.store.get(ChatGoal, turn.goal_id).status == ChatGoalStatus.RUNNING
             )
         except NotFoundError:
+            # diagnostic-expected: a deleted goal cannot receive hook feedback.
             return False
 
     async def _run_start_native_hooks(self, prepared: PreparedChat) -> None:

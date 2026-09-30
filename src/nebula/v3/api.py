@@ -9236,7 +9236,7 @@ def create_app(
                         "allow_cloud_tool_results": False,
                     }
                 )
-            unarchive_chat_session(store, request.session_id)
+            unarchive_chat_session(store, selected_chat.id)
         if request.backend == ChatBackend.HARNESS:
             engagement_id = request.engagement_id
             if request.session_id:
