@@ -99,17 +99,23 @@ def _delete_chat_turn_ledgers(session: Session, turn_ids: Any) -> None:
 
 
 def not_temporary_chat_session() -> ColumnElement[bool]:
-    """SQL predicate that excludes "Ask Nebula" popup sessions from chat rows.
+    """Exclude temporary popup and side-pane sessions from public chat rows.
 
     ``list_entities``, ``count``, ``overview`` and the federated search
     projection all share this definition so a temporary conversation is either
     hidden everywhere or nowhere.
     """
 
-    return func.coalesce(
-        EntityRow.payload["metadata"]["temporary_assistant"].as_boolean(),
-        False,
-    ).is_(False)
+    return and_(
+        func.coalesce(
+            EntityRow.payload["metadata"]["temporary_assistant"].as_boolean(),
+            False,
+        ).is_(False),
+        func.coalesce(
+            EntityRow.payload["metadata"]["side_chat"].as_boolean(),
+            False,
+        ).is_(False),
+    )
 
 
 def _check_model_update(model):
@@ -1977,7 +1983,7 @@ class NebulaStore:
             return bool(session.scalar(select(exists().where(predicate))))
 
     def overview(self, engagement_id: str | None = None) -> dict[str, Any]:
-        # Temporary "Ask Nebula" sessions are hidden from the conversation list,
+        # Temporary popup and side-chat sessions are hidden from the conversation list,
         # so the conversation count must leave them out as well.
         statement = (
             select(EntityRow.kind, func.count(EntityRow.id))

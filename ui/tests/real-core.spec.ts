@@ -3062,7 +3062,9 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up", {timeout: 30_000});
     await expect(page.locator(".session-workspace > .chat-panel")).not.toContainText("Independent follow-up");
     const sessions = await (await api.get("chat-sessions")).json() as Array<{id: string; parent_session_id?: string; metadata?: Record<string, unknown>}>;
-    expect(sessions.find(item => item.id === sideId)).toMatchObject({parent_session_id: parent.session_id, metadata: {side_chat: true}});
+    expect(sessions.find(item => item.id === sideId)).toBeUndefined();
+    const savedSide = await (await api.get(`chat-sessions/${sideId}`)).json() as {parent_session_id: string; metadata: Record<string, unknown>};
+    expect(savedSide).toMatchObject({parent_session_id: parent.session_id, metadata: {side_chat: true}});
     const sideMessages = await (await api.get(`chat/sessions/${sideId}/messages`)).json() as Array<{content: string; source_message_id?: string}>;
     expect(sideMessages.filter(item => item.source_message_id).length).toBe(2);
     expect(sideMessages.some(item => item.content.includes("Independent follow-up"))).toBe(true);
@@ -3071,10 +3073,10 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up");
     await expect(page.locator(".session-workspace > .chat-panel")).not.toContainText("Independent follow-up");
     await side.getByRole("button", {name: "Close side chat"}).click();
-    if (await page.getByRole("button", {name: "Show conversations"}).isVisible()) await page.getByRole("button", {name: "Show conversations"}).click();
-    await page.locator(`.session-select[data-session-id="${sideId}"]`).click();
-    await expect(side).toBeVisible();
-    await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up");
+    await expect(side).toHaveCount(0);
+    await expect(page).not.toHaveURL(/sideChat=/);
+    expect((await api.get(`chat-sessions/${sideId}`)).status()).toBe(404);
+    await expect(page.locator(`.session-select[data-session-id="${sideId}"]`)).toHaveCount(0);
     await testInfo.attach("side-chat-real-core", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), parentId: parent.session_id, sideId}), contentType: "application/json"});
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });

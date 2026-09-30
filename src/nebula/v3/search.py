@@ -96,7 +96,10 @@ def project_search_document(
         )
     if kind == "chat_sessions":
         metadata = payload.get("metadata")
-        if isinstance(metadata, dict) and metadata.get("temporary_assistant") is True:
+        if isinstance(metadata, dict) and (
+            metadata.get("temporary_assistant") is True
+            or metadata.get("side_chat") is True
+        ):
             return None
         return SearchProjection(
             ResourceKind.CONVERSATION,
@@ -361,7 +364,7 @@ def upsert_search_document(session: Session, row: EntityRow) -> None:
 def projected_entity_rows() -> ColumnElement[bool]:
     """SQL predicate for the entity rows that own a search document.
 
-    Temporary "Ask Nebula" sessions are indexed kinds but never projected
+    Temporary popup and side-chat sessions are indexed kinds but never projected
     (``project_search_document`` returns ``None``), so the stale-projection
     comparison has to leave them out or every search reads as a repair.
     """

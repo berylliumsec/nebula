@@ -1,27 +1,30 @@
 {
-  "change_digest": "81290f1292756f47ae525a998efbade9c559c1f8d6bf45dcc6945b8a154a6bfb",
-  "reviewed_by": "Codex goal completion-hook feedback review",
-  "reason": "Running provider goals must return each replayable required completion-hook rejection to the model until the hook accepts or the goal stops. Blocking start-hook output must also reach the model in goal mode without bypassing the gate. Selected cases cover repeated completion failures, ordinary-turn bounds, effectful-hook no-replay safety, and start-hook delivery. Tool-free goal retries also assert exact provider usage accounting.",
-  "exclusions": "No UI, browser-origin, frontend, or native source changed, so those layers are empty. The selected Python cases cover the changed Core hook lifecycle; unrelated chat and provider suites are excluded. Production real-Core exercise would require a controlled provider and hook workspace and is not run against active Eve research.",
-  "expected_tests": {
-    "python": 7,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
-  },
-  "python_versions": [
-    "3.11"
-  ],
+  "change_digest": "e8499d80b302813be738632a0aab7cc42045b85e62d53805ce9216c07a1b402f",
+  "reviewed_by": "Codex side chat lifecycle review",
+  "reason": "Temporary side chats must remain beside the parent while open, inherit saved history without copying goals, stay out of project conversation and search views, survive reload while open, and discard on close even during a side turn. The selected backend lifecycle cases, mock desktop and mobile pane journey, and production real-Core desktop and mobile active-turn journeys cover these boundaries.",
+  "exclusions": "No native code or isolated frontend unit logic changed, so native and frontend selections are empty. The production UI build and selected browser journeys cover the changed client workflow. Unrelated chat, provider, harness, and full suites are excluded.",
+  "expected_tests": {"python": 3, "frontend": 0, "native": 0, "playwright": 12},
+  "python_versions": ["3.11"],
   "python_node": false,
   "python": [
-    "tests/v3/test_native_hook_turn_ends.py::test_running_goal_routes_each_replayable_completion_hook_failure",
-    "tests/v3/test_native_hook_turn_ends.py::test_running_goal_rechecks_replayable_hook_more_than_once_without_tools",
-    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_preserves_model_decision_when_completion_hook_still_blocks",
-    "tests/v3/test_native_hook_turn_ends.py::test_required_completion_hook_feedback_reaches_model_and_rechecks_answer",
-    "tests/v3/test_blocking_hook_feedback.py::test_effectful_tool_completion_hook_routes_feedback_without_replay",
-    "tests/v3/test_blocking_hook_feedback.py::test_blocking_start_hook_sends_output_to_model_but_keeps_turn_failed"
+    "tests/v3/test_temporary_chat.py::test_snapshot_is_independent_hidden_and_discarded",
+    "tests/v3/test_temporary_chat.py::test_side_chat_is_hidden_leased_and_discarded_without_touching_parent",
+    "tests/v3/test_temporary_chat.py::test_discarding_running_side_reply_cancels_only_side_turn"
   ],
   "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "side-chat/desktop",
+    "side-chat/compact",
+    "side-chat/mobile-chromium-small",
+    "side-chat/mobile-chromium-ledger-390",
+    "side-chat/mobile-chromium-wide",
+    "side-chat/mobile-webkit-small",
+    "side-chat/mobile-webkit",
+    "side-chat/mobile-webkit-wide",
+    "side-chat/assistant-real-desktop",
+    "side-chat-active/assistant-real-desktop",
+    "side-chat-active/assistant-real-chromium-390",
+    "side-chat-active/assistant-real-webkit-390"
+  ]
 }

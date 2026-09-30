@@ -10315,7 +10315,10 @@ def create_app(
         ):
             offset += len(page)
             for session in page:
-                if session.metadata.get("temporary_assistant") is True:
+                if (
+                    session.metadata.get("temporary_assistant") is True
+                    or session.metadata.get("side_chat") is True
+                ):
                     continue
                 turn = pending.get(session.id)
                 activity.append(
@@ -10449,6 +10452,7 @@ def create_app(
             if request.allow_agent_messaging and (
                 is_subagent_session(current)
                 or current.metadata.get("temporary_assistant") is True
+                or current.metadata.get("side_chat") is True
                 or isinstance(current.metadata.get("archived_at"), str)
             ):
                 raise ConflictError(

@@ -12502,6 +12502,7 @@ class HarnessRuntimeService:
                 engagement_id=run.engagement_id,
             )
             if item.metadata.get("temporary_assistant") is not True
+            and item.metadata.get("side_chat") is not True
         ]
         if existing:
             return existing[0]
@@ -16516,6 +16517,7 @@ class HarnessRuntimeService:
                 },
             )
             if chat.metadata.get("temporary_assistant") is not True
+            and chat.metadata.get("side_chat") is not True
         ]
 
     def _append_chat_handoff(

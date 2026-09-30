@@ -8972,7 +8972,11 @@ export class ApiClient {
       "chat-sessions",
       signal,
       engagementId,
-    ).then((items) => page(items.map(mapChatSession)));
+    ).then((items) => page(items.map(mapChatSession).filter(session => !session.isSideChat)));
+  }
+
+  getChatSession(sessionId: string, signal?: AbortSignal): Promise<ChatSessionSummary> {
+    return this.request<WireChatSession>(`chat-sessions/${encodeURIComponent(sessionId)}`, {signal}).then(mapChatSession);
   }
 
   listChatSessionActivity(
