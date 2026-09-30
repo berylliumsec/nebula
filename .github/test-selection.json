@@ -1,5 +1,5 @@
 {
-  "change_digest": "a360620f26f842897b07a10dba2d3fcd053d54222d876e59b4458265c2428a2b",
+  "change_digest": "a86d5af051190ad8a579f99e0b27459ea60804de28def64e3153e470febec12b",
   "reviewed_by": "Codex side chat parent ownership review",
   "reason": "Core now discovers side chats by parent conversation and retains them until explicit close. The UI displays a side chat only beside its parent, restores it on return and reload, and clears a stale side-chat URL on another conversation. The selected backend file covers discovery, expiry, and discard; the focused unit file covers ownership selection; the existing side-chat Playwright entries cover navigation, draft retention, responsive controls, and durable real-Core behavior.",
   "exclusions": "Native code is unchanged. Unrelated backend and UI journeys and full suites are excluded. Mocked WebKit full reload is excluded because it bypasses this fixture's API routes; the selected production real-Core journey checks reload. Browser and device coverage applies only to the side-chat journey.",

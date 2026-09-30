@@ -98,7 +98,9 @@ def test_side_chat_is_hidden_and_discarded_without_touching_parent(popup):
         "main", through_message_id="message", side_chat=True
     )
     assert side.parent_session_id == "main"
-    assert [row["id"] for row in client.get("/chat/sessions/main/side-chats").json()] == [side.id]
+    assert [
+        row["id"] for row in client.get("/chat/sessions/main/side-chats").json()
+    ] == [side.id]
     assert [row.id for row in store.list_entities(ChatSession)] == ["main"]
     assert store.count(ChatSession) == 1
     assert store.overview("p")["counts"]["chat_sessions"] == 1
@@ -196,11 +198,19 @@ def test_side_chat_discovery_is_scoped_to_its_parent(popup):
         )
     )
     service = ChatService(store)
-    first_side = service.fork_session("main", through_message_id="message", side_chat=True)
-    second_side = service.fork_session("second", through_message_id="second-message", side_chat=True)
+    first_side = service.fork_session(
+        "main", through_message_id="message", side_chat=True
+    )
+    second_side = service.fork_session(
+        "second", through_message_id="second-message", side_chat=True
+    )
     create(client)  # A popup is hidden but is not a side chat.
-    assert [row["id"] for row in client.get("/chat/sessions/main/side-chats").json()] == [first_side.id]
-    assert [row["id"] for row in client.get("/chat/sessions/second/side-chats").json()] == [second_side.id]
+    assert [
+        row["id"] for row in client.get("/chat/sessions/main/side-chats").json()
+    ] == [first_side.id]
+    assert [
+        row["id"] for row in client.get("/chat/sessions/second/side-chats").json()
+    ] == [second_side.id]
     assert client.get("/chat/sessions/missing/side-chats").status_code == 404
 
 
