@@ -9,12 +9,20 @@ import pytest
 
 from nebula.v3 import diagnostic_sensitive, diagnostics
 from nebula.v3.chat import ChatCompletionRequest, ChatError, ChatService
-from nebula.v3.domain import ChatTurn, ChatTurnStatus, Engagement
+from nebula.v3.domain import (
+    ChatGoal,
+    ChatGoalStatus,
+    ChatTurn,
+    ChatTurnStatus,
+    Engagement,
+    utc_now,
+)
 from nebula.v3.native_hooks import discover_native_hooks, snapshot_native_hook
 from nebula.v3.providers import (
     ModelRequest,
     ModelResponse,
     ModelStreamEvent,
+    ModelUsage,
     StreamEventType,
     ToolCall,
 )
@@ -127,6 +135,29 @@ def _service(tmp_path, provider_type, *, hook_id, events, script, **hook):
         stream=provider_type is BlockingProvider,
     )
     return store, service, provider, request, hook_dir
+
+
+def _attach_running_goal(store, prepared):
+    goal = store.create(
+        ChatGoal(
+            id="goal",
+            engagement_id=prepared.engagement_id,
+            session_id=prepared.session.id,
+            objective="Finish after the repository guard accepts the answer",
+            completion_criteria=["Repository guard accepts the answer"],
+            status=ChatGoalStatus.RUNNING,
+            time_budget_seconds=3600,
+            active_since=utc_now(),
+        )
+    )
+    turn = prepared.turn
+    prepared.turn = store.update(
+        ChatTurn,
+        turn.id,
+        {"goal_id": goal.id},
+        expected_revision=turn.revision,
+    )
+    return goal
 
 
 async def _poll(read, *, timeout: float = 5.0):
@@ -449,6 +480,94 @@ def test_tool_turn_routes_again_with_completion_hook_feedback(tmp_path):
     assert "exact operator action required" in str(
         provider.requests[2].messages[-1].content
     )
+
+
+def test_running_goal_routes_each_replayable_completion_hook_failure(tmp_path):
+    script = (
+        "#!/bin/sh\n"
+        "python3 -c 'import json,sys; "
+        'message=json.load(sys.stdin)["payload"]["assistant_message"]; '
+        'print("Repository guard still blocks completion"); '
+        'raise SystemExit(0 if "Accepted answer" in message else 3)\'\n'
+    )
+    workspace = tmp_path / "workspace"
+    _write_native_hook(
+        workspace,
+        "repository-lifecycle",
+        events=["chat.turn.completed"],
+        script=script,
+        failure_policy="block",
+    )
+    store, service, prepared, provider = _prepared(
+        tmp_path,
+        [
+            _response(text="Initial answer."),
+            _response(text="Still blocked."),
+            _response(text="Accepted answer."),
+        ],
+        RecordingBroker(),
+    )
+    _attach_running_goal(store, prepared)
+    prepared.hook_snapshots = [
+        snapshot_native_hook("repository-lifecycle", discover_native_hooks(workspace))
+    ]
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == "Accepted answer."
+    assert store.get(ChatTurn, "turn").status == ChatTurnStatus.COMPLETE
+    assert len(service.list_turn_hook_executions("turn")) == 3
+    assert prepared.turn.request_snapshot["completion_hook_feedback"]["attempt"] == 2
+    assert "Repository guard still blocks completion" in str(
+        provider.requests[2].messages[-1].content
+    )
+
+
+def test_running_goal_rechecks_replayable_hook_more_than_once_without_tools(
+    tmp_path,
+):
+    class RevisingProvider(FakeProvider):
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation"):
+                return await super().complete(request)
+            self.requests.append(request)
+            attempt = int(request.metadata.get("completion_hook_retry", "0"))
+            return ModelResponse(
+                provider_id=self.config.id,
+                model="model-a",
+                text=(
+                    "Accepted answer."
+                    if attempt == 2
+                    else f"Incomplete answer {attempt}."
+                ),
+                finish_reason="stop",
+                usage=ModelUsage(input_tokens=2, output_tokens=1, total_tokens=3),
+            )
+
+    script = (
+        "#!/bin/sh\n"
+        "python3 -c 'import json,sys; "
+        'message=json.load(sys.stdin)["payload"]["assistant_message"]; '
+        'print("More evidence required"); '
+        'raise SystemExit(0 if "Accepted answer" in message else 3)\'\n'
+    )
+    store, service, provider, request, _ = _service(
+        tmp_path,
+        RevisingProvider,
+        hook_id="answer-guard",
+        events=["chat.turn.completed"],
+        script=script,
+        failure_policy="block",
+    )
+    prepared = service.prepare(request)
+    _attach_running_goal(store, prepared)
+
+    completion = asyncio.run(service.complete(prepared))
+
+    assert completion.message.content == "Accepted answer."
+    assert len(service.list_turn_hook_executions(prepared.turn.id)) == 3
+    assert store.get(ChatTurn, prepared.turn.id).usage.total_tokens == 9
+    assert "More evidence required" in str(provider.requests[2].messages[-1].content)
 
 
 def test_tool_turn_preserves_model_decision_when_completion_hook_still_blocks(
