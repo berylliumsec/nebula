@@ -19,22 +19,33 @@
 .side-chat-header small { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .side-chat-header .icon-button { flex: 0 0 44px; width: 44px; min-height: 44px; }
 .side-chat-back { display: none; }
+.side-chat-conversations { display: none; }
 .side-chat-context { display: grid; gap: 5px; padding: 8px 16px 10px; border-bottom: 1px solid var(--border-soft); }
-.side-chat-parent-link { width: fit-content; max-width: 100%; padding: 2px 0; overflow: hidden; border: 0; color: var(--blue); background: transparent; font: inherit; font-size: 12px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-.side-chat-parent-link:hover { text-decoration: underline; }
+.side-chat-parent-link { width: fit-content; max-width: 100%; padding: 2px 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .side-chat-history-toggle { display: flex; min-height: 44px; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); color: var(--text); background: var(--surface-muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .side-chat-history-toggle svg:last-child { margin-left: auto; transition: transform var(--motion-fast) var(--motion-ease); }
 .side-chat-history-toggle[aria-expanded="true"] svg:last-child { transform: rotate(180deg); }
 .side-chat-context > small { color: var(--muted); font-size: 10px; font-weight: var(--weight-semibold); letter-spacing: .04em; text-transform: uppercase; }
 .side-chat-pane .chat-scroll { padding-inline: max(18px, calc((100% - var(--chat-reading-track)) / 2)); }
 .side-chat-pane .chat-composer { min-width: 0; }
-.side-chat-pane :is(.side-chat-parent-link, .side-chat-history-toggle):focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.side-chat-pane .side-chat-history-toggle:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 /* Keep both conversations visible in ordinary desktop windows. Give the
    split the conversation-list width when the window is constrained. */
+@media (max-width: 1100px) {
+  .side-chat-conversations { display: grid; }
+}
+
 @media (min-width: 761px) and (max-width: 1100px) {
   .session-layout.chat.side-chat-active.conversation-panel-open { grid-template-columns: minmax(0, 1fr); }
   .session-layout.chat.side-chat-active > .session-list { display: none; }
+  .session-layout.chat.side-chat-active.mobile-list-open > .session-list {
+    position: fixed; z-index: 80; inset: 0 auto 0 0; display: flex; width: min(320px, calc(100vw - 56px)); height: 100%;
+    flex-direction: column; border-right: 1px solid var(--border); background: var(--surface); box-shadow: 16px 0 48px rgb(0 0 0 / 35%);
+  }
+  .session-layout.chat.side-chat-active.mobile-list-open > .mobile-drawer-scrim {
+    position: fixed; z-index: 79; inset: 0 0 0 min(320px, calc(100vw - 56px)); width: auto; height: 100%; border: 0; background: var(--overlay-scrim);
+  }
 }
 
 @media (max-width: 760px) {

@@ -848,7 +848,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
   );
 });
 
-export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSideChatUnavailable, sideChatClosing = false, sideChatCloseError }: { embeddedSideChat?: boolean; onCloseSideChat?: () => void; onSideChatUnavailable?: () => void; sideChatClosing?: boolean; sideChatCloseError?: string } = {}) {
+export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShowConversations, sideChatConversationListOpen = false, onSideChatUnavailable, sideChatClosing = false, sideChatCloseError }: { embeddedSideChat?: boolean; onCloseSideChat?: () => void; onShowConversations?: () => void; sideChatConversationListOpen?: boolean; onSideChatUnavailable?: () => void; sideChatClosing?: boolean; sideChatCloseError?: string } = {}) {
   const confirm = useConfirmation();
   const { openSetting } = useChrome();
   const compact = useCompactLayout();
@@ -888,7 +888,6 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
   const openUnattachedChatView = () => updateSearchParams(params => {
     params.set("view", (sessionViewFromParam(params.get("view")) ?? view) === "browser" ? "browser" : "chat");
     params.delete(embeddedSideChat ? "sideChat" : "session");
-    if (!embeddedSideChat) params.delete("sideChat");
   }, { replace: true });
   const consumedSelectionHandoff = useRef<string | null>(null);
   const clearSubmittedContext = () => {
@@ -901,7 +900,6 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
     updateSearchParams(params => {
       if (!preserveSurface && !embeddedSideChat) params.set("view", params.get("view") === "browser" ? "browser" : "chat");
       if (params.get("handoff") === consumedSelectionHandoff.current) params.delete("handoff");
-      if (!embeddedSideChat && params.get("session") && params.get("session") !== id) params.delete("sideChat");
       params.set(embeddedSideChat ? "sideChat" : "session", id);
     }, { replace: true });
   };
@@ -1254,18 +1252,6 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
   const [showInheritedHistory, setShowInheritedHistory] = useState(false);
   const [sideChatBusy, setSideChatBusy] = useState(false);
   const [sideChatError, setSideChatError] = useState<string>();
-  const previousSideChatIdRef = useRef("");
-  const discardedSideChatIdsRef = useRef(new Set<string>());
-  useEffect(() => {
-    if (embeddedSideChat || !api) return;
-    const previous = previousSideChatIdRef.current;
-    previousSideChatIdRef.current = sideChatId;
-    if (!previous || previous === sideChatId || discardedSideChatIdsRef.current.has(previous)) return;
-    // Switching parents or using browser Back also closes the temporary pane.
-    void api.discardTemporaryChat(previous).catch(error => {
-      void logCaughtDiagnostic("interface.sessions_page.side_chat_discard_after_navigation", "Core will expire a temporary side chat that could not be discarded after navigation.", error, "sessions_page");
-    });
-  }, [api, embeddedSideChat, sideChatId]);
   useEffect(() => {
     if (embeddedSideChat || !api || !sideChatId) return;
     const renew = () => { void api.keepTemporaryChatAlive(sideChatId).catch(error => {
@@ -1276,11 +1262,6 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
     window.addEventListener("focus", renew);
     return () => { window.clearInterval(timer); window.removeEventListener("focus", renew); };
   }, [api, embeddedSideChat, sideChatId]);
-  useEffect(() => {
-    if (embeddedSideChat || !api || !sideChatId || view === "chat") return;
-    // A side chat is tied to the parent's chat view. Leaving that view closes it.
-    updateSearchParams(params => params.delete("sideChat"), { replace: true });
-  }, [api, embeddedSideChat, sideChatId, view, updateSearchParams]);
   useEffect(() => setShowInheritedHistory(false), [sessionId]);
   const [replacedMessages, setReplacedMessages] = useState<PersistedChatMessage[]>([]);
   const [messageEdit, setMessageEdit] = useState<MessageEdit>();
@@ -2310,7 +2291,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
       // Temporary side chats are intentionally absent from the project list.
       // Fetch the one named by the URL so the pane survives a refresh.
       const side = await api.getChatSession(requestedSessionId, controller.signal);
-      if (!side.isSideChat || side.parentSessionId !== searchParams.get("session") || side.engagementId !== engagement.id) {
+      if (!side.isSideChat || side.engagementId !== engagement.id) {
         if (!controller.signal.aborted) onSideChatUnavailable?.();
         return [];
       }
@@ -2690,6 +2671,10 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
   };
 
   const toggleConversationPanel = () => {
+    if (sideChatId && matchMedia("(max-width: 1100px)").matches) {
+      setMobileListOpen((current) => !current);
+      return;
+    }
     setConversationPanelOpen((current) => {
       const next = !current;
       writeConversationPanelOpen(localStorage, next);
@@ -3658,7 +3643,6 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
     try {
       try { await api.discardTemporaryChat(closingId); }
       catch (error) { if (!(error instanceof ApiError && error.status === 404)) throw error; }
-      discardedSideChatIdsRef.current.add(closingId);
       chatPreviews.delete(closingId);
       if (engagement) {
         draftStore.clear(chatDraftStorageKey(engagement.id, closingId));
@@ -3677,8 +3661,6 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
   };
 
   const unavailableSideChat = () => {
-    const unavailableId = latestSearchParams().get("sideChat");
-    if (unavailableId) discardedSideChatIdsRef.current.add(unavailableId);
     setChatError("This temporary side chat is no longer available. Open a new one from the parent conversation.");
     updateSearchParams(params => params.delete("sideChat"), {replace: true});
   };
@@ -3699,13 +3681,10 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
       if (!boundary) throw new Error("No saved message is available yet. Retry once the turn starts.");
       const source = sessions.find(item => item.id === sourceSessionId);
       const fork = await api.forkChatSession(sourceSessionId, boundary.id, `Side chat · ${source?.title ?? "Conversation"}`.slice(0, 300), undefined, true);
-      if (latestSearchParams().get("session") === sourceSessionId) {
-        setChatTerminalOpen(false);
-        updateSearchParams(params => params.set("sideChat", fork.id));
-      } else {
-        // The operator moved to another conversation before the fork returned.
-        await api.discardTemporaryChat(fork.id);
-      }
+      // The main conversation may have changed while the fork was in flight.
+      // Keep the new pane beside whichever conversation is selected now.
+      setChatTerminalOpen(false);
+      updateSearchParams(params => params.set("sideChat", fork.id));
     } catch (error) {
       void logCaughtDiagnostic("interface.sessions_page.side_chat", "Side chat creation failed.", error, "sessions_page");
       setChatError(error instanceof Error ? error.message : "Could not open a side chat. Retry from the conversation toolbar.");
@@ -5591,7 +5570,6 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
             <div className="chat-panel">
               <ChatSearchPanel open={transcriptSearchOpen} onClose={closeTranscriptSearch} key={`search:${sessionId || "new"}`} search={chatNavigation.search} onSelect={(hit) => {
                 updateSearchParams(next => {
-                  if (!embeddedSideChat && next.get("session") !== hit.session_id) next.delete("sideChat");
                   next.set(embeddedSideChat ? "sideChat" : "session", hit.session_id);
                   next.set("message", hit.message_id);
                   if (!embeddedSideChat) next.set("view", view === "browser" ? "browser" : "chat");
@@ -5817,13 +5795,14 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
     const parentTitle = sessions.find(item => item.id === activeChatSession?.parentSessionId)?.title ?? "Parent conversation";
     return <section className="side-chat-pane" id="workbench-side-chat" role="region" aria-label="Side chat">
       <header className="side-chat-header">
-        <button className="icon-button subtle side-chat-back" type="button" aria-label="Back to parent conversation" title="Close temporary side chat and return to parent" disabled={sideChatClosing} onClick={onCloseSideChat}><ChevronLeft size={18} aria-hidden="true" /></button>
+        <button className="icon-button subtle side-chat-back" type="button" aria-label="Close side chat" title="Close and discard temporary side chat" disabled={sideChatClosing} onClick={onCloseSideChat}><ChevronLeft size={18} aria-hidden="true" /></button>
         <div><strong>Side chat</strong><small title={activeChatSession?.title}>{activeChatSession?.title.replace(/^Side chat · /, "") ?? "Loading conversation…"}</small></div>
+        <button className="icon-button subtle side-chat-conversations" type="button" aria-label="Choose main conversation" title="Choose main conversation" aria-expanded={sideChatConversationListOpen} aria-controls="workbench-conversations" onClick={onShowConversations}><PanelLeft size={18} aria-hidden="true" /></button>
         <button className="icon-button subtle side-chat-close" type="button" aria-label="Close side chat" title="Close and discard temporary side chat" disabled={sideChatClosing} onClick={onCloseSideChat}>{sideChatClosing ? <LoaderCircle className="spin" size={18} aria-hidden="true" /> : <X size={18} aria-hidden="true" />}</button>
       </header>
       {sideChatCloseError && <DiagnosticErrorNotice error={sideChatCloseError} fallback="Could not close the side chat. Retry." compact />}
       <div className="side-chat-context">
-        <button className="side-chat-parent-link" type="button" disabled={sideChatClosing} onClick={onCloseSideChat}>From {parentTitle}</button>
+        <span className="side-chat-parent-link">From {parentTitle}</span>
         <button className="side-chat-history-toggle" type="button" aria-expanded={showInheritedHistory} onClick={() => setShowInheritedHistory(current => !current)}><History size={15} aria-hidden="true" /> Inherited history · {inheritedMessageCount} message{inheritedMessageCount === 1 ? "" : "s"} <ChevronDown size={14} aria-hidden="true" /></button>
         {!showInheritedHistory && <small>Only saved messages from the parent are carried over.</small>}
       </div>
@@ -5843,7 +5822,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
       {fullScreen && workbenchToolbar}
 
       <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen ? " conversation-panel-open" : ""}${view === "chat" && sideChatId ? " side-chat-active" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`} style={sessionLayoutStyle}>
-        {compact && view === "chat" && mobileListOpen && <button className="mobile-drawer-scrim" type="button" aria-label="Close conversations" onClick={() => setMobileListOpen(false)} />}
+        {view === "chat" && mobileListOpen && <button className="mobile-drawer-scrim" type="button" aria-label="Close conversations" onClick={() => setMobileListOpen(false)} />}
         {view === "chat" && (conversationPanelOpen || mobileListOpen) && <aside ref={(element) => { conversationPanelSize.panelRef.current = element; }} className="session-list" id="workbench-conversations" aria-label="Conversations" style={conversationPanelSize.panelStyle}>
           {conversationPanelSize.resizeHandle}
           {compact && mobileListOpen && <MobileDrawerProject onNavigate={() => setMobileListOpen(false)} />}
@@ -6024,7 +6003,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onSide
           ) : (
             assistantPanel
           )}
-          {view === "chat" && sideChatId && <>{sideChatSplit.resizeHandle}<SessionsPage key={`side-chat:${sideChatId}`} embeddedSideChat onCloseSideChat={() => void closeSideChat()} onSideChatUnavailable={unavailableSideChat} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} /></>}
+          {view === "chat" && sideChatId && <>{sideChatSplit.resizeHandle}<SessionsPage key={`side-chat:${sideChatId}`} embeddedSideChat onCloseSideChat={() => void closeSideChat()} onShowConversations={() => setMobileListOpen(true)} sideChatConversationListOpen={mobileListOpen} onSideChatUnavailable={unavailableSideChat} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} /></>}
         </section>
 
         {(view === "chat" || view === "browser") && agentView !== "closed" && api && engagement && sessionId && <AgentViewPanel

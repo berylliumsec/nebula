@@ -3099,8 +3099,25 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     const sideMessages = await (await api.get(`chat/sessions/${sideId}/messages`)).json() as Array<{content: string; source_message_id?: string}>;
     expect(sideMessages.filter(item => item.source_message_id).length).toBe(2);
     expect(sideMessages.some(item => item.content.includes("Independent follow-up"))).toBe(true);
+    const otherResponse = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Other research question"}], include_knowledge: false, stream: false}});
+    expect(otherResponse.ok(), await otherResponse.text()).toBe(true);
+    const other = await otherResponse.json() as {session_id: string};
     await page.reload();
     await expect(side).toBeVisible({timeout: 20_000});
+    const otherConversation = page.locator(`.session-select[data-session-id="${other.session_id}"]`);
+    if (!(await otherConversation.isVisible())) {
+      if ((page.viewportSize()?.width ?? 1440) <= 1100) await side.getByRole("button", {name: "Choose main conversation"}).click();
+      else await page.getByRole("button", {name: "Show conversations"}).click();
+    }
+    await otherConversation.click();
+    await expect(page).toHaveURL(new RegExp(`session=${other.session_id}.*sideChat=${sideId}`));
+    await expect(page.locator(".session-workspace > .chat-panel .chat-message.operator")).toContainText("Other research question");
+    await expect(side).toBeVisible();
+    await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up");
+    expect((await api.get(`chat-sessions/${sideId}`)).ok()).toBe(true);
+    await page.reload();
+    await expect(side).toBeVisible({timeout: 20_000});
+    await expect(page).toHaveURL(new RegExp(`session=${other.session_id}.*sideChat=${sideId}`));
     await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up");
     await expect(page.locator(".session-workspace > .chat-panel")).not.toContainText("Independent follow-up");
     await page.goto(`${core.origin}/?view=chat&session=${sideId}`);
