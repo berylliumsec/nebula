@@ -1,8 +1,8 @@
 {
-  "change_digest": "a86d5af051190ad8a579f99e0b27459ea60804de28def64e3153e470febec12b",
+  "change_digest": "cdaf5257201edca172d29c2ec88a53e64c17c6d17ace65aa9e82aff82f226c34",
   "reviewed_by": "Codex side chat parent ownership review",
-  "reason": "Core now discovers side chats by parent conversation and retains them until explicit close. The UI displays a side chat only beside its parent, restores it on return and reload, and clears a stale side-chat URL on another conversation. The selected backend file covers discovery, expiry, and discard; the focused unit file covers ownership selection; the existing side-chat Playwright entries cover navigation, draft retention, responsive controls, and durable real-Core behavior.",
-  "exclusions": "Native code is unchanged. Unrelated backend and UI journeys and full suites are excluded. Mocked WebKit full reload is excluded because it bypasses this fixture's API routes; the selected production real-Core journey checks reload. Browser and device coverage applies only to the side-chat journey.",
+  "reason": "Core now discovers side chats by parent conversation and retains them until explicit close. The UI displays a side chat only beside its parent, restores it on return and reload, and clears a stale side-chat URL on another conversation. The selected backend file covers discovery, expiry, and discard; the focused unit file covers ownership selection; the existing side-chat Playwright entries cover navigation, draft retention, and durable real-Core behavior. A comment in chat.py classifies an existing expected missing-goal handler for the repository diagnostic audit without changing its behavior.",
+  "exclusions": "Native code is unchanged. Unrelated backend and UI journeys and full suites are excluded; the chat.py audit comment changes no behavior. Mocked WebKit full reload is excluded because it bypasses this fixture's API routes; the selected production real-Core journey checks reload. Browser and device coverage applies only to the side-chat journey.",
   "expected_tests": {
     "python": 11,
     "frontend": 3,
