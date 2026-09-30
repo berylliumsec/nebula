@@ -3,8 +3,15 @@
   "reviewed_by": "Codex side chat lifecycle review",
   "reason": "Temporary side chats must remain beside the parent while open, inherit saved history without copying goals, stay out of project conversation and search views, survive reload while open, and discard on close even during a side turn. The selected backend lifecycle cases, mock desktop and mobile pane journey, and production real-Core desktop and mobile active-turn journeys cover these boundaries.",
   "exclusions": "No native code or isolated frontend unit logic changed, so native and frontend selections are empty. The production UI build and selected browser journeys cover the changed client workflow. Unrelated chat, provider, harness, and full suites are excluded.",
-  "expected_tests": {"python": 3, "frontend": 0, "native": 0, "playwright": 12},
-  "python_versions": ["3.11"],
+  "expected_tests": {
+    "python": 3,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 12
+  },
+  "python_versions": [
+    "3.11"
+  ],
   "python_node": false,
   "python": [
     "tests/v3/test_temporary_chat.py::test_snapshot_is_independent_hidden_and_discarded",
@@ -14,17 +21,17 @@
   "frontend": [],
   "native": [],
   "playwright": [
-    "side-chat/desktop",
-    "side-chat/compact",
-    "side-chat/mobile-chromium-small",
-    "side-chat/mobile-chromium-ledger-390",
-    "side-chat/mobile-chromium-wide",
-    "side-chat/mobile-webkit-small",
-    "side-chat/mobile-webkit",
-    "side-chat/mobile-webkit-wide",
-    "side-chat/assistant-real-desktop",
-    "side-chat-active/assistant-real-desktop",
-    "side-chat-active/assistant-real-chromium-390",
-    "side-chat-active/assistant-real-webkit-390"
+    "entry:side-chat/desktop",
+    "entry:side-chat/compact",
+    "entry:side-chat/mobile-chromium-small",
+    "entry:side-chat/mobile-chromium-ledger-390",
+    "entry:side-chat/mobile-chromium-wide",
+    "entry:side-chat/mobile-webkit-small",
+    "entry:side-chat/mobile-webkit",
+    "entry:side-chat/mobile-webkit-wide",
+    "entry:side-chat/assistant-real-desktop",
+    "entry:side-chat-active/assistant-real-desktop",
+    "entry:side-chat-active/assistant-real-chromium-390",
+    "entry:side-chat-active/assistant-real-webkit-390"
   ]
 }
