@@ -4797,12 +4797,20 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   const answer = { ...question, id: "parent-answer", sequence: 2, role: "assistant", content: "The release needs a rollback plan." };
   let forkPayload: Record<string, unknown> | undefined;
   let forkAttempts = 0;
+  let discardAttempts = 0;
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({ json: [provider] });
     if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({ json: { provider_id: provider.id, healthy: true, models: ["side-model"] } });
-    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: [parent, ...(forkPayload ? [side] : [])] });
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({ json: [parent] });
+    if (path.endsWith(`/chat-sessions/${side.id}`) && request.method() === "GET") return route.fulfill({ json: side });
+    if (path.endsWith(`/chat/temporary-sessions/${side.id}`) && request.method() === "DELETE") {
+      discardAttempts += 1;
+      if (discardAttempts === 1) return route.fulfill({ status: 503, json: { detail: "Could not discard side chat" } });
+      return route.fulfill({ status: 204 });
+    }
+    if (path.endsWith(`/chat/temporary-sessions/${side.id}/keepalive`) && request.method() === "POST") return route.fulfill({ status: 204 });
     if (path.endsWith(`/chat/sessions/${parent.id}/fork`) && request.method() === "POST") {
       forkAttempts += 1;
       if (forkAttempts === 1) return route.fulfill({ status: 503, json: { detail: "Side chat temporarily unavailable" } });
@@ -4838,6 +4846,7 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   await expect(page).toHaveURL(new RegExp(`session=${parent.id}.*sideChat=${side.id}`));
   const sidePane = page.getByRole("region", { name: "Side chat" });
   await expect(sidePane).toBeVisible();
+  await expect(page.locator(`.session-select[data-session-id="${side.id}"]`)).toHaveCount(0);
   await expect(sidePane.getByRole("button", { name: "Inherited history · 2 messages" })).toBeVisible();
   await expect(sidePane.locator(".chat-message")).toHaveCount(0);
   await sidePane.getByRole("button", { name: "Inherited history · 2 messages" }).click();
@@ -4871,13 +4880,13 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   }
   expect((await new AxeBuilder({ page }).include("#workbench-side-chat").analyze()).violations).toEqual([]);
   await sidePane.getByRole("button", { name: (page.viewportSize()?.width ?? 1440) <= 1100 ? "Back to parent conversation" : "Close side chat" }).click();
-  await expect(sidePane).toHaveCount(0);
-  await expect(page).not.toHaveURL(/sideChat=/);
-  if (mobile) await page.getByRole("button", { name: "Open conversations", exact: true }).click();
-  else if (await page.getByRole("button", { name: "Show conversations" }).isVisible()) await page.getByRole("button", { name: "Show conversations" }).click();
-  await page.locator(`.session-select[data-session-id="${side.id}"]`).click();
   await expect(sidePane).toBeVisible();
-  await expect(page).toHaveURL(new RegExp(`session=${parent.id}.*sideChat=${side.id}`));
+  await expect(sidePane.getByRole("alert").filter({ hasText: "Could not discard side chat" })).toBeVisible();
+  await sidePane.getByRole("button", { name: (page.viewportSize()?.width ?? 1440) <= 1100 ? "Back to parent conversation" : "Close side chat" }).click();
+  await expect(sidePane).toHaveCount(0);
+  expect(discardAttempts).toBe(2);
+  await expect(page).not.toHaveURL(/sideChat=/);
+  await expect(page.locator(`.session-select[data-session-id="${side.id}"]`)).toHaveCount(0);
 });
 
 test("New chat detaches from an in-flight saved conversation load", async ({ page }) => {

@@ -98,6 +98,7 @@ class AgentMessageService:
         return not (
             is_subagent_session(session)
             or session.metadata.get("temporary_assistant") is True
+            or session.metadata.get("side_chat") is True
             or isinstance(session.metadata.get("archived_at"), str)
         )
 

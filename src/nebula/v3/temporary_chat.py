@@ -1,4 +1,4 @@
-"""Leased conversation branches used only by the Ask Nebula popup."""
+"""Leased conversation branches for temporary popups and side chats."""
 
 from __future__ import annotations
 
@@ -17,6 +17,13 @@ from .storage import NotFoundError
 logger = logging.getLogger(__name__)
 
 
+def is_temporary_chat(chat: ChatSession) -> bool:
+    return (
+        chat.metadata.get("temporary_assistant") is True
+        or chat.metadata.get("side_chat") is True
+    )
+
+
 class TemporaryChatRequest(BaseModel):
     engagement_id: str = Field(min_length=1, max_length=200)
     session_id: str | None = Field(default=None, min_length=1, max_length=200)
@@ -33,22 +40,22 @@ def temporary_chat_router(store, chat_service, harness_runtime):
         except NotFoundError:
             # diagnostic-expected: an already-discarded temporary chat needs no cleanup.
             return
-        if not chat.metadata.get("temporary_assistant"):
+        if not is_temporary_chat(chat):
             raise HTTPException(
-                409, "Only temporary assistant conversations can be discarded here"
+                409, "Only temporary conversations can be discarded here"
             )
         turn = chat_service().pending_turn(chat.id)
         if turn:
             if turn.harness_turn_id:
                 await harness_runtime.cancel_turn(
-                    turn.harness_turn_id, reason="Popup discarded"
+                    turn.harness_turn_id, reason="Temporary chat discarded"
                 )
             else:
                 await chat_service().stop_provider_turn(turn.id)
         if chat.harness_session_id:
             await harness_runtime.close_session(chat.harness_session_id)
         store.delete_chat_session(chat.id)
-        # This session belongs exclusively to the popup, never the source chat.
+        # The temporary session owns its vendor runtime, never the source chat.
         if chat.harness_session_id:
             with suppress(NotFoundError):
                 store.delete(HarnessSession, chat.harness_session_id)
@@ -60,7 +67,7 @@ def temporary_chat_router(store, chat_service, harness_runtime):
             expired = [
                 row.id
                 for row in store.iter_readable_entities(ChatSession)
-                if row.metadata.get("temporary_assistant")
+                if is_temporary_chat(row)
                 and row.updated_at + timedelta(days=1) < utc_now()
             ]
             for session_id in expired:
@@ -154,10 +161,8 @@ def temporary_chat_router(store, chat_service, harness_runtime):
     @router.post("/chat/temporary-sessions/{session_id}/keepalive", status_code=204)
     async def keepalive(session_id: str):
         chat = store.get(ChatSession, session_id)
-        if not chat.metadata.get("temporary_assistant"):
-            raise HTTPException(
-                409, "Only temporary assistant conversations can be renewed here"
-            )
+        if not is_temporary_chat(chat):
+            raise HTTPException(409, "Only temporary conversations can be renewed here")
         store.update(ChatSession, chat.id, {"metadata": chat.metadata})
         return Response(status_code=204)
 

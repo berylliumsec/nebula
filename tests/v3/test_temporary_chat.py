@@ -6,7 +6,14 @@ import pytest
 
 from nebula.v3.chat import ChatService
 from nebula.v3.chat_workspace import workspace_router
-from nebula.v3.domain import ChatSession, ChatMessage, Engagement, HarnessSession
+from nebula.v3.domain import (
+    ChatMessage,
+    ChatSession,
+    ChatTurn,
+    ChatTurnStatus,
+    Engagement,
+    HarnessSession,
+)
 from nebula.v3.storage import NebulaStore, NotFoundError
 from nebula.v3.temporary_chat import temporary_chat_router
 
@@ -79,6 +86,77 @@ def test_snapshot_is_independent_hidden_and_discarded(popup):
     with pytest.raises(NotFoundError):
         store.get(ChatSession, branch)
     assert len(ChatService(store).session_messages("main")) == 1
+
+
+def test_side_chat_is_hidden_leased_and_discarded_without_touching_parent(popup):
+    from nebula.v3.search import project_search_document
+
+    store, client, _ = popup
+    side = ChatService(store).fork_session(
+        "main", through_message_id="message", side_chat=True
+    )
+    assert side.parent_session_id == "main"
+    assert [row.id for row in store.list_entities(ChatSession)] == ["main"]
+    assert store.count(ChatSession) == 1
+    assert store.overview("p")["counts"]["chat_sessions"] == 1
+    assert (
+        project_search_document("chat_sessions", side.model_dump(mode="json")) is None
+    )
+    store.create(
+        ChatMessage(
+            engagement_id="p",
+            session_id=side.id,
+            sequence=2,
+            role="assistant",
+            content="Private side-only answer",
+        )
+    )
+    assert (
+        client.get("/chat/projects/p/search?q=Private%20side-only").json()["items"]
+        == []
+    )
+    before = store.get(ChatSession, side.id)
+    assert (
+        client.post(f"/chat/temporary-sessions/{side.id}/keepalive").status_code == 204
+    )
+    assert store.get(ChatSession, side.id).revision == before.revision + 1
+    assert client.delete(f"/chat/temporary-sessions/{side.id}").status_code == 204
+    assert client.delete(f"/chat/temporary-sessions/{side.id}").status_code == 204
+    with pytest.raises(NotFoundError):
+        store.get(ChatSession, side.id)
+    assert [row.id for row in store.list_entities(ChatSession)] == ["main"]
+    assert len(ChatService(store).session_messages("main")) == 1
+
+
+def test_discarding_running_side_reply_cancels_only_side_turn(popup):
+    store, client, _ = popup
+    side = ChatService(store).fork_session(
+        "main", through_message_id="message", side_chat=True
+    )
+    side_turn = store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id=side.id,
+            provider_profile_id="provider",
+            model="m",
+            status=ChatTurnStatus.ROUTING,
+        )
+    )
+    parent_turn = store.create(
+        ChatTurn(
+            engagement_id="p",
+            session_id="main",
+            provider_profile_id="provider",
+            model="m",
+            status=ChatTurnStatus.ROUTING,
+        )
+    )
+    assert client.delete(f"/chat/temporary-sessions/{side.id}").status_code == 204
+    with pytest.raises(NotFoundError):
+        store.get(ChatSession, side.id)
+    with pytest.raises(NotFoundError):
+        store.get(ChatTurn, side_turn.id)
+    assert store.get(ChatTurn, parent_turn.id).status == ChatTurnStatus.ROUTING
 
 
 def test_cannot_discard_main_or_copy_another_project(popup):

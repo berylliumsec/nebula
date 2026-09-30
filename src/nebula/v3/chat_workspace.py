@@ -3,7 +3,7 @@
 from hashlib import sha256
 from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select, exists, func
+from sqlalchemy import and_, select, exists, func
 from sqlalchemy.orm import aliased
 from .database import EntityRow
 from .domain import (
@@ -47,12 +47,18 @@ def workspace_router(store: NebulaStore) -> APIRouter:
                 select(visible_chat.id).where(
                     visible_chat.kind == "chat_sessions",
                     visible_chat.id == EntityRow.chat_session_id,
-                    func.coalesce(
-                        visible_chat.payload["metadata"][
-                            "temporary_assistant"
-                        ].as_boolean(),
-                        False,
-                    ).is_(False),
+                    and_(
+                        func.coalesce(
+                            visible_chat.payload["metadata"][
+                                "temporary_assistant"
+                            ].as_boolean(),
+                            False,
+                        ).is_(False),
+                        func.coalesce(
+                            visible_chat.payload["metadata"]["side_chat"].as_boolean(),
+                            False,
+                        ).is_(False),
+                    ),
                 )
             )
         )
