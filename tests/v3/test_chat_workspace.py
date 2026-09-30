@@ -41,8 +41,11 @@ def workspace(tmp_path):
 
 def test_goal_title_is_not_replaced_by_first_message():
     session = ChatSession(
-        id="goal", engagement_id="p", title="Investigate the build failure",
-        provider_profile_id="provider", model="m",
+        id="goal",
+        engagement_id="p",
+        title="Investigate the build failure",
+        provider_profile_id="provider",
+        model="m",
         metadata={"initial_title_state": "goal"},
     )
     assert not should_name(session)

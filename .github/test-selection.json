@@ -1,5 +1,5 @@
 {
-  "change_digest": "3fba8019cb6efbbdfd382f6b670079b526cfaaa821a4e45bb07d65ddc19a21c1",
+  "change_digest": "aa6716f70de5d4e7adae45d3ba65217725e7c0bf7e02385f2c2c8d12e7969b01",
   "reviewed_by": "Codex focused goal title review",
   "reason": "Goal conversation creation and initial naming changed. The API creation test checks the durable title state; the naming policy test checks that the first message cannot rename it.",
   "exclusions": "No UI source, browser origin behavior, native code, or harness naming changed. Frontend, Playwright, native, and unrelated Python tests are excluded. Real Core UI validation is separate from the focused automated test selection.",
