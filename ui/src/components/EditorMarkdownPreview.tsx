@@ -3,13 +3,10 @@ import remarkGfm from "remark-gfm";
 
 function safeMarkdownUrl(value: string): string {
   if (value.startsWith("#")) return value;
-  try {
-    const url = new URL(value);
-    return ["http:", "https:", "mailto:"].includes(url.protocol) ? value : "";
-  } catch {
-    // Relative workspace paths cannot be served from the app's own origin.
-    return "";
-  }
+  // Relative workspace paths cannot be served from the app's own origin.
+  if (!URL.canParse(value)) return "";
+  const url = new URL(value);
+  return ["http:", "https:", "mailto:"].includes(url.protocol) ? value : "";
 }
 
 const components: Components = {

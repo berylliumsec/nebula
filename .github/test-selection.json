@@ -1,5 +1,5 @@
 {
-  "change_digest": "aaee3f42817734037f760454a49bf72054bb8cba1dbb7d0a992918754ffe9721",
+  "change_digest": "3c202638f402752f7c7f713b3c2b9e4ec45a5db1395659227d10a2ccd1d376e3",
   "reviewed_by": "Codex focused editor workflow review",
   "reason": "Markdown editor preview changes the Code toolbar and rendered pane. The selected component files verify unsaved-buffer rendering, source recovery, GFM, and link safety. The Coding browser journey covers the visible editor workflow in desktop and mobile Chromium/WebKit profiles; the mobile real-Core journey verifies the saved workspace file remains authoritative.",
   "exclusions": "No backend or native source changed, so Python and native tests are excluded. The selected editor journeys and production UI build cover this view change; unrelated chat, harness, and full suites are excluded. Remote and workspace-relative images are shown as labeled placeholders because the editor has no scoped image URL for those assets.",
