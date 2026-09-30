@@ -1,5 +1,5 @@
 {
-  "change_digest": "06eb7445cb7d6505acae4749e9433510dddb56741d45e22a865e8e9e6dd64426",
+  "change_digest": "81290f1292756f47ae525a998efbade9c559c1f8d6bf45dcc6945b8a154a6bfb",
   "reviewed_by": "Codex goal completion-hook feedback review",
   "reason": "Running provider goals must return each replayable required completion-hook rejection to the model until the hook accepts or the goal stops. Blocking start-hook output must also reach the model in goal mode without bypassing the gate. Selected cases cover repeated completion failures, ordinary-turn bounds, effectful-hook no-replay safety, and start-hook delivery. Tool-free goal retries also assert exact provider usage accounting.",
   "exclusions": "No UI, browser-origin, frontend, or native source changed, so those layers are empty. The selected Python cases cover the changed Core hook lifecycle; unrelated chat and provider suites are excluded. Production real-Core exercise would require a controlled provider and hook workspace and is not run against active Eve research.",

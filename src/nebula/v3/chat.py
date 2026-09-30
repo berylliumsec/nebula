@@ -6698,7 +6698,9 @@ class ChatService:
         if turn is None or turn.goal_id is None:
             return False
         try:
-            return self.store.get(ChatGoal, turn.goal_id).status == ChatGoalStatus.RUNNING
+            return (
+                self.store.get(ChatGoal, turn.goal_id).status == ChatGoalStatus.RUNNING
+            )
         except NotFoundError:
             return False
 
@@ -6786,9 +6788,7 @@ class ChatService:
             if "chat.turn.completed" in hook.manifest.events
         )
         attempt = self._completion_hook_attempt(turn)
-        if attempt and not (
-            replayable and self._running_goal_for_hook_feedback(turn)
-        ):
+        if attempt and not (replayable and self._running_goal_for_hook_feedback(turn)):
             self._record_completion_hook_decision(prepared, blocked, response)
             raise blocked
         execution = blocked.execution
