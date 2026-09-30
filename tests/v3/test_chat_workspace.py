@@ -39,6 +39,18 @@ def workspace(tmp_path):
     return store, TestClient(app, raise_server_exceptions=False)
 
 
+def test_goal_title_is_not_replaced_by_first_message():
+    session = ChatSession(
+        id="goal",
+        engagement_id="p",
+        title="Investigate the build failure",
+        provider_profile_id="provider",
+        model="m",
+        metadata={"initial_title_state": "goal"},
+    )
+    assert not should_name(session)
+
+
 def test_search_is_project_scoped_paginated_and_literal(tmp_path):
     _, client = workspace(tmp_path)
     data = client.get(

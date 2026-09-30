@@ -268,7 +268,7 @@ class ChatGoalService:
                 "max_active_subagents": body.max_active_subagents,
                 "message_count": 0,
                 "last_sequence": 0,
-                "initial_title_state": "pending",
+                "initial_title_state": "goal",
             },
         )
         goal = ChatGoal(

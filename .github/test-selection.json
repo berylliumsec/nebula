@@ -1,32 +1,24 @@
 {
-  "change_digest": "3c202638f402752f7c7f713b3c2b9e4ec45a5db1395659227d10a2ccd1d376e3",
-  "reviewed_by": "Codex focused editor workflow review",
-  "reason": "Markdown editor preview changes the Code toolbar and rendered pane. The selected component files verify unsaved-buffer rendering, source recovery, GFM, and link safety. The Coding browser journey covers the visible editor workflow in desktop and mobile Chromium/WebKit profiles; the mobile real-Core journey verifies the saved workspace file remains authoritative.",
-  "exclusions": "No backend or native source changed, so Python and native tests are excluded. The selected editor journeys and production UI build cover this view change; unrelated chat, harness, and full suites are excluded. Remote and workspace-relative images are shown as labeled placeholders because the editor has no scoped image URL for those assets.",
+  "change_digest": "aa6716f70de5d4e7adae45d3ba65217725e7c0bf7e02385f2c2c8d12e7969b01",
+  "reviewed_by": "Codex focused goal title review",
+  "reason": "Goal conversation creation and initial naming changed. The API creation test checks the durable title state; the naming policy test checks that the first message cannot rename it.",
+  "exclusions": "No UI source, browser origin behavior, native code, or harness naming changed. Frontend, Playwright, native, and unrelated Python tests are excluded. Real Core UI validation is separate from the focused automated test selection.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 31,
-    "native": 0,
-    "playwright": 10
+    "python": 2,
+    "frontend": 0,
+    "playwright": 0,
+    "native": 0
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.11"
+  ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/components/CodeEditorPanel.test.tsx",
-    "ui/src/components/EditorMarkdownPreview.test.tsx"
+  "python": [
+    "tests/v3/test_api.py::test_goal_conversation_exists_before_its_first_message",
+    "tests/v3/test_chat_workspace.py::test_goal_title_is_not_replaced_by_first_message"
   ],
-  "native": [],
-  "playwright": [
-    "entry:coding-makeover/desktop",
-    "entry:coding-makeover/compact",
-    "entry:coding-makeover/mobile-chromium-small",
-    "entry:coding-makeover/mobile-chromium-ledger-390",
-    "entry:coding-makeover/mobile-chromium-wide",
-    "entry:coding-makeover/mobile-webkit-small",
-    "entry:coding-makeover/mobile-webkit",
-    "entry:coding-makeover/mobile-webkit-wide",
-    "entry:coding-makeover-core/real-core"
-  ]
+  "frontend": [],
+  "playwright": [],
+  "native": []
 }
