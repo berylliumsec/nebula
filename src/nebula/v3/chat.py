@@ -5486,8 +5486,13 @@ class ChatService:
         citations: list[ChatCitation] = []
         from .chat_decisions import decision_snapshot, decision_instructions
 
-        operator_decisions = decision_snapshot(
-            self.store, session.id if session else None, engagement_id
+        side_chat = bool(session and session.metadata.get("side_chat") is True)
+        operator_decisions = (
+            []
+            if side_chat
+            else decision_snapshot(
+                self.store, session.id if session else None, engagement_id
+            )
         )
         instructions = _CHAT_BASE_INSTRUCTIONS + decision_instructions(
             operator_decisions
@@ -5516,7 +5521,9 @@ class ChatService:
             )
             instructions += goal_snapshot_instruction(self.store, goal)
             instructions += _goal_time_instruction(goal, utc_now())
-        project_instructions = self._project_instructions(engagement_id)
+        project_instructions = (
+            None if side_chat else self._project_instructions(engagement_id)
+        )
         instructions += project_instructions_text(project_instructions)
         instructions += skill_instructions(skill_snapshots)
         tool_components: RuntimeToolComponents | AutomationToolComponents | None = None
@@ -5591,7 +5598,7 @@ class ChatService:
         skill_resources_selected = any(item.resources for item in skill_snapshots)
         # A project can opt into the local search runtime alone, with no MCP
         # server, SSH environment or command runtime selected.
-        web_search_selected = self._web_search_selected(engagement_id)
+        web_search_selected = not side_chat and self._web_search_selected(engagement_id)
         # Each family sends tool inputs and results to the model; the names
         # tell the operator what a refused cloud turn was about to share.
         tool_families = [
@@ -5899,12 +5906,16 @@ class ChatService:
             # and a Nebula failure they selected only when those words ask
             # about a problem (see help_subject). The rest of a selection is
             # the operator's material, not a question to Nebula's runbooks.
-            operator_help_chunks = self._retrieve_operator_help(
-                help_subject(
-                    durable_incoming[-1].content,
-                    [item.text for item in request.context_attachments],
-                ),
-                token_budget=knowledge_budget,
+            operator_help_chunks = (
+                []
+                if side_chat
+                else self._retrieve_operator_help(
+                    help_subject(
+                        durable_incoming[-1].content,
+                        [item.text for item in request.context_attachments],
+                    ),
+                    token_budget=knowledge_budget,
+                )
             )
             operator_help_tokens = sum(
                 estimate_tokens(chunk.text, message_count=1)
@@ -13433,14 +13444,18 @@ class ChatService:
                 parent_session_id=source.id,
                 forked_from_message_id=boundary.id,
                 metadata={
-                    **{
-                        key: value
-                        for key, value in source.metadata.items()
-                        if key not in _FORK_PRIVATE_METADATA_KEYS
-                    },
+                    **(
+                        {}
+                        if side_chat
+                        else {
+                            key: value
+                            for key, value in source.metadata.items()
+                            if key not in _FORK_PRIVATE_METADATA_KEYS
+                        }
+                    ),
                     "forked_from_session_id": source.id,
                     "forked_from_message_id": boundary.id,
-                    "workspace_is_shared": True,
+                    "workspace_is_shared": not side_chat,
                     "side_chat": side_chat,
                     "branch_before_message": bool(before_message_id),
                     "harness_context_handoff_pending": (
@@ -13466,23 +13481,30 @@ class ChatService:
                     source_message_id=message.id,
                     provider_profile_id=message.provider_profile_id,
                     model=message.model,
-                    usage=message.usage,
-                    finish_reason=message.finish_reason,
-                    provider_request_id=message.provider_request_id,
+                    usage=None if side_chat else message.usage,
+                    finish_reason=None if side_chat else message.finish_reason,
+                    provider_request_id=None
+                    if side_chat
+                    else message.provider_request_id,
                     citations=message.citations,
-                    metadata={**message.metadata, "fork_source_message_id": message.id},
+                    metadata=(
+                        {"fork_source_message_id": message.id}
+                        if side_chat
+                        else {**message.metadata, "fork_source_message_id": message.id}
+                    ),
                 )
             )
         from .chat_decisions import fork_decisions
         from .chat_goals import ChatGoalService
         from .storage import NotFoundError
 
-        fork_decisions(
-            self.store,
-            source,
-            fork,
-            boundary.sequence - (1 if before_message_id else 0),
-        )
+        if not side_chat:
+            fork_decisions(
+                self.store,
+                source,
+                fork,
+                boundary.sequence - (1 if before_message_id else 0),
+            )
         if source.backend == ChatBackend.PROVIDER and not side_chat:
             try:
                 goal = ChatGoalService(self.store).get(source.id)

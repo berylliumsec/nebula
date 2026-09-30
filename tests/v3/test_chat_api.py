@@ -18,6 +18,7 @@ from nebula.v3.domain import (
     ContextSnapshotStatus,
     ContextSourceReference,
     ChatBackend,
+    ChatDecision,
     ChatGoal,
     ChatSession,
     ChatMessage,
@@ -27,6 +28,7 @@ from nebula.v3.domain import (
     Engagement,
     HarnessSession,
     HarnessSessionStatus,
+    HarnessProfile,
     McpServerProfile,
     McpTransport,
     ProviderCapabilityVerification,
@@ -378,6 +380,17 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
             backend=ChatBackend.PROVIDER,
             provider_profile_id=profile.id,
             model="model-a",
+            metadata={"tools_enabled": True, "parent_only_context": "never copy"},
+        )
+    )
+    store.create(
+        ChatDecision(
+            engagement_id=engagement.id, session_id=parent.id, text="Parent decision"
+        )
+    )
+    store.create(
+        ChatDecision(
+            engagement_id=engagement.id, scope="project", text="Project decision"
         )
     )
     goal = store.create(
@@ -395,6 +408,7 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
             sequence=1,
             role=ChatRole.USER,
             content="Earlier question",
+            metadata={"parent_goal_id": goal.id},
         )
     )
     current = store.create(
@@ -434,10 +448,46 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
     assert side.status_code == 201, side.text
     side_id = side.json()["id"]
     assert side.json()["metadata"]["side_chat"] is True
+    assert "tools_enabled" not in side.json()["metadata"]
+    assert "parent_only_context" not in side.json()["metadata"]
     copied = client.get(f"/api/v1/chat/sessions/{side_id}/messages", headers=_auth())
     assert [item["source_message_id"] for item in copied.json()] == [
         earlier.id,
         current.id,
+    ]
+    assert "parent_goal_id" not in copied.json()[0]["metadata"]
+    from nebula.v3.chat_decisions import decision_snapshot
+
+    assert decision_snapshot(store, side_id, engagement.id) == []
+    assert (
+        store.find_entities(
+            ChatDecision, {"session_id": side_id}, engagement_id=engagement.id
+        )
+        == []
+    )
+    prepared = ChatService(
+        store, provider_factory=lambda _: ApiChatProvider(profile.id)
+    ).prepare(
+        ChatCompletionRequest(
+            engagement_id=engagement.id,
+            provider_id=profile.id,
+            model="model-a",
+            session_id=side_id,
+            messages=[{"role": "user", "content": "Side-only question"}],
+            include_knowledge=False,
+        )
+    )
+    assert prepared.operator_decisions == []
+    assert "Parent decision" not in prepared.base_instructions
+    assert "Project decision" not in prepared.base_instructions
+    assert [
+        message.content
+        for message in prepared.model_request.messages
+        if message.role != "system"
+    ] == [
+        "Earlier question",
+        "Question sent during the active turn",
+        "Side-only question",
     ]
     assert (
         store.find_entities(
@@ -463,12 +513,23 @@ def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path)
 def test_side_chat_snapshots_active_harness_with_independent_vendor_session(tmp_path):
     store = NebulaStore(tmp_path / "active-harness-side-chat.db")
     engagement = store.create(Engagement(name="Active harness side chat"))
+    store.create(
+        HarnessProfile(
+            id="harness-1",
+            name="Harness",
+            kind="codex_app_server",
+            executable="/bin/true",
+            default_model="model-a",
+        )
+    )
     vendor = store.create(
         HarnessSession(
             engagement_id=engagement.id,
             harness_profile_id="harness-1",
             model="model-a",
             status=HarnessSessionStatus.RUNNING,
+            mcp_server_ids=["parent-mcp"],
+            metadata={"parent_only_context": "never copy"},
         )
     )
     parent = store.create(
@@ -519,6 +580,9 @@ def test_side_chat_snapshots_active_harness_with_independent_vendor_session(tmp_
     child_vendor_id = side.json()["harness_session_id"]
     assert child_vendor_id != vendor.id
     assert side.json()["metadata"]["harness_context_handoff_pending"] is True
+    side_vendor = store.get(HarnessSession, child_vendor_id)
+    assert side_vendor.mcp_server_ids == []
+    assert "parent_only_context" not in side_vendor.metadata
     copied = client.get(f"/api/v1/chat/sessions/{side_id}/messages", headers=_auth())
     assert [item["source_message_id"] for item in copied.json()] == [current.id]
     assert (
