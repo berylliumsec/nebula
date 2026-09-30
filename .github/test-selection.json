@@ -1,40 +1,32 @@
 {
-  "change_digest": "4e9901ee7c9e6edcbc4308d57755d26886e4fe94e5d688861fe44ab5afd6d811",
-  "reviewed_by": "Codex side chat lifecycle review",
-  "reason": "Temporary side chats must remain beside the parent at desktop and compact widths, inherit only saved parent messages without goals, decisions, tools, project instructions, or vendor settings, stay out of project conversations, survive refresh while open, and discard on close or after lease expiry. Five backend cases cover provider and harness history-only forks and lifecycle; eight mock browser profiles cover geometry, resize, accessibility, and close retry; five production real-Core journeys cover desktop and compact split, refresh, legacy direct links, and opening during an active parent turn on desktop and mobile engines.",
-  "exclusions": "No native code or isolated frontend unit logic changed, so native and frontend selections are empty. The production UI build and selected browser journeys cover the changed client workflow. Unrelated chat, provider, harness, and full suites are excluded.",
+  "change_digest": "aaee3f42817734037f760454a49bf72054bb8cba1dbb7d0a992918754ffe9721",
+  "reviewed_by": "Codex focused editor workflow review",
+  "reason": "Markdown editor preview changes the Code toolbar and rendered pane. The selected component files verify unsaved-buffer rendering, source recovery, GFM, and link safety. The Coding browser journey covers the visible editor workflow in desktop and mobile Chromium/WebKit profiles; the mobile real-Core journey verifies the saved workspace file remains authoritative.",
+  "exclusions": "No backend or native source changed, so Python and native tests are excluded. The selected editor journeys and production UI build cover this view change; unrelated chat, harness, and full suites are excluded. Remote and workspace-relative images are shown as labeled placeholders because the editor has no scoped image URL for those assets.",
   "expected_tests": {
-    "python": 5,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 31,
     "native": 0,
-    "playwright": 13
+    "playwright": 10
   },
-  "python_versions": [
-    "3.11"
-  ],
+  "python_versions": ["3.12"],
+  "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_chat_api.py::test_side_chat_snapshots_active_provider_turn_without_copying_goal",
-    "tests/v3/test_chat_api.py::test_side_chat_snapshots_active_harness_with_independent_vendor_session",
-    "tests/v3/test_temporary_chat.py::test_side_chat_is_hidden_leased_and_discarded_without_touching_parent",
-    "tests/v3/test_temporary_chat.py::test_abandoned_side_chat_expires_before_popup_chat",
-    "tests/v3/test_temporary_chat.py::test_discarding_running_side_reply_cancels_only_side_turn"
+  "python": [],
+  "frontend": [
+    "ui/src/components/CodeEditorPanel.test.tsx",
+    "ui/src/components/EditorMarkdownPreview.test.tsx"
   ],
-  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:side-chat/desktop",
-    "entry:side-chat/compact",
-    "entry:side-chat/mobile-chromium-small",
-    "entry:side-chat/mobile-chromium-ledger-390",
-    "entry:side-chat/mobile-chromium-wide",
-    "entry:side-chat/mobile-webkit-small",
-    "entry:side-chat/mobile-webkit",
-    "entry:side-chat/mobile-webkit-wide",
-    "entry:side-chat/assistant-real-desktop",
-    "entry:side-chat/assistant-real-compact",
-    "entry:side-chat-active/assistant-real-desktop",
-    "entry:side-chat-active/assistant-real-chromium-390",
-    "entry:side-chat-active/assistant-real-webkit-390"
+    "entry:coding-makeover/desktop",
+    "entry:coding-makeover/compact",
+    "entry:coding-makeover/mobile-chromium-small",
+    "entry:coding-makeover/mobile-chromium-ledger-390",
+    "entry:coding-makeover/mobile-chromium-wide",
+    "entry:coding-makeover/mobile-webkit-small",
+    "entry:coding-makeover/mobile-webkit",
+    "entry:coding-makeover/mobile-webkit-wide",
+    "entry:coding-makeover-core/real-core"
   ]
 }

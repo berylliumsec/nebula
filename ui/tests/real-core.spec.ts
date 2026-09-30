@@ -2106,7 +2106,9 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
     await editor.press("Meta+A");
     await editor.press("Control+A");
     await page.keyboard.insertText(text);
-    await expect(editor).toContainText(text.trim());
+    for (const line of text.trim().split(/\r?\n/).filter(Boolean)) {
+      await expect(editor).toContainText(line.trim());
+    }
   };
   const core = await startRealCore();
   const api = await playwrightRequest.newContext({
@@ -2124,8 +2126,8 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
     await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("navigation", { name: "Mobile operator navigation" })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "New file", exact: true }).first().click();
-    await page.getByRole("textbox", { name: "File path" }).fill("mobile-proof.txt");
-    await replaceEditorText("real Core mobile proof\n");
+    await page.getByRole("textbox", { name: "File path" }).fill("mobile-proof.md");
+    await replaceEditorText("# Real Core draft\n\n- **Readable** before save\n");
 
     const sidebar = page.getByRole("complementary", { name: "Editor files" });
     await expect(sidebar).toBeHidden();
@@ -2141,14 +2143,20 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
       }
     }
 
+    await page.getByRole("button", { name: "Preview Markdown" }).click();
+    const markdownPreview = page.getByRole("region", { name: "Markdown preview: mobile-proof.md" });
+    await expect(markdownPreview.getByRole("heading", { name: "Real Core draft" })).toBeVisible();
+    await expect(markdownPreview.getByRole("listitem")).toHaveText("Readable before save");
+    await expect(page.getByText("Unsaved", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Edit Markdown" }).click();
     await page.getByRole("textbox", { name: "Code editor" }).press("Control+S");
-    await expect(page.getByText("Saved /workspace/mobile-proof.txt. Use it from Terminal when you're ready.")).toBeVisible();
+    await expect(page.getByText("Saved /workspace/mobile-proof.md. Use it from Terminal when you're ready.")).toBeVisible();
     const listingResponse = await api.get(`engagements/${projectId}/workspace?path=&offset=0&limit=100`);
     expect(listingResponse.ok()).toBe(true);
-    expect(JSON.stringify(await listingResponse.json())).toContain("mobile-proof.txt");
-    const fileResponse = await api.get(`engagements/${projectId}/workspace/download?path=mobile-proof.txt`);
+    expect(JSON.stringify(await listingResponse.json())).toContain("mobile-proof.md");
+    const fileResponse = await api.get(`engagements/${projectId}/workspace/download?path=mobile-proof.md`);
     expect(fileResponse.ok()).toBe(true);
-    expect(await fileResponse.text()).toBe("real Core mobile proof\n");
+    expect(await fileResponse.text()).toBe("# Real Core draft\n\n- **Readable** before save\n");
 
     await page.getByRole("button", { name: "New editor file" }).click();
     await page.getByRole("textbox", { name: "File path" }).fill("scanner.py");
@@ -2179,7 +2187,7 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
     const configuredLaunch = await api.get(`engagements/${projectId}/workspace/debug-configurations`, { params: { path: "scanner.py" } });
     expect(configuredLaunch.ok(), await configuredLaunch.text()).toBe(true);
     expect(JSON.stringify(await configuredLaunch.json())).toContain("Debug active scanner");
-    await expect(page.getByRole("tab", { name: /mobile-proof\.txt/ })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /mobile-proof\.md/ })).toBeVisible();
     await expect(page.getByRole("tab", { name: /scanner\.py/ })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("button", { name: "Project tasks and tests" })).toBeVisible();
     const taskRequest = page.waitForResponse((response) => response.url().includes("/workspace/tasks"));
@@ -2206,9 +2214,9 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
     const quickOpen = page.getByRole("dialog", { name: "Quick open" });
     await expect(quickOpen).toBeVisible();
     await quickOpen.getByRole("textbox", { name: "Find a workspace file" }).fill("mobile-proof");
-    await quickOpen.getByRole("option", { name: /mobile-proof\.txt/ }).click();
-    await expect(page.getByRole("tab", { name: /mobile-proof\.txt/ })).toHaveAttribute("aria-selected", "true");
-    await expect(page.locator(".cm-line").first()).toHaveText("real Core mobile proof");
+    await quickOpen.getByRole("option", { name: /mobile-proof\.md/ }).click();
+    await expect(page.getByRole("tab", { name: /mobile-proof\.md/ })).toHaveAttribute("aria-selected", "true");
+    await expect(page.locator(".cm-line").first()).toHaveText("# Real Core draft");
 
     await page.keyboard.press("Control+Shift+F");
     const textSearch = page.getByRole("dialog", { name: "Search workspace text" });
@@ -2245,7 +2253,7 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
     await reload.getByRole("button", { name: "Reload file" }).click();
     await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("newer agent edit");
 
-    await expect(page.getByText(/Python · open-buffer intelligence ready/)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText(/Python · intelligence ready/)).toBeVisible({ timeout: 20_000 });
     const editor = page.getByRole("textbox", { name: "Code editor" });
     await page.locator(".cm-line").nth(3).click();
     await editor.press("Home");

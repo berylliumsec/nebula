@@ -105,6 +105,38 @@ async function openDuplicateLineFile(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("CodeEditorPanel", () => {
+  it("previews the unsaved Markdown buffer and returns to its source without saving", async () => {
+    const user = userEvent.setup();
+    const readme = { path: "README.md", name: "README.md", kind: "file" as const, size: 14, modifiedAt: "2026-07-16T12:00:00Z" };
+    const uploadWorkspaceFile = vi.fn();
+    renderPanel({
+      listWorkspace: vi.fn().mockResolvedValue(listing([readme, pythonEntry])),
+      downloadWorkspaceFile: vi.fn().mockImplementation((_project, path) => Promise.resolve(new Blob([path === "README.md" ? "# Original" : "print('a')\n"]))),
+      uploadWorkspaceFile,
+    });
+
+    await user.click(await screen.findByRole("button", { name: /README\.md/ }));
+    const editor = await screen.findByRole("textbox", { name: "Code editor" });
+    fireEvent.change(editor, { target: { value: "# Draft title\n\n- **First** item\n" } });
+    const previewButton = screen.getByRole("button", { name: "Preview Markdown" });
+    expect(previewButton).toHaveAttribute("aria-pressed", "false");
+    await user.click(previewButton);
+    const preview = screen.getByRole("region", { name: "Markdown preview: README.md" });
+    expect(within(preview).getByRole("heading", { name: "Draft title" })).toBeVisible();
+    expect(within(preview).getByRole("listitem")).toHaveTextContent("First item");
+    expect(screen.queryByRole("textbox", { name: "Code editor" })).not.toBeInTheDocument();
+    expect(screen.getByText("Unsaved", { exact: true })).toBeVisible();
+    expect(uploadWorkspaceFile).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: /tool\.py/ }));
+    expect(screen.queryByRole("button", { name: "Preview Markdown" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: /README\.md/ }));
+    expect(screen.getByRole("region", { name: "Markdown preview: README.md" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Edit Markdown" }));
+    expect(screen.getByRole("textbox", { name: "Code editor" })).toHaveValue("# Draft title\n\n- **First** item\n");
+    expect(screen.getByRole("button", { name: "Preview Markdown" })).toBeVisible();
+  });
+
   it("applies a suggestion to the selected range rather than the first identical text", async () => {
     const user = userEvent.setup();
     const editor = await openDuplicateLineFile(user);

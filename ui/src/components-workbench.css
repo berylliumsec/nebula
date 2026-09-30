@@ -1459,6 +1459,18 @@ kbd { font-size: 11px; }
 .code-editor-conflict { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 9px; margin: 8px 9px 0; padding: 8px 9px; color: var(--yellow); border: 1px solid color-mix(in srgb, var(--yellow) 40%, var(--border)); border-radius: var(--radius-control); background: var(--yellow-muted); }.code-editor-conflict > span { display: grid; gap: 2px; }.code-editor-conflict strong { color: var(--text); font-size: 11px; }.code-editor-conflict small { color: var(--muted-strong); font-size: 11px; }
 .code-editor-surfaces { display: grid; min-width: 0; min-height: 0; flex: 1 1 0; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
 .code-editor-surfaces.split { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.code-editor-markdown-actions { display: flex; flex: 0 0 auto; gap: 2px; padding: 2px; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface-muted); }
+.code-editor-markdown-actions > .icon-button { display: grid; width: 44px; height: 44px; min-width: 44px; min-height: 44px; place-items: center; padding: 0; }
+.code-editor-markdown-actions > .icon-button[aria-pressed="true"] { color: var(--text-strong); background: var(--blue-muted); }
+.code-editor-markdown-actions > .icon-button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.code-editor-markdown-preview { min-width: 0; min-height: 0; flex: 1 1 0; overflow: auto; padding: 32px clamp(20px, 6vw, 76px); color: var(--text); background: var(--canvas); }
+.code-editor-markdown-preview > .assistant-markdown { max-width: 820px; margin-inline: auto; font-size: var(--type-reading); }
+.code-editor-markdown-preview .assistant-markdown h1 { font-size: clamp(24px, 3vw, 30px); line-height: 1.25; }
+.code-editor-markdown-preview .assistant-markdown h2 { font-size: 20px; }
+.code-editor-markdown-preview pre { max-width: 100%; padding: 14px; overflow: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-control); background: var(--surface-raised); }
+.code-editor-markdown-preview blockquote { padding-left: 14px; border-left: 3px solid var(--border); color: var(--muted-strong); }
+.code-editor-markdown-preview :is(td, th, code) { overflow-wrap: anywhere; }
+.code-editor-markdown-image, .code-editor-markdown-empty { color: var(--muted); }
 .code-editor-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid transparent; }.code-editor-pane + .code-editor-pane { border-left-color: var(--border); }.code-editor-pane.active { border-color: color-mix(in srgb, var(--blue) 55%, transparent); }
 .code-editor-pane > header { display: flex; min-height: 32px; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 5px 3px 9px; overflow: hidden; color: var(--muted); border-bottom: 1px solid var(--border-soft); background: var(--surface-muted); font: 11px var(--font-mono); }.code-editor-pane-focus { display: flex; min-width: 0; flex: 1; padding: 5px 3px; overflow: hidden; border: 0; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }.code-editor-pane-focus span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.code-editor-pane-focus:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }.code-editor-pane .code-mirror-host { flex: 1 1 0; }.code-editor-surfaces.split .code-mirror-host { min-height: 0; }
 .code-editor-persistence-error { display: flex; align-items: center; gap: 9px; padding: 8px 10px; color: var(--yellow); border-bottom: 1px solid var(--border-soft); background: var(--yellow-muted); }.code-editor-persistence-error > span { display: grid; min-width: 0; flex: 1; gap: 2px; }.code-editor-persistence-error small { color: var(--muted-strong); }.code-editor-restore-retry { align-self: flex-start; margin: 5px 10px; }
@@ -2887,6 +2899,7 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 .code-editor-mobile-action-toggle { display: none; }
 @media (max-width: 760px) {
   .code-editor-panel { --editor-sidebar-width: 100%; }
+  .code-editor-markdown-preview { padding: 24px 18px; }
   .code-editor-toolbar { grid-template-columns: minmax(0, 1fr); padding: 8px; }
   .code-editor-tools-trigger { display: none; }
   .code-editor-action-rail { flex-wrap: wrap; }
