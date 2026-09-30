@@ -6557,10 +6557,10 @@ class ChatService:
         request: ModelRequest,
         response: ModelResponse,
     ) -> ModelResponse:
-        """Give one safe completion-hook rejection to the model before failing.
+        """Return replayable hook rejections to a running goal's model.
 
-        The hook output is untrusted data. A second rejection ends the turn;
-        completed hooks with side effects are never replayed.
+        Ordinary turns retain one feedback/recheck. Effectful hooks are never
+        replayed, even in goal mode.
         """
 
         if prepared.tools_enabled:
@@ -6580,18 +6580,12 @@ class ChatService:
                 _turn_end_hook_payload(
                     completion.finish_reason or "stop", None, completion.message.content
                 ),
-                attempt=int(
-                    bool(
-                        prepared.turn
-                        and prepared.turn.request_snapshot.get(
-                            "completion_hook_feedback"
-                        )
-                    )
-                ),
+                attempt=self._completion_hook_attempt(prepared.turn),
             )
             return response
 
-        for attempt in range(2):
+        attempt = 0
+        while True:
             completion = self._completion(prepared, response)
             try:
                 await self._run_native_hooks(
@@ -6606,18 +6600,20 @@ class ChatService:
                 )
                 return response
             except CompletionHookBlocked as blocked:
-                if attempt:
-                    self._record_completion_hook_decision(prepared, blocked, response)
-                    raise
                 replayable = not any(
                     hook.manifest.side_effects != "none"
                     for hook in prepared.hook_snapshots
                     if "chat.turn.completed" in hook.manifest.events
                 )
+                if attempt and not (
+                    replayable and self._running_goal_for_hook_feedback(prepared.turn)
+                ):
+                    self._record_completion_hook_decision(prepared, blocked, response)
+                    raise
                 execution = blocked.execution
                 if prepared.turn is not None:
                     turn = self._refresh_turn(prepared.turn)
-                    if not prepared.tools_enabled:
+                    if attempt == 0:
                         turn = self._add_usage(turn, response)
                     turn = self.store.update(
                         ChatTurn,
@@ -6633,7 +6629,11 @@ class ChatService:
                     prepared.turn = turn
                 feedback = _blocked_hook_model_output(execution)
                 recheck_instruction = (
-                    "Your next answer will be checked once more. "
+                    (
+                        "Each answer will be checked again while the goal runs. "
+                        if self._running_goal_for_hook_feedback(prepared.turn)
+                        else "Your next answer will be checked once more. "
+                    )
                     if replayable
                     else "This effectful hook cannot be replayed in this turn; "
                     "your explanation will remain a blocked-turn outcome. "
@@ -6662,7 +6662,10 @@ class ChatService:
                         ],
                         "tools": [],
                         "tool_choice": ToolChoice.NONE,
-                        "metadata": {**request.metadata, "completion_hook_retry": "1"},
+                        "metadata": {
+                            **request.metadata,
+                            "completion_hook_retry": str(attempt + 1),
+                        },
                     }
                 )
                 retry = self._fit_turn_goal_request(prepared, retry)
@@ -6679,7 +6682,25 @@ class ChatService:
                 if not replayable:
                     self._record_completion_hook_decision(prepared, blocked, response)
                     raise blocked
-        raise AssertionError("completion hook feedback loop ended unexpectedly")
+                attempt += 1
+
+    @staticmethod
+    def _completion_hook_attempt(turn: ChatTurn | None) -> int:
+        if turn is None:
+            return 0
+        feedback = turn.request_snapshot.get("completion_hook_feedback")
+        if not isinstance(feedback, dict):
+            return 0
+        attempt = feedback.get("attempt")
+        return attempt if isinstance(attempt, int) and attempt > 0 else 1
+
+    def _running_goal_for_hook_feedback(self, turn: ChatTurn | None) -> bool:
+        if turn is None or turn.goal_id is None:
+            return False
+        try:
+            return self.store.get(ChatGoal, turn.goal_id).status == ChatGoalStatus.RUNNING
+        except NotFoundError:
+            return False
 
     async def _run_start_native_hooks(self, prepared: PreparedChat) -> None:
         try:
@@ -6687,8 +6708,7 @@ class ChatService:
         except StartHookBlocked as blocked:
             # A start hook gates the entire turn. The model may explain its
             # output, but gets no tools and cannot turn the denial into success.
-            if prepared.turn is not None and prepared.turn.goal_id is None:
-                await self._send_start_hook_feedback(prepared, blocked)
+            await self._send_start_hook_feedback(prepared, blocked)
             raise
 
     async def _send_start_hook_feedback(
@@ -6755,19 +6775,22 @@ class ChatService:
         blocked: CompletionHookBlocked,
         response: ModelResponse,
     ) -> ChatTurn:
-        """Return a tool turn to routing with one bounded hook result."""
+        """Return a replayable rejection to routing while a goal runs."""
 
         if prepared.turn is None:
             raise blocked
         turn = self._refresh_turn(prepared.turn)
-        if turn.request_snapshot.get("completion_hook_feedback"):
-            self._record_completion_hook_decision(prepared, blocked, response)
-            raise blocked
         replayable = not any(
             hook.manifest.side_effects != "none"
             for hook in prepared.hook_snapshots
             if "chat.turn.completed" in hook.manifest.events
         )
+        attempt = self._completion_hook_attempt(turn)
+        if attempt and not (
+            replayable and self._running_goal_for_hook_feedback(turn)
+        ):
+            self._record_completion_hook_decision(prepared, blocked, response)
+            raise blocked
         execution = blocked.execution
         feedback = _blocked_hook_model_output(execution)
         turn = self.store.update(
@@ -6783,6 +6806,7 @@ class ChatService:
                         "output": feedback,
                         "candidate": response.text[:4_000],
                         "recheck": replayable,
+                        "attempt": attempt + 1,
                     },
                 },
             },
@@ -6831,7 +6855,11 @@ class ChatService:
         if not isinstance(feedback, dict):
             return request
         recheck_instruction = (
-            "Your next answer will be checked once more. "
+            (
+                "Each answer will be checked again while the goal runs. "
+                if turn.goal_id is not None
+                else "Your next answer will be checked once more. "
+            )
             if feedback.get("recheck", True)
             else "This effectful hook cannot be replayed in this turn; "
             "your explanation will remain a blocked-turn outcome. "

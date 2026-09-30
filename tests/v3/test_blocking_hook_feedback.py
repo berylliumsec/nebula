@@ -24,10 +24,13 @@ from nebula.v3.tools import ProjectHookPolicyDenied
 from tests.v3.test_automation_runtime import create_tool_chat, runtime, tool_invocation
 from tests.v3.test_chat import FakeProvider, _write_native_hook
 from tests.v3.test_chat_tool_loop import RecordingBroker, _prepared, _response
-from tests.v3.test_native_hook_turn_ends import _service
+from tests.v3.test_native_hook_turn_ends import _attach_running_goal, _service
 
 
-def test_blocking_start_hook_sends_output_to_model_but_keeps_turn_failed(tmp_path):
+@pytest.mark.parametrize("goal_mode", [False, True])
+def test_blocking_start_hook_sends_output_to_model_but_keeps_turn_failed(
+    tmp_path, goal_mode
+):
     class GuidanceProvider(FakeProvider):
         async def complete(self, request: ModelRequest) -> ModelResponse:
             if request.metadata.get("start_hook_feedback") == "1":
@@ -54,6 +57,8 @@ def test_blocking_start_hook_sends_output_to_model_but_keeps_turn_failed(tmp_pat
         failure_policy="block",
     )
     prepared = service.prepare(request)
+    if goal_mode:
+        _attach_running_goal(store, prepared)
 
     with pytest.raises(StartHookBlocked, match="start-check"):
         asyncio.run(service.complete(prepared))
