@@ -15358,7 +15358,7 @@ class ChatService:
             }
         for _ in range(3):
             latest = self.store.get(ChatSession, session.id)
-            if latest.metadata.get("initial_title_state") == "operator":
+            if not should_name(latest):
                 return
             try:
                 prepared.session = self.store.update(

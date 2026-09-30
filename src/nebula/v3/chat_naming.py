@@ -17,7 +17,7 @@ def substantive_prompt(prompts: list[str]) -> str:
 
 def should_name(session: ChatSession) -> bool:
     state = session.metadata.get("initial_title_state")
-    if state == "operator":
+    if state in {"operator", "goal"}:
         return False
     # Existing greeting titles can improve on the next substantive exchange.
     return state != "generated" or bool(_GREETING.fullmatch(session.title))
