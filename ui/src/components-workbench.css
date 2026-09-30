@@ -2923,3 +2923,8 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 /* Page actions placed in the Workbench toolbar are icon-only, like their neighbours; the name stays in aria-label and title. */
 .session-toolbar-actions .toolbar-icon-action.page-header-action { width: 44px; height: 44px; min-height: 44px; flex: 0 0 44px; gap: 0; padding: 0; justify-content: center; }
 .session-toolbar-actions .toolbar-icon-action .page-header-action-label { display: none; }
+
+.code-editor-mobile-search-toggle { display: none; }
+@media (max-width: 760px) { .code-editor-mobile-search-toggle { display: inline-flex; width: 44px; height: 44px; flex: 0 0 44px; } }
+
+.code-editor-sidebar > header button[aria-label="Search editor files and folders"], .workspace-browser-toolbar button[aria-label="Search files and folders"] { width: 44px; height: 44px; flex: 0 0 44px; }

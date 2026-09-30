@@ -30,6 +30,35 @@ function listing() {
 }
 
 describe("WorkspacePanel uploads", () => {
+  it("searches folders and opens a matching file in Files", async () => {
+    const user = userEvent.setup();
+    const listWorkspace = vi.fn().mockResolvedValue(listing());
+    const searchWorkspace = vi.fn().mockResolvedValue({
+      matches: [{ path: "src/report.txt", kind: "path", preview: "src/report.txt" }],
+      scannedFiles: 1, truncated: false,
+    });
+    const previewWorkspaceFile = vi.fn().mockResolvedValue({ text: "Report body", truncated: false });
+    renderPanel({ listWorkspace, searchWorkspace, previewWorkspaceFile });
+
+    await user.click(screen.getByRole("button", { name: "Search files and folders" }));
+    const dialog = await screen.findByRole("dialog", { name: "Quick open" });
+    await user.type(within(dialog).getByRole("textbox", { name: "Find a workspace file" }), "report");
+    await user.click(await within(dialog).findByRole("option", { name: /src\/report\.txt/ }));
+
+    expect(await screen.findByText("Report body")).toBeVisible();
+    expect(previewWorkspaceFile).toHaveBeenCalledWith("project-1", "src/report.txt", expect.any(AbortSignal));
+    expect(listWorkspace).toHaveBeenCalledWith("project-1", "src", 0, expect.any(AbortSignal));
+
+    searchWorkspace.mockResolvedValueOnce({
+      matches: [{ path: "src/reports", kind: "directory", preview: "src/reports" }],
+      scannedFiles: 1, truncated: false,
+    });
+    await user.click(screen.getByRole("button", { name: "Search files and folders" }));
+    const folderDialog = await screen.findByRole("dialog", { name: "Quick open" });
+    await user.type(within(folderDialog).getByRole("textbox", { name: "Find a workspace file" }), "reports");
+    await user.click(await within(folderDialog).findByRole("option", { name: /src\/reports/ }));
+    expect(listWorkspace).toHaveBeenCalledWith("project-1", "src/reports", 0, expect.any(AbortSignal));
+  });
   it("blocks reset while the workspace is in use and offers the relevant recovery view", async () => {
     const user = userEvent.setup();
     const onOpenTerminal = vi.fn();

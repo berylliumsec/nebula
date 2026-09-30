@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import { FileCode2, LoaderCircle, Search, TextSearch, X } from "lucide-react";
+import { FileCode2, Folder, LoaderCircle, Search, TextSearch, X } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { WorkspaceSearchMatch } from "../api/types";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
@@ -68,11 +68,11 @@ export function EditorWorkspaceSearch({ api, engagementId, initialMode, initialQ
     {error && <DiagnosticErrorNotice error={error} fallback="Workspace search failed." compact />}
     <div className="editor-search-results" role="listbox" aria-label="Workspace search results">
       {matches.map((match, index) => <button type="button" role="option" aria-selected="false" key={`${match.path}:${match.line ?? 0}:${match.column ?? 0}:${index}`} onClick={() => onOpen(match)}>
-        {match.kind === "path" ? <FileCode2 size={16} /> : <TextSearch size={16} />}
+        {match.kind === "directory" ? <Folder size={16} /> : match.kind === "path" ? <FileCode2 size={16} /> : <TextSearch size={16} />}
         <span><strong>{match.path}</strong>{match.line && <small>Line {match.line}, column {match.column} · {match.preview}</small>}</span>
       </button>)}
       {!loading && Boolean(query.trim()) && !matches.length && !error && <div className="empty-state compact"><Search size={20} /><strong>No matches</strong><p>Try a shorter term or switch search modes.</p></div>}
-      {!query.trim() && <div className="empty-state compact"><Search size={20} /><strong>{mode === "files" ? "Open any project file" : "Search across project code"}</strong><p>Results stay inside the current workspace and symbolic links are never followed.</p></div>}
+      {!query.trim() && <div className="empty-state compact"><Search size={20} /><strong>{mode === "files" ? "Open a project file or folder" : "Search across project code"}</strong><p>Results stay inside the current workspace and symbolic links are never followed.</p></div>}
     </div>
     <footer><span>{loading ? <><LoaderCircle className="spin" size={13} /> Searching…</> : query.trim() ? `${matches.length} result${matches.length === 1 ? "" : "s"} across ${scannedFiles} file${scannedFiles === 1 ? "" : "s"}` : "Ready"}</span>{truncated && <small>Bounded result limit reached; refine the query.</small>}</footer>
   </ModalSurface>;

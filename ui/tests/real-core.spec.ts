@@ -2412,35 +2412,52 @@ test("production Code quick-open works from a non-loopback LAN origin", async ({
     .find((address) => address?.family === "IPv4" && !address.internal)?.address;
   test.skip(!lanAddress, "No non-loopback IPv4 interface is available for the LAN-origin gate.");
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const projectFolder = await mkdtemp(path.join(tmpdir(), "nebula-file-search-project-"));
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
   try {
-    const engagementsResponse = await api.get("engagements");
-    expect(engagementsResponse.ok()).toBe(true);
-    const projectId = (await engagementsResponse.json() as Array<{ id: string }>)[0]?.id;
-    expect(projectId).toBeTruthy();
-    const upload = await api.put(
-      `engagements/${projectId}/workspace/file?path=lan-proof.py&overwrite=false`,
-      { data: Buffer.from("print('lan production proof')\n"), headers: { "Content-Type": "text/plain" } },
-    );
-    expect(upload.ok(), await upload.text()).toBe(true);
+    await mkdir(path.join(projectFolder, "reports"));
+    await writeFile(path.join(projectFolder, "lan-proof.py"), "print('lan production proof')\n");
+    await writeFile(path.join(projectFolder, "reports", "note.txt"), "Search reaches the report.\n");
+    const create = await api.post("engagements", { data: {
+      name: "File Search Acceptance", description: "", client_name: null,
+      status: "draft", tags: [], workspace_path: projectFolder, metadata: {},
+    } });
+    expect(create.ok(), await create.text()).toBe(true);
+    const projectId = (await create.json() as { id: string }).id;
+    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projectId);
 
     await page.goto(`${core.origin}/?view=code#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("tab", { name: "Workspace code editor", exact: true })).toBeVisible({ timeout: 20_000 });
     expect(new URL(page.url()).hostname).toBe(lanAddress);
     await page.getByRole("button", { name: /lan-proof\.py/ }).click();
     await expect(page.locator(".cm-line").first()).toHaveText("print('lan production proof')");
-    await expect(page.getByText(/open-buffer intelligence ready/)).toBeVisible({ timeout: 10_000 });
-    await page.getByRole("button", { name: "Open", exact: true }).click();
+    await expect(page.getByRole("button", {name: "Python · intelligence ready"})).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("complementary", {name: "Editor files"}).getByRole("button", {name: "Search editor files and folders"}).click();
     const quickOpen = page.getByRole("dialog", { name: "Quick open" });
+    await quickOpen.getByRole("textbox", { name: "Find a workspace file" }).fill("reports");
+    await quickOpen.getByRole("option", {name: "reports", exact: true}).click();
+    await expect(page.getByRole("navigation", {name: "Editor workspace path"})).toContainText("reports");
+    await page.getByRole("complementary", {name: "Editor files"}).getByRole("button", {name: "Search editor files and folders"}).click();
     await quickOpen.getByRole("textbox", { name: "Find a workspace file" }).fill("lan-proof");
     await quickOpen.getByRole("option", { name: /lan-proof\.py/ }).click();
     await expect(page.locator(".cm-line").first()).toHaveText("print('lan production proof')");
+    await page.goto(`${core.origin}/?view=workspace#token=${encodeURIComponent(core.token)}`);
+    await page.getByRole("button", {name: "Search files and folders"}).click();
+    const filesQuickOpen = page.getByRole("dialog", {name: "Quick open"});
+    await filesQuickOpen.getByRole("textbox", {name: "Find a workspace file"}).fill("reports");
+    await filesQuickOpen.getByRole("option", {name: "reports", exact: true}).click();
+    await expect(page.getByRole("navigation", {name: "Workspace path"})).toContainText("reports");
+    await page.getByRole("button", {name: "Search files and folders"}).click();
+    await filesQuickOpen.getByRole("textbox", {name: "Find a workspace file"}).fill("note.txt");
+    await filesQuickOpen.getByRole("option", {name: /reports\/note\.txt/}).click();
+    await expect(page.getByText("Search reaches the report.")).toBeVisible();
   } finally {
     await api.dispose();
     await stopRealCore(core);
+    await rm(projectFolder, {recursive: true, force: true});
   }
 });
 

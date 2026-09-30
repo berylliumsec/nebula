@@ -270,6 +270,7 @@ def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(tmp_pa
     (root / "src" / "scanner.py").write_text(
         "def scan_target(host):\n    return host\n", encoding="utf-8"
     )
+    (root / "src" / "scanner-assets").mkdir()
     (root / "binary.bin").write_bytes(b"scan_target\x00private")
     outside = tmp_path / "outside-secret.txt"
     outside.write_text("scan_target must not escape", encoding="utf-8")
@@ -282,8 +283,8 @@ def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(tmp_pa
             params={"query": "scanner", "mode": "files"},
         )
         assert files.status_code == 200
-        assert [match["path"] for match in files.json()["matches"]] == [
-            "src/scanner.py"
+        assert [(match["path"], match["kind"]) for match in files.json()["matches"]] == [
+            ("src/scanner-assets", "directory"), ("src/scanner.py", "path")
         ]
 
         text = client.get(

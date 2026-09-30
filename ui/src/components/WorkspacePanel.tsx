@@ -1,11 +1,12 @@
 import { IconAction } from "./IconAction";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from "react";
-import { Activity, AlertTriangle, Download, EllipsisVertical, File, FileCheck2, Folder, Link2, MessageSquareText, RefreshCw, SquareTerminal, Trash2, Upload, X } from "lucide-react";
+import { Activity, AlertTriangle, Download, EllipsisVertical, File, FileCheck2, Folder, Link2, MessageSquareText, RefreshCw, Search, SquareTerminal, Trash2, Upload, X } from "lucide-react";
 import { ApiError, type ApiClient } from "../api/client";
-import type { WorkspaceEntry, WorkspacePreview, WorkspaceResetStatus } from "../api/types";
+import type { WorkspaceEntry, WorkspacePreview, WorkspaceResetStatus, WorkspaceSearchMatch } from "../api/types";
 import { useConfirmation } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { WorkspaceEntryContextMenu, type WorkspaceEntryMenuState } from "./WorkspaceEntryContextMenu";
+import { EditorWorkspaceSearch } from "./EditorWorkspaceSearch";
 
 interface WorkspacePanelProps {
   api: ApiClient;
@@ -45,6 +46,8 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
   const [dragActive, setDragActive] = useState(false);
   const [uploading, setUploading] = useState<{ name: string; path: string }>();
   const [entryMenu, setEntryMenu] = useState<WorkspaceEntryMenuState>();
+  const [searchOpen, setSearchOpen] = useState(false);
+  const pendingSearchFile = useRef<string | undefined>(undefined);
   const uploadInputRef = useRef<HTMLInputElement>(null);
   const uploadAbortRef = useRef<AbortController | undefined>(undefined);
   const crumbs = useMemo(() => path ? path.split("/") : [], [path]);
@@ -69,9 +72,20 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
     setSelected(undefined);
     setPreview(undefined);
     const controller = new AbortController();
-    void load(0, controller.signal);
+    void load(0, controller.signal).then(async () => {
+      const target = pendingSearchFile.current;
+      if (!target || controller.signal.aborted) return;
+      pendingSearchFile.current = undefined;
+      setSelected({ path: target, name: target.split("/").at(-1) ?? target, kind: "file", size: -1, modifiedAt: "" });
+      try {
+        const result = await api.previewWorkspaceFile(engagementId, target, controller.signal);
+        if (!controller.signal.aborted) setPreview(result);
+      } catch (previewError) {
+        if (!controller.signal.aborted) setError(previewError instanceof Error ? previewError.message : "This file cannot be previewed.");
+      }
+    });
     return () => controller.abort();
-  }, [load]);
+  }, [load, api, engagementId]);
 
   useEffect(() => () => uploadAbortRef.current?.abort(), []);
 
@@ -165,6 +179,16 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       void logCaughtDiagnostic("interface.workspace_panel.caught_failure_04", "A handled interface operation failed.", previewError, "workspace_panel");
       setError(previewError instanceof Error ? previewError.message : "This file cannot be previewed.");
     }
+  };
+
+  const openSearchMatch = (match: WorkspaceSearchMatch) => {
+    setSearchOpen(false);
+    if (match.kind === "directory") { setPath(match.path); return; }
+    const parent = match.path.split("/").slice(0, -1).join("/");
+    const entry: WorkspaceEntry = { path: match.path, name: match.path.split("/").at(-1) ?? match.path, kind: "file", size: -1, modifiedAt: "" };
+    if (parent === path) { void openEntry(entry); return; }
+    pendingSearchFile.current = match.path;
+    setPath(parent);
   };
 
   const download = async () => {
@@ -301,6 +325,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
       <header className="workspace-browser-toolbar">
         <nav aria-label="Workspace path"><button type="button" onClick={() => setPath("")}>/workspace</button>{crumbs.map((crumb, index) => <span key={`${crumb}-${index}`}>/<button type="button" onClick={() => navigateCrumb(index)}>{crumb}</button></span>)}</nav>
         <div>
+          <IconAction icon={Search} label="Search files and folders" title="Search files and folders" onClick={() => setSearchOpen(true)} />
           <input ref={uploadInputRef} className="sr-only" type="file" aria-label="Choose workspace file" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadFile(file); }} />
           {uploading ? <button className="button quiet" type="button" onClick={() => uploadAbortRef.current?.abort()}><X size={14} /> Cancel upload</button> : <button className="button primary" type="button" onClick={() => uploadInputRef.current?.click()}><Upload size={14} /> Upload file</button>}
           <IconAction icon={RefreshCw} label="Refresh" disabled={loading} onClick={() => void load(0)} />
@@ -328,7 +353,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
           {nextOffset !== undefined && <button className="button quiet" type="button" disabled={loading} onClick={() => void load(nextOffset)}>Load more</button>}
         </section>
         <section className={`workspace-file-preview${selected?.kind === "file" ? "" : " is-empty"}`}>
-          {selected?.kind === "symlink" ? <div className="empty-state"><Link2 size={22} /><strong>Inert symbolic link</strong><p>Nebula will not follow, preview, download, or preserve this entry.</p></div> : selected?.kind === "file" ? <><header><div><h3>{selected.name}</h3><p>{selected.path} · {sizeLabel(selected.size)}</p></div><div><IconAction icon={Download} label="Download" title="Download file" onClick={() => void download()} />{preview && onUseWithAssistant && <button className="button secondary" type="button" onClick={() => onUseWithAssistant({ text: preview.text, sourceKind: "workspace_file", sourceId: selected.path, sourceLabel: selected.name, truncated: preview.truncated })}><MessageSquareText size={13} /> Use with Assistant</button>}<button className="button primary" type="button" onClick={() => void promote()}><FileCheck2 size={13} /> Preserve as Evidence</button></div></header>{preview ? <><pre data-selection-source-kind="workspace_file" data-selection-source-id={selected.path} data-selection-source-label={selected.name}>{preview.text}</pre>{preview.truncated && <p>Preview stops at 256 KiB. Download or preserve uses exact full bytes.</p>}</> : <div className="empty-state compact"><File size={21} /><strong>No plain-text preview</strong><p>The file may be binary, non-UTF-8, or still loading.</p></div>}</> : <div className="empty-state"><Folder size={23} /><strong>Select a workspace file</strong><p>Preview is read-only and bounded to 256 KiB.</p></div>}
+          {selected?.kind === "symlink" ? <div className="empty-state"><Link2 size={22} /><strong>Inert symbolic link</strong><p>Nebula will not follow, preview, download, or preserve this entry.</p></div> : selected?.kind === "file" ? <><header><div><h3>{selected.name}</h3><p>{selected.path}{selected.size >= 0 ? ` · ${sizeLabel(selected.size)}` : ""}</p></div><div><IconAction icon={Download} label="Download" title="Download file" onClick={() => void download()} />{preview && onUseWithAssistant && <button className="button secondary" type="button" onClick={() => onUseWithAssistant({ text: preview.text, sourceKind: "workspace_file", sourceId: selected.path, sourceLabel: selected.name, truncated: preview.truncated })}><MessageSquareText size={13} /> Use with Assistant</button>}<button className="button primary" type="button" onClick={() => void promote()}><FileCheck2 size={13} /> Preserve as Evidence</button></div></header>{preview ? <><pre data-selection-source-kind="workspace_file" data-selection-source-id={selected.path} data-selection-source-label={selected.name}>{preview.text}</pre>{preview.truncated && <p>Preview stops at 256 KiB. Download or preserve uses exact full bytes.</p>}</> : <div className="empty-state compact"><File size={21} /><strong>No plain-text preview</strong><p>The file may be binary, non-UTF-8, or still loading.</p></div>}</> : <div className="empty-state"><Folder size={23} /><strong>Select a workspace file</strong><p>Preview is read-only and bounded to 256 KiB.</p></div>}
         </section>
       </div>
       {resetStatus?.reasonCode === "linked_workspace" ? <p className="workspace-reset-summary">Linked folder · bulk reset is unavailable.</p> : <details className="workspace-reset-disclosure" key={engagementId}>
@@ -340,6 +365,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
         <button className="button danger" type="button" disabled={resetName !== engagementName || resetStatusLoading || resetStatus?.canReset !== true} onClick={() => void reset()}>{resetStatusLoading ? "Checking…" : "Reset workspace"}</button>
         </section>
       </details>}
+      {searchOpen && <EditorWorkspaceSearch api={api} engagementId={engagementId} initialMode="files" onClose={() => setSearchOpen(false)} onOpen={openSearchMatch} />}
       {entryMenu && <WorkspaceEntryContextMenu menu={entryMenu} onClose={() => setEntryMenu(undefined)} onCopyPath={copyPath} onCopyContents={copyContents} onRename={renameEntry} onDelete={deleteEntry} />}
     </div>
   );

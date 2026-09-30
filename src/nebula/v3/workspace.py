@@ -76,7 +76,7 @@ class WorkspaceListing(NebulaModel):
 
 class WorkspaceSearchMatch(NebulaModel):
     path: str
-    kind: Literal["path", "content"]
+    kind: Literal["path", "directory", "content"]
     line: int | None = Field(default=None, ge=1)
     column: int | None = Field(default=None, ge=1)
     preview: str = Field(default="", max_length=500)
@@ -1067,6 +1067,13 @@ class WorkspaceService:
                             if entry.name in WORKSPACE_SEARCH_EXCLUDES:
                                 skipped_directories += 1
                                 continue
+                            if mode == "files" and needle in entry_path.casefold():
+                                matches.append(WorkspaceSearchMatch(
+                                    path=entry_path, kind="directory", preview=entry_path,
+                                ))
+                                if len(matches) >= limit:
+                                    truncated = True
+                                    break
                             pending.append(entry_parts)
                             continue
                         if not stat.S_ISREG(metadata.st_mode):
