@@ -3245,7 +3245,7 @@ export interface WorkspaceListing {
 
 export interface WorkspaceSearchMatch {
   path: string;
-  kind: "path" | "content";
+  kind: "path" | "directory" | "content";
   line?: number;
   column?: number;
   preview: string;

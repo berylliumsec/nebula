@@ -10519,6 +10519,11 @@ reloadTest("stabilization editor files scroll within the sidebar", async ({page}
     }));
     return route.fulfill({json: {engagement_id: "scratch-project", path, entries, offset: 0, next_offset: null, total: entries.length}});
   });
+  await page.route("**/engagements/*/workspace/search?*", route => route.fulfill({json: {
+    engagement_id: "scratch-project", query: "folder-69", mode: "files",
+    matches: [{path: "folder-69", kind: "directory", preview: "folder-69"}],
+    scanned_files: 0, truncated: false,
+  }}));
   await openWorkspace(page, "/?view=code", "Workbench");
   const sidebar = page.getByRole("complementary", {name: "Editor files", exact: true});
   const list = sidebar.locator(".code-editor-files");
@@ -10545,6 +10550,15 @@ reloadTest("stabilization editor files scroll within the sidebar", async ({page}
     await sidebar.getByRole("button", {name: "/workspace", exact: true}).click();
   };
   await checkScroll();
+  await sidebar.getByRole("button", {name: "Search editor files and folders"}).click();
+  const quickOpen = page.getByRole("dialog", {name: "Quick open"});
+  await quickOpen.getByRole("textbox", {name: "Find a workspace file"}).fill("folder-69");
+  await quickOpen.getByRole("option", {name: /folder-69/}).click();
+  await expect(sidebar.getByRole("navigation", {name: "Editor workspace path"})).toContainText("folder-69");
+  const searchSize = await sidebar.getByRole("button", {name: "Search editor files and folders"}).boundingBox();
+  expect(searchSize?.width).toBeGreaterThanOrEqual(44);
+  expect(searchSize?.height).toBeGreaterThanOrEqual(44);
+  await sidebar.getByRole("button", {name: "/workspace", exact: true}).click();
   const divider = page.getByRole("separator", {name: "Resize editor sidebar"});
   let rememberedWidth: string | null = null;
   if ((page.viewportSize()?.width ?? 0) > 760) {
@@ -10586,6 +10600,17 @@ reloadTest("stabilization editor files scroll within the sidebar", async ({page}
   if (rememberedWidth) await expect(divider).toHaveAttribute("aria-valuenow", rememberedWidth);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({path: info.outputPath("editor-files-scroll.png")});
+  await page.goto("/?view=workspace");
+  const filesSearch = page.getByRole("button", {name: "Search files and folders"});
+  await expect(filesSearch).toBeVisible();
+  const filesSearchSize = await filesSearch.boundingBox();
+  expect(filesSearchSize?.width).toBeGreaterThanOrEqual(44);
+  expect(filesSearchSize?.height).toBeGreaterThanOrEqual(44);
+  await filesSearch.click();
+  const filesQuickOpen = page.getByRole("dialog", {name: "Quick open"});
+  await filesQuickOpen.getByRole("textbox", {name: "Find a workspace file"}).fill("folder-69");
+  await filesQuickOpen.getByRole("option", {name: /folder-69/}).click();
+  await expect(page.getByRole("navigation", {name: "Workspace path"})).toContainText("folder-69");
 });
 
 reloadTest("stabilization terminal toolbar reclaims space and keeps controls reachable", async ({page}, info) => {
