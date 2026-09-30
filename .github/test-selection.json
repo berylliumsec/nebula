@@ -1,24 +1,32 @@
 {
-  "change_digest": "aa6716f70de5d4e7adae45d3ba65217725e7c0bf7e02385f2c2c8d12e7969b01",
-  "reviewed_by": "Codex focused goal title review",
-  "reason": "Goal conversation creation and initial naming changed. The API creation test checks the durable title state; the naming policy test checks that the first message cannot rename it.",
-  "exclusions": "No UI source, browser origin behavior, native code, or harness naming changed. Frontend, Playwright, native, and unrelated Python tests are excluded. Real Core UI validation is separate from the focused automated test selection.",
+  "change_digest": "db8d400a8b697ff2abcc91192fccc96f4ebc8659a45a3d2d947e47fede4b3097",
+  "reviewed_by": "Codex side chat navigation review",
+  "reason": "The side chat remains open while the main conversation changes, and its header opens the conversation drawer when the side pane covers the main toolbar. The selected interface journey checks list navigation, draft retention, reload, explicit discard and responsive layout in the existing desktop and mobile browser profiles. The real Core journey checks that the temporary session and its messages remain available after changing the main conversation, then disappear only after explicit close.",
+  "exclusions": "No backend or native source changed, so Python and native tests are excluded. There is no isolated unit or component transformation; the regression is URL navigation and Core-backed pane lifecycle, exercised through the selected Playwright journeys. Mocked WebKit full reload is excluded because it bypasses this fixture's API routes; the selected production real-Core journey checks reload. Unrelated UI areas and full suites are excluded.",
   "expected_tests": {
-    "python": 2,
+    "python": 0,
     "frontend": 0,
-    "playwright": 0,
-    "native": 0
+    "native": 0,
+    "playwright": 10
   },
   "python_versions": [
-    "3.11"
+    "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_api.py::test_goal_conversation_exists_before_its_first_message",
-    "tests/v3/test_chat_workspace.py::test_goal_title_is_not_replaced_by_first_message"
-  ],
+  "python": [],
   "frontend": [],
-  "playwright": [],
-  "native": []
+  "native": [],
+  "playwright": [
+    "entry:side-chat/desktop",
+    "entry:side-chat/compact",
+    "entry:side-chat/mobile-chromium-small",
+    "entry:side-chat/mobile-chromium-ledger-390",
+    "entry:side-chat/mobile-chromium-wide",
+    "entry:side-chat/mobile-webkit-small",
+    "entry:side-chat/mobile-webkit",
+    "entry:side-chat/mobile-webkit-wide",
+    "entry:side-chat/assistant-real-desktop",
+    "entry:side-chat/assistant-real-compact"
+  ]
 }
