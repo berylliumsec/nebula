@@ -1068,9 +1068,13 @@ class WorkspaceService:
                                 skipped_directories += 1
                                 continue
                             if mode == "files" and needle in entry_path.casefold():
-                                matches.append(WorkspaceSearchMatch(
-                                    path=entry_path, kind="directory", preview=entry_path,
-                                ))
+                                matches.append(
+                                    WorkspaceSearchMatch(
+                                        path=entry_path,
+                                        kind="directory",
+                                        preview=entry_path,
+                                    )
+                                )
                                 if len(matches) >= limit:
                                     truncated = True
                                     break

@@ -283,9 +283,9 @@ def test_workspace_search_is_recursive_bounded_and_never_follows_symlinks(tmp_pa
             params={"query": "scanner", "mode": "files"},
         )
         assert files.status_code == 200
-        assert [(match["path"], match["kind"]) for match in files.json()["matches"]] == [
-            ("src/scanner-assets", "directory"), ("src/scanner.py", "path")
-        ]
+        assert [
+            (match["path"], match["kind"]) for match in files.json()["matches"]
+        ] == [("src/scanner-assets", "directory"), ("src/scanner.py", "path")]
 
         text = client.get(
             f"/api/v1/engagements/{engagement.id}/workspace/search",

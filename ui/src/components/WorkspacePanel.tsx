@@ -81,7 +81,10 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
         const result = await api.previewWorkspaceFile(engagementId, target, controller.signal);
         if (!controller.signal.aborted) setPreview(result);
       } catch (previewError) {
-        if (!controller.signal.aborted) setError(previewError instanceof Error ? previewError.message : "This file cannot be previewed.");
+        if (!controller.signal.aborted) {
+          void logCaughtDiagnostic("interface.workspace_panel.search_preview_failed", "A searched workspace file could not be previewed.", previewError, "workspace_panel");
+          setError(previewError instanceof Error ? previewError.message : "This file cannot be previewed.");
+        }
       }
     });
     return () => controller.abort();

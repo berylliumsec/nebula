@@ -1,8 +1,8 @@
 {
-  "change_digest": "061cb7becbcceb637b12a017a21ce72695bb6b44d82c717d8d9cd1ed324bd7a9",
+  "change_digest": "264b5479e0af2ee67f858fd27754742271ebc73a5ac91f9677290e7cc80838fa",
   "reviewed_by": "Codex file navigation search review",
   "reason": "Files and Code expose visible search icons; the bounded workspace search API returns directories, and selecting a result opens its folder or file. One backend case, both affected component files, eight production LAN mock browser profiles, and one isolated real-Core production LAN journey cover the search and navigation path.",
-  "exclusions": "No native runtime changed. Unrelated backend, frontend, and browser suites are excluded. Physical-device testing is unavailable; permanent mobile browser profiles provide emulated coverage.",
+  "exclusions": "No native runtime changed. The split-pane storage edit classifies an existing expected fallback and changes no runtime behavior, so it needs no extra journey. Unrelated backend, frontend, and browser suites are excluded. Physical-device testing is unavailable; permanent mobile browser profiles provide emulated coverage.",
   "expected_tests": {
     "python": 1,
     "frontend": 40,

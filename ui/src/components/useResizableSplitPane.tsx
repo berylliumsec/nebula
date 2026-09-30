@@ -8,6 +8,7 @@ function storedRatio(key: string): number {
     const value = Number(localStorage.getItem(key));
     return Number.isFinite(value) && value > 0 && value < 1 ? value : 0.5;
   } catch {
+    // diagnostic-expected: blocked device storage falls back to an even split.
     return 0.5;
   }
 }
