@@ -862,6 +862,7 @@ test("stabilization Coding keeps Save and reviewed actions discoverable", async 
     await expect(rail.getByRole("button", { name: "Ask Nebula" })).toBeVisible();
     await page.getByRole("button", { name: "More editor tools" }).click();
     await expect(page.getByLabel("Editor tools").getByRole("button", { name: "Find", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "More editor tools" }).click();
   } else {
     const moreActions = rail.getByRole("button", { name: "More code actions" });
     await expect(moreActions).toBeVisible();
@@ -879,7 +880,32 @@ test("stabilization Coding keeps Save and reviewed actions discoverable", async 
     await expect(rail.getByRole("button", { name: "Preserve as Evidence" })).toBeVisible();
     await page.getByRole("button", { name: "More editor actions" }).click();
     await expect(page.getByLabel("Editor options").getByRole("button", { name: "Find", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "More editor actions" }).click();
+    await moreActions.click();
   }
+  await page.getByRole("textbox", { name: "File path" }).fill("preview.md");
+  const editor = page.getByRole("textbox", { name: "Code editor" });
+  await editor.click();
+  await editor.press("ControlOrMeta+A");
+  await page.keyboard.insertText("# Preview draft\n\n- **Rendered** item\n");
+  const eye = page.getByRole("button", { name: "Preview Markdown" });
+  await expect(eye).toBeVisible();
+  const eyeSize = await eye.boundingBox();
+  expect(eyeSize?.width).toBeGreaterThanOrEqual(44);
+  expect(eyeSize?.height).toBeGreaterThanOrEqual(44);
+  await eye.click();
+  const preview = page.getByRole("region", { name: "Markdown preview: preview.md" });
+  await expect(preview.getByRole("heading", { name: "Preview draft" })).toBeVisible();
+  await expect(preview.getByRole("listitem")).toHaveText("Rendered item");
+  await expect(editor).toBeHidden();
+  await expect(page.getByText("Unsaved", { exact: true })).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).include(".code-editor-markdown-actions").include(".code-editor-markdown-preview").analyze();
+  expect(accessibility.violations).toEqual([]);
+  const bounds = await preview.evaluate((element) => ({ right: element.getBoundingClientRect().right, viewport: innerWidth }));
+  expect(bounds.right).toBeLessThanOrEqual(bounds.viewport + 1);
+  await page.getByRole("button", { name: "Edit Markdown" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(editor).toContainText("# Preview draft");
 });
 
 test("browser keeps native bounds and opens scoped live context as a reviewed AI draft", async ({ browser }, testInfo) => {
