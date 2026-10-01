@@ -485,6 +485,7 @@ class WorkspaceProvenanceService:
             "supported": observation.supported,
             "unsupported_reason": observation.unsupported_reason,
             "confidence": observation.confidence,
+            "current_paths": sorted(observation.current),
             "mutations": observation.mutations,
             "attribution": observation.attribution,
             "concurrent_scope_ids": observation.concurrent_scope_ids,

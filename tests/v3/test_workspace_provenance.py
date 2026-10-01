@@ -80,6 +80,10 @@ def test_provenance_attributes_only_state_changed_after_the_actor_baseline(tmp_p
         "preexisting.txt"
     ]
     assert service.receipt(completed)["schema"] == PROVENANCE_SCHEMA
+    assert service.receipt(completed)["current_paths"] == [
+        "owned.txt",
+        "preexisting.txt",
+    ]
 
 
 def test_provenance_keeps_prior_actor_ownership_across_later_turns(tmp_path):
