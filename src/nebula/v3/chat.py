@@ -361,6 +361,14 @@ class CompletionHookBlocked(ChatError):
         super().__init__(f"{message}; hook output: {detail}" if detail else message)
 
 
+def _completion_hook_goal_pause_reason(error: CompletionHookBlocked) -> str:
+    return (
+        f"Required completion hook '{error.execution.hook_id}' still blocks this "
+        "goal's response. Review the saved hook decision and repair its listed "
+        "state before resuming the goal."
+    )
+
+
 class StartHookBlocked(ChatError):
     """A required start hook stopped the turn before model or tool work."""
 
@@ -1894,6 +1902,9 @@ _TURN_HOOK_EVENTS = frozenset(
 _HOOK_STDERR_EXCERPT_CHARS = 500
 _HOOK_MODEL_FEEDBACK_CHARS = 8_000
 _HOOK_MODEL_DECISION_CHARS = 4_000
+# A running goal can use tools between rejected answers, but a persistent
+# blocker must end the turn instead of generating unbounded rechecks.
+_RUNNING_GOAL_COMPLETION_HOOK_RECHECKS = 2
 # A completed turn's hook gets the answer it is about to store (a Codex Stop
 # hook's last_assistant_message), bounded in UTF-8 bytes like hook output.
 _HOOK_ASSISTANT_MESSAGE_BYTES = 64 * 1024
@@ -4899,13 +4910,20 @@ class ChatService:
                 # Before subagent reports held for this turn are posted, so
                 # the note follows the operator's message it answers.
                 self.record_turn_outcome(turn.id)
+                if stopped:
+                    pause_reason = (
+                        "Response stopped by the operator. Resume the goal when ready."
+                    )
+                elif isinstance(runtime.error, CompletionHookBlocked):
+                    pause_reason = _completion_hook_goal_pause_reason(runtime.error)
+                else:
+                    pause_reason = (
+                        "Response failed before the goal finished. Review the error, "
+                        "then resume the goal."
+                    )
                 self._pause_running_session_goal(
                     turn.session_id,
-                    (
-                        "Response stopped by the operator. Resume the goal when ready."
-                        if stopped
-                        else "Response failed before the goal finished. Review the error, then resume the goal."
-                    ),
+                    pause_reason,
                 )
             if turn is not None:
                 try:
@@ -6411,6 +6429,11 @@ class ChatService:
             self._fail_closed_turn(prepared, status=status, error=detail)
             if prepared.turn is not None:
                 self.record_turn_outcome(prepared.turn.id)
+                if isinstance(error, CompletionHookBlocked):
+                    self._pause_running_session_goal(
+                        prepared.turn.session_id,
+                        _completion_hook_goal_pause_reason(error),
+                    )
             raise error
         finally:
             if admission is not None and prepared.turn is not None:
@@ -6568,10 +6591,10 @@ class ChatService:
         request: ModelRequest,
         response: ModelResponse,
     ) -> ModelResponse:
-        """Return replayable hook rejections to a running goal's model.
+        """Return bounded, replayable hook rejections to the model.
 
-        Ordinary turns retain one feedback/recheck. Effectful hooks are never
-        replayed, even in goal mode.
+        Running goals get two repair/recheck opportunities. Ordinary turns get
+        one. Effectful hooks are never replayed.
         """
 
         if prepared.tools_enabled:
@@ -6616,8 +6639,8 @@ class ChatService:
                     for hook in prepared.hook_snapshots
                     if "chat.turn.completed" in hook.manifest.events
                 )
-                if attempt and not (
-                    replayable and self._running_goal_for_hook_feedback(prepared.turn)
+                if attempt >= self._completion_hook_recheck_limit(
+                    prepared.turn, replayable=replayable
                 ):
                     self._record_completion_hook_decision(prepared, blocked, response)
                     raise
@@ -6640,11 +6663,8 @@ class ChatService:
                     prepared.turn = turn
                 feedback = _blocked_hook_model_output(execution)
                 recheck_instruction = (
-                    (
-                        "Each answer will be checked again while the goal runs. "
-                        if self._running_goal_for_hook_feedback(prepared.turn)
-                        else "Your next answer will be checked once more. "
-                    )
+                    "Your next answer will be checked again. Repair attempts in "
+                    "this turn are bounded; make concrete progress before answering. "
                     if replayable
                     else "This effectful hook cannot be replayed in this turn; "
                     "your explanation will remain a blocked-turn outcome. "
@@ -6715,6 +6735,13 @@ class ChatService:
         except NotFoundError:
             # diagnostic-expected: a deleted goal cannot receive hook feedback.
             return False
+
+    def _completion_hook_recheck_limit(
+        self, turn: ChatTurn | None, *, replayable: bool
+    ) -> int:
+        if replayable and self._running_goal_for_hook_feedback(turn):
+            return _RUNNING_GOAL_COMPLETION_HOOK_RECHECKS
+        return 1
 
     async def _run_start_native_hooks(self, prepared: PreparedChat) -> None:
         try:
@@ -6789,7 +6816,7 @@ class ChatService:
         blocked: CompletionHookBlocked,
         response: ModelResponse,
     ) -> ChatTurn:
-        """Return a replayable rejection to routing while a goal runs."""
+        """Return a replayable rejection to routing within the repair bound."""
 
         if prepared.turn is None:
             raise blocked
@@ -6800,7 +6827,7 @@ class ChatService:
             if "chat.turn.completed" in hook.manifest.events
         )
         attempt = self._completion_hook_attempt(turn)
-        if attempt and not (replayable and self._running_goal_for_hook_feedback(turn)):
+        if attempt >= self._completion_hook_recheck_limit(turn, replayable=replayable):
             self._record_completion_hook_decision(prepared, blocked, response)
             raise blocked
         execution = blocked.execution
@@ -6867,11 +6894,8 @@ class ChatService:
         if not isinstance(feedback, dict):
             return request
         recheck_instruction = (
-            (
-                "Each answer will be checked again while the goal runs. "
-                if turn.goal_id is not None
-                else "Your next answer will be checked once more. "
-            )
+            "Your next answer will be checked again. Repair attempts in this "
+            "turn are bounded; make concrete progress before answering. "
             if feedback.get("recheck", True)
             else "This effectful hook cannot be replayed in this turn; "
             "your explanation will remain a blocked-turn outcome. "

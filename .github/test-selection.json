@@ -1,13 +1,13 @@
 {
-  "change_digest": "79c6151966ee107333e3cf9fbe3b9354f61a0c4906af6557d51c045566282757",
-  "reviewed_by": "Codex side chat parent ownership review",
-  "reason": "Core now discovers side chats by parent conversation and retains them until explicit close. The UI displays a side chat only beside its parent, restores it on return and reload, and clears a stale side-chat URL on another conversation. The selected backend file covers discovery, expiry, and discard; the focused unit file covers ownership selection; the existing side-chat Playwright entries cover navigation, draft retention, and durable real-Core behavior. A comment in chat.py classifies an existing expected missing-goal handler for the repository diagnostic audit. In api.py, unarchiving uses the already loaded chat ID so mypy can prove it is a string. Neither CI repair changes behavior.",
-  "exclusions": "Native code is unchanged. Unrelated backend and UI journeys and full suites are excluded; the chat.py and api.py CI repairs do not change behavior. Mocked WebKit full reload is excluded because it bypasses this fixture's API routes; the selected production real-Core journey checks reload. Browser and device coverage applies only to the side-chat journey.",
+  "change_digest": "36502436ebd8c0b18a1799ae92febd6f2d0ff24823d5d1a367add19557a98503",
+  "reviewed_by": "Codex focused review of completion-hook goal routing",
+  "reason": "Core now bounds replayable required completion-hook rechecks for running goals, preserves the final rejected answer, and pauses a persistently blocked goal. Seven exact Python cases cover acceptance on the second recheck, persistent rejection with and without tools, the streamed provider-turn finalizer, ordinary-turn behavior, and delivery of hook feedback.",
+  "exclusions": "No UI, frontend, native, browser-origin, or packaged-client code changed. Those test layers and unrelated backend journeys are excluded. The selected Python cases exercise the Core state transition and hook subprocess through a local provider fixture; live production Core and browser behavior require separate verification before a production completion claim.",
   "expected_tests": {
-    "python": 11,
-    "frontend": 3,
+    "python": 7,
+    "frontend": 0,
     "native": 0,
-    "playwright": 10
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
@@ -15,22 +15,15 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_temporary_chat.py"
+    "tests/v3/test_native_hook_turn_ends.py::test_running_goal_routes_each_replayable_completion_hook_failure",
+    "tests/v3/test_native_hook_turn_ends.py::test_running_goal_stops_after_bounded_tool_hook_repairs",
+    "tests/v3/test_native_hook_turn_ends.py::test_running_goal_rechecks_replayable_hook_more_than_once_without_tools",
+    "tests/v3/test_native_hook_turn_ends.py::test_running_goal_stops_after_bounded_tool_free_hook_rechecks",
+    "tests/v3/test_native_hook_turn_ends.py::test_streamed_running_goal_pauses_after_persistent_completion_hook",
+    "tests/v3/test_native_hook_turn_ends.py::test_tool_turn_preserves_model_decision_when_completion_hook_still_blocks",
+    "tests/v3/test_native_hook_turn_ends.py::test_required_completion_hook_feedback_reaches_model_and_rechecks_answer"
   ],
-  "frontend": [
-    "ui/src/pages/sideChatSelection.test.ts"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:side-chat/desktop",
-    "entry:side-chat/compact",
-    "entry:side-chat/mobile-chromium-small",
-    "entry:side-chat/mobile-chromium-ledger-390",
-    "entry:side-chat/mobile-chromium-wide",
-    "entry:side-chat/mobile-webkit-small",
-    "entry:side-chat/mobile-webkit",
-    "entry:side-chat/mobile-webkit-wide",
-    "entry:side-chat/assistant-real-desktop",
-    "entry:side-chat/assistant-real-compact"
-  ]
+  "playwright": []
 }
