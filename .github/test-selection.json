@@ -1,5 +1,5 @@
 {
-  "change_digest": "e0029a18a073bcddd8e789751639c931e6df4ffe442d19b7fff9e5927a9ab698",
+  "change_digest": "1d3bee11c4837ff693203bb9f733a3f351dbca25efa92db550dbe2f8cade0e4a",
   "reviewed_by": "Codex focused review of workspace-provenance receipt completeness",
   "reason": "Core receipts now include the frozen current path list. The workspace-provenance and native-hook tests cover persisted classification, parallel actors, and the receipt delivered to a project hook; ten Python tests passed locally.",
   "exclusions": "No UI, frontend, native, browser-origin, or packaged-client code changed. Those test layers and unrelated backend journeys are excluded. Live Core deployment and an Apple-project Stop-hook integration check remain separate rollout gates.",

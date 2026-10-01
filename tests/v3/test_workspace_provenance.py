@@ -81,7 +81,8 @@ def test_provenance_attributes_only_state_changed_after_the_actor_baseline(tmp_p
     ]
     assert service.receipt(completed)["schema"] == PROVENANCE_SCHEMA
     assert service.receipt(completed)["current_paths"] == [
-        "owned.txt", "preexisting.txt"
+        "owned.txt",
+        "preexisting.txt",
     ]
 
 
