@@ -1,10 +1,10 @@
 {
-  "change_digest": "1d3bee11c4837ff693203bb9f733a3f351dbca25efa92db550dbe2f8cade0e4a",
-  "reviewed_by": "Codex focused review of workspace-provenance receipt completeness",
-  "reason": "Core receipts now include the frozen current path list. The workspace-provenance and native-hook tests cover persisted classification, parallel actors, and the receipt delivered to a project hook; ten Python tests passed locally.",
-  "exclusions": "No UI, frontend, native, browser-origin, or packaged-client code changed. Those test layers and unrelated backend journeys are excluded. Live Core deployment and an Apple-project Stop-hook integration check remain separate rollout gates.",
+  "change_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "reviewed_by": "Codex review of public test-selection metadata",
+  "reason": "Replace project-specific rollout wording with a generic downstream-hook boundary. No runtime, UI, or test code changed.",
+  "exclusions": "All test layers are excluded for this wording-only metadata change. Live Core deployment and downstream project-hook integration remain separate rollout gates.",
   "expected_tests": {
-    "python": 10,
+    "python": 0,
     "frontend": 0,
     "native": 0,
     "playwright": 0
@@ -14,10 +14,7 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_workspace_provenance.py",
-    "tests/v3/test_native_hooks.py"
-  ],
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": []
