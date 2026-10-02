@@ -3085,6 +3085,9 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     expect(widths).toHaveLength(2);
     expect(Math.abs(widths[0] - widths[1])).toBeLessThanOrEqual(2);
     await expect(side.getByRole("button", {name: "Inherited history · 2 messages"})).toBeVisible();
+    const sideOpen = await page.evaluate(() => performance.getEntriesByName("nebula.side_chat.open", "measure").at(-1)?.duration);
+    console.info(`SIDE_CHAT_PROFILE ${JSON.stringify({durationMs: sideOpen ?? null, origin: core.origin, project: testInfo.project.name})}`);
+    await testInfo.attach("side-chat-open-timing.json", {body: JSON.stringify({durationMs: sideOpen ?? null, origin: core.origin, build: "production", project: testInfo.project.name}), contentType: "application/json"});
     const sideId = new URL(page.url()).searchParams.get("sideChat");
     expect(sideId).toBeTruthy();
     await expect(page.locator(`.session-select[data-session-id="${sideId}"]`)).toHaveCount(0);
@@ -3200,6 +3203,81 @@ test("assistant upgrade side chat opens during a running Core turn with its save
     await expect(side).toBeVisible({timeout: 20_000});
     await expect(side.getByRole("button", {name: "Inherited history · 3 messages"})).toBeVisible();
     await testInfo.attach("active-side-chat-real-core", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), parentId: parent.session_id, sideId}), contentType: "application/json"});
+  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+});
+
+test("assistant upgrade large side chat opens from a recent page on real Core", async ({page}, testInfo) => {
+  test.setTimeout(120_000);
+  const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
+  const stub = await startLocalModelStub();
+  const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
+    const providerResponse = await api.post("providers", {data: {name: "Large side chat", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}});
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as {id: string};
+    const response = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Original research question"}], include_knowledge: false, stream: false}});
+    expect(response.ok(), await response.text()).toBe(true);
+    const parent = await response.json() as {session_id: string};
+    const otherResponse = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Other short question"}], include_knowledge: false, stream: false}});
+    expect(otherResponse.ok(), await otherResponse.text()).toBe(true);
+    const other = await otherResponse.json() as {session_id: string};
+    // Add bounded, valid records to this disposable Core in one transaction.
+    // This keeps the browser test representative without calling the model 226 times.
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], {encoding: "utf8"}).stdout.trim();
+    const coreBinary = [process.env.NEBULA_TEST_CORE_BIN, process.env.NEBULA_CORE_BINARY, path.join(repository, ".venv/bin/nebula-core"), commonGitDir ? path.join(path.dirname(commonGitDir), ".venv/bin/nebula-core") : undefined].find(candidate => candidate && existsSync(candidate));
+    expect(coreBinary, "A Python environment matching the real Core binary is required").toBeTruthy();
+    const python = path.join(path.dirname(coreBinary!), "python");
+    const seed = spawnSync(python, ["-c", `
+import sys
+import random
+from nebula.v3.domain import ChatMessage
+from nebula.v3.storage import NebulaStore
+store = NebulaStore(sys.argv[1])
+def content(index):
+    raw = random.Random(index).randbytes(9600).hex()
+    return f"Saved research message {index} " + " ".join(raw[offset:offset + 16] for offset in range(0, len(raw), 16))
+messages = [ChatMessage(id=f"perf-message-{index:04d}", engagement_id=sys.argv[2], session_id=sys.argv[3], sequence=index, role="user" if index % 2 else "assistant", content=content(index), reasoning=("Private reasoning details. " * 1040) if index % 2 == 0 else "", provider_profile_id=sys.argv[4], model="security-model") for index in range(3, 455)]
+with store.transaction() as transaction:
+    transaction.add_chat_messages(messages)
+`, path.join(core.dataDir, "nebula.db"), projects[0].id, parent.session_id, provider.id], {encoding: "utf8", env: {...process.env, PYTHONPATH: path.resolve(import.meta.dirname, "../../src")}, timeout: 30_000});
+    expect(seed.status, seed.error?.message ?? seed.stderr).toBe(0);
+    const pairingApi = await playwrightRequest.newContext({baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
+    const pairing = await (await pairingApi.post("auth/pairings", {data: {name: "Large side chat browser"}})).json() as {secret: string; confirmation_code: string};
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Large side chat browser");
+    await page.getByRole("button", {name: "Pair device"}).click();
+    await expect(coreReady(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}`);
+    await expect(page.locator(".session-workspace > .chat-panel .chat-message").first()).toBeVisible();
+    await page.getByRole("button", {name: "Show conversations"}).click();
+    await page.locator(`.session-select[data-session-id="${other.session_id}"]`).click();
+    await expect(page.locator(".session-workspace > .chat-panel .chat-message.operator")).toContainText("Other short question");
+    await page.locator(`.session-select[data-session-id="${parent.session_id}"]`).click();
+    await expect(page.locator(".session-workspace > .chat-panel .chat-message.operator").last()).toContainText("Saved research message 453");
+    const switchMs = await page.evaluate(() => performance.getEntriesByName("nebula.chat_switch.authoritative", "measure").at(-1)?.duration ?? null);
+    await page.evaluate(() => {
+      (window as typeof window & {__nebulaSideChatLongTasks?: Array<{startTime: number; duration: number}>}).__nebulaSideChatLongTasks = [];
+      new PerformanceObserver(list => {
+        (window as typeof window & {__nebulaSideChatLongTasks?: Array<{startTime: number; duration: number}>}).__nebulaSideChatLongTasks?.push(...list.getEntries().map(entry => ({startTime: entry.startTime, duration: entry.duration})));
+      }).observe({entryTypes: ["longtask"]});
+    });
+    await page.getByRole("button", {name: "Open side chat", exact: true}).click();
+    const side = page.getByRole("region", {name: "Side chat"});
+    await expect(side.getByRole("button", {name: "Inherited history · 454 messages"})).toBeVisible({timeout: 30_000});
+    await expect.poll(() => page.evaluate(() => performance.getEntriesByName("nebula.side_chat.open", "measure").at(-1)?.duration ?? 0)).toBeGreaterThan(0);
+    const profile = {...await page.evaluate(() => ({
+      openMs: performance.getEntriesByName("nebula.side_chat.open", "measure").at(-1)?.duration ?? null,
+      requests: performance.getEntriesByType("resource").filter(entry => entry.name.includes("/api/v1/") && entry.startTime >= (performance.getEntriesByName("nebula.side_chat.open_start", "mark")[0]?.startTime ?? Infinity)).map(entry => ({name: new URL(entry.name).pathname, startMs: entry.startTime - (performance.getEntriesByName("nebula.side_chat.open_start", "mark")[0]?.startTime ?? 0), durationMs: entry.duration, transferSize: (entry as PerformanceResourceTiming).transferSize, serverTiming: (entry as PerformanceResourceTiming).serverTiming.map(item => ({name: item.name, duration: item.duration}))})),
+      longTasks: (window as typeof window & {__nebulaSideChatLongTasks?: Array<{startTime: number; duration: number}>}).__nebulaSideChatLongTasks?.filter(entry => entry.startTime >= (performance.getEntriesByName("nebula.side_chat.open_start", "mark")[0]?.startTime ?? Infinity)) ?? [],
+      mountedRows: document.querySelectorAll(".side-chat-pane .chat-message").length,
+    })), switchMs};
+    expect(profile.openMs).toBeGreaterThan(0);
+    expect(profile.mountedRows).toBe(0);
+    console.info(`LARGE_SIDE_CHAT_PROFILE ${JSON.stringify({openMs: profile.openMs, switchMs: profile.switchMs, longestTaskMs: Math.max(0, ...profile.longTasks.map(item => item.duration)), requestCount: profile.requests.length, forkMs: profile.requests.find(item => item.name.endsWith("/fork"))?.durationMs, sideMessageMs: profile.requests.find(item => item.name.includes("/messages") && item.startMs > 0)?.durationMs, mountedRows: profile.mountedRows})}`);
+    await testInfo.attach("large-side-chat-profile.json", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, ...profile}, null, 2), contentType: "application/json"});
   } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
 });
 

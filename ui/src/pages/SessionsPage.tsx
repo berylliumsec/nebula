@@ -1279,6 +1279,7 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
     [subagentState.subagents],
   );
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const sideChatMeasuredIdRef = useRef("");
   const [historyBeforeId, setHistoryBeforeId] = useState<string>();
   const [hasOlderHistory, setHasOlderHistory] = useState(false);
   const [olderHistoryLoading, setOlderHistoryLoading] = useState(false);
@@ -1505,6 +1506,14 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
       return false;
     });
   }, [messages, sessionId]);
+  useLayoutEffect(() => {
+    if (!embeddedSideChat || !sessionId || sessionId !== requestedSessionId || loadingHistory || !sessionReadReady
+      || sideChatMeasuredIdRef.current === sessionId) return;
+    sideChatMeasuredIdRef.current = sessionId;
+    if (!performance.getEntriesByName("nebula.side_chat.open_start", "mark").length) return;
+    performance.mark("nebula.side_chat.ready");
+    performance.measure("nebula.side_chat.open", "nebula.side_chat.open_start", "nebula.side_chat.ready");
+  }, [embeddedSideChat, loadingHistory, requestedSessionId, sessionId, sessionReadReady]);
   const activeDraftStorageKey = engagement
     ? chatDraftStorageKey(engagement.id, sessionId || undefined)
     : "";
@@ -1594,14 +1603,14 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
   const selectedHarness = harnesses.find((harness) => harness.id === harnessId);
   const runtimeReady = runtimeKind === "provider" ? Boolean(selectedProvider) : Boolean(selectedHarness);
   useEffect(() => {
-    if (!engagement || !runtimeReady) return;
+    if (embeddedSideChat || !engagement || !runtimeReady) return;
     registerAssistantSnapshot({
       engagementId: engagement.id, sessionId: sessionId || undefined,
       backend: runtimeKind, providerId: runtimeKind === "provider" ? providerId : undefined,
       harnessProfileId: runtimeKind === "harness" ? harnessId : undefined, model: model.trim(),
       includeKnowledge: false,
     });
-  }, [engagement?.id, sessionId, runtimeKind, providerId, harnessId, model, runtimeReady, registerAssistantSnapshot]);
+  }, [embeddedSideChat, engagement?.id, sessionId, runtimeKind, providerId, harnessId, model, runtimeReady, registerAssistantSnapshot]);
   const selectedHarnessSkill = harnessSkills.find((skill) => skill.path === harnessSkillPath);
   const matchingHarnessSkills = useMemo(() => {
     const query = skillToken?.query.toLocaleLowerCase() ?? "";
@@ -1732,12 +1741,12 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
   }, [view]);
 
   useEffect(() => {
-    if (runtimeKind !== "provider" || coreState !== "online" || (view !== "chat" && view !== "browser") || !selectedProvider || !model.trim() || modelVerification) return;
+    if (embeddedSideChat || runtimeKind !== "provider" || coreState !== "online" || (view !== "chat" && view !== "browser") || !selectedProvider || !model.trim() || modelVerification) return;
     const key = `${selectedProvider.id}:${model.trim()}`;
     if (attemptedToolVerificationRef.current.has(key)) return;
     attemptedToolVerificationRef.current.add(key);
     void reverifyProvider(selectedProvider.id, model).catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_01", "A handled interface operation failed.", caughtError, "sessions_page"); return undefined; });
-  }, [coreState, model, modelVerification, reverifyProvider, runtimeKind, selectedProvider, view]);
+  }, [coreState, embeddedSideChat, model, modelVerification, reverifyProvider, runtimeKind, selectedProvider, view]);
 
   useEffect(() => {
     if (runtimeKind !== "harness" || !allowSubagents || coreState !== "online" || !subagentProvider || !subagentModel.trim() || subagentModelVerification) return;
@@ -1748,12 +1757,12 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
   }, [allowSubagents, coreState, reverifyProvider, runtimeKind, subagentModel, subagentModelVerification, subagentProvider]);
 
   useEffect(() => {
-    if (!assistantDrafts.length) return;
+    if (embeddedSideChat || !assistantDrafts.length) return;
     if (view === "terminal") setTerminalAssistantOpen(true);
     setExpandedContextIndex(undefined);
     setConversationOpen(true);
     globalThis.requestAnimationFrame?.(() => composerRef.current?.focus());
-  }, [assistantDrafts, view]);
+  }, [assistantDrafts, embeddedSideChat, view]);
 
   useComposerAutosize(composerRef, draft, CHAT_COMPOSER_MAX_HEIGHT, `${view}:${conversationOpen}:${sessionId ?? "new"}`);
 
@@ -1992,14 +2001,16 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
       void logCaughtDiagnostic("interface.sessions_page.harness_sessions", "Harness sessions could not be loaded.", caughtError, "sessions_page");
       if (active) setHarnessSessions([]);
     });
-    void api.listMcpServers().then((nextServers) => {
-      if (active) setMcpServers(nextServers.filter((item) => item.enabled));
-    }).catch((caughtError) => {
-      void logCaughtDiagnostic("interface.sessions_page.mcp_servers", "MCP servers could not be loaded.", caughtError, "sessions_page");
-      if (active) setMcpServers([]);
-    });
+    if (!embeddedSideChat) {
+      void api.listMcpServers().then((nextServers) => {
+        if (active) setMcpServers(nextServers.filter((item) => item.enabled));
+      }).catch((caughtError) => {
+        void logCaughtDiagnostic("interface.sessions_page.mcp_servers", "MCP servers could not be loaded.", caughtError, "sessions_page");
+        if (active) setMcpServers([]);
+      });
+    }
     return () => { active = false; };
-  }, [api, coreState, engagement]);
+  }, [api, coreState, embeddedSideChat, engagement]);
 
   useEffect(() => {
     if (
@@ -2105,7 +2116,7 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
     return () => controller.abort();
   }, [api, engagement, runtimeKind, selectedHarness, projectCatalogKey]);
   useEffect(() => {
-    if (!api || !engagement || runtimeKind !== "provider") {
+    if (embeddedSideChat || !api || !engagement || runtimeKind !== "provider") {
       setNativeHooks([]);
       setSelectedHookIds([]);
       setNativeHookError(undefined);
@@ -2123,7 +2134,7 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
       setNativeHookError(error instanceof Error ? error.message : "Hooks could not be discovered.");
     });
     return () => controller.abort();
-  }, [api, engagement, runtimeKind, projectCatalogKey]);
+  }, [api, embeddedSideChat, engagement, runtimeKind, projectCatalogKey]);
   useEffect(() => {
     if (assistantSettingsOpen || view === "chat") setProjectCatalogKey(key => key + 1);
   }, [assistantSettingsOpen, view]);
@@ -3727,6 +3738,8 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
     if (sideChatBusy) return;
     if (sideChatId) { await closeSideChat(); return; }
     if (!api || !sessionId) return;
+    performance.clearMarks("nebula.side_chat.open_start");
+    performance.mark("nebula.side_chat.open_start");
     const sourceSessionId = sessionId;
     setSideChatBusy(true);
     setSideChatError(undefined);
@@ -5520,6 +5533,14 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
   // A phone never splits the chat: the terminal is its own tab there.
   const chatTerminalVisible = view === "chat" && chatTerminalOpen && !sideChatId && !compact && Boolean(api && engagement);
   const sideChatSplit = useResizableSplitPane("nebula.side-chat.ratio", Boolean(sideChatId) && view === "chat" && !embeddedSideChat);
+  // Parent composer keystrokes and stream frames must not render the second
+  // transcript. These callbacks keep their identity while using the latest
+  // parent state when the operator actually closes or reveals the pane.
+  const sideChatActions = useStableActions({
+    close: () => { void closeSideChat(); },
+    showConversations: () => setMobileListOpen(true),
+    unavailable: unavailableSideChat,
+  });
   const chatTerminalSize = useResizableSidePanel({
     defaultWidth: 520,
     enabled: chatTerminalVisible && !chatTerminalStacked,
@@ -6106,7 +6127,7 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
           ) : (
             assistantPanel
           )}
-          {view === "chat" && sideChatId && <>{sideChatSplit.resizeHandle}<SessionsPage key={`side-chat:${sideChatId}`} embeddedSideChat sideChatParentTitle={sessions.find(item => item.id === sessionId)?.title} onCloseSideChat={() => void closeSideChat()} onShowConversations={() => setMobileListOpen(true)} sideChatConversationListOpen={mobileListOpen} onSideChatUnavailable={unavailableSideChat} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} /></>}
+          {view === "chat" && sideChatId && <>{sideChatSplit.resizeHandle}<MemoizedSideChat key={`side-chat:${sideChatId}`} embeddedSideChat sideChatParentTitle={sessions.find(item => item.id === sessionId)?.title} onCloseSideChat={sideChatActions.close} onShowConversations={sideChatActions.showConversations} sideChatConversationListOpen={mobileListOpen} onSideChatUnavailable={sideChatActions.unavailable} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} /></>}
         </section>
 
         {(view === "chat" || view === "browser") && agentView !== "closed" && api && engagement && sessionId && <AgentViewPanel
@@ -6156,3 +6177,5 @@ export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, on
     </div>
   );
 }
+
+const MemoizedSideChat = memo(SessionsPage);
