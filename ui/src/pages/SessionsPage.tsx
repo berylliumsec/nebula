@@ -1354,6 +1354,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   const chatScrollGeometryRef = useRef<ChatScrollGeometry | undefined>(undefined);
   const chatReadingPositionRef = useRef<{sessionId: string; scrollTop: number; followBottom: boolean}>({sessionId: "", scrollTop: 0, followBottom: true});
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
   const chatTouchYRef = useRef<number | undefined>(undefined);
   const previousChatSendingRef = useRef(false);
   const providerGoalSettledRef = useRef(false);
@@ -1463,11 +1464,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     const position = restoredScrollRef.current;
     chatFollowBottomRef.current = position?.followBottom ?? true;
     setHasNewerMessages(!chatFollowBottomRef.current);
+    setHasOlderMessages(false);
     if (!position) return;
     const restore = () => {
       chatFollowBottomRef.current = position.followBottom;
       setHasNewerMessages(!position.followBottom);
       if (chatViewportRef.current && !position.followBottom) chatViewportRef.current.scrollTop = position.scrollTop;
+      setHasOlderMessages((chatViewportRef.current?.scrollTop ?? 0) > 24);
     };
     restore();
     // The external thread store commits its message rows after the parent render.
@@ -5705,6 +5708,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
                       chatReadingPositionRef.current = {sessionId, scrollTop: viewport.scrollTop, followBottom: atBottom};
                       chatFollowBottomRef.current = atBottom;
                       setHasNewerMessages(!atBottom);
+                      setHasOlderMessages(geometry.scrollTop > 24);
                     }}
                     onWheel={event => {if (event.deltaY < 0) chatFollowBottomRef.current = false;}}
                     onTouchStart={event => {chatTouchYRef.current = event.touches[0]?.clientY;}}
@@ -5717,6 +5721,11 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
                     scrollToBottomOnThreadSwitch={!restoredScrollRef.current}
                     turnAnchor="bottom"
                   >
+                {messages.length > 0 && hasOlderMessages && <button className="chat-scroll-jump chat-scroll-to-top" type="button" aria-label="Scroll to earliest message" title="Scroll to earliest message" onClick={() => {
+                  chatFollowBottomRef.current = false;
+                  if (chatViewportRef.current) chatViewportRef.current.scrollTop = 0;
+                  setHasOlderMessages(false);
+                }}><ChevronDown size={16} aria-hidden="true" /></button>}
                 {leadingReplacements.map((group) => <ReplacedMessages group={group} key={group.id} />)}
                 {loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <ThreadPrimitive.Messages>{({ message: threadMessage }) => {
                   const message = messagesById.get(threadMessage.id);
@@ -5756,7 +5765,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
                       subagents={subagentState.subagents}
                       onReview={() => updateSearchParams(next => next.set("drawer", "subagents"))}
                     />}
-                    {messages.length > 0 && hasNewerMessages && <ThreadPrimitive.ScrollToBottom className="chat-scroll-to-bottom" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => { chatFollowBottomRef.current = true; }}>
+                    {messages.length > 0 && hasNewerMessages && <ThreadPrimitive.ScrollToBottom className="chat-scroll-jump chat-scroll-to-bottom" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => { chatFollowBottomRef.current = true; }}>
                       <ChevronDown size={16} aria-hidden="true" />
                     </ThreadPrimitive.ScrollToBottom>}
                   </ThreadPrimitive.Viewport>
