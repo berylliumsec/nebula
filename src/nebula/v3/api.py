@@ -10387,15 +10387,21 @@ def create_app(
     ) -> list[ChatMessage]:
         if limit is not None:
             if not include_replaced:
-                raise HTTPException(status_code=422, detail="Paged history requires include_replaced")
+                raise HTTPException(
+                    status_code=422, detail="Paged history requires include_replaced"
+                )
             page = chat_service().session_messages_page(
                 session_id, limit=limit, before_message_id=before_message_id
             )
             return [
-                item.model_copy(update={
-                    "reasoning": "",
-                    "metadata": {**item.metadata, "reasoning_available": True},
-                }) if item.reasoning else item
+                item.model_copy(
+                    update={
+                        "reasoning": "",
+                        "metadata": {**item.metadata, "reasoning_available": True},
+                    }
+                )
+                if item.reasoning
+                else item
                 for item in page
             ]
         return chat_service().session_messages(
@@ -10411,7 +10417,9 @@ def create_app(
         store.get(ChatSession, session_id)
         message = store.get(ChatMessage, message_id)
         if message.session_id != session_id:
-            raise HTTPException(status_code=404, detail="Message not found in conversation")
+            raise HTTPException(
+                status_code=404, detail="Message not found in conversation"
+            )
         return {"reasoning": message.reasoning}
 
     @app.get(
@@ -10605,12 +10613,24 @@ def create_app(
     async def fork_chat_session(
         session_id: str, request: ChatSessionForkRequest
     ) -> ChatSession:
-        if sum((bool(request.through_message_id), bool(request.before_message_id), request.through_latest)) != 1:
+        if (
+            sum(
+                (
+                    bool(request.through_message_id),
+                    bool(request.before_message_id),
+                    request.through_latest,
+                )
+            )
+            != 1
+        ):
             raise HTTPException(
                 status_code=422, detail="Choose exactly one branch boundary"
             )
         if request.through_latest and not request.side_chat:
-            raise HTTPException(status_code=422, detail="Latest-message branching is only for side chats")
+            raise HTTPException(
+                status_code=422,
+                detail="Latest-message branching is only for side chats",
+            )
         source = store.get(ChatSession, session_id)
         harness_session_id: str | None = None
         if source.backend == ChatBackend.HARNESS:

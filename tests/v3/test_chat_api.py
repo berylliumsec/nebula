@@ -382,20 +382,30 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
         f"/api/v1/chat/sessions/{latest_side.json()['id']}/messages", headers=_auth()
     ).json()
     assert [message["source_message_id"] for message in latest_messages] == [
-        message["id"] for message in client.get(
+        message["id"]
+        for message in client.get(
             f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
         ).json()
     ]
-    assert client.post(
-        f"/api/v1/chat/sessions/{session_id}/fork",
-        headers=_auth(), json={"through_latest": True},
-    ).status_code == 422
+    assert (
+        client.post(
+            f"/api/v1/chat/sessions/{session_id}/fork",
+            headers=_auth(),
+            json={"through_latest": True},
+        ).status_code
+        == 422
+    )
 
-    store.create(ChatMessage(
-        engagement_id=engagement.id, session_id=session_id, sequence=3,
-        role=ChatRole.ASSISTANT, content="A later saved answer.",
-        reasoning="Large saved reasoning stays in Core.",
-    ))
+    store.create(
+        ChatMessage(
+            engagement_id=engagement.id,
+            session_id=session_id,
+            sequence=3,
+            role=ChatRole.ASSISTANT,
+            content="A later saved answer.",
+            reasoning="Large saved reasoning stays in Core.",
+        )
+    )
     recent = client.get(
         f"/api/v1/chat/sessions/{session_id}/messages?include_replaced=true&limit=2",
         headers=_auth(),
@@ -406,7 +416,8 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     assert recent.json()[-1]["metadata"]["reasoning_available"] is True
     older = client.get(
         f"/api/v1/chat/sessions/{session_id}/messages?include_replaced=true&limit=2"
-        f"&before_message_id={recent.json()[0]['id']}", headers=_auth(),
+        f"&before_message_id={recent.json()[0]['id']}",
+        headers=_auth(),
     )
     assert [item["sequence"] for item in older.json()] == [1]
     reasoning = client.get(
@@ -414,10 +425,13 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
         headers=_auth(),
     )
     assert reasoning.json() == {"reasoning": "Large saved reasoning stays in Core."}
-    assert client.get(
-        f"/api/v1/chat/sessions/{latest_side.json()['id']}/messages/{recent.json()[-1]['id']}/reasoning",
-        headers=_auth(),
-    ).status_code == 404
+    assert (
+        client.get(
+            f"/api/v1/chat/sessions/{latest_side.json()['id']}/messages/{recent.json()[-1]['id']}/reasoning",
+            headers=_auth(),
+        ).status_code
+        == 404
+    )
 
 
 def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path):

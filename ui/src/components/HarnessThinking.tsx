@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { reasoningSummaryState, reasoningSummaryText, type HarnessActivityItem } from "../pages/harnessActivity";
 import { HarnessMarkdown } from "./HarnessMarkdown";
 
@@ -20,7 +21,10 @@ export function ThinkingDisclosure({
     if (!load || loading) return;
     setLoading(true); setError(undefined);
     try { setLoaded(await load()); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Could not load saved thinking."); }
+    catch (caught) {
+      void logCaughtDiagnostic("interface.assistant_chat.reasoning_failed", "Saved thinking could not be loaded.", caught, "assistant_chat");
+      setError(caught instanceof Error ? caught.message : "Could not load saved thinking.");
+    }
     finally { setLoading(false); }
   };
   if (!thought && !streaming && !load) return null;
