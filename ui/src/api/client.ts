@@ -1566,6 +1566,7 @@ interface WireHarnessProfile extends WireEntity {
       default_reasoning_effort?: string | null;
       service_tiers?: Array<{ id: string; label: string; description?: string }>;
       default_service_tier?: string | null;
+      cyber_access_programs?: Array<"standard" | "daybreakBlue" | "daybreakRed"> | null;
     }>;
     activity_replay?: boolean;
     reasoning_summaries?: boolean;
@@ -3573,6 +3574,7 @@ export function chatRequestBody(
     harness_mode: body.harnessMode,
     harness_reasoning_effort: body.harnessReasoningEffort,
     harness_service_tier: body.harnessServiceTier,
+    harness_cyber_access_program: body.harnessCyberAccessProgram,
     harness_skill: body.harnessSkill
       ? { name: body.harnessSkill.name, path: body.harnessSkill.path }
       : undefined,
@@ -3700,6 +3702,10 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
         description: item.description ?? "",
       })),
       defaultServiceTier: option.default_service_tier ?? undefined,
+      cyberAccessPrograms: Array.isArray(option.cyber_access_programs)
+        ? option.cyber_access_programs.filter((item): item is "standard" | "daybreakBlue" | "daybreakRed" =>
+          item === "standard" || item === "daybreakBlue" || item === "daybreakRed")
+        : undefined,
     })),
     enabled: value.enabled,
     localOnly: value.privacy?.local_only === true,
@@ -3987,6 +3993,12 @@ function mapHarnessSession(value: WireHarnessSession): HarnessSessionSummary {
       && !Array.isArray(value.metadata.runtime_options)
       && typeof (value.metadata.runtime_options as JsonObject).service_tier === "string"
         ? String((value.metadata.runtime_options as JsonObject).service_tier)
+        : undefined,
+    cyberAccessProgram: typeof value.metadata?.runtime_options === "object"
+      && value.metadata.runtime_options
+      && !Array.isArray(value.metadata.runtime_options)
+      && ["standard", "daybreakBlue", "daybreakRed"].includes(String((value.metadata.runtime_options as JsonObject).cyber_access_program))
+        ? (value.metadata.runtime_options as JsonObject).cyber_access_program as "standard" | "daybreakBlue" | "daybreakRed"
         : undefined,
     status: value.status,
     mcpServerIds: value.mcp_server_ids ?? [],

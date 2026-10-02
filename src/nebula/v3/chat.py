@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from dataclasses import replace as dataclass_replace
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from pydantic import (
@@ -636,6 +636,9 @@ class ChatCompletionRequest(NebulaModel):
     # conversation and Core remembers the choice.
     reasoning_effort: ReasoningEffort | None = None
     harness_service_tier: str | None = Field(default=None, max_length=100)
+    harness_cyber_access_program: (
+        Literal["automatic", "standard", "daybreakBlue", "daybreakRed"] | None
+    ) = None
     harness_skill: dict[str, str] | None = None
     runtime_switch_confirmation: str | None = Field(
         default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
@@ -684,6 +687,8 @@ class ChatCompletionRequest(NebulaModel):
                 raise ValueError("provider chat requires provider_id")
             if self.harness_profile_id or self.harness_session_id:
                 raise ValueError("provider chat cannot include harness runtime fields")
+            if self.harness_cyber_access_program is not None:
+                raise ValueError("provider chat cannot select Codex cyber access")
         else:
             if not self.harness_profile_id or self.provider_id:
                 raise ValueError(

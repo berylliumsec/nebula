@@ -1114,6 +1114,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   // what most turns want; Core remembers whatever the operator chose here.
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort | "">("");
   const [harnessServiceTier, setHarnessServiceTier] = useState("");
+  const [harnessCyberAccessProgram, setHarnessCyberAccessProgram] = useState<"" | "standard" | "daybreakBlue" | "daybreakRed">("");
   const [harnessSkills, setHarnessSkills] = useState<HarnessSkillSummary[]>([]);
   const [harnessSkillPath, setHarnessSkillPath] = useState("");
   const [harnessSkillsLoading, setHarnessSkillsLoading] = useState(false);
@@ -1661,6 +1662,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   ])];
   const harnessReasoningEfforts = selectedHarnessModelOptions?.reasoningEfforts ?? [];
   const harnessServiceTiers = selectedHarnessModelOptions?.serviceTiers ?? [];
+  const harnessCyberAccessPrograms = selectedHarness?.kind === "codex_app_server"
+    ? selectedHarnessModelOptions?.cyberAccessPrograms
+    : undefined;
   const providerIsLocal = selectedProvider?.kind === "local" || selectedProvider?.privacy === "local_only";
   const imageInputEnabled = runtimeKind === "provider"
     ? Boolean(selectedProvider?.capabilities.includes("vision"))
@@ -1699,6 +1703,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     setReasoningEffort(saved.reasoningEffort ?? "");
     setHarnessReasoningEffort(saved.harnessReasoningEffort ?? "");
     setHarnessServiceTier(saved.harnessServiceTier ?? "");
+    setHarnessCyberAccessProgram("");
     setHarnessMode(saved.harnessMode ?? "");
     setAllowSubagents(saved.allowSubagents);
     setSubagentProviderId(saved.subagentProviderId ?? "");
@@ -2085,6 +2090,10 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       ?? selectedHarnessModelOptions?.defaultServiceTier
       ?? "",
     );
+    setHarnessCyberAccessProgram(
+      (selectedHarnessSession?.harnessProfileId === harnessId && selectedHarnessSession?.model === model
+        ? selectedHarnessSession.cyberAccessProgram : undefined) ?? "",
+    );
   }, [
     model,
     engagement?.id,
@@ -2095,6 +2104,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     selectedHarnessSession?.id,
     selectedHarnessSession?.reasoningEffort,
     selectedHarnessSession?.serviceTier,
+    selectedHarnessSession?.cyberAccessProgram,
   ]);
   const harnessModesKey = (selectedHarness?.capabilities?.modes ?? []).join("\n");
   useEffect(() => {
@@ -4621,6 +4631,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       harnessServiceTier: runtimeKind === "harness"
         ? harnessServiceTier
         : undefined,
+      harnessCyberAccessProgram: runtimeKind === "harness" && selectedHarness?.kind === "codex_app_server"
+        ? harnessCyberAccessProgram || "automatic"
+        : undefined,
       harnessSkill: runtimeKind === "harness" && selectedHarnessSkill
         ? { name: selectedHarnessSkill.name, path: selectedHarnessSkill.path }
         : undefined,
@@ -5639,6 +5652,8 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
                 </> : <label><span>Model</span><select aria-label="Chat harness model" value={model} disabled={!harnessModelOptions.length} onChange={(event) => { setModel(event.target.value); void rememberAssistantDefaults({ backend: "harness", harnessId, model: event.target.value || null }); setAssistantSettingsStatus("Model updated. Applies to your next message."); }}><option value="">{harnessModelOptions.length ? "Select model" : "Run a harness check to discover models"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
                 {runtimeKind === "provider" && <label><span>Effort</span><select aria-label="Reasoning effort" value={reasoningEffort} disabled={assistantSettingsBusy} onChange={(event) => void saveProviderReasoningEffort(event.target.value as ReasoningEffort | "")}><option value="">Model default</option>{REASONING_EFFORTS.map((item) => <option value={item} key={item}>{item === "none" ? "None · answer only" : item}</option>)}</select></label>}{runtimeKind === "harness" && (harnessReasoningEfforts.length > 0 || harnessReasoningEffort) && <label><span>Effort</span><select aria-label="Harness reasoning effort" value={harnessReasoningEffort} onChange={(event) => { setHarnessReasoningEffort(event.target.value); void rememberAssistantDefaults({ harnessReasoningEffort: event.target.value || null }); setAssistantSettingsStatus("Effort updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessReasoningEffort && !harnessReasoningEfforts.some((item) => item.id === harnessReasoningEffort) && <option value={harnessReasoningEffort}>{harnessReasoningEffort} · saved</option>}{harnessReasoningEfforts.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
                 {runtimeKind === "harness" && (harnessServiceTiers.length > 0 || harnessServiceTier) && <label><span>Speed</span><select aria-label="Harness speed" value={harnessServiceTier} onChange={(event) => { setHarnessServiceTier(event.target.value); void rememberAssistantDefaults({ harnessServiceTier: event.target.value || null }); setAssistantSettingsStatus("Speed updated. Applies to your next message."); }}><option value="">Harness default</option>{harnessServiceTier && !harnessServiceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{harnessServiceTiers.map((item) => <option title={item.description || undefined} value={item.id} key={item.id}>{item.label}</option>)}</select></label>}
+                {runtimeKind === "harness" && selectedHarness?.kind === "codex_app_server" && (harnessCyberAccessPrograms?.length || harnessCyberAccessProgram) ? <label><span>Cyber access</span><select aria-label="Codex cyber access" value={harnessCyberAccessProgram} disabled={composerBusy} onChange={(event) => { setHarnessCyberAccessProgram(event.target.value as "" | "standard" | "daybreakBlue" | "daybreakRed"); setAssistantSettingsStatus("Cyber access updated. Applies to your next message."); }}><option value="">Codex automatic</option>{harnessCyberAccessProgram && !harnessCyberAccessPrograms?.includes(harnessCyberAccessProgram) && <option value={harnessCyberAccessProgram}>{harnessCyberAccessProgram} · saved</option>}{harnessCyberAccessPrograms?.map((program) => <option value={program} key={program}>{program === "standard" ? "Standard" : program === "daybreakBlue" ? "Daybreak Blue" : "Daybreak Red"}</option>)}</select><small>Available choices come from this Codex account and model.</small></label> : null}
+                {runtimeKind === "harness" && selectedHarness?.kind === "codex_app_server" && selectedHarnessModelOptions && !harnessCyberAccessPrograms?.length && !harnessCyberAccessProgram && <small role="status">This Codex runtime did not advertise a cyber access choice for this model and account.</small>}
                 {runtimeKind === "harness" && Boolean(selectedHarness?.capabilities?.modes.length) && <label><span>Mode</span><select aria-label="Chat harness mode" value={harnessMode} disabled={sending} onChange={(event) => { setHarnessMode(event.target.value); void rememberAssistantDefaults({ harnessMode: event.target.value || null }); }}><option value="">Harness default</option>{selectedHarness?.capabilities?.modes.map((item) => <option value={item} key={item}>{item === "plan" || item === "planning" ? "Planning" : item.replaceAll("_", " ")}</option>)}</select></label>}
                 </div>
                 {assistantSettingsStatus && <p className="provider-dialog-note" role="status">{assistantSettingsStatus}</p>}

@@ -720,6 +720,51 @@ def test_disabled_nebula_knowledge_does_not_suppress_installed_skills():
     )
 
 
+def test_codex_daybreak_choice_is_advertised_and_saved_for_chat(tmp_path):
+    store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
+    profile = store.update(
+        HarnessProfile,
+        profile.id,
+        {
+            "capabilities": profile.capabilities.model_copy(
+                update={
+                    "models": ["test-model"],
+                    "model_options": [
+                        HarnessModelOptions(
+                            model="test-model",
+                            cyber_access_programs=["standard", "daybreakBlue"],
+                        )
+                    ],
+                }
+            )
+        },
+        expected_revision=profile.revision,
+    )
+    chat, _, turn = runtime.prepare_chat(
+        engagement_id=engagement.id,
+        profile_id=profile.id,
+        model="test-model",
+        prompt="Review the patch",
+        chat_session_id=None,
+        harness_session_id=None,
+        mcp_server_ids=[],
+        harness_cyber_access_program="daybreakBlue",
+    )
+    session = store.get(HarnessSession, turn.harness_session_id)
+    assert session.metadata["runtime_options"]["cyber_access_program"] == "daybreakBlue"
+    assert (
+        chat.metadata["harness_runtime_options"]["cyber_access_program"]
+        == "daybreakBlue"
+    )
+    with pytest.raises(HarnessConfigurationError, match="not available"):
+        runtime.create_session(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model="test-model",
+            cyber_access_program="daybreakRed",
+        )
+
+
 def test_harness_model_controls_are_validated_and_frozen_per_session(tmp_path):
     store, engagement, profile, _mcp, _adapter, runtime = _runtime(tmp_path)
     profile = store.update(

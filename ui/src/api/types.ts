@@ -1816,6 +1816,7 @@ export interface ChatCompletionRequest {
   harnessMode?: string;
   harnessReasoningEffort?: string;
   harnessServiceTier?: string;
+  harnessCyberAccessProgram?: "automatic" | "standard" | "daybreakBlue" | "daybreakRed";
   harnessSkill?: HarnessSkillInvocation;
   /** Provider-side reasoning level; absent leaves the model's own default. */
   reasoningEffort?: ReasoningEffort;
@@ -2356,6 +2357,7 @@ export interface HarnessModelOptions {
   defaultReasoningEffort?: string;
   serviceTiers: HarnessRuntimeOption[];
   defaultServiceTier?: string;
+  cyberAccessPrograms?: Array<"standard" | "daybreakBlue" | "daybreakRed">;
 }
 
 export interface HarnessCapabilities {
@@ -2559,6 +2561,7 @@ export interface HarnessSessionSummary {
   model: string;
   reasoningEffort?: string;
   serviceTier?: string;
+  cyberAccessProgram?: "standard" | "daybreakBlue" | "daybreakRed";
   status:
     | "starting"
     | "idle"
