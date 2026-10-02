@@ -768,6 +768,35 @@ test("assistant upgrade copies saved code with the HTTP clipboard fallback", asy
   await expect(page.locator("textarea[readonly]")).toHaveCount(0);
 });
 
+reloadTest("stabilization assistant links open workspace files in Code and web pages in the device browser", async ({ page }) => {
+  await page.context().route("https://example.test/review", route => route.fulfill({ contentType: "text/html", body: "<title>Review page</title><h1>Review page</h1>" }));
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) return route.fulfill({ json: [{ ...entity, id: "link-chat", engagement_id: "scratch-project", title: "Linked files", backend: "provider", metadata: {} }] });
+    if (path.endsWith("/chat/sessions/link-chat/messages")) return route.fulfill({ json: [{ ...entity, id: "link-message", engagement_id: "scratch-project", session_id: "link-chat", sequence: 1, role: "assistant", content: "[Open file](/workspace/notes/review.md#L2) · [Open site](https://example.test/review) · [Outside](/tmp/secret)", citations: [], metadata: {} }] });
+    if (path.endsWith("/chat/sessions/link-chat/pending-turn")) return route.fulfill({ json: null });
+    if (path.endsWith("/workspace/download")) return route.fulfill({ contentType: "text/plain", body: "first line\nsecond line\n" });
+    return route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat&session=link-chat", "Workbench");
+  const reply = page.locator(".chat-message.assistant .assistant-markdown");
+  await reply.getByRole("link", { name: "Open file" }).click();
+  await expect(page).toHaveURL(/view=code/);
+  await expect(page).toHaveURL(/openFile=notes%2Freview.md/);
+  await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
+  await expect(page.locator(".code-editor-panel")).toContainText("second line");
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
+  await page.goBack();
+  await expect(reply.getByRole("link", { name: "Open site" })).toBeVisible();
+  expect(await reply.getByText("Outside").evaluate(element => element.closest("a")?.getAttribute("href"))).toBeNull();
+  const popup = page.waitForEvent("popup");
+  await reply.getByRole("link", { name: "Open site" }).click();
+  const opened = await popup;
+  await expect(opened).toHaveURL("https://example.test/review");
+  await expect(opened.getByRole("heading", { name: "Review page" })).toBeVisible();
+});
+
 reloadTest("assistant upgrade recovers failed workspace catalogs and mission replay without double counting", async ({ page }) => {
   const requests = { library: 0, harnesses: 0, runs: 0 };
   const blocked = { library: true, harnesses: true, runs: true };

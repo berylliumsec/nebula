@@ -13,6 +13,7 @@ import {
 } from "./assistantCode";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { copySelectionText } from "./selection/selectionActions";
+import { webLink, workspaceLink, type WorkspaceLink } from "./assistantLinks";
 
 export interface FencedRunCandidate {
   source: string;
@@ -29,6 +30,9 @@ interface AssistantMarkdownProps {
   runnableLanguages: ReadonlySet<ExecutionLanguage>;
   onRun: (candidate: FencedRunCandidate) => void;
   onRunInTerminal?: (candidate: FencedRunCandidate) => void;
+  workspacePath?: string;
+  onOpenFile?: (file: WorkspaceLink) => void;
+  onOpenWebLink?: (url: string) => void;
   /** Fences before a separately displayed final answer still count in Core's saved message. */
   blockOrdinalOffset?: number;
 }
@@ -44,13 +48,15 @@ function safeUrl(value: string): string {
   }
 }
 
-function openSafeLink(event: MouseEvent<HTMLAnchorElement>, href?: string) {
+function openSafeLink(event: MouseEvent<HTMLAnchorElement>, href?: string, file?: WorkspaceLink, onOpenFile?: (file: WorkspaceLink) => void, onOpenWebLink?: (url: string) => void) {
   if (!href) {
     event.preventDefault();
     return;
   }
   if (href.startsWith("#")) return;
   event.preventDefault();
+  if (file && onOpenFile) { onOpenFile(file); return; }
+  if (webLink(href) && onOpenWebLink) { onOpenWebLink(href); return; }
   globalThis.open(href, "_blank", "noopener,noreferrer");
 }
 
@@ -190,6 +196,9 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
   runnableLanguages,
   onRun,
   onRunInTerminal,
+  workspacePath,
+  onOpenFile,
+  onOpenWebLink,
   blockOrdinalOffset = 0,
 }: AssistantMarkdownProps) {
   const parsed = useMemo(() => parseExactFences(content), [content]);
@@ -229,15 +238,16 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
       ? <input {...properties} aria-label={properties.checked ? "Done" : "To do"} />
       : <input {...properties} />,
     a: ({ node: _node, href, children, ...properties }) => {
-      const safe = href ? safeUrl(href) : "";
-      return <a {...properties} href={safe || undefined} rel="noopener noreferrer" onClick={(event) => openSafeLink(event, safe)}>{children}</a>;
+      const file = href && onOpenFile ? workspaceLink(href, workspacePath) : undefined;
+      const safe = file ? href! : href ? safeUrl(href) : "";
+      return <a {...properties} href={safe || undefined} rel="noopener noreferrer" onClick={(event) => openSafeLink(event, safe, file, onOpenFile, onOpenWebLink)}>{children}</a>;
     },
   };
 
   return (
     <div className={`assistant-markdown${streaming ? " streaming" : ""}`}>
       {renderable && (
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={safeUrl}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={(url) => onOpenFile && workspaceLink(url, workspacePath) ? url : safeUrl(url)}>
           {renderable}
         </ReactMarkdown>
       )}

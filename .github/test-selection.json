@@ -1,57 +1,31 @@
 {
-  "change_digest": "a46d269f049868b655fa3573ed8099c4d5b489c826f5e41a24a91bf8892f540d",
-  "reviewed_by": "Codex focused review of chat paging, side-chat lifecycle, and Workbench state isolation",
-  "reason": "The chat paging, side-chat, transcript, and Workbench-state extraction diff is covered by focused backend, component, browser, and real-Core journeys. The selected side-chat matrix exercises open, restore, active turns, and mobile layout; the Daybreak and earliest-message scroll journeys verify integration with changes merged to main during this branch. Other provider, project, editor, terminal, and native journeys remain outside this diff.",
-  "exclusions": "No native Rust code changed. Unrelated provider, project, editor, and terminal journeys are outside this diff. Python 3.11 is selected because the local project environment provides it; the Python 3.12 environment cannot import its installed OpenSSL dependency.",
+  "change_digest": "5f80d0854c0cf49b6b156fd2236f3f05530cd601750dab4cbc3b9d9d86e09226",
+  "reviewed_by": "Codex focused review of agent link routing through chat, Code, and Browser",
+  "reason": "The changed journey is clicking file and web links in an assistant transcript. Component tests cover workspace path boundaries, safe Markdown rendering, and editor loading. The named mocked Playwright journey checks visible Code navigation, reload, and device-browser opening across the permanent desktop and mobile matrix. One production LAN journey uses a disposable real Core, durable reply, and actual workspace file. The shared browser specs and impact manifest contain only these named journeys and their catalog entries. The production LAN case specifically covers the insecure-origin request-ID fallback that the real-Core run exposed. The native Browser component test checks scoped navigation after the durable browser session loads. The malformed-link catch is classified for the frontend diagnostics audit.",
+  "exclusions": "No Python or Rust code changed. Provider execution beyond the local response fixture, other chat journeys, browser research tools, and full suites are outside the link-navigation diff. Native desktop browser navigation requires a Tauri device and is reported separately from web-browser coverage.",
   "expected_tests": {
-    "python": 1,
-    "frontend": 6,
+    "python": 0,
+    "frontend": 69,
     "native": 0,
-    "playwright": 31
+    "playwright": 9
   },
-  "python_versions": [
-    "3.11"
-  ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_chat_api.py::test_chat_image_upload_preview_and_arbitrary_message_fork"
-  ],
+  "python": [],
   "frontend": [
-    "ui/src/components/HarnessThinking.test.tsx"
+    "ui/src/components/assistantLinks.test.ts",
+    "ui/src/components/assistantMarkdown.test.tsx",
+    "ui/src/components/CodeEditorPanel.test.tsx",
+    "ui/src/components/WorkbenchBrowser.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:side-chat/desktop",
-    "entry:side-chat/compact",
-    "entry:side-chat/mobile-chromium-small",
-    "entry:side-chat/mobile-chromium-ledger-390",
-    "entry:side-chat/mobile-chromium-wide",
-    "entry:side-chat/mobile-webkit-small",
-    "entry:side-chat/mobile-webkit",
-    "entry:side-chat/mobile-webkit-wide",
-    "entry:side-chat/assistant-real-desktop",
-    "entry:chat-history-performance/desktop",
-    "entry:chat-history-performance/compact",
-    "entry:chat-history-performance/mobile-chromium-small",
-    "entry:chat-history-performance/mobile-chromium-ledger-390",
-    "entry:chat-history-performance/mobile-chromium-wide",
-    "entry:chat-history-performance/mobile-webkit-small",
-    "entry:chat-history-performance/mobile-webkit",
-    "entry:chat-history-performance/mobile-webkit-wide",
-    "entry:conversation-switch-performance/desktop",
-    "entry:conversation-switch-performance/mobile-chromium-ledger-390",
-    "entry:conversation-switch-performance/mobile-webkit",
-    "entry:chat-stream-scroll/desktop",
-    "entry:chat-stream-scroll/mobile-chromium-ledger-390",
-    "entry:chat-stream-scroll/mobile-webkit",
-    "entry:chat-scroll-navigation/desktop",
-    "entry:chat-scroll-navigation/mobile-chromium-ledger-390",
-    "entry:chat-scroll-navigation/mobile-webkit",
-    "entry:side-chat-active/assistant-real-desktop",
-    "entry:side-chat-active/assistant-real-chromium-390",
-    "entry:side-chat-active/assistant-real-webkit-390",
-    "entry:side-chat-large/assistant-real-desktop",
-    "entry:codex-daybreak/assistant-real-desktop"
+    "entry:assistant-links/desktop",
+    "entry:assistant-links/compact",
+    "entry:assistant-links/mobile-chromium-small",
+    "entry:assistant-links/mobile-chromium-ledger-390",
+    "entry:assistant-links/mobile-chromium-wide",
+    "entry:assistant-links/mobile-webkit-small",
+    "entry:assistant-links/mobile-webkit",
+    "entry:assistant-links/mobile-webkit-wide",
+    "entry:assistant-links/assistant-real-desktop"
   ]
 }

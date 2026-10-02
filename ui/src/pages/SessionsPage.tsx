@@ -102,6 +102,7 @@ import { groupByAssistantId } from "./chatRenderGroups";
 import { Link, useSearchParams, type NavigateOptions } from "react-router-dom";
 import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime, providerDefaultModel } from "../api/runtimeDefaults";
+import { isTauriRuntime } from "../api/runtime";
 import { emptyAssistantDefaults, preferredAssistantRuntime } from "../api/assistantDefaults";
 import {
   prepareProviderCredential,
@@ -603,12 +604,15 @@ interface TranscriptRowShared {
   harnessSessionId: string;
   harnessBusy: boolean;
   harnessControlBusy: boolean;
+  workspacePath?: string;
 }
 
 /** What rows can ask the page to do; one stable object that calls the page's latest handlers. */
 interface TranscriptRowActions {
   setRunCandidate: (candidate: FencedRunCandidate) => void;
   runInTerminal: (candidate: FencedRunCandidate) => void;
+  openLinkedFile: (file: { path: string; line?: number }) => void;
+  openLinkedWebPage: (url: string) => void;
   resendEditedMessage: () => Promise<void>;
   setMessageEdit: (update: (current: MessageEdit | undefined) => MessageEdit | undefined) => void;
   cancelMessageEdit: () => void;
@@ -754,7 +758,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
               <button className="button primary" type="submit" disabled={editing.busy || !editing.text.trim()}>{editing.busy ? <><LoaderCircle className="spin" size={13} /> Resending</> : "Resend"}</button>
             </div>
           </form>
-          : <AssistantMarkdown content={displayContent} messageId={message.id} durable={message.role !== "user" && message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={message.role === "user" ? NO_RUNNABLE_LANGUAGES : shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} blockOrdinalOffset={answerBlockOrdinalOffset} />)}
+          : <AssistantMarkdown content={displayContent} messageId={message.id} durable={message.role !== "user" && message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={message.role === "user" ? NO_RUNNABLE_LANGUAGES : shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} workspacePath={shared.workspacePath} onOpenFile={actions.openLinkedFile} onOpenWebLink={actions.openLinkedWebPage} blockOrdinalOffset={answerBlockOrdinalOffset} />)}
       {message.id && subagentResult && <ChatSubagentResultCard
         subagent={subagentResult}
         onOpenConversation={id => void actions.selectSession(id)}
@@ -773,7 +777,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
           details: <>
             <section className="activity-ledger-progress-text" aria-label="Progress updates">
               <h4>Progress updates</h4>
-              <AssistantMarkdown content={progressContent} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} />
+              <AssistantMarkdown content={progressContent} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} workspacePath={shared.workspacePath} onOpenFile={actions.openLinkedFile} onOpenWebLink={actions.openLinkedWebPage} />
             </section>
             {message.reasoning && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming"} />}
           </>,
@@ -5767,10 +5771,29 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     harnessSessionId,
     harnessBusy: Boolean(harnessActivity?.busy),
     harnessControlBusy,
+    workspacePath: engagement?.workspacePath,
   });
   const transcriptActions = useStableActions<TranscriptRowActions>({
     setRunCandidate,
     runInTerminal,
+    openLinkedFile: ({ path, line }) => updateSearchParams(next => {
+      next.set("view", "code");
+      next.set("openFile", path);
+      if (line) next.set("openLine", String(line)); else next.delete("openLine");
+      next.set("openFileRequest", globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+    }),
+    openLinkedWebPage: (url) => {
+      if (!isTauriRuntime()) {
+        globalThis.open(url, "_blank", "noopener,noreferrer");
+        return;
+      }
+      updateSearchParams(next => {
+        next.set("view", "browser");
+        next.set("browserEngine", "native");
+        next.set("openUrl", url);
+        next.set("openUrlRequest", globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`);
+      });
+    },
     resendEditedMessage,
     setMessageEdit,
     cancelMessageEdit,
@@ -6210,7 +6233,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             </BrowserAssistantPanel>}
           </div>}
           {api && engagement && <div className="persistent-code-editor" hidden={view !== "code"}>
-            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} initialOpenPath={searchParams.get("openFile") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => setView("terminal")} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={requestNebulaDraft} /></Suspense>
+            <Suspense fallback={<div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading Code editor…</strong></div>}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} initialOpenPath={searchParams.get("openFile") ?? undefined} initialOpenLine={Number(searchParams.get("openLine")) || undefined} initialOpenRequest={searchParams.get("openFileRequest") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => setView("terminal")} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={requestNebulaDraft} /></Suspense>
           </div>}
           {api && engagement && <div className={`persistent-browser integrated-browser-layout${browserAssistantOpen ? " assistant-open" : ""}`} hidden={view !== "browser"}>
             <div className="integrated-browser-page">
@@ -6221,6 +6244,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               onContext={(request) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }}
               actionContainer={browserActionContainer} onControlChange={setBrowserControlEnabled} imageSupported={imageInputEnabled} onImage={(file) => { setBrowserAssistantOpen(true); void attachImageFiles([file]); }} /> : <WorkbenchBrowser
               active={view === "browser"}
+              initialOpenUrl={searchParams.get("openUrl") ?? undefined}
+              initialOpenRequest={searchParams.get("openUrlRequest") ?? undefined}
               api={api}
               operatorId={activeOperator?.id}
               projectId={engagement.id}
