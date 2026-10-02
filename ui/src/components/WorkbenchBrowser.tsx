@@ -60,6 +60,8 @@ interface BrowserTab {
 
 interface WorkbenchBrowserProps {
   active: boolean;
+  initialOpenUrl?: string;
+  initialOpenRequest?: string;
   api: ApiClient;
   operatorId?: string;
   projectId: string;
@@ -179,7 +181,7 @@ function visibleSurfaceRect(element: HTMLElement): DOMRect {
   return new DOMRect(left, top, Math.max(0, right - left), Math.max(0, bottom - top));
 }
 
-export function WorkbenchBrowser({ active, api, operatorId = "operator", projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, onAttachContext, assistantRuntimeLabel, onAskSelection, onContinueConversation, onOpenFiles, onScopeUpdated, onUploadEvidence }: WorkbenchBrowserProps) {
+export function WorkbenchBrowser({ active, initialOpenUrl, initialOpenRequest, api, operatorId = "operator", projectId, scope, scopeLoading = false, onAddKnowledgeUrl, onAskNebula, onAttachContext, assistantRuntimeLabel, onAskSelection, onContinueConversation, onOpenFiles, onScopeUpdated, onUploadEvidence }: WorkbenchBrowserProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const confirm = useConfirmation();
   const dialogOpen = useDialogOpen();
@@ -522,6 +524,15 @@ export function WorkbenchBrowser({ active, api, operatorId = "operator", project
       return false;
     }
   }, [activeIdentity, activeSession, api, bounds, deviceId, onScopeUpdated, projectId, scope, updateTab]);
+
+  const openedLinkedUrlRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!desktop || !active || !initialOpenUrl || !sessionHydrated || scopeLoading || !deviceId || !activeSession || !activeIdentity || !activeTab) return;
+    const request = `${initialOpenUrl}:${initialOpenRequest ?? ""}`;
+    if (openedLinkedUrlRef.current === request) return;
+    openedLinkedUrlRef.current = request;
+    void openAddress(activeTab.id, initialOpenUrl);
+  }, [active, activeIdentity, activeSession, activeTab, desktop, deviceId, initialOpenRequest, initialOpenUrl, openAddress, scopeLoading, sessionHydrated]);
 
   const addTab = useCallback((url?: string) => {
     if (tabsRef.current.length >= MAX_TABS) {

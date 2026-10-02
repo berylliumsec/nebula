@@ -1262,6 +1262,53 @@ test("assistant upgrade conversation switching restores durable Core history pro
   }
 });
 
+test("assistant upgrade linked reply opens a durable workspace file from production LAN Core", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const modelStub = await startLocalModelStub({ responseContent: "[Open file](/workspace/notes/review.md#L2) · [Open site](https://example.test/review)" });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const workspaceRoot = path.join(core.dataDir, "engagement-workspaces", createHash("sha256").update(projectId!).digest("hex"));
+    await mkdir(path.join(workspaceRoot, "notes"), { recursive: true });
+    await writeFile(path.join(workspaceRoot, "notes/review.md"), "first line\nsecond line\n");
+    const providerResponse = await api.post("providers", { data: {
+      name: "Linked reply fixture", provider_type: "vllm", endpoint: `${modelStub.origin}/v1`, enabled: true, is_local: true,
+      model_allowlist: ["security-model"], privacy: { local_only: true, residency: [], permits_sensitive_data: false }, metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+    const completionResponse = await api.post("chat/completions", { data: {
+      backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projectId,
+      messages: [{ role: "user", content: "Link the reviewed file and site." }], include_knowledge: false, stream: false,
+    } });
+    expect(completionResponse.ok(), await completionResponse.text()).toBe(true);
+    const completion = await completionResponse.json() as { session_id: string };
+    const pairingApi = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+    const pairing = await (await pairingApi.post("auth/pairings", { data: { name: "Linked reply browser" } })).json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Linked reply browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${completion.session_id}`);
+    const reply = page.locator(".chat-message.assistant .assistant-markdown");
+    await expect(reply.getByRole("link", { name: "Open file" })).toBeVisible();
+    await reply.getByRole("link", { name: "Open file" }).click();
+    await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("notes/review.md");
+    await expect(page.locator(".code-editor-panel")).toContainText("second line");
+    await page.reload();
+    await expect(page.locator(".code-editor-panel")).toContainText("second line");
+    await testInfo.attach("linked-file-lan", { body: await page.screenshot(), contentType: "image/png" });
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
+
 test("production assistant preserves exact research context and relaunch-safe drafts through real Core", async ({ page }) => {
   test.setTimeout(120_000);
   const lanAddress = localNetworkIpv4();

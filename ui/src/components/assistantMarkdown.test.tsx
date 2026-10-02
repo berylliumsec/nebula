@@ -58,6 +58,21 @@ describe("exact assistant Markdown", () => {
     expect(screen.getByRole("link", { name: "safe" })).toHaveAttribute("href", "https://example.test/");
   });
 
+  it("opens workspace files in Code and web links in Browser", async () => {
+    const user = userEvent.setup();
+    const onOpenFile = vi.fn();
+    const onOpenWebLink = vi.fn();
+    const external = vi.spyOn(globalThis, "open").mockImplementation(() => null);
+    render(<AssistantMarkdown content="[file](/home/agent/nebula/ui/src/App.tsx#L42) [web](https://example.test/) [outside](/tmp/secret)" durable runnableLanguages={new Set()} onRun={vi.fn()} workspacePath="/home/agent/nebula" onOpenFile={onOpenFile} onOpenWebLink={onOpenWebLink} />);
+    await user.click(screen.getByRole("link", { name: "file" }));
+    await user.click(screen.getByRole("link", { name: "web" }));
+    expect(onOpenFile).toHaveBeenCalledWith({ path: "ui/src/App.tsx", line: 42 });
+    expect(onOpenWebLink).toHaveBeenCalledWith("https://example.test/");
+    expect(screen.getByText("outside").closest("a")).not.toHaveAttribute("href");
+    expect(external).not.toHaveBeenCalled();
+    external.mockRestore();
+  });
+
   it("copies and runs only immutable selected source with UTF-8 byte offsets", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);

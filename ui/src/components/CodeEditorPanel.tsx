@@ -57,6 +57,8 @@ interface CodeEditorPanelProps {
   initialWorkspaceSearch?: string;
   /** Workspace-relative file to open once, e.g. from a guide's `?openFile=`. */
   initialOpenPath?: string;
+  initialOpenLine?: number;
+  initialOpenRequest?: string;
 }
 
 function validWorkspacePath(path: string): boolean {
@@ -97,7 +99,7 @@ function nextUntitledPath(directory: string, entries: WorkspaceEntry[], buffers:
   return directory ? `${directory}/${name}` : name;
 }
 
-export function CodeEditorPanel({ active, api, engagementId, workspacePath, providers = [], harnesses = [], onRun, onOpenTerminal, onCreateFindingDraft, onUseWithAssistant, initialWorkspaceSearch, initialOpenPath }: CodeEditorPanelProps) {
+export function CodeEditorPanel({ active, api, engagementId, workspacePath, providers = [], harnesses = [], onRun, onOpenTerminal, onCreateFindingDraft, onUseWithAssistant, initialWorkspaceSearch, initialOpenPath, initialOpenLine, initialOpenRequest }: CodeEditorPanelProps) {
   const sidebarSize = useEditorSidebarWidth();
   const confirm = useConfirmation();
   const chrome = useOptionalChrome();
@@ -365,10 +367,11 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
     return () => window.removeEventListener("beforeunload", warn);
   }, [anyDirty]);
 
-  const openFile = async (entry: WorkspaceEntry, skipDirtyCheck = false) => {
+  const openFile = async (entry: WorkspaceEntry, skipDirtyCheck = false, line?: number) => {
     const open = buffers.find((candidate) => candidate.existing && candidate.filePath === entry.path);
     if (!skipDirtyCheck && open) {
       activateBuffer(open.id);
+      if (line) setNavigation({ line, column: 1, request: Date.now() });
       setMobileFilesOpen(false);
       return;
     }
@@ -392,6 +395,7 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
         return next;
       });
       setCursor({ line: 1, column: 1 });
+      if (line) setNavigation({ line, column: 1, request: Date.now() });
       setMobileFilesOpen(false);
       setMobileToolsOpen(false);
     } catch (caughtError) {
@@ -687,16 +691,17 @@ export function CodeEditorPanel({ active, api, engagementId, workspacePath, prov
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
   useEffect(() => {
-    if (!active || !initialOpenPath || openedPathRef.current === initialOpenPath) return;
-    openedPathRef.current = initialOpenPath;
+    const request = `${initialOpenPath}:${initialOpenLine ?? ""}:${initialOpenRequest ?? ""}`;
+    if (!active || !initialOpenPath || openedPathRef.current === request) return;
+    openedPathRef.current = request;
     void openFileRef.current({
       path: initialOpenPath,
       name: initialOpenPath.split("/").at(-1) ?? initialOpenPath,
       kind: "file",
       size: 0,
       modifiedAt: new Date().toISOString(),
-    });
-  }, [active, initialOpenPath]);
+    }, false, initialOpenLine);
+  }, [active, initialOpenPath, initialOpenLine, initialOpenRequest]);
 
   const executionLanguage = (path: string): ExecutionLanguage | undefined => {
     const extension = path.split(".").at(-1)?.toLowerCase();

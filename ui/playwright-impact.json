@@ -41,6 +41,17 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "assistant-links": [
+      {"area":"assistant-links","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization assistant links open workspace files in Code and web pages in the device browser","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-links","project":"compact","test_match":"tests/interface.spec.ts","grep":"stabilization assistant links open workspace files in Code and web pages in the device browser","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-links","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"stabilization assistant links open workspace files in Code and web pages in the device browser","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-links","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"stabilization assistant links open workspace files in Code and web pages in the device browser","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-links","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"stabilization assistant links open workspace files in Code and web pages in the device browser","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-links","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"stabilization assistant links open workspace files in Code and web pages in the device browser","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-links","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization assistant links open workspace files in Code and web pages in the device browser","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-links","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"stabilization assistant links open workspace files in Code and web pages in the device browser","runtime":"mock","shard":"1/1"},
+      {"area":"assistant-links","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade linked reply opens a durable workspace file from production LAN Core","runtime":"real-core","shard":"1/1"}
+    ],
     "conversation-progress": [
       {"area":"conversation-progress","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade restores paused provider supervisor thinking and partial text after refresh|assistant upgrade keeps parent and subagent final answers clear of saved routing updates|automation callback subagent wait keeps the assistant reply and follows the resumed turn","runtime":"mock","shard":"1/1"},
       {"area":"conversation-progress","project":"compact","test_match":"tests/interface.spec.ts","grep":"assistant upgrade restores paused provider supervisor thinking and partial text after refresh|assistant upgrade keeps parent and subagent final answers clear of saved routing updates|automation callback subagent wait keeps the assistant reply and follows the resumed turn","runtime":"mock","shard":"1/1"},

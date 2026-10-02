@@ -137,6 +137,7 @@ function renderBrowser(
     onDelta: (answer: string) => void,
   ) => Promise<{ sessionId: string; answer: string }>,
   onContinueConversation = vi.fn(),
+  initialOpenUrl?: string,
 ) {
   return {
     onAddKnowledgeUrl,
@@ -151,6 +152,7 @@ function renderBrowser(
             <BlockingSurfaceControl />
             <WorkbenchBrowser
               active
+              initialOpenUrl={initialOpenUrl}
               api={api}
               projectId="project-1"
               scope={scopeValue}
@@ -223,6 +225,14 @@ describe("WorkbenchBrowser", () => {
     renderBrowser(undefined, undefined, scope, undefined, api);
     await openPage();
     expect(browserMocks.create.mock.calls[0][10]).toEqual(fresh);
+  });
+
+  it("opens an assistant link in the scoped native browser after the durable session loads", async () => {
+    runtimeMocks.isTauriRuntime.mockReturnValue(true);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) { return new DOMRect(0, 0, 900, this.classList.contains("browser-toolbar") ? 48 : 600); });
+    renderBrowser(undefined, undefined, scope, undefined, browserApi(), undefined, undefined, "https://docs.example.com/review");
+    await waitFor(() => expect(browserMocks.create).toHaveBeenCalledTimes(1));
+    expect(browserMocks.create.mock.calls[0][5]).toBe("https://docs.example.com/review");
   });
 
   it("refreshes native scope before reload and blocks the reload when installation fails", async () => {
