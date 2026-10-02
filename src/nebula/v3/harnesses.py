@@ -2266,6 +2266,7 @@ class CodexAppServerConnection(HarnessConnection):
         interaction_handler: InteractionHandler = _decline_unsupported_interaction,
         approval_policy: Literal["untrusted", "never"] = "untrusted",
         trusted_mcp_servers: frozenset[str] = frozenset(),
+        cyber_access_program: str | None = None,
     ) -> None:
         self.rpc = rpc
         self.external_session_id = external_session_id
@@ -2273,6 +2274,7 @@ class CodexAppServerConnection(HarnessConnection):
         self.interaction_handler = interaction_handler
         self.approval_policy = approval_policy
         self.trusted_mcp_servers = trusted_mcp_servers
+        self.cyber_access_program = cyber_access_program
         self.active_turn_id: str | None = None
         self.last_turn_id: str | None = None
         self._awaiting_goal_turn = False
@@ -2403,6 +2405,8 @@ class CodexAppServerConnection(HarnessConnection):
             "approvalPolicy": self.approval_policy,
             "summary": "detailed",
         }
+        if self.cyber_access_program is not None:
+            turn_params["cyberAccessProgram"] = self.cyber_access_program
         if mode:
             # App Server calls this a collaboration mode.  It is only sent when
             # the negotiated capability admitted the operator's selection.
@@ -3906,6 +3910,10 @@ class CodexAppServerAdapter(HarnessAdapter):
                         )
                     default_effort = item.get("defaultReasoningEffort")
                     default_tier = item.get("defaultServiceTier")
+                    access = item.get("availableAccessPrograms")
+                    cyber_programs = (
+                        access.get("cyber") if isinstance(access, dict) else None
+                    )
                     model_options.append(
                         HarnessModelOptions(
                             model=model,
@@ -3919,6 +3927,16 @@ class CodexAppServerAdapter(HarnessAdapter):
                             service_tiers=service_tiers,
                             default_service_tier=(
                                 default_tier if isinstance(default_tier, str) else None
+                            ),
+                            cyber_access_programs=(
+                                [
+                                    program
+                                    for program in cyber_programs
+                                    if program
+                                    in {"standard", "daybreakBlue", "daybreakRed"}
+                                ]
+                                if isinstance(cyber_programs, list)
+                                else None
                             ),
                         )
                     )
@@ -4160,6 +4178,8 @@ class CodexAppServerAdapter(HarnessAdapter):
             )
             reasoning_effort = runtime_options.get("reasoning_effort")
             service_tier = runtime_options.get("service_tier")
+            cyber_access_program = runtime_options.get("cyber_access_program")
+            daybreak_enabled = cyber_access_program in {"daybreakBlue", "daybreakRed"}
             thread_runtime_options = {
                 **(
                     {"reasoningEffort": reasoning_effort}
@@ -4199,6 +4219,14 @@ class CodexAppServerAdapter(HarnessAdapter):
                     raise HarnessVendorSessionNotFoundError(
                         "Codex no longer has this thread, so it cannot be resumed."
                     ) from exc
+                if cyber_access_program is not None:
+                    await rpc.request(
+                        "thread/metadata/update",
+                        {
+                            "threadId": request.session.external_session_id,
+                            "daybreakEnabled": daybreak_enabled,
+                        },
+                    )
             else:
                 result = await rpc.request(
                     "thread/start",
@@ -4212,6 +4240,11 @@ class CodexAppServerAdapter(HarnessAdapter):
                             native_capabilities=native_capabilities,
                         ),
                         "developerInstructions": developer_instructions,
+                        **(
+                            {"daybreakEnabled": daybreak_enabled}
+                            if cyber_access_program is not None
+                            else {}
+                        ),
                         **thread_runtime_options,
                     },
                 )
@@ -4233,6 +4266,7 @@ class CodexAppServerAdapter(HarnessAdapter):
                 interaction_handler=request.interaction_handler,
                 approval_policy=approval_policy,
                 trusted_mcp_servers=frozenset(request.gateway_config),
+                cyber_access_program=cyber_access_program,
             )
         except (Exception, asyncio.CancelledError) as caught_error:
             record_caught_exception(
@@ -8982,6 +9016,7 @@ class HarnessRuntimeService:
         mcp_server_ids: list[str] | None = None,
         reasoning_effort: str | None = None,
         service_tier: str | None = None,
+        cyber_access_program: str | None = None,
         tools_enabled: bool = True,
     ) -> HarnessSession:
         if self._closed:
@@ -9010,6 +9045,20 @@ class HarnessRuntimeService:
             ),
             None,
         )
+        if cyber_access_program is not None:
+            if profile.kind != HarnessKind.CODEX_APP_SERVER:
+                raise HarnessConfigurationError(
+                    "Daybreak selection requires a Codex harness"
+                )
+            advertised = model_options.cyber_access_programs if model_options else None
+            if advertised is None:
+                raise HarnessConfigurationError(
+                    "This Codex version did not advertise cyber access choices. Check the Codex runtime and retry."
+                )
+            if cyber_access_program not in advertised:
+                raise HarnessConfigurationError(
+                    f"{cyber_access_program!r} is not available for {selected_model!r} on this Codex account"
+                )
         resolved_reasoning_effort = reasoning_effort or (
             model_options.default_reasoning_effort if model_options else None
         )
@@ -9074,6 +9123,11 @@ class HarnessRuntimeService:
             "runtime_options": {
                 "reasoning_effort": resolved_reasoning_effort,
                 "service_tier": resolved_service_tier,
+                **(
+                    {"cyber_access_program": cyber_access_program}
+                    if cyber_access_program is not None
+                    else {}
+                ),
             },
         }
         metadata["scope_snapshot"] = scope.model_dump(mode="json")
@@ -9649,6 +9703,7 @@ class HarnessRuntimeService:
         harness_skill: HarnessSkillInvocation | None = None,
         harness_reasoning_effort: str | None = None,
         harness_service_tier: str | None = None,
+        harness_cyber_access_program: str | None = None,
         content_blocks: list[ChatContentBlock] | None = None,
         provider_subagent: dict[str, Any] | None = None,
         pending_provider_subagent: dict[str, Any] | None = None,
@@ -9797,6 +9852,14 @@ class HarnessRuntimeService:
                 if same_model
                 else None
             )
+            if harness_cyber_access_program == "automatic":
+                cyber_program = None
+            elif harness_cyber_access_program is not None:
+                cyber_program = harness_cyber_access_program
+            else:
+                cyber_program = (
+                    frozen_options.get("cyber_access_program") if same_model else None
+                )
             effort = effort or (
                 model_options.default_reasoning_effort if model_options else None
             )
@@ -9810,6 +9873,7 @@ class HarnessRuntimeService:
                 or set(session.mcp_server_ids) != set(selected_mcp)
                 or effort != frozen_options.get("reasoning_effort")
                 or tier != frozen_options.get("service_tier")
+                or cyber_program != frozen_options.get("cyber_access_program")
             )
             self._validate_harness_privacy(
                 engagement_id, profile, selected_mcp, allow_remote_mcp=allow_remote_mcp
@@ -9826,6 +9890,7 @@ class HarnessRuntimeService:
                     mcp_server_ids=selected_mcp,
                     reasoning_effort=effort,
                     service_tier=tier,
+                    cyber_access_program=cyber_program,
                 )
                 chat = self._rebind_chat_session(
                     chat,
@@ -9883,6 +9948,14 @@ class HarnessRuntimeService:
                     raise HarnessStateError(
                         "selected speed does not match the existing harness session"
                     )
+                if harness_cyber_access_program is not None and (
+                    None
+                    if harness_cyber_access_program == "automatic"
+                    else harness_cyber_access_program
+                ) != frozen_options.get("cyber_access_program"):
+                    raise HarnessStateError(
+                        "selected Daybreak choice does not match the existing harness session"
+                    )
                 self._validate_harness_privacy(
                     engagement_id,
                     profile,
@@ -9907,6 +9980,11 @@ class HarnessRuntimeService:
                     mcp_server_ids=mcp_server_ids,
                     reasoning_effort=harness_reasoning_effort,
                     service_tier=harness_service_tier,
+                    cyber_access_program=(
+                        None
+                        if harness_cyber_access_program == "automatic"
+                        else harness_cyber_access_program
+                    ),
                 )
             chat = self.store.create(
                 ChatSession(

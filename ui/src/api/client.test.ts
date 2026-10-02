@@ -1978,6 +1978,7 @@ describe("ApiClient", () => {
       model: "model-1",
       harnessReasoningEffort: "high",
       harnessServiceTier: "fast",
+      harnessCyberAccessProgram: "daybreakBlue",
       messages: [{ role: "user", content: "work in parallel" }],
     }, (event) => events.push(event));
 
@@ -1994,6 +1995,7 @@ describe("ApiClient", () => {
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({
       harness_reasoning_effort: "high",
       harness_service_tier: "fast",
+      harness_cyber_access_program: "daybreakBlue",
     });
     const headers = new Headers(fetchMock.mock.calls[0][1]?.headers);
     expect(headers.get("Authorization")).toBeNull();
@@ -2401,6 +2403,7 @@ describe("ApiClient", () => {
             default_reasoning_effort: "high",
             service_tiers: [{ id: "fast", label: "Fast", description: "Priority processing" }],
             default_service_tier: "fast",
+            cyber_access_programs: ["standard", "daybreakBlue"],
           }],
         },
       }]), { status: 200 });
@@ -2426,7 +2429,7 @@ describe("ApiClient", () => {
         model: "gpt-test",
         status: "idle",
         mcp_server_ids: ["mcp-1"],
-        metadata: { runtime_options: { reasoning_effort: "high", service_tier: "fast" } },
+        metadata: { runtime_options: { reasoning_effort: "high", service_tier: "fast", cyber_access_program: "daybreakBlue" } },
         last_activity_at: entity.updated_at,
       }]), { status: 200 });
       if (path.endsWith("/harness-sessions/session-1/activity")) return new Response(JSON.stringify({
@@ -2481,6 +2484,7 @@ describe("ApiClient", () => {
         reasoningEfforts: [{ id: "high", label: "High" }],
         defaultServiceTier: "fast",
         serviceTiers: [{ id: "fast", label: "Fast" }],
+        cyberAccessPrograms: ["standard", "daybreakBlue"],
       }],
       localOnly: false,
       permitsSensitiveData: true,
@@ -2492,7 +2496,7 @@ describe("ApiClient", () => {
       },
     });
     expect(server).toMatchObject({ description: "Shared project files.", required: true, tools: [{ name: "read_file", readOnly: true }] });
-    expect(session).toMatchObject({ harnessProfileId: "harness-1", mcpServerIds: ["mcp-1"], reasoningEffort: "high", serviceTier: "fast" });
+    expect(session).toMatchObject({ harnessProfileId: "harness-1", mcpServerIds: ["mcp-1"], reasoningEffort: "high", serviceTier: "fast", cyberAccessProgram: "daybreakBlue" });
     expect(activity).toMatchObject({ sessionId: "session-1", busy: true, live: true, turnId: "turn-1", turnStatus: "running" });
     expect(run).toMatchObject({ backend: "harness", harnessSessionId: "session-1" });
     const missionBody = JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input).endsWith("/missions"))?.[1]?.body));

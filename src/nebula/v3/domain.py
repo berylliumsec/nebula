@@ -2844,6 +2844,9 @@ class HarnessModelOptions(NebulaModel):
         default_factory=list, max_length=32
     )
     default_service_tier: str | None = Field(default=None, max_length=100)
+    cyber_access_programs: (
+        list[Literal["standard", "daybreakBlue", "daybreakRed"]] | None
+    ) = None
 
     @model_validator(mode="after")
     def defaults_are_advertised(self) -> "HarnessModelOptions":

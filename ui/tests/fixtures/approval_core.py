@@ -104,7 +104,10 @@ class InertConnection(HarnessConnection):
         if self.request.session.engagement_id == "diagnostic":
             yield HarnessEvent(type="completed", message="OK")
             return
-        if self.runtime.scenario == "settings" and "Popup wait for stop" in prompt:
+        if (
+            self.runtime.scenario in {"settings", "daybreak"}
+            and "Popup wait for stop" in prompt
+        ):
             yield HarnessEvent(
                 type="output_delta",
                 item_kind="reasoning",
@@ -112,9 +115,11 @@ class InertConnection(HarnessConnection):
                 delta="Checking the selected context before answering.",
             )
             await asyncio.Event().wait()
-        if self.runtime.scenario == "settings":
+        if self.runtime.scenario in {"settings", "daybreak"}:
             options = self.request.session.metadata.get("runtime_options", {})
             answer = f"SETTINGS {self.request.session.model} {options.get('reasoning_effort')}"
+            if self.runtime.scenario == "daybreak":
+                answer += f" {options.get('cyber_access_program')}"
             yield HarnessEvent(
                 type="item_upsert",
                 vendor=HarnessKind.CODEX_APP_SERVER,
@@ -171,7 +176,7 @@ class InertAdapter(HarnessAdapter):
             authentication_state="verified",
             capabilities=HarnessCapabilities(
                 models=["fixture", "fixture-next"]
-                if self.runtime.scenario == "settings"
+                if self.runtime.scenario in {"settings", "daybreak"}
                 else ["fixture"],
                 interruption=True,
                 model_options=[
@@ -182,10 +187,15 @@ class InertAdapter(HarnessAdapter):
                             HarnessRuntimeOption(id="high", label="High"),
                         ],
                         default_reasoning_effort="low",
+                        cyber_access_programs=(
+                            ["standard", "daybreakBlue"]
+                            if self.runtime.scenario == "daybreak"
+                            else None
+                        ),
                     )
                     for model in ["fixture", "fixture-next"]
                 ]
-                if self.runtime.scenario == "settings"
+                if self.runtime.scenario in {"settings", "daybreak"}
                 else [],
             ),
         )
@@ -276,6 +286,7 @@ if __name__ == "__main__":
         choices=[
             "commands",
             "settings",
+            "daybreak",
             "single",
             "two_requests",
             "adapter_exit",
@@ -311,6 +322,8 @@ if __name__ == "__main__":
                 ))
     artifacts = ArtifactStore(args.root / "artifacts")
     adapter = InertAdapter()
+    if args.scenario == "daybreak":
+        adapter.kind = HarnessKind.CODEX_APP_SERVER
     runtime = FailureInjectionRuntime(
         store,
         credential_store=CredentialStore(),
@@ -327,8 +340,10 @@ if __name__ == "__main__":
         store.create(
             HarnessProfile(
                 id="inert-fixture",
-                name="Approval fixture",
-                kind="grok_acp",
+                name="Codex Daybreak fixture"
+                if args.scenario == "daybreak"
+                else "Approval fixture",
+                kind="codex_app_server" if args.scenario == "daybreak" else "grok_acp",
                 executable="/bin/true",
                 default_model="fixture",
                 privacy={"local_only": True, "permits_sensitive_data": True},

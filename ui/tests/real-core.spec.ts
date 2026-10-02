@@ -4401,6 +4401,63 @@ reliabilityTest("assistant upgrade new chat reuses saved Assistant settings afte
     await testInfo.attach("assistant-defaults-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), projectId}), contentType: "application/json"});
   } finally {await core.stop();}
 });
+
+reliabilityTest("assistant upgrade Daybreak selection persists across Codex chat refresh", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startApprovalCore(localNetworkIpv4(), "daybreak");
+  try {
+    expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
+    const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Daybreak acceptance"}})).json();
+    await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Daybreak acceptance");
+    await page.getByRole("button", {name: "Pair device", exact: true}).click();
+    await expect(coreConnected(page)).toBeVisible({timeout: 20_000});
+    await page.goto(`${core.origin}/?view=chat`);
+    await page.getByRole("button", {name: "New chat", exact: true}).click();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    const settings = page.getByRole("dialog", {name: "Assistant settings"});
+    await settings.getByRole("combobox", {name: "Chat runtime"}).selectOption("harness");
+    await settings.getByRole("combobox", {name: "Codex cyber access"}).selectOption("daybreakBlue");
+    await settings.getByRole("button", {name: "Close assistant settings"}).click();
+    const composer = page.getByRole("textbox", {name: "Message the analyst assistant", exact: true});
+    await composer.fill("Review the patch");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS fixture low daybreakBlue", {timeout: 20_000});
+    const chatId = new URL(page.url()).searchParams.get("session");
+    expect(chatId).toBeTruthy();
+    const firstChat = await (await core.api.get(`chat-sessions/${chatId}`)).json();
+    const firstHarness = await (await core.api.get(`harness-sessions/${firstChat.harness_session_id}`)).json();
+    expect(firstHarness.metadata.runtime_options.cyber_access_program).toBe("daybreakBlue");
+
+    await page.reload();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await expect(settings.getByRole("combobox", {name: "Codex cyber access"})).toHaveValue("daybreakBlue");
+    await settings.getByRole("combobox", {name: "Codex cyber access"}).selectOption("standard");
+    await settings.getByRole("button", {name: "Close assistant settings"}).click();
+    await composer.fill("Continue with standard access");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS fixture low standard", {timeout: 20_000});
+    expect(new URL(page.url()).searchParams.get("session")).toBe(chatId);
+    const secondChat = await (await core.api.get(`chat-sessions/${chatId}`)).json();
+    const secondHarness = await (await core.api.get(`harness-sessions/${secondChat.harness_session_id}`)).json();
+    expect(secondHarness.metadata.runtime_options.cyber_access_program).toBe("standard");
+    await page.reload();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await expect(settings.getByRole("combobox", {name: "Codex cyber access"})).toHaveValue("standard");
+    await settings.getByRole("combobox", {name: "Codex cyber access"}).selectOption("");
+    await settings.getByRole("button", {name: "Close assistant settings"}).click();
+    await composer.fill("Continue with automatic access");
+    await page.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("SETTINGS fixture low None", {timeout: 20_000});
+    const automaticChat = await (await core.api.get(`chat-sessions/${chatId}`)).json();
+    const automaticHarness = await (await core.api.get(`harness-sessions/${automaticChat.harness_session_id}`)).json();
+    expect(automaticHarness.metadata.runtime_options.cyber_access_program).toBeUndefined();
+    await page.reload();
+    await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
+    await expect(settings.getByRole("combobox", {name: "Codex cyber access"})).toHaveValue("");
+    await testInfo.attach("codex-daybreak-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), chatId}), contentType: "application/json"});
+  } finally {await core.stop();}
+});
 reliabilityTest("stabilization real Core keeps the Subagents choice across refresh", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");

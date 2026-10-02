@@ -31,6 +31,7 @@ from typing import Any
 import claude_agent_sdk
 import pytest
 
+from nebula.v3.chat import ChatCompletionRequest
 from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     Approval,
@@ -108,6 +109,135 @@ class ScriptedCodexRpc:
 
     async def close(self) -> None:
         return None
+
+
+def test_codex_daybreak_catalog_and_turn_request():
+    request = ChatCompletionRequest.model_validate(
+        {
+            "backend": "harness",
+            "harness_profile_id": "codex",
+            "messages": [{"role": "user", "content": "Inspect the patch"}],
+            "harness_cyber_access_program": "daybreakRed",
+        }
+    )
+    assert request.harness_cyber_access_program == "daybreakRed"
+    assert (
+        ChatCompletionRequest.model_validate(
+            {
+                "backend": "harness",
+                "harness_profile_id": "codex",
+                "messages": [{"role": "user", "content": "Inspect the patch"}],
+                "harness_cyber_access_program": "automatic",
+            }
+        ).harness_cyber_access_program
+        == "automatic"
+    )
+
+    class CatalogRpc(ScriptedCodexRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            if method == "model/list":
+                return {
+                    "data": [
+                        {
+                            "model": "gpt-cyber",
+                            "inputModalities": ["text"],
+                            "supportedReasoningEfforts": [],
+                            "serviceTiers": [],
+                            "availableAccessPrograms": {
+                                "cyber": ["standard", "daybreakRed"]
+                            },
+                        }
+                    ]
+                }
+            return await super().request(method, params)
+
+    async def scenario() -> None:
+        rpc = CatalogRpc([_turn_completed()])
+        models, options = await CodexAppServerAdapter()._models(rpc, timeout=1)
+        assert models == ["gpt-cyber"]
+        assert options[0].cyber_access_programs == ["standard", "daybreakRed"]
+        connection = CodexAppServerConnection(
+            rpc,
+            external_session_id=THREAD,
+            permission_handler=_allow,
+            cyber_access_program="daybreakRed",
+        )
+        stream = connection.run_turn("Inspect the patch", model="gpt-cyber")
+        first = await anext(stream)
+        assert first.type == "started"
+        assert rpc.calls[-1][1]["cyberAccessProgram"] == "daybreakRed"
+        await stream.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_codex_daybreak_thread_choice_is_saved_on_start_and_resume(tmp_path):
+    class ThreadRpc(ScriptedCodexRpc):
+        async def request(self, method: str, params: dict[str, Any]) -> Any:
+            self.calls.append((method, params))
+            if method in {"thread/start", "thread/resume"}:
+                return {"thread": {"id": THREAD}}
+            return {}
+
+    async def scenario() -> None:
+        rpc = ThreadRpc()
+        adapter = CodexAppServerAdapter()
+
+        async def connect(*_args: Any, **_kwargs: Any) -> ThreadRpc:
+            return rpc
+
+        async def initialize(*_args: Any, **_kwargs: Any) -> dict[str, str]:
+            return {"userAgent": "codex-cli/0.159.2"}
+
+        adapter._connect = connect  # type: ignore[method-assign]
+        adapter._initialize = initialize  # type: ignore[method-assign]
+        profile = HarnessProfile(
+            id="codex-daybreak",
+            name="Codex",
+            kind=HarnessKind.CODEX_APP_SERVER,
+            executable="/bin/true",
+            default_model="gpt-cyber",
+        )
+        session = HarnessSession(
+            id="nebula-thread",
+            engagement_id="project",
+            harness_profile_id=profile.id,
+            model="gpt-cyber",
+            metadata={"runtime_options": {"cyber_access_program": "daybreakRed"}},
+        )
+        request = AdapterOpenRequest(
+            profile=profile,
+            session=session,
+            workspace=tmp_path,
+            mcp_profiles=(),
+            credential_store=CredentialStore(),
+            permission_handler=_allow,
+        )
+        connection = await adapter._open(request)
+        assert (
+            next(params for method, params in rpc.calls if method == "thread/start")[
+                "daybreakEnabled"
+            ]
+            is True
+        )
+        assert connection.cyber_access_program == "daybreakRed"
+        rpc.calls.clear()
+        await adapter._open(
+            AdapterOpenRequest(
+                profile=profile,
+                session=session.model_copy(update={"external_session_id": THREAD}),
+                workspace=tmp_path,
+                mcp_profiles=(),
+                credential_store=CredentialStore(),
+                permission_handler=_allow,
+            )
+        )
+        assert (
+            "thread/metadata/update",
+            {"threadId": THREAD, "daybreakEnabled": True},
+        ) in rpc.calls
+
+    asyncio.run(scenario())
 
 
 def _notification(method: str, **params: Any) -> dict[str, Any]:

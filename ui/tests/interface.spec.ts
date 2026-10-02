@@ -5548,6 +5548,10 @@ test("assistant settings expose provider metadata when switching a saved provide
       checked_at: entity.updated_at,
       authentication_state: "verified",
       models: ["codex-model"],
+      model_options: [{
+        model: "codex-model",
+        cyber_access_programs: ["standard", "daybreakBlue"],
+      }],
     },
   };
   await installTruthfulCore(page);
@@ -5599,6 +5603,8 @@ test("assistant settings expose provider metadata when switching a saved provide
 
   await expect(settings.getByLabel("Chat harness", { exact: true })).toHaveValue(harness.id);
   await expect(settings.getByLabel("Chat harness model", { exact: true })).toHaveValue("codex-model");
+  await settings.getByLabel("Codex cyber access").selectOption("daybreakBlue");
+  await expect(settings.getByLabel("Codex cyber access")).toHaveValue("daybreakBlue");
   await expect(page.getByRole("button", { name: "Assistant settings", exact: true })).toContainText("Codex harness");
   expect((await new AxeBuilder({ page }).include("#assistant-settings-popover").analyze()).violations).toEqual([]);
   expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);

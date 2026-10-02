@@ -1,21 +1,32 @@
 {
-  "change_digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-  "reviewed_by": "Codex review of public test-selection metadata",
-  "reason": "Replace project-specific rollout wording with a generic downstream-hook boundary. No runtime, UI, or test code changed.",
-  "exclusions": "All test layers are excluded for this wording-only metadata change. Live Core deployment and downstream project-hook integration remain separate rollout gates.",
+  "change_digest": "dc19cb7822a478be3f72a3009251eb5bba50ff8d0585cc4a78b3ff076299a6be",
+  "reviewed_by": "Codex Daybreak focused selection review",
+  "reason": "Codex model discovery, per-chat Daybreak persistence, turn RPC selection, API mapping, and the assistant settings control changed. Selected tests cover those boundaries, the assistant settings browser journey, and one production-bundle LAN Real Core chat lifecycle.",
+  "exclusions": "Native code and unrelated Python, frontend, and browser journeys did not change. The Real Core fixture uses an inert Codex adapter, so live Codex account entitlement and server behavior remain unverified; the configured live Codex launcher is currently missing its executable.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
+    "python": 3,
+    "frontend": 86,
+    "playwright": 7,
+    "native": 0
   },
   "python_versions": [
-    "3.12"
+    "3.11"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [],
-  "native": [],
-  "playwright": []
+  "python": [
+    "tests/v3/test_harness_leftovers.py::test_codex_daybreak_catalog_and_turn_request",
+    "tests/v3/test_harness_leftovers.py::test_codex_daybreak_thread_choice_is_saved_on_start_and_resume",
+    "tests/v3/test_harnesses.py::test_codex_daybreak_choice_is_advertised_and_saved_for_chat"
+  ],
+  "frontend": [
+    "ui/src/api/client.test.ts"
+  ],
+  "playwright": [
+    "entry:assistant-settings-navigation/desktop",
+    "entry:assistant-settings-navigation/mobile-chromium",
+    "entry:assistant-settings-navigation/mobile-webkit",
+    "entry:codex-daybreak/assistant-real-desktop"
+  ],
+  "native": []
 }

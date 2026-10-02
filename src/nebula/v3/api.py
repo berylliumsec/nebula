@@ -9294,6 +9294,7 @@ def create_app(
                 harness_mode=request.harness_mode,
                 harness_reasoning_effort=request.harness_reasoning_effort,
                 harness_service_tier=request.harness_service_tier,
+                harness_cyber_access_program=request.harness_cyber_access_program,
                 harness_skill=(
                     HarnessSkillInvocation.model_validate(request.harness_skill)
                     if request.harness_skill is not None
