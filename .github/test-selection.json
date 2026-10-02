@@ -15,13 +15,13 @@
   "frontend": [],
   "native": [],
   "playwright": [
-    "chat-scroll-navigation/desktop",
-    "chat-scroll-navigation/compact",
-    "chat-scroll-navigation/mobile-chromium-small",
-    "chat-scroll-navigation/mobile-chromium-ledger-390",
-    "chat-scroll-navigation/mobile-chromium-wide",
-    "chat-scroll-navigation/mobile-webkit-small",
-    "chat-scroll-navigation/mobile-webkit",
-    "chat-scroll-navigation/mobile-webkit-wide"
+    "entry:chat-scroll-navigation/desktop",
+    "entry:chat-scroll-navigation/compact",
+    "entry:chat-scroll-navigation/mobile-chromium-small",
+    "entry:chat-scroll-navigation/mobile-chromium-ledger-390",
+    "entry:chat-scroll-navigation/mobile-chromium-wide",
+    "entry:chat-scroll-navigation/mobile-webkit-small",
+    "entry:chat-scroll-navigation/mobile-webkit",
+    "entry:chat-scroll-navigation/mobile-webkit-wide"
   ]
 }
