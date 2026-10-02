@@ -407,9 +407,12 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .chat-harness-mcp > small { color: var(--muted); font-size: 11px; }
 .chat-thread { position: relative; display: flex; min-height: 0; flex: 1; }
 .chat-scroll { min-height: 0; flex: 1; padding: 25px 30px; overflow-y: auto; overflow-anchor: none; }
-.chat-scroll-to-bottom { position: sticky; z-index: 2; bottom: 0; display: grid; width: 32px; height: 32px; margin: -32px 0 0 auto; place-items: center; border: 1px solid var(--border); border-radius: 50%; color: var(--text-strong); background: var(--surface-raised); box-shadow: none; cursor: pointer; }
-.chat-scroll-to-bottom:hover { border-color: var(--blue); color: var(--blue); }
-.chat-scroll-to-bottom:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.chat-scroll-jump { position: sticky; z-index: 2; display: grid; width: 44px; height: 44px; place-items: center; border: 1px solid var(--border); border-radius: 50%; color: var(--text-strong); background: var(--surface-raised); box-shadow: none; cursor: pointer; }
+.chat-scroll-jump:hover { border-color: var(--blue); color: var(--blue); }
+.chat-scroll-jump:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.chat-scroll-to-top { top: 0; margin: 0 0 -44px auto; }
+.chat-scroll-to-top svg { transform: rotate(180deg); }
+.chat-scroll-to-bottom { bottom: 0; margin: -44px 0 0 auto; }
 .chat-message { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; max-width: 760px; margin-bottom: 22px; }
 .chat-avatar { display: grid; width: 28px; height: 28px; place-items: center; border-radius: var(--radius-control); color: var(--on-accent); background: var(--blue); font-size: 11px; font-weight: var(--weight-bold); }.chat-message.operator .chat-avatar { background: var(--violet); }
 .chat-message header { display: flex; gap: 8px; margin-bottom: 6px; }.chat-message header strong { font-size: 11px; }.chat-message header span { color: var(--muted); font-size: 11px; }.chat-message p { color: var(--text); font-size: 11px; line-height: 1.55; }

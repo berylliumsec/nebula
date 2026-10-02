@@ -1,32 +1,27 @@
 {
-  "change_digest": "dc19cb7822a478be3f72a3009251eb5bba50ff8d0585cc4a78b3ff076299a6be",
-  "reviewed_by": "Codex Daybreak focused selection review",
-  "reason": "Codex model discovery, per-chat Daybreak persistence, turn RPC selection, API mapping, and the assistant settings control changed. Selected tests cover those boundaries, the assistant settings browser journey, and one production-bundle LAN Real Core chat lifecycle.",
-  "exclusions": "Native code and unrelated Python, frontend, and browser journeys did not change. The Real Core fixture uses an inert Codex adapter, so live Codex account entitlement and server behavior remain unverified; the configured live Codex launcher is currently missing its executable.",
+  "change_digest": "ec49ffb1adeb47825e59b4f456b2a848d7d9c9638c82a756c720a511ccee8f41",
+  "reviewed_by": "Codex focused review for chat scroll navigation",
+  "reason": "The diff adds a viewport-local jump to the earliest message and keeps the existing latest jump. Eight collected Playwright runs cover scrolling, streaming reader intent, both jump controls, and 44 px touch target geometry across desktop and mobile Chromium/WebKit.",
+  "exclusions": "No Core, native, or API behavior changed. Unrelated browser journeys and full suites are excluded. Real-Core, non-loopback LAN, and physical-device gates are outside this viewport-local interaction and are not claimed.",
   "expected_tests": {
-    "python": 3,
-    "frontend": 86,
-    "playwright": 7,
-    "native": 0
+    "python": 0,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 8
   },
-  "python_versions": [
-    "3.11"
-  ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_harness_leftovers.py::test_codex_daybreak_catalog_and_turn_request",
-    "tests/v3/test_harness_leftovers.py::test_codex_daybreak_thread_choice_is_saved_on_start_and_resume",
-    "tests/v3/test_harnesses.py::test_codex_daybreak_choice_is_advertised_and_saved_for_chat"
-  ],
-  "frontend": [
-    "ui/src/api/client.test.ts"
-  ],
+  "python": [],
+  "frontend": [],
+  "native": [],
   "playwright": [
-    "entry:assistant-settings-navigation/desktop",
-    "entry:assistant-settings-navigation/mobile-chromium",
-    "entry:assistant-settings-navigation/mobile-webkit",
-    "entry:codex-daybreak/assistant-real-desktop"
-  ],
-  "native": []
+    "entry:chat-scroll-navigation/desktop",
+    "entry:chat-scroll-navigation/compact",
+    "entry:chat-scroll-navigation/mobile-chromium-small",
+    "entry:chat-scroll-navigation/mobile-chromium-ledger-390",
+    "entry:chat-scroll-navigation/mobile-chromium-wide",
+    "entry:chat-scroll-navigation/mobile-webkit-small",
+    "entry:chat-scroll-navigation/mobile-webkit",
+    "entry:chat-scroll-navigation/mobile-webkit-wide"
+  ]
 }

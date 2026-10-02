@@ -2507,7 +2507,6 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   .chat-settings-fields { grid-template-columns: minmax(0, 1fr); }
   .chat-settings-popover > header { min-height: 44px; }
   .chat-settings-popover > header .icon-button { width: 44px; height: 44px; }
-  .chat-scroll-to-bottom { width: 44px; height: 44px; margin-top: -44px; }
   .chat-context-bar .chat-knowledge-toggle { min-width: 0; }
   .chat-knowledge-toggle > span { min-width: 0; white-space: normal; }
   .table-scroll { overflow: visible; }

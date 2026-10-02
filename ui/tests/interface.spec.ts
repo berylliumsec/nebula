@@ -3657,8 +3657,8 @@ test("VPN settings keep upload and project routing calm at every width", async (
   expect(accessibility.violations).toEqual([]);
 });
 
-test("streaming chat follows the bottom without overriding reader scroll intent", async ({ page }, testInfo) => {
-  test.skip(!["desktop", "webkit"].includes(testInfo.project.name), "Scroll intent needs one desktop interaction run.");
+test("assistant upgrade scrolls between earliest and latest messages without overriding reader intent", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"].includes(testInfo.project.name), "Covered by the desktop and mobile scroll projects.");
   const provider = {
     ...entity,
     id: "provider-scroll-test",
@@ -3732,6 +3732,8 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   const composer = page.getByPlaceholder("Ask about this project…");
   await expect(composer).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Scroll to earliest message" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Scroll to latest message" })).toHaveCount(0);
   await composer.fill("Stream a long response for scroll testing.");
   await page.getByRole("button", { name: "Send message" }).click();
   const chatScroll = page.locator(".chat-scroll");
@@ -3740,7 +3742,11 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
   await chatScroll.hover();
   let previousTrackpadPosition = await chatScroll.evaluate((element) => element.scrollTop);
   for (let index = 0; index < 8; index += 1) {
-    await page.mouse.wheel(0, 180);
+    if (testInfo.project.name.startsWith("mobile-webkit")) {
+      await chatScroll.evaluate((element) => { element.scrollTop += 180; });
+    } else {
+      await page.mouse.wheel(0, 180);
+    }
     await page.waitForTimeout(25);
     const currentTrackpadPosition = await chatScroll.evaluate((element) => element.scrollTop);
     expect(currentTrackpadPosition).toBeGreaterThanOrEqual(previousTrackpadPosition - 2);
@@ -3748,6 +3754,13 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
   }
   const distanceFromBottom = () => chatScroll.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight);
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
+  const scrollToEarliest = page.getByRole("button", { name: "Scroll to earliest message" });
+  await expect(scrollToEarliest).toBeEnabled();
+  expect((await scrollToEarliest.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await scrollToEarliest.click();
+  await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBe(0);
+  await expect(scrollToEarliest).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Scroll to latest message" })).toBeEnabled();
   await chatScroll.evaluate((element) => element.dispatchEvent(new WheelEvent("wheel", { deltaY: -500, bubbles: true })));
   await page.waitForTimeout(50);
   await chatScroll.evaluate((element) => element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 500));
@@ -3762,7 +3775,11 @@ test("streaming chat follows the bottom without overriding reader scroll intent"
   await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 10_000 });
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
 
-  await page.mouse.wheel(0, -500);
+  if (testInfo.project.name.startsWith("mobile-webkit")) {
+    await chatScroll.evaluate((element) => { element.scrollTop -= 500; });
+  } else {
+    await page.mouse.wheel(0, -500);
+  }
   await expect.poll(distanceFromBottom).toBeGreaterThan(100);
   const readerPosition = await chatScroll.evaluate((element) => element.scrollTop);
   await page.waitForTimeout(300);
