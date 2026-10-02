@@ -8,8 +8,11 @@
 | Open a side chat | It inherits the saved boundary without another parent-history request; only explicit Close discards it. | Core fork, URL `sideChat`, local draft | Side-chat browser matrix and real-Core reload/reply journey |
 | Read long work | Mounted transcript rows stay bounded; collapsed reasoning is fetched when opened and can be retried. | Core message and reasoning route | Long-history browser and disclosure component tests |
 | Navigate and stream | A saved reading position survives a switch; the active answer stays reachable while it grows. | Device preview plus Core reconciliation | Conversation-switch and harness-scroll browser journeys |
+| Use both panes | Parent and side keep separate drafts, active turns, approvals, attachments, and scroll positions; Workbench catalogs and layout state belong to the parent only. | Core sessions, URL identities, per-pane React state | Side-chat browser and real-Core active-turn journeys |
 
-The side pane retains the full composer and approval workflow. It reads only its own session rather than duplicating the project conversation catalog and sidebar polling. The embedded page is memoized so parent typing and stream updates do not render its transcript; it also skips the parent workbench's MCP and hook catalogs, tool-model verification, and assistant draft snapshot. Extracting the shared chat controller from `SessionsPage` would remove the remaining dormant page hooks.
+The side-chat lifecycle covers discovery from the conversation toolbar, creation at a saved boundary, selection and replies, active streaming and interruption, navigation away and back, reload and reconnect, missing-session recovery, and explicit close. Closing the parent view only hides the pane. Core owns the transcript and fork lineage, the URL owns both selected IDs, and browser storage holds device-local drafts and pane sizing.
+
+The parent `SessionsPage` owns Workbench navigation and catalog choices. Its layout observers and guide action mount only in the parent `WorkbenchLayout`. Both conversations use the shared `ConversationPane` session logic, with independent drafts, transcript pages, turns, approvals, and scroll positions. The side pane receives inert Workbench values, reads only its own Core session, and does not fetch the project's conversation, skill, MCP, or hook catalogs. Memoization prevents parent typing and stream updates from rendering the side transcript.
 
 ## Measurements on 2026-10-02
 
@@ -21,11 +24,13 @@ The side-chat open path now emits `nebula.side_chat.open` from the toolbar actio
 
 An isolated real-Core test with 454 messages and about 15 MiB of varied, wrap-safe stored text and reasoning measured a 360 ms authoritative switch in desktop Chromium. Three side-chat opens took 511–900 ms; the fork request took 197–593 ms and the side transcript page 87–112 ms. The side pane mounted zero inherited rows while collapsed. These are diagnostic local runs, not percentiles. A separate pathological fixture with a 19,000-character unbroken token triggered a 2.7-second browser layout task, so long unbroken content needs its own UI treatment if it occurs in operator transcripts.
 
+After moving Workbench state out of the side controller, one 454-message real-Core production LAN run measured a 214 ms authoritative switch and 578 ms side-chat open in desktop Chromium. The fork request took 255 ms, the side message page 115 ms, and the trace recorded no task over 50 ms. This single run is compatible with the earlier range, but does not isolate the refactor's contribution or establish a percentile improvement.
+
 A synthetic SQLite fork of 454 messages with roughly 22 MiB of source text and reasoning took about 0.69 s after batched insertion. The prior per-message copy stage took about 1.30 s versus 0.77 s with one transaction; the complete fork took about 0.85 s with that transaction but per-row flushes. These are local synthetic runs, not production percentile measurements.
 
 ## Remaining latency to investigate
 
-1. The side chat still mounts a second page controller. Extracting shared chat state from workbench-only state would remove dormant hooks and further reduce its bundle and mount work; retain attachments, edits, queue, approvals, harness interaction, and reconnect behavior when doing so.
+1. `ConversationPane` still contains a few guarded Workbench effects. They do no side-pane catalog work; move them into parent-only components if a new trace shows measurable mount cost. The separate per-chat turn, draft, and transcript controllers are required while both chats remain independently usable.
 2. The side-chat fork still materializes inherited records. The isolated real-Core fork was below a second, but a busy database needs a latency distribution before choosing a more complex snapshot design.
 3. Profile real operator transcripts with long unbroken strings and repair their layout cost without changing exact text or copy behavior.
 4. Full-history export intentionally reads all messages. Other normal selection, completion, and reconciliation paths now request recent pages; inspect future callers before adding another unbounded read.

@@ -1,7 +1,7 @@
 {
-  "change_digest": "91147ff29974a6073431030d6a50ff767a9f25c9b4650ace6bb766b781cc7489",
-  "reviewed_by": "Codex focused review of chat paging, side-chat lifecycle, and memoized side-chat render isolation",
-  "reason": "The chat paging, side-chat, and transcript diff is covered by focused backend, component, browser, and real-Core journeys. Main advanced during this branch with Codex Daybreak changes in the same chat files; the focused Daybreak real-Core journey is added to verify the rebased integration. Other provider, project, editor, terminal, and native journeys remain outside this diff.",
+  "change_digest": "0866282559bee22b221378aef7b9fb8adffb0a469025540cb813fb24d8dde549",
+  "reviewed_by": "Codex focused review of chat paging, side-chat lifecycle, and Workbench state isolation",
+  "reason": "The chat paging, side-chat, transcript, and Workbench-state extraction diff is covered by focused backend, component, browser, and real-Core journeys. The selected side-chat matrix exercises open, restore, active turns, and mobile layout; the Daybreak journey verifies integration with the rebased chat UI. Other provider, project, editor, terminal, and native journeys remain outside this diff.",
   "exclusions": "No native Rust code changed. Unrelated provider, project, editor, and terminal journeys are outside this diff. Python 3.11 is selected because the local project environment provides it; the Python 3.12 environment cannot import its installed OpenSSL dependency.",
   "expected_tests": {
     "python": 1,
