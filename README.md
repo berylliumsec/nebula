@@ -169,6 +169,14 @@ Verify the imported project and its evidence before deleting the original data. 
 - [Release notes](docs/releases/)
 - [Release process](packaging/RELEASING.md)
 
+## Community
+
+- [Contributing](CONTRIBUTING.md): propose changes and choose focused checks
+- [Support](SUPPORT.md): documentation, questions, and bug reports
+- [Code of Conduct](CODE_OF_CONDUCT.md): community expectations and reporting
+- [Security policy](SECURITY.md): report vulnerabilities privately
+- [BSD 2-Clause license](LICENSE.md)
+
 <br />
 
 ---

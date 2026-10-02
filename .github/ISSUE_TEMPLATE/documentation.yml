@@ -1,0 +1,33 @@
+name: Documentation improvement
+description: Report missing, unclear, or outdated documentation.
+title: "[Docs]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For setup or usage questions, use [Discussions](https://github.com/berylliumsec/nebula/discussions).
+        Do not include secrets, personal data, or private engagement details.
+  - type: input
+    id: location
+    attributes:
+      label: Documentation page or file
+      description: Link to the relevant section, or describe where the missing guidance belongs.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Relevant version or source commit
+      description: Include this if the documentation differs between a published build and a source checkout.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is missing or unclear?
+      description: Describe the gap and what you expected to learn.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested correction
+      description: Optional proposed wording, a source, or a safe example that would help.

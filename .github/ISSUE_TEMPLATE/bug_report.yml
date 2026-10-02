@@ -1,0 +1,75 @@
+name: Bug report
+description: Report a reproducible problem in Nebula.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For usage questions, use [Discussions](https://github.com/berylliumsec/nebula/discussions).
+        For a suspected vulnerability, follow [Security](https://github.com/berylliumsec/nebula/blob/main/SECURITY.md) instead of this public form.
+        Use synthetic examples. Remove credentials, tokens, personal data, customer details, private paths, and engagement evidence from all text and images.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and pull requests for this problem.
+          required: true
+        - label: This report contains no secrets or private engagement data.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Nebula version or source commit
+      description: Give the exact installed version, or the commit for a source checkout.
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation method
+      options:
+        - APT repository
+        - Downloaded DEB
+        - AppImage
+        - Source checkout
+        - Other (describe in environment)
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include host OS/version, CPU architecture, and desktop/browser/Core surface. For browser issues, include browser/device details; for container issues, include Docker or Podman version. Do not paste complete diagnostic output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What were you trying to do, and what should have happened?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead? Include the relevant error message with private details removed.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide the smallest safe example using synthetic data in an environment you own or are authorized to test.
+      placeholder: |
+        1. Open ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence and additional context
+      description: Optional relevant log excerpt or screenshot, frequency, last known working version, and workarounds. Review attachments yourself before uploading; do not attach whole projects, databases, or engagement bundles.

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and community help
+    url: https://github.com/berylliumsec/nebula/discussions
+    about: Ask setup and usage questions in Discussions.
+  - name: Security vulnerability reporting
+    url: https://github.com/berylliumsec/nebula/blob/main/SECURITY.md
+    about: Read the private reporting instructions before sharing vulnerability details.

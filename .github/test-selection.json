@@ -1,31 +1,16 @@
 {
-  "change_digest": "5f80d0854c0cf49b6b156fd2236f3f05530cd601750dab4cbc3b9d9d86e09226",
-  "reviewed_by": "Codex focused review of agent link routing through chat, Code, and Browser",
-  "reason": "The changed journey is clicking file and web links in an assistant transcript. Component tests cover workspace path boundaries, safe Markdown rendering, and editor loading. The named mocked Playwright journey checks visible Code navigation, reload, and device-browser opening across the permanent desktop and mobile matrix. One production LAN journey uses a disposable real Core, durable reply, and actual workspace file. The shared browser specs and impact manifest contain only these named journeys and their catalog entries. The production LAN case specifically covers the insecure-origin request-ID fallback that the real-Core run exposed. The native Browser component test checks scoped navigation after the durable browser session loads. The malformed-link catch is classified for the frontend diagnostics audit.",
-  "exclusions": "No Python or Rust code changed. Provider execution beyond the local response fixture, other chat journeys, browser research tools, and full suites are outside the link-navigation diff. Native desktop browser navigation requires a Tauri device and is reported separately from web-browser coverage.",
+  "change_digest": "98ebbaee29915d08bf4667b2789ee91fa1723dec90e701593a2257cc4407aa1c",
+  "reviewed_by": "Community documentation and template review",
+  "reason": "This diff adds community guidelines, support and private security-reporting guidance, GitHub issue forms and a pull request template, and README navigation. Validation checks YAML syntax and form structure, unique field IDs and labels, relative and repository link targets, and whitespace. The maintainer-confirmed private address is used for both vulnerability and conduct reports.",
+  "exclusions": "No application code, dependencies, workflows, packaging, or runtime behavior changes. Python, frontend, native, and Playwright product tests are not selected; documentation and template checks do not establish product behavior coverage. No full suites are approved or run.",
   "expected_tests": {
     "python": 0,
-    "frontend": 69,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 0
   },
   "python": [],
-  "frontend": [
-    "ui/src/components/assistantLinks.test.ts",
-    "ui/src/components/assistantMarkdown.test.tsx",
-    "ui/src/components/CodeEditorPanel.test.tsx",
-    "ui/src/components/WorkbenchBrowser.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:assistant-links/desktop",
-    "entry:assistant-links/compact",
-    "entry:assistant-links/mobile-chromium-small",
-    "entry:assistant-links/mobile-chromium-ledger-390",
-    "entry:assistant-links/mobile-chromium-wide",
-    "entry:assistant-links/mobile-webkit-small",
-    "entry:assistant-links/mobile-webkit",
-    "entry:assistant-links/mobile-webkit-wide",
-    "entry:assistant-links/assistant-real-desktop"
-  ]
+  "playwright": []
 }

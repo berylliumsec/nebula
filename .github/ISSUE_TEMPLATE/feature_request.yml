@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a focused improvement to Nebula.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use [Discussions](https://github.com/berylliumsec/nebula/discussions) for open-ended ideas and questions.
+        Keep examples synthetic and free of credentials, personal information, and private engagement data.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and discussions for this idea.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and affected workflow
+      description: Who encounters this problem, and what is difficult in the current workflow?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe what someone should be able to do and how they would know it worked.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What existing features or workarounds have you tried?
+  - type: textarea
+    id: impact
+    attributes:
+      label: Scope and constraints
+      description: Note affected platforms, accessibility needs, compatibility, or privacy and authorization considerations. Avoid sensitive examples.
