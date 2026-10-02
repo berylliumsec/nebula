@@ -1,13 +1,13 @@
 {
-  "change_digest": "0866282559bee22b221378aef7b9fb8adffb0a469025540cb813fb24d8dde549",
+  "change_digest": "a46d269f049868b655fa3573ed8099c4d5b489c826f5e41a24a91bf8892f540d",
   "reviewed_by": "Codex focused review of chat paging, side-chat lifecycle, and Workbench state isolation",
-  "reason": "The chat paging, side-chat, transcript, and Workbench-state extraction diff is covered by focused backend, component, browser, and real-Core journeys. The selected side-chat matrix exercises open, restore, active turns, and mobile layout; the Daybreak journey verifies integration with the rebased chat UI. Other provider, project, editor, terminal, and native journeys remain outside this diff.",
+  "reason": "The chat paging, side-chat, transcript, and Workbench-state extraction diff is covered by focused backend, component, browser, and real-Core journeys. The selected side-chat matrix exercises open, restore, active turns, and mobile layout; the Daybreak and earliest-message scroll journeys verify integration with changes merged to main during this branch. Other provider, project, editor, terminal, and native journeys remain outside this diff.",
   "exclusions": "No native Rust code changed. Unrelated provider, project, editor, and terminal journeys are outside this diff. Python 3.11 is selected because the local project environment provides it; the Python 3.12 environment cannot import its installed OpenSSL dependency.",
   "expected_tests": {
     "python": 1,
     "frontend": 6,
     "native": 0,
-    "playwright": 28
+    "playwright": 31
   },
   "python_versions": [
     "3.11"
@@ -45,6 +45,9 @@
     "entry:chat-stream-scroll/desktop",
     "entry:chat-stream-scroll/mobile-chromium-ledger-390",
     "entry:chat-stream-scroll/mobile-webkit",
+    "entry:chat-scroll-navigation/desktop",
+    "entry:chat-scroll-navigation/mobile-chromium-ledger-390",
+    "entry:chat-scroll-navigation/mobile-webkit",
     "entry:side-chat-active/assistant-real-desktop",
     "entry:side-chat-active/assistant-real-chromium-390",
     "entry:side-chat-active/assistant-real-webkit-390",

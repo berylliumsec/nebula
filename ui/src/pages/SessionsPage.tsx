@@ -1510,6 +1510,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (hasOlderHistory && !olderHistoryReadRef.current) void loadOlderHistory(messageId);
   }, [searchParams, loadingHistory, messages.length, hasOlderHistory]);
   const chatFollowBottomRef = useRef(true);
+  const chatScrollJumpRef = useRef<"top" | "bottom" | null>(null);
   const chatScrollGeometryRef = useRef<ChatScrollGeometry | undefined>(undefined);
   const chatReadingPositionRef = useRef<{sessionId: string; scrollTop: number; followBottom: boolean}>({sessionId: "", scrollTop: 0, followBottom: true});
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
@@ -1615,6 +1616,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     : messages, [embeddedSideChat, messages, showInheritedHistory]);
   useLayoutEffect(() => {
     chatScrollGeometryRef.current = undefined;
+    chatScrollJumpRef.current = null;
     const position = restoredScrollRef.current;
     chatFollowBottomRef.current = position?.followBottom ?? true;
     setHasNewerMessages(!chatFollowBottomRef.current);
@@ -4018,6 +4020,17 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     followOnAppend: !((loadingHistory && restoredScrollRef.current?.followBottom === false) || !chatFollowBottomRef.current),
     scrollEndThreshold: 80,
   });
+  // A newly measured long row may start above the viewport yet still span
+  // the reader's position. Correcting for its full size would undo an upward
+  // scroll, especially in WebKit. Only rows wholly above need compensation.
+  transcriptVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) =>
+    item.end <= (instance.scrollOffset ?? 0) && instance.scrollDirection !== "backward";
+  const transcriptHeight = transcriptVirtualizer.getTotalSize();
+  useLayoutEffect(() => {
+    if (chatFollowBottomRef.current && chatViewportRef.current) {
+      chatViewportRef.current.scrollTop = chatViewportRef.current.scrollHeight;
+    }
+  }, [transcriptHeight]);
 
   const pendingApprovalToRestore = pendingApprovalId(authoritativeState, authoritativeState?.turn_id ?? undefined);
   useEffect(() => {
@@ -5867,7 +5880,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                       const viewport = event.currentTarget;
                       if (!viewport.clientHeight) return;
                       const geometry = {scrollTop: viewport.scrollTop, scrollHeight: viewport.scrollHeight, clientHeight: viewport.clientHeight};
-                      const atBottom = followsChatBottom(chatScrollGeometryRef.current, geometry, chatFollowBottomRef.current);
+                      const jump = chatScrollJumpRef.current;
+                      const distanceFromBottom = geometry.scrollHeight - geometry.scrollTop - geometry.clientHeight;
+                      const atBottom = jump === "top" ? false : jump === "bottom" ? true
+                        : followsChatBottom(chatScrollGeometryRef.current, geometry, chatFollowBottomRef.current);
+                      if ((jump === "top" && geometry.scrollTop <= 2) || (jump === "bottom" && distanceFromBottom <= 2)) {
+                        chatScrollJumpRef.current = null;
+                      }
                       chatScrollGeometryRef.current = geometry;
                       chatReadingPositionRef.current = {sessionId, scrollTop: viewport.scrollTop, followBottom: atBottom};
                       chatFollowBottomRef.current = atBottom;
@@ -5881,10 +5900,14 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     onPointerDown={event => {if (event.target === event.currentTarget) chatFollowBottomRef.current = false;}}
                   >
                 {messages.length > 0 && hasOlderMessages && <button className="chat-scroll-jump chat-scroll-to-top" type="button" aria-label="Scroll to earliest message" title="Scroll to earliest message" onClick={() => {
+                  chatScrollJumpRef.current = "top";
                   chatFollowBottomRef.current = false;
-                  if (chatViewportRef.current) chatViewportRef.current.scrollTop = 0;
-                  transcriptVirtualizer.scrollToIndex(0, {align: "start"});
+                  setHasNewerMessages(true);
                   setHasOlderMessages(false);
+                  requestAnimationFrame(() => {
+                    if (chatViewportRef.current) chatViewportRef.current.scrollTop = 0;
+                    transcriptVirtualizer.scrollToIndex(0, {align: "start"});
+                  });
                 }}><ChevronDown size={16} aria-hidden="true" /></button>}
                 {loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <div className="chat-virtual-list" style={{height: transcriptVirtualizer.getTotalSize(), position: "relative"}}>{transcriptVirtualizer.getVirtualItems().map((virtualItem) => {
                   const itemStyle: CSSProperties = {position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualItem.start}px)`};
@@ -5933,7 +5956,15 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                       subagents={subagentState.subagents}
                       onReview={() => updateSearchParams(next => next.set("drawer", "subagents"))}
                     />}
-                    {messages.length > 0 && hasNewerMessages && <button className="chat-scroll-jump chat-scroll-to-bottom" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => { chatFollowBottomRef.current = true; transcriptVirtualizer.scrollToEnd(); }}>
+                    {messages.length > 0 && hasNewerMessages && <button className="chat-scroll-jump chat-scroll-to-bottom" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => {
+                      chatScrollJumpRef.current = "bottom";
+                      chatFollowBottomRef.current = true;
+                      setHasNewerMessages(false);
+                      requestAnimationFrame(() => {
+                        transcriptVirtualizer.scrollToEnd();
+                        if (chatViewportRef.current) chatViewportRef.current.scrollTop = chatViewportRef.current.scrollHeight;
+                      });
+                    }}>
                       <ChevronDown size={16} aria-hidden="true" />
                     </button>}
                   </div>
