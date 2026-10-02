@@ -953,6 +953,7 @@ class ChatSessionUpdateRequest(NebulaModel):
 class ChatSessionForkRequest(NebulaModel):
     through_message_id: str | None = Field(default=None, min_length=1, max_length=200)
     before_message_id: str | None = Field(default=None, min_length=1, max_length=200)
+    through_latest: bool = False
     title: str | None = Field(default=None, min_length=1, max_length=300)
     side_chat: bool = False
 
@@ -10379,11 +10380,47 @@ def create_app(
         dependencies=[Depends(require_auth)],
     )
     def list_chat_session_messages(
-        session_id: str, include_replaced: bool = False
+        session_id: str,
+        include_replaced: bool = False,
+        limit: int | None = Query(default=None, ge=1, le=200),
+        before_message_id: str | None = None,
     ) -> list[ChatMessage]:
+        if limit is not None:
+            if not include_replaced:
+                raise HTTPException(
+                    status_code=422, detail="Paged history requires include_replaced"
+                )
+            page = chat_service().session_messages_page(
+                session_id, limit=limit, before_message_id=before_message_id
+            )
+            return [
+                item.model_copy(
+                    update={
+                        "reasoning": "",
+                        "metadata": {**item.metadata, "reasoning_available": True},
+                    }
+                )
+                if item.reasoning
+                else item
+                for item in page
+            ]
         return chat_service().session_messages(
             session_id, include_replaced=include_replaced
         )
+
+    @app.get(
+        f"{API_PREFIX}/chat/sessions/{{session_id}}/messages/{{message_id}}/reasoning",
+        tags=["chat"],
+        dependencies=[Depends(require_auth)],
+    )
+    def get_chat_message_reasoning(session_id: str, message_id: str) -> dict[str, str]:
+        store.get(ChatSession, session_id)
+        message = store.get(ChatMessage, message_id)
+        if message.session_id != session_id:
+            raise HTTPException(
+                status_code=404, detail="Message not found in conversation"
+            )
+        return {"reasoning": message.reasoning}
 
     @app.get(
         f"{API_PREFIX}/chat/sessions/{{session_id}}/context",
@@ -10576,9 +10613,23 @@ def create_app(
     async def fork_chat_session(
         session_id: str, request: ChatSessionForkRequest
     ) -> ChatSession:
-        if bool(request.through_message_id) == bool(request.before_message_id):
+        if (
+            sum(
+                (
+                    bool(request.through_message_id),
+                    bool(request.before_message_id),
+                    request.through_latest,
+                )
+            )
+            != 1
+        ):
             raise HTTPException(
                 status_code=422, detail="Choose exactly one branch boundary"
+            )
+        if request.through_latest and not request.side_chat:
+            raise HTTPException(
+                status_code=422,
+                detail="Latest-message branching is only for side chats",
             )
         source = store.get(ChatSession, session_id)
         harness_session_id: str | None = None
@@ -10607,6 +10658,7 @@ def create_app(
                 session_id,
                 through_message_id=request.through_message_id,
                 before_message_id=request.before_message_id,
+                through_latest=request.through_latest,
                 title=request.title,
                 side_chat=request.side_chat,
                 harness_session_id=harness_session_id,

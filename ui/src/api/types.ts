@@ -2281,6 +2281,7 @@ export interface ChatSessionSummary {
   isSubagent?: boolean;
   /** Core marks side chats separately from ordinary transcript branches. */
   isSideChat?: boolean;
+  inheritedMessageCount?: number;
   forkedFromMessageId?: Identifier;
   model?: string;
   toolsEnabled: boolean;

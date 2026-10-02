@@ -4844,6 +4844,7 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   let discardAttempts = 0;
   let sideCreated = false;
   let sideDiscarded = false;
+  let parentMessageLoads = 0;
   await page.context().route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -4867,7 +4868,7 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
       sideCreated = true;
       return route.fulfill({ status: 201, json: side });
     }
-    if (path.endsWith(`/chat/sessions/${parent.id}/messages`)) return route.fulfill({ json: [question, answer] });
+    if (path.endsWith(`/chat/sessions/${parent.id}/messages`)) { parentMessageLoads += 1; return route.fulfill({ json: [question, answer] }); }
     if (path.endsWith(`/chat/sessions/${other.id}/messages`)) return route.fulfill({ json: [] });
     if (path.endsWith(`/chat/sessions/${side.id}/messages`)) return route.fulfill({ json: [
       { ...question, id: "side-question", session_id: side.id, source_message_id: question.id },
@@ -4878,6 +4879,8 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   });
 
   await openWorkspace(page, `/?view=chat&session=${parent.id}`, "Workbench");
+  await expect.poll(() => parentMessageLoads).toBeGreaterThan(0);
+  const parentLoadsBeforeFork = parentMessageLoads;
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   if (mobile) {
     await page.getByRole("button", { name: "Conversation actions" }).click();
@@ -4893,7 +4896,8 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   } else {
     await page.getByRole("button", { name: "Open side chat", exact: true }).click();
   }
-  await expect.poll(() => forkPayload).toMatchObject({ through_message_id: answer.id, side_chat: true });
+  await expect.poll(() => forkPayload).toMatchObject({ through_latest: true, side_chat: true });
+  expect(parentMessageLoads).toBe(parentLoadsBeforeFork);
   await expect(page).toHaveURL(new RegExp(`session=${parent.id}.*sideChat=${side.id}`));
   const sidePane = page.getByRole("region", { name: "Side chat" });
   await expect(sidePane).toBeVisible();
@@ -4976,6 +4980,70 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   expect(discardAttempts).toBe(2);
   await expect(page).not.toHaveURL(/sideChat=/);
   await expect(page.locator(`.session-select[data-session-id="${side.id}"]`)).toHaveCount(0);
+});
+
+test("conversation switching pages long history and renders only nearby transcript rows", async ({ page }, testInfo) => {
+  await installTruthfulCore(page);
+  const provider = {
+    ...entity, id: "paged-provider", name: "Paged provider", provider_type: "vllm", endpoint: "http://127.0.0.1:8000/v1",
+    enabled: true, is_local: true, secret_ref: null, model_allowlist: ["page-model"], capabilities: { streaming: true },
+    privacy: { local_only: true, permits_sensitive_data: true }, metadata: { default_model: "page-model" },
+  };
+  const session = { ...entity, id: "paged-session", engagement_id: "scratch-project", title: "Long conversation", backend: "provider", provider_profile_id: provider.id, model: "page-model", metadata: {} };
+  const saved = Array.from({length: 150}, (_, index) => ({
+    ...entity, id: `paged-message-${index + 1}`, engagement_id: "scratch-project", session_id: session.id,
+    sequence: index + 1, role: index % 2 ? "assistant" : "user", content: `Saved message ${index + 1}`,
+    reasoning: "", citations: [], metadata: index === 149 ? {reasoning_available: true} : {},
+  }));
+  const pageRequests: Array<{limit: number; before: string | null}> = [];
+  let reasoningReads = 0;
+  await page.context().route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    if (path.endsWith("/providers") && request.method() === "GET") return route.fulfill({json: [provider]});
+    if (path.endsWith(`/providers/${provider.id}/health`)) return route.fulfill({json: {provider_id: provider.id, healthy: true, models: ["page-model"]}});
+    if (path.endsWith("/chat-sessions") && request.method() === "GET") return route.fulfill({json: [session]});
+    if (path.endsWith(`/chat/sessions/${session.id}/messages/paged-message-150/reasoning`)) {
+      reasoningReads += 1;
+      return route.fulfill({json: {reasoning: "Deferred saved reasoning."}});
+    }
+    if (path.endsWith(`/chat/sessions/${session.id}/messages`)) {
+      const limit = Number(url.searchParams.get("limit"));
+      const before = url.searchParams.get("before_message_id");
+      pageRequests.push({limit, before});
+      const boundary = before ? saved.findIndex(item => item.id === before) : saved.length;
+      return route.fulfill({json: saved.slice(Math.max(0, boundary - limit), boundary)});
+    }
+    if (path.endsWith("/pending-turn")) return route.fulfill({json: null});
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${session.id}`, "Workbench");
+  await expect.poll(() => pageRequests.length).toBeGreaterThan(0);
+  expect(pageRequests[0]).toEqual({limit: 61, before: null});
+  const viewport = page.locator(".session-workspace > .chat-panel .chat-scroll");
+  await expect.poll(() => viewport.locator(".chat-message").count()).toBeLessThan(30);
+  expect(reasoningReads).toBe(0);
+  await viewport.getByText("Thinking", {exact: true}).click();
+  await expect(viewport.getByText("Deferred saved reasoning.")).toBeVisible();
+  expect(reasoningReads).toBe(1);
+  await viewport.evaluate(element => {element.scrollTop = 0;});
+  await expect(viewport.getByRole("button", {name: "Load earlier messages"})).toBeVisible();
+  await viewport.getByRole("button", {name: "Load earlier messages"}).click();
+  await expect.poll(() => pageRequests.length).toBe(2);
+  expect(pageRequests[1]).toEqual({limit: 61, before: "paged-message-91"});
+  await expect.poll(() => viewport.locator(".chat-message").count()).toBeLessThan(30);
+  const profile = await page.evaluate(() => ({
+    switchMs: performance.getEntriesByName("nebula.chat_switch.authoritative", "measure").at(-1)?.duration ?? null,
+    renderedRows: document.querySelectorAll(".session-workspace > .chat-panel .chat-message").length,
+    domNodes: document.querySelectorAll("*").length,
+    messageRequests: performance.getEntriesByType("resource")
+      .filter(entry => entry.name.includes(`/chat/sessions/paged-session/messages`))
+      .map(entry => ({durationMs: entry.duration, transferBytes: (entry as PerformanceResourceTiming).transferSize})),
+  }));
+  await testInfo.attach("chat-history-profile.json", {body: JSON.stringify(profile, null, 2), contentType: "application/json"});
+  console.info(`CHAT_PROFILE ${testInfo.project.name} ${JSON.stringify(profile)}`);
 });
 
 test("New chat detaches from an in-flight saved conversation load", async ({ page }) => {
@@ -5231,7 +5299,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   // Hold the network response: preview visibility must not depend on a timer.
   refreshGate = new Promise<void>(resolve => {releaseRefresh = resolve;});
   await selectChat("Source conversation");
-  await expect(page.getByText("Source transcript", {exact: true})).toBeAttached();
+  await expect(page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true})).toBeAttached();
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toBeVisible();
   await expect(page.getByRole("textbox", {name: "Message the analyst assistant"})).toBeEnabled();
@@ -5239,7 +5307,7 @@ test("conversation switching commits URL identity and keeps prefetched work deta
   await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
   freshSource = true;
   releaseRefresh(); refreshGate = undefined;
-  await expect(page.getByText("Fresh source transcript", {exact: true})).toBeAttached();
+  await expect(page.getByText("Earlier source message 0. A durable paragraph to preserve the reading position.", {exact: true})).toBeAttached();
   await expect.poll(() => page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBe(150);
   await expect(page.getByText("Showing saved messages · syncing…", {exact: true})).toHaveCount(0);
   await expect(page.getByRole("button", {name: "Send message", exact: true})).toBeEnabled();
@@ -7474,7 +7542,13 @@ test("stabilization completed harness output keeps one continuous transcript scr
               controller.close();
               return;
             }
-            globalThis.setTimeout(enqueue, index === 2 ? 800 : index === 4 ? 2_000 : 80);
+            if (index === 4) {
+              const waitForStreamingAssertions = () => {
+                if ((globalThis as typeof globalThis & {__releaseHarnessCompletion?: boolean}).__releaseHarnessCompletion) enqueue();
+                else globalThis.setTimeout(waitForStreamingAssertions, 50);
+              };
+              waitForStreamingAssertions();
+            } else globalThis.setTimeout(enqueue, index === 2 ? 800 : 80);
           };
           enqueue();
         },
@@ -7501,9 +7575,14 @@ test("stabilization completed harness output keeps one continuous transcript scr
   const runtimeRollover = page.getByRole("status").filter({ hasText: "Command runtime updated" });
   await expect(runtimeRollover).toContainText("preserved the prior session");
   await expect(runtimeRollover).toContainText("current command runtime");
+  const streamingWork = page.getByRole("region", {name: "Work summary"});
+  await expect(streamingWork).toContainText("I found the verification path.");
+  await streamingWork.getByRole("button", {name: "Show activity"}).click();
+  await streamingWork.locator(".activity-ledger-entry-content details > summary").first().click();
   const commentary = page.getByLabel("Assistant commentary");
   await expect(commentary).toContainText("I found the verification path. I’m checking the production behavior before changing anything.");
   await expect(commentary).toBeVisible();
+  await streamingWork.getByRole("button", {name: "Hide activity"}).click();
   const streamingMessage = page.locator(".chat-message.assistant").last();
   await expect(streamingMessage.locator(".assistant-markdown strong")).toHaveText("Streaming Markdown is visible.");
   await expect(streamingMessage.locator(".assistant-markdown code")).toHaveText("memcpy");
@@ -7521,6 +7600,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
   await expect.poll(() => steeringBody).toEqual({ text: "Prioritize the TLS boundary and preserve exact output." });
   await expect(guidanceComposer).toHaveValue("");
   await expect(page.getByText("Guidance sent to the active harness turn.")).toBeVisible();
+  await page.evaluate(() => {(globalThis as typeof globalThis & {__releaseHarnessCompletion?: boolean}).__releaseHarnessCompletion = true;});
   const planToggle = page.getByRole("button", { name: "Expand plan steps, 1 of 3 completed" });
   await expect(planToggle).toBeVisible();
   await planToggle.click();

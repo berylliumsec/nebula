@@ -58,6 +58,7 @@ from .event_history import (
 )
 from .domain import (
     Artifact,
+    ChatMessage,
     ChatTurn,
     ENTITY_MODEL_BY_KIND,
     Entity,
@@ -306,6 +307,38 @@ class StoreTransaction:
             self.add(entity)
         return entities
 
+    def add_chat_messages(self, messages: Sequence[ChatMessage]) -> None:
+        """Insert a transcript snapshot in one flush; messages have no search projection."""
+
+        self.session.add_all(
+            [
+                EntityRow(
+                    id=message.id,
+                    kind=message.entity_kind,
+                    engagement_id=message.engagement_id,
+                    revision=message.revision,
+                    payload=_dump_entity(message),
+                    **_entity_lookup_fields(message),
+                    created_at=message.created_at,
+                    updated_at=message.updated_at,
+                )
+                for message in messages
+            ]
+        )
+        try:
+            self.session.flush()
+        except IntegrityError as exc:
+            record_caught_exception(
+                "storage",
+                "storage.storage.caught_failure_002",
+                "A handled storage operation raised an exception.",
+                exc,
+                stage="storage",
+            )
+            raise ConflictError(
+                "chat message snapshot contains an existing entity"
+            ) from exc
+
     def add_absent(self, entity: Entity) -> bool:
         """Add a write-once record unless its id is already stored.
 
@@ -542,6 +575,7 @@ class NebulaStore:
         statuses: Sequence[str] | None = None,
         newest_first: bool = False,
         limit: int | None = None,
+        before: Entity | None = None,
         readable_only: bool = False,
     ) -> list[EntityT]:
         """Return one conversation's records of ``model``, oldest first, filtered in SQL.
@@ -561,6 +595,16 @@ class NebulaStore:
             EntityRow.kind == model.entity_kind,
             EntityRow.chat_session_id == session_id,
         )
+        if before is not None:
+            statement = statement.where(
+                or_(
+                    EntityRow.created_at < before.created_at,
+                    and_(
+                        EntityRow.created_at == before.created_at,
+                        EntityRow.id < before.id,
+                    ),
+                )
+            )
         if statuses is not None:
             statement = statement.where(
                 EntityRow.payload["status"].as_string().in_(list(statuses))

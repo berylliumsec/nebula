@@ -3601,6 +3601,8 @@ function mapChatSession(value: WireChatSession): ChatSessionSummary {
     parentSessionId: value.parent_session_id ?? undefined,
     isSubagent: typeof value.metadata?.subagent_id === "string" && value.metadata.subagent_id.length > 0,
     isSideChat: value.metadata?.side_chat === true,
+    inheritedMessageCount: typeof value.metadata?.inherited_message_count === "number"
+      ? value.metadata.inherited_message_count : undefined,
     forkedFromMessageId: value.forked_from_message_id ?? undefined,
     model: value.model ?? undefined,
     toolsEnabled: value.metadata?.tools_enabled === true,
@@ -9124,6 +9126,7 @@ export class ApiClient {
     title?: string,
     beforeMessageId?: string,
     sideChat = false,
+    throughLatest = false,
   ): Promise<ChatSessionSummary> {
     return this.request<WireChatSession>(
       `chat/sessions/${encodeURIComponent(sessionId)}/fork`,
@@ -9132,6 +9135,7 @@ export class ApiClient {
         body: JSON.stringify({
           through_message_id: throughMessageId,
           before_message_id: beforeMessageId,
+          through_latest: throughLatest,
           title,
           side_chat: sideChat,
         }),
@@ -9262,13 +9266,23 @@ export class ApiClient {
   listChatMessages(
     sessionId: string,
     signal?: AbortSignal,
-    options?: { includeReplaced?: boolean },
+    options?: { includeReplaced?: boolean; limit?: number; beforeMessageId?: string },
   ): Promise<PersistedChatMessage[]> {
-    const query = options?.includeReplaced ? "?include_replaced=true" : "";
+    const params = new URLSearchParams();
+    if (options?.includeReplaced) params.set("include_replaced", "true");
+    if (options?.limit) params.set("limit", String(options.limit));
+    if (options?.beforeMessageId) params.set("before_message_id", options.beforeMessageId);
+    const query = params.size ? `?${params}` : "";
     return this.request<WirePersistedChatMessage[]>(
       `chat/sessions/${encodeURIComponent(sessionId)}/messages${query}`,
       { signal },
     ).then((items) => items.map(mapPersistedChatMessage));
+  }
+
+  getChatMessageReasoning(sessionId: string, messageId: string): Promise<string> {
+    return this.request<{reasoning: string}>(
+      `chat/sessions/${encodeURIComponent(sessionId)}/messages/${encodeURIComponent(messageId)}/reasoning`,
+    ).then(value => value.reasoning);
   }
 
   rewindChatSession(

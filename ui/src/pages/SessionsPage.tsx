@@ -46,15 +46,10 @@ import { useCompactLayout } from "../hooks/useCompactLayout";
 import { MobileMorePanel } from "../components/MobileMorePanel";
 import { MobileDrawerFooter, MobileDrawerProject } from "../components/MobileDrawerChrome";
 import { MobileApprovals } from "../components/MobileApprovals";
-import { lazy, memo, startTransition, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
+import { lazy, memo, startTransition, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {useComposerAutosize} from "./useComposerAutosize";
 import { createPortal } from "react-dom";
-import {
-  AssistantRuntimeProvider,
-  ThreadPrimitive,
-  useExternalStoreRuntime,
-  type ThreadMessageLike,
-} from "@assistant-ui/react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Activity,
   Archive,
@@ -383,6 +378,21 @@ const PUBLISHED_RESULTS_IDLE_POLL_MS = 16_000;
 /** Conversation-list activity reads; an unchanged, idle list backs off to the second. */
 const SESSION_ACTIVITY_POLL_MS = 5_000;
 const SESSION_ACTIVITY_IDLE_POLL_MS = 20_000;
+const CHAT_HISTORY_PAGE_SIZE = 60;
+
+async function readRecentChatHistory(api: ApiClient, id: string, signal?: AbortSignal) {
+  const page = await api.listChatMessages(id, signal, {
+    includeReplaced: true, limit: CHAT_HISTORY_PAGE_SIZE + 1,
+  });
+  const hasOlder = page.length > CHAT_HISTORY_PAGE_SIZE;
+  const history = hasOlder ? page.slice(1) : page;
+  return {
+    active: history.filter(message => !message.replacedAt),
+    replaced: history.filter(message => message.replacedAt),
+    beforeId: history[0]?.id,
+    hasOlder,
+  };
+}
 
 interface ConversationMessage extends ReconciledConversationMessage {}
 
@@ -456,39 +466,6 @@ function AssistantLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) 
     {item.usage && item.usage.totalTokens > 0 && <small>{item.usage.totalTokens.toLocaleString()} tokens{item.usage.reasoningTokens ? ` · ${item.usage.reasoningTokens.toLocaleString()} reasoning` : ""}{harnessCostLabel(item) ? ` · ${harnessCostLabel(item)}` : ""}{item.usage.durationMs ? ` · ${(item.usage.durationMs / 1000).toFixed(1)}s` : ""}</small>}
     {item.artifactIds.length > 0 && <div className="scope-chip-list">{item.artifactIds.map((id) => <span title={id} key={id}>Artifact {id.slice(0, 8)}</span>)}</div>}
   </div>;
-}
-
-function assistantMessageStatus(message: ConversationMessage): ThreadMessageLike["status"] {
-  switch (message.state) {
-    case "streaming":
-      return { type: "running" };
-    case "waiting_approval":
-      return { type: "requires-action", reason: "interrupt" };
-    case "cancelled":
-      return { type: "incomplete", reason: "cancelled" };
-    case "error":
-      return { type: "incomplete", reason: "error", error: message.detail ?? "Chat response failed." };
-    default:
-      return { type: "complete", reason: "stop" };
-  }
-}
-
-function convertConversationMessage(message: ConversationMessage): ThreadMessageLike {
-  return {
-    id: message.runtimeId ?? message.id,
-    role: message.role === "system" ? "assistant" : message.role,
-    content: message.content,
-    createdAt: new Date(message.createdAt),
-    status: message.role === "assistant" ? assistantMessageStatus(message) : undefined,
-    metadata: {
-      custom: {
-        durable: message.durable,
-        sequence: message.sequence,
-        state: message.state,
-        role: message.role,
-      },
-    },
-  };
 }
 
 function makeId(prefix: string): string {
@@ -746,7 +723,13 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       <header>{message.role === "assistant" && <><strong>{shared.assistantSource}</strong>{shared.runtimeConfiguration && <span>{shared.runtimeConfiguration}</span>}</>}{agentMessage && <><strong>Message from {agentMessageSender}</strong><span>main agent</span></>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
       {message.role === "assistant" && message.toolSuggestions && <ToolSuggestionChip summary={message.toolSuggestions} />}
       {message.role === "assistant" && !progressContent && <HarnessThinking items={messageActivityItems} />}
-      {message.role === "assistant" && !progressContent && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming" && Boolean(message.reasoning)} />}
+      {message.role === "assistant" && !progressContent && <ThinkingDisclosure
+        text={message.reasoning}
+        streaming={message.state === "streaming" && Boolean(message.reasoning)}
+        load={!message.reasoning && message.metadata?.reasoning_available === true && shared.api && shared.sessionId
+          ? () => shared.api!.getChatMessageReasoning(shared.sessionId, message.id)
+          : undefined}
+      />}
       {displayContent && (editing
           ? <form className="chat-message-edit" onSubmit={event => {event.preventDefault(); void actions.resendEditedMessage();}}>
             <textarea
@@ -849,7 +832,238 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
   );
 });
 
-export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShowConversations, sideChatConversationListOpen = false, onSideChatUnavailable, sideChatClosing = false, sideChatCloseError }: { embeddedSideChat?: boolean; onCloseSideChat?: () => void; onShowConversations?: () => void; sideChatConversationListOpen?: boolean; onSideChatUnavailable?: () => void; sideChatClosing?: boolean; sideChatCloseError?: string } = {}) {
+/** Page chrome state stays out of the second, session-focused controller. */
+function useWorkbenchState() {
+  const [mobileListOpen, setMobileListOpen] = useState(false);
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
+  const [mobileConversationMenuOpen, setMobileConversationMenuOpen] = useState(false);
+  const [fullScreen, setFullScreen] = useState(false);
+  const [conversationPanelOpen, setConversationPanelOpen] = useState(() => readConversationPanelOpen(localStorage));
+  const [terminalAssistantOpen, setTerminalAssistantOpen] = useState(false);
+  const [chatTerminalOpen, setChatTerminalOpenState] = useState(() => {
+    try { return localStorage.getItem(CHAT_TERMINAL_OPEN_KEY) === "true"; }
+    catch { /* diagnostic-expected: storage can be unavailable; the side terminal starts closed. */ return false; }
+  });
+  const setChatTerminalOpen = useCallback((open: boolean) => {
+    setChatTerminalOpenState(open);
+    try { localStorage.setItem(CHAT_TERMINAL_OPEN_KEY, String(open)); }
+    catch { /* diagnostic-expected: storage can be unavailable; the choice lasts for this page only. */ }
+  }, []);
+  const [executionRefresh, setExecutionRefresh] = useState(0);
+  const [executionCapabilities, setExecutionCapabilities] = useState<ExecutionCapabilities>();
+  const [browserScope, setBrowserScope] = useState<EngagementScopePolicy>();
+  const [browserScopeLoading, setBrowserScopeLoading] = useState(false);
+  const [runCandidate, setRunCandidate] = useState<FencedRunCandidate>();
+  const [terminalCommandRequest, setTerminalCommandRequest] = useState<{ id: string; source: string }>();
+  const [browserAssistantOpen, setBrowserAssistantOpen] = useState(false);
+  const [browserControlsOpen, setBrowserControlsOpen] = useState(true);
+  const [browserControlEnabled, setBrowserControlEnabled] = useState(false);
+  const [terminalToolbarHost, setTerminalToolbarHost] = useState<HTMLDivElement | null>(null);
+  const [browserActionContainer, setBrowserActionContainer] = useState<HTMLDivElement | null>(null);
+  const [externalHarnessSessions, setExternalHarnessSessions] = useState<ExternalHarnessSessionSummary[]>([]);
+  const [externalSessionQuery, setExternalSessionQuery] = useState("");
+  const [externalSessionsLoading, setExternalSessionsLoading] = useState(false);
+  const [externalSessionsError, setExternalSessionsError] = useState<string>();
+  const [mcpServers, setMcpServers] = useState<McpServerProfile[]>([]);
+  const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
+  const [environmentTarget, setEnvironmentTarget] = useState<EnvironmentTarget>("auto");
+  const [nativeHooks, setNativeHooks] = useState<NativeHookDescriptor[]>([]);
+  const [projectCatalogKey, setProjectCatalogKey] = useState(0);
+  const [selectedHookIds, setSelectedHookIds] = useState<string[]>([]);
+  const [nativeHookError, setNativeHookError] = useState<string>();
+  const [commandRuntimeReady, setCommandRuntimeReady] = useState(false);
+  const [toolRuntimeReason, setToolRuntimeReason] = useState<string>();
+  const [sessionActivity, setSessionActivity] = useState<Record<string, ChatSessionActivity["state"]>>({});
+  const [sessionQuery, setSessionQuery] = useState("");
+  const [expandedSubagentParents, setExpandedSubagentParents] = useState<ReadonlySet<string>>(() => new Set());
+  const [exportingSessionId, setExportingSessionId] = useState<string>();
+  const [deletingSessionId, setDeletingSessionId] = useState<string>();
+  const [deletingAllSessions, setDeletingAllSessions] = useState(false);
+  const [sessionActionsId, setSessionActionsId] = useState<string>();
+  const [sessionActionsPosition, setSessionActionsPosition] = useState<{ left: number; openAbove: boolean; top: number }>();
+  const [renamingSessionId, setRenamingSessionId] = useState<string>();
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameError, setRenameError] = useState<string>();
+  const [renamingBusy, setRenamingBusy] = useState(false);
+  const [archivingSessionId, setArchivingSessionId] = useState<string>();
+  const [archivedGroupOpen, setArchivedGroupOpen] = useState(false);
+  const [sideChatLookup, setSideChatLookup] = useState<{ engagementId: string; parentId: string; items: ChatSessionSummary[] }>();
+  return {mobileListOpen, setMobileListOpen, mobileMoreOpen, setMobileMoreOpen, mobileConversationMenuOpen, setMobileConversationMenuOpen,
+    fullScreen, setFullScreen, conversationPanelOpen, setConversationPanelOpen, terminalAssistantOpen, setTerminalAssistantOpen,
+    chatTerminalOpen, setChatTerminalOpen, executionRefresh, setExecutionRefresh, executionCapabilities, setExecutionCapabilities,
+    browserScope, setBrowserScope, browserScopeLoading, setBrowserScopeLoading, runCandidate, setRunCandidate,
+    terminalCommandRequest, setTerminalCommandRequest, browserAssistantOpen, setBrowserAssistantOpen,
+    browserControlsOpen, setBrowserControlsOpen, browserControlEnabled, setBrowserControlEnabled,
+    terminalToolbarHost, setTerminalToolbarHost, browserActionContainer, setBrowserActionContainer,
+    externalHarnessSessions, setExternalHarnessSessions, externalSessionQuery, setExternalSessionQuery,
+    externalSessionsLoading, setExternalSessionsLoading, externalSessionsError, setExternalSessionsError,
+    mcpServers, setMcpServers, selectedMcpIds, setSelectedMcpIds, environmentTarget, setEnvironmentTarget,
+    nativeHooks, setNativeHooks, projectCatalogKey, setProjectCatalogKey, selectedHookIds, setSelectedHookIds,
+    nativeHookError, setNativeHookError, commandRuntimeReady, setCommandRuntimeReady, toolRuntimeReason, setToolRuntimeReason,
+    sessionActivity, setSessionActivity,
+    sessionQuery, setSessionQuery, expandedSubagentParents, setExpandedSubagentParents, exportingSessionId, setExportingSessionId,
+    deletingSessionId, setDeletingSessionId, deletingAllSessions, setDeletingAllSessions, sessionActionsId, setSessionActionsId,
+    sessionActionsPosition, setSessionActionsPosition, renamingSessionId, setRenamingSessionId, renameDraft, setRenameDraft,
+    renameError, setRenameError, renamingBusy, setRenamingBusy, archivingSessionId, setArchivingSessionId,
+    archivedGroupOpen, setArchivedGroupOpen, sideChatLookup, setSideChatLookup};
+}
+
+type WorkbenchState = ReturnType<typeof useWorkbenchState>;
+const ignoreSideWorkbenchChange = () => {};
+const SIDE_WORKBENCH_STATE: WorkbenchState = {
+  mobileListOpen: false, setMobileListOpen: ignoreSideWorkbenchChange,
+  mobileMoreOpen: false, setMobileMoreOpen: ignoreSideWorkbenchChange,
+  mobileConversationMenuOpen: false, setMobileConversationMenuOpen: ignoreSideWorkbenchChange,
+  fullScreen: false, setFullScreen: ignoreSideWorkbenchChange,
+  conversationPanelOpen: false, setConversationPanelOpen: ignoreSideWorkbenchChange,
+  terminalAssistantOpen: false, setTerminalAssistantOpen: ignoreSideWorkbenchChange,
+  chatTerminalOpen: false, setChatTerminalOpen: ignoreSideWorkbenchChange,
+  executionRefresh: 0, setExecutionRefresh: ignoreSideWorkbenchChange,
+  executionCapabilities: undefined, setExecutionCapabilities: ignoreSideWorkbenchChange,
+  browserScope: undefined, setBrowserScope: ignoreSideWorkbenchChange,
+  browserScopeLoading: false, setBrowserScopeLoading: ignoreSideWorkbenchChange,
+  runCandidate: undefined, setRunCandidate: ignoreSideWorkbenchChange,
+  terminalCommandRequest: undefined, setTerminalCommandRequest: ignoreSideWorkbenchChange,
+  browserAssistantOpen: false, setBrowserAssistantOpen: ignoreSideWorkbenchChange,
+  browserControlsOpen: true, setBrowserControlsOpen: ignoreSideWorkbenchChange,
+  browserControlEnabled: false, setBrowserControlEnabled: ignoreSideWorkbenchChange,
+  terminalToolbarHost: null, setTerminalToolbarHost: ignoreSideWorkbenchChange,
+  browserActionContainer: null, setBrowserActionContainer: ignoreSideWorkbenchChange,
+  externalHarnessSessions: [], setExternalHarnessSessions: ignoreSideWorkbenchChange,
+  externalSessionQuery: "", setExternalSessionQuery: ignoreSideWorkbenchChange,
+  externalSessionsLoading: false, setExternalSessionsLoading: ignoreSideWorkbenchChange,
+  externalSessionsError: undefined, setExternalSessionsError: ignoreSideWorkbenchChange,
+  mcpServers: [], setMcpServers: ignoreSideWorkbenchChange,
+  selectedMcpIds: [], setSelectedMcpIds: ignoreSideWorkbenchChange,
+  environmentTarget: "auto", setEnvironmentTarget: ignoreSideWorkbenchChange,
+  nativeHooks: [], setNativeHooks: ignoreSideWorkbenchChange,
+  projectCatalogKey: 0, setProjectCatalogKey: ignoreSideWorkbenchChange,
+  selectedHookIds: [], setSelectedHookIds: ignoreSideWorkbenchChange,
+  nativeHookError: undefined, setNativeHookError: ignoreSideWorkbenchChange,
+  commandRuntimeReady: false, setCommandRuntimeReady: ignoreSideWorkbenchChange,
+  toolRuntimeReason: undefined, setToolRuntimeReason: ignoreSideWorkbenchChange,
+  sessionActivity: {}, setSessionActivity: ignoreSideWorkbenchChange,
+  sessionQuery: "", setSessionQuery: ignoreSideWorkbenchChange,
+  expandedSubagentParents: new Set(), setExpandedSubagentParents: ignoreSideWorkbenchChange,
+  exportingSessionId: undefined, setExportingSessionId: ignoreSideWorkbenchChange,
+  deletingSessionId: undefined, setDeletingSessionId: ignoreSideWorkbenchChange,
+  deletingAllSessions: false, setDeletingAllSessions: ignoreSideWorkbenchChange,
+  sessionActionsId: undefined, setSessionActionsId: ignoreSideWorkbenchChange,
+  sessionActionsPosition: undefined, setSessionActionsPosition: ignoreSideWorkbenchChange,
+  renamingSessionId: undefined, setRenamingSessionId: ignoreSideWorkbenchChange,
+  renameDraft: "", setRenameDraft: ignoreSideWorkbenchChange,
+  renameError: undefined, setRenameError: ignoreSideWorkbenchChange,
+  renamingBusy: false, setRenamingBusy: ignoreSideWorkbenchChange,
+  archivingSessionId: undefined, setArchivingSessionId: ignoreSideWorkbenchChange,
+  archivedGroupOpen: false, setArchivedGroupOpen: ignoreSideWorkbenchChange,
+  sideChatLookup: undefined, setSideChatLookup: ignoreSideWorkbenchChange,
+};
+
+interface WorkbenchLayoutParts {
+  chatTerminalVisible: boolean;
+  chatTerminalStacked: boolean;
+  sideChatSplit: ReturnType<typeof useResizableSplitPane>;
+  chatTerminalSize: ReturnType<typeof useResizableSidePanel>;
+  conversationPanelSize: ReturnType<typeof useResizableSidePanel>;
+  conversationPanelWidth: number | undefined;
+  setSessionInspectorWidth: (width: number | undefined) => void;
+  sessionLayoutStyle: CSSProperties;
+}
+
+/** Only the Workbench owns layout observers and persistent panel preferences. */
+function WorkbenchLayout({ view, chatTerminalOpen, sideChatId, compact, hasWorkspace, conversationPanelOpen, sessionInspectorOpen, children }: {
+  view: SessionView;
+  chatTerminalOpen: boolean;
+  sideChatId: string;
+  compact: boolean;
+  hasWorkspace: boolean;
+  conversationPanelOpen: boolean;
+  sessionInspectorOpen: boolean;
+  children: (layout: WorkbenchLayoutParts) => ReactNode;
+}) {
+  const [chatTerminalStacked, setChatTerminalStacked] = useState(() => window.matchMedia(BROWSER_ASSISTANT_SHEET_QUERY).matches);
+  useEffect(() => {
+    const query = window.matchMedia(BROWSER_ASSISTANT_SHEET_QUERY);
+    const update = () => setChatTerminalStacked(query.matches);
+    query.addEventListener?.("change", update);
+    return () => query.removeEventListener?.("change", update);
+  }, []);
+  useLayoutEffect(() => {
+    if (!window.matchMedia("(max-width: 760px)").matches) return;
+    document.querySelector<HTMLElement>(`.session-tabs button[aria-selected="true"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [view]);
+  const chatTerminalVisible = view === "chat" && chatTerminalOpen && !sideChatId && !compact && hasWorkspace;
+  const sideChatSplit = useResizableSplitPane("nebula.side-chat.ratio", Boolean(sideChatId) && view === "chat");
+  const chatTerminalSize = useResizableSidePanel({
+    defaultWidth: 520,
+    enabled: chatTerminalVisible && !chatTerminalStacked,
+    label: "Resize terminal",
+    maxWidth: 960,
+    minPrimaryWidth: 420,
+    minWidth: 360,
+    storageKey: "nebula.chat-side-terminal.width",
+  });
+  const [conversationPanelWidth, setConversationPanelWidth] = useState<number>();
+  const [sessionInspectorWidth, setSessionInspectorWidth] = useState<number>();
+  useEffect(() => {
+    if (!sessionInspectorOpen) setSessionInspectorWidth(undefined);
+  }, [sessionInspectorOpen]);
+  const conversationPanelSize = useResizableSidePanel({
+    defaultWidth: 280,
+    enabled: view === "chat" && conversationPanelOpen && !compact,
+    label: "Resize conversations",
+    maxWidth: 520,
+    minPrimaryWidth: 420 + (sessionInspectorWidth ?? 0),
+    minWidth: 240,
+    onWidthChange: setConversationPanelWidth,
+    side: "left",
+    storageKey: "nebula.conversations.width",
+  });
+  const sessionLayoutStyle = {
+    "--conversation-panel-width": `${conversationPanelWidth ?? 280}px`,
+    "--session-inspector-width": `${sessionInspectorWidth ?? 280}px`,
+  } as CSSProperties;
+  return children({chatTerminalVisible, chatTerminalStacked, sideChatSplit, chatTerminalSize, conversationPanelSize, conversationPanelWidth, setSessionInspectorWidth, sessionLayoutStyle});
+}
+
+function WorkbenchGuideAction({ onOpen, assistantSettingsOpen, view, refreshCatalog }: { onOpen: () => void; assistantSettingsOpen: boolean; view: SessionView; refreshCatalog: () => void }) {
+  useGuideAction("open-assistant-settings", onOpen);
+  useEffect(() => {
+    if (assistantSettingsOpen || view === "chat") refreshCatalog();
+  }, [assistantSettingsOpen, refreshCatalog, view]);
+  useEffect(() => {
+    window.addEventListener("focus", refreshCatalog);
+    return () => window.removeEventListener("focus", refreshCatalog);
+  }, [refreshCatalog]);
+  return null;
+}
+
+export function SessionsPage() {
+  const workbench = useWorkbenchState();
+  return <ConversationPane workbench={workbench} />;
+}
+
+function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat = false, sideChatParentTitle, onCloseSideChat, onShowConversations, sideChatConversationListOpen = false, onSideChatUnavailable, sideChatClosing = false, sideChatCloseError }: { workbench?: WorkbenchState; embeddedSideChat?: boolean; sideChatParentTitle?: string; onCloseSideChat?: () => void; onShowConversations?: () => void; sideChatConversationListOpen?: boolean; onSideChatUnavailable?: () => void; sideChatClosing?: boolean; sideChatCloseError?: string } = {}) {
+  const {mobileListOpen, setMobileListOpen, mobileMoreOpen, setMobileMoreOpen, mobileConversationMenuOpen, setMobileConversationMenuOpen,
+    fullScreen, setFullScreen, conversationPanelOpen, setConversationPanelOpen, terminalAssistantOpen, setTerminalAssistantOpen,
+    chatTerminalOpen, setChatTerminalOpen, executionRefresh, setExecutionRefresh, executionCapabilities, setExecutionCapabilities,
+    browserScope, setBrowserScope, browserScopeLoading, setBrowserScopeLoading, runCandidate, setRunCandidate,
+    terminalCommandRequest, setTerminalCommandRequest, browserAssistantOpen, setBrowserAssistantOpen,
+    browserControlsOpen, setBrowserControlsOpen, browserControlEnabled, setBrowserControlEnabled,
+    terminalToolbarHost, setTerminalToolbarHost, browserActionContainer, setBrowserActionContainer,
+    externalHarnessSessions, setExternalHarnessSessions, externalSessionQuery, setExternalSessionQuery,
+    externalSessionsLoading, setExternalSessionsLoading, externalSessionsError, setExternalSessionsError,
+    mcpServers, setMcpServers, selectedMcpIds, setSelectedMcpIds, environmentTarget, setEnvironmentTarget,
+    nativeHooks, setNativeHooks, projectCatalogKey, setProjectCatalogKey, selectedHookIds, setSelectedHookIds,
+    nativeHookError, setNativeHookError, commandRuntimeReady, setCommandRuntimeReady, toolRuntimeReason, setToolRuntimeReason,
+    sessionActivity, setSessionActivity,
+    sessionQuery, setSessionQuery, expandedSubagentParents, setExpandedSubagentParents, exportingSessionId, setExportingSessionId,
+    deletingSessionId, setDeletingSessionId, deletingAllSessions, setDeletingAllSessions, sessionActionsId, setSessionActionsId,
+    sessionActionsPosition, setSessionActionsPosition, renamingSessionId, setRenamingSessionId, renameDraft, setRenameDraft,
+    renameError, setRenameError, renamingBusy, setRenamingBusy, archivingSessionId, setArchivingSessionId,
+    archivedGroupOpen, setArchivedGroupOpen, sideChatLookup, setSideChatLookup} = workbench;
+  const refreshProjectCatalog = useCallback(() => setProjectCatalogKey(key => key + 1), [setProjectCatalogKey]);
   const confirm = useConfirmation();
   const { openSetting } = useChrome();
   const compact = useCompactLayout();
@@ -906,15 +1120,8 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       params.set(embeddedSideChat ? "sideChat" : "session", id);
     }, { replace: true });
   };
-  const [mobileListOpen, setMobileListOpen] = useState(false);
-  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
-  const [mobileConversationMenuOpen, setMobileConversationMenuOpen] = useState(false);
   const mobileConversationMenuRef = useRef<HTMLDivElement>(null);
   const mobileConversationActionsRef = useRef<HTMLButtonElement>(null);
-  const [fullScreen, setFullScreen] = useState(false);
-  const [conversationPanelOpen, setConversationPanelOpen] = useState(
-    () => readConversationPanelOpen(localStorage),
-  );
   const requestedDrawer = searchParams.get("drawer") ?? "";
   const drawerTab: "context" | "results" | "subagents" =
     requestedDrawer === "results" ? "results"
@@ -983,57 +1190,11 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       setAssistantSettingsError(`Could not remember this choice for new chats: ${error instanceof Error ? error.message : "try again."}`);
     });
   };
-  const [executionCapabilities, setExecutionCapabilities] = useState<ExecutionCapabilities>();
-  const [browserScope, setBrowserScope] = useState<EngagementScopePolicy>();
-  const [browserScopeLoading, setBrowserScopeLoading] = useState(false);
   const conversationMenuRef = useRef<HTMLDetailsElement>(null);
-  const [runCandidate, setRunCandidate] = useState<FencedRunCandidate>();
-  const [terminalCommandRequest, setTerminalCommandRequest] = useState<{ id: string; source: string }>();
-  const [terminalAssistantOpen, setTerminalAssistantOpen] = useState(false);
-  // The live shell can also sit beside the chat; the preference is per device.
-  const [chatTerminalOpen, setChatTerminalOpenState] = useState(() => {
-    try {
-      return localStorage.getItem(CHAT_TERMINAL_OPEN_KEY) === "true";
-    } catch {
-      // diagnostic-expected: storage can be unavailable; the side terminal then starts closed
-      return false;
-    }
-  });
-  const setChatTerminalOpen = useCallback((open: boolean) => {
-    setChatTerminalOpenState(open);
-    try {
-      localStorage.setItem(CHAT_TERMINAL_OPEN_KEY, String(open));
-    } catch {
-      // diagnostic-expected: storage can be unavailable; the choice then lasts for this page only
-    }
-  }, []);
-  const [chatTerminalStacked, setChatTerminalStacked] = useState(() => window.matchMedia(BROWSER_ASSISTANT_SHEET_QUERY).matches);
-  useEffect(() => {
-    const query = window.matchMedia(BROWSER_ASSISTANT_SHEET_QUERY);
-    const update = () => setChatTerminalStacked(query.matches);
-    query.addEventListener?.("change", update);
-    return () => query.removeEventListener?.("change", update);
-  }, []);
-  const [executionRefresh, setExecutionRefresh] = useState(0);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
-  const [sessionActivity, setSessionActivity] = useState<Record<string, ChatSessionActivity["state"]>>({});
   const activeEngagementIdRef = useRef(engagement?.id);
   activeEngagementIdRef.current = engagement?.id;
-  const [sessionQuery, setSessionQuery] = useState("");
-  const [expandedSubagentParents, setExpandedSubagentParents] = useState<ReadonlySet<string>>(() => new Set());
-  const [exportingSessionId, setExportingSessionId] = useState<string>();
-  const [deletingSessionId, setDeletingSessionId] = useState<string>();
-  const [deletingAllSessions, setDeletingAllSessions] = useState(false);
-  const [sessionActionsId, setSessionActionsId] = useState<string>();
-  const [sessionActionsPosition, setSessionActionsPosition] = useState<{ left: number; openAbove: boolean; top: number }>();
-  const [renamingSessionId, setRenamingSessionId] = useState<string>();
-  const [renameDraft, setRenameDraft] = useState("");
-  const [renameError, setRenameError] = useState<string>();
-  const [renamingBusy, setRenamingBusy] = useState(false);
-  const [archivingSessionId, setArchivingSessionId] = useState<string>();
-  const [archivedGroupOpen, setArchivedGroupOpen] = useState(false);
   const [sessionId, setSessionId] = useState("");
-  const [sideChatLookup, setSideChatLookup] = useState<{ engagementId: string; parentId: string; items: ChatSessionSummary[] }>();
   // A side chat may be rendered only beside the conversation that owns it.
   // Core is authoritative for that ownership; an unverified URL is never enough.
   const sideChatId = !embeddedSideChat && requestedSessionId === sessionId
@@ -1098,14 +1259,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     applyProviderToolSharing(saved.profile);
   }, [applyProviderToolSharing]);
   const [harnessSessions, setHarnessSessions] = useState<HarnessSessionSummary[]>([]);
-  const [externalHarnessSessions, setExternalHarnessSessions] = useState<ExternalHarnessSessionSummary[]>([]);
-  const [externalSessionQuery, setExternalSessionQuery] = useState("");
-  const [externalSessionsLoading, setExternalSessionsLoading] = useState(false);
-  const [externalSessionsError, setExternalSessionsError] = useState<string>();
   const [harnessActivity, setHarnessActivity] = useState<HarnessSessionActivity>();
   const [harnessActivityError, setHarnessActivityError] = useState<string>();
   const [harnessProgress, setHarnessProgress] = useState<HarnessProgress>();
-  const [mcpServers, setMcpServers] = useState<McpServerProfile[]>([]);
   const [harnessId, setHarnessId] = useState("");
   const [harnessSessionId, setHarnessSessionId] = useState("");
   const [harnessMode, setHarnessMode] = useState("");
@@ -1121,19 +1277,11 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   const [harnessSkillError, setHarnessSkillError] = useState<string>();
   const [skillToken, setSkillToken] = useState<HarnessSkillTokenRange>();
   const [skillMenuIndex, setSkillMenuIndex] = useState(0);
-  const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
-  const [environmentTarget, setEnvironmentTarget] = useState<EnvironmentTarget>("auto");
-  const [nativeHooks, setNativeHooks] = useState<NativeHookDescriptor[]>([]);
   // Hooks and skills are files the operator edits in Code or on the host; re-read them
   // when the chat or its settings come back into view instead of trusting the first load.
-  const [projectCatalogKey, setProjectCatalogKey] = useState(0);
-  const [selectedHookIds, setSelectedHookIds] = useState<string[]>([]);
-  const [nativeHookError, setNativeHookError] = useState<string>();
   const [hookExecutions, setHookExecutions] = useState<NativeHookExecution[]>([]);
   const [model, setModel] = useState("");
   const runtimeSwitchGenerationRef = useRef(0);
-  const [commandRuntimeReady, setCommandRuntimeReady] = useState(false);
-  const [toolRuntimeReason, setToolRuntimeReason] = useState<string>();
   const [toolCards, setToolCards] = useState<ToolLifecycleCard[]>([]);
   const [activityItems, setActivityItems] = useState<HarnessActivityItem[]>([]);
   const [harnessInteractions, setHarnessInteractions] = useState<HarnessInteraction[]>([]);
@@ -1296,6 +1444,12 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     [subagentState.subagents],
   );
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const sideChatMeasuredIdRef = useRef("");
+  const [historyBeforeId, setHistoryBeforeId] = useState<string>();
+  const [hasOlderHistory, setHasOlderHistory] = useState(false);
+  const [olderHistoryLoading, setOlderHistoryLoading] = useState(false);
+  const [olderHistoryError, setOlderHistoryError] = useState<string>();
+  const olderHistoryReadRef = useRef(false);
   const [sessionReadReady, setSessionReadReady] = useState(true);
   const chatPreviews = useMemo(() => new ChatPreviewCache<{
     messages: ConversationMessage[];
@@ -1309,7 +1463,6 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   const [chatError, setChatError] = useState<unknown>();
   const [chatReconnecting, setChatReconnecting] = useState(false);
   const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false);
-  useGuideAction("open-assistant-settings", () => setAssistantSettingsOpen(true));
   const [assistantSettingsStatus, setAssistantSettingsStatus] = useState("");
   const [assistantSettingsError, setAssistantSettingsError] = useState<string>();
   const [assistantSettingsBusy, setAssistantSettingsBusy] = useState(false);
@@ -1347,10 +1500,17 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   useEffect(() => {
     const messageId = searchParams.get("message");
     if (!messageId || loadingHistory) return;
-    const element = document.getElementById(`chat-message-${messageId}`);
-    if (element) { chatFollowBottomRef.current = false; element.scrollIntoView({block: "center"}); element.focus({preventScroll: true}); }
-  }, [searchParams, loadingHistory, messages.length]);
+    const index = visibleMessages.findIndex(message => message.id === messageId);
+    if (index >= 0) {
+      chatFollowBottomRef.current = false;
+      transcriptVirtualizer.scrollToIndex(index + virtualMessageOffset, {align: "center"});
+      const frame = requestAnimationFrame(() => document.getElementById(`chat-message-${messageId}`)?.focus({preventScroll: true}));
+      return () => cancelAnimationFrame(frame);
+    }
+    if (hasOlderHistory && !olderHistoryReadRef.current) void loadOlderHistory(messageId);
+  }, [searchParams, loadingHistory, messages.length, hasOlderHistory]);
   const chatFollowBottomRef = useRef(true);
+  const chatScrollJumpRef = useRef<"top" | "bottom" | null>(null);
   const chatScrollGeometryRef = useRef<ChatScrollGeometry | undefined>(undefined);
   const chatReadingPositionRef = useRef<{sessionId: string; scrollTop: number; followBottom: boolean}>({sessionId: "", scrollTop: 0, followBottom: true});
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
@@ -1447,20 +1607,16 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   const followUpStorageKeyRef = useRef("");
   const followUpAutoDrainRef = useRef(false);
   const followUpDrainIdRef = useRef<string | undefined>(undefined);
-  const inheritedMessageCount = embeddedSideChat ? messages.filter(message => message.sourceMessageId).length : 0;
+  const inheritedMessageCount = embeddedSideChat
+    ? sessions.find(item => item.id === sessionId)?.inheritedMessageCount
+      ?? (hasOlderHistory ? undefined : messages.filter(message => message.sourceMessageId).length)
+    : 0;
   const visibleMessages = useMemo(() => embeddedSideChat && !showInheritedHistory
     ? messages.filter(message => !message.sourceMessageId)
     : messages, [embeddedSideChat, messages, showInheritedHistory]);
-  const chatRuntimeStore = useMemo(() => ({
-    messages: visibleMessages,
-    convertMessage: convertConversationMessage,
-    isLoading: loadingHistory,
-    isRunning: sending,
-    onNew: async () => undefined,
-  }), [loadingHistory, sending, visibleMessages]);
-  const chatRuntime = useExternalStoreRuntime(chatRuntimeStore);
   useLayoutEffect(() => {
     chatScrollGeometryRef.current = undefined;
+    chatScrollJumpRef.current = null;
     const position = restoredScrollRef.current;
     chatFollowBottomRef.current = position?.followBottom ?? true;
     setHasNewerMessages(!chatFollowBottomRef.current);
@@ -1469,11 +1625,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     const restore = () => {
       chatFollowBottomRef.current = position.followBottom;
       setHasNewerMessages(!position.followBottom);
-      if (chatViewportRef.current && !position.followBottom) chatViewportRef.current.scrollTop = position.scrollTop;
+      if (chatViewportRef.current && !position.followBottom) {
+        chatViewportRef.current.scrollTop = position.scrollTop;
+        transcriptVirtualizer.scrollToOffset(position.scrollTop);
+      }
       setHasOlderMessages((chatViewportRef.current?.scrollTop ?? 0) > 24);
     };
     restore();
-    // The external thread store commits its message rows after the parent render.
     const frame = requestAnimationFrame(restore);
     return () => cancelAnimationFrame(frame);
   }, [conversationOpen, sessionId]);
@@ -1488,22 +1646,8 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       if (chatFollowBottomRef.current) viewport.scrollTop = viewport.scrollHeight;
     };
     scrollToLatest();
-    // Message rows and rich content can finish laying out after the parent frame.
-    const observer = new ResizeObserver(scrollToLatest);
-    observer.observe(viewport);
-    const observeRows = () => {
-      observer.disconnect();
-      observer.observe(viewport);
-      for (const child of viewport.children) observer.observe(child);
-      scrollToLatest();
-    };
-    const rowsObserver = new MutationObserver(observeRows);
-    rowsObserver.observe(viewport, {childList: true});
-    observeRows();
     const frame = globalThis.requestAnimationFrame?.(scrollToLatest);
     return () => {
-      rowsObserver.disconnect();
-      observer.disconnect();
       if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame);
     };
   }, [conversationOpen, loadingHistory, messages, sending, sessionId, view]);
@@ -1511,32 +1655,6 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     if (!import.meta.env.DEV || (view !== "chat" && view !== "browser") || !conversationOpen || !chatViewportRef.current) return;
     return attachChatScrollTrace(chatViewportRef.current);
   }, [conversationOpen, sessionId, view]);
-  const messagesById = useMemo(
-    () => new Map(messages.map((message) => [message.runtimeId ?? message.id, message])),
-    [messages],
-  );
-  // Rows measured at their current message version. The size is only the
-  // placeholder until a row first renders (``contain-intrinsic-size: auto``
-  // remembers real sizes after that), so a streaming frame measures just the
-  // row that changed rather than forcing layout on every message.
-  const measuredMessagesRef = useRef(new WeakSet<ConversationMessage>());
-  useLayoutEffect(() => {
-    if (loadingHistory) measuredMessagesRef.current = new WeakSet();
-    for (const message of messages) {
-      const element = document.getElementById(`chat-message-${message.id}`);
-      if (!element) continue;
-      if (loadingHistory) {
-        element.classList.remove("render-contained");
-        element.style.removeProperty("--chat-message-intrinsic-size");
-        continue;
-      }
-      if (measuredMessagesRef.current.has(message) && element.classList.contains("render-contained")) continue;
-      const height = Math.max(1, Math.ceil(element.getBoundingClientRect().height));
-      element.style.setProperty("--chat-message-intrinsic-size", `${height}px`);
-      element.classList.add("render-contained");
-      measuredMessagesRef.current.add(message);
-    }
-  }, [loadingHistory, messages, sessionId]);
   const activityItemsByAssistantId = useMemo(
     () => groupByAssistantId(activityItems.filter(shouldShowActivityItem)),
     [activityItems],
@@ -1554,6 +1672,14 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       return false;
     });
   }, [messages, sessionId]);
+  useLayoutEffect(() => {
+    if (!embeddedSideChat || !sessionId || sessionId !== requestedSessionId || loadingHistory || !sessionReadReady
+      || sideChatMeasuredIdRef.current === sessionId) return;
+    sideChatMeasuredIdRef.current = sessionId;
+    if (!performance.getEntriesByName("nebula.side_chat.open_start", "mark").length) return;
+    performance.mark("nebula.side_chat.ready");
+    performance.measure("nebula.side_chat.open", "nebula.side_chat.open_start", "nebula.side_chat.ready");
+  }, [embeddedSideChat, loadingHistory, requestedSessionId, sessionId, sessionReadReady]);
   const activeDraftStorageKey = engagement
     ? chatDraftStorageKey(engagement.id, sessionId || undefined)
     : "";
@@ -1643,14 +1769,14 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   const selectedHarness = harnesses.find((harness) => harness.id === harnessId);
   const runtimeReady = runtimeKind === "provider" ? Boolean(selectedProvider) : Boolean(selectedHarness);
   useEffect(() => {
-    if (!engagement || !runtimeReady) return;
+    if (embeddedSideChat || !engagement || !runtimeReady) return;
     registerAssistantSnapshot({
       engagementId: engagement.id, sessionId: sessionId || undefined,
       backend: runtimeKind, providerId: runtimeKind === "provider" ? providerId : undefined,
       harnessProfileId: runtimeKind === "harness" ? harnessId : undefined, model: model.trim(),
       includeKnowledge: false,
     });
-  }, [engagement?.id, sessionId, runtimeKind, providerId, harnessId, model, runtimeReady, registerAssistantSnapshot]);
+  }, [embeddedSideChat, engagement?.id, sessionId, runtimeKind, providerId, harnessId, model, runtimeReady, registerAssistantSnapshot]);
   const selectedHarnessSkill = harnessSkills.find((skill) => skill.path === harnessSkillPath);
   const matchingHarnessSkills = useMemo(() => {
     const query = skillToken?.query.toLocaleLowerCase() ?? "";
@@ -1774,19 +1900,14 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     };
   }, [compact, mobileConversationMenuOpen, mobileListOpen]);
 
-  useLayoutEffect(() => {
-    if (!window.matchMedia("(max-width: 760px)").matches) return;
-    document.querySelector<HTMLElement>(`.session-tabs button[aria-selected="true"]`)
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [view]);
 
   useEffect(() => {
-    if (runtimeKind !== "provider" || coreState !== "online" || (view !== "chat" && view !== "browser") || !selectedProvider || !model.trim() || modelVerification) return;
+    if (embeddedSideChat || runtimeKind !== "provider" || coreState !== "online" || (view !== "chat" && view !== "browser") || !selectedProvider || !model.trim() || modelVerification) return;
     const key = `${selectedProvider.id}:${model.trim()}`;
     if (attemptedToolVerificationRef.current.has(key)) return;
     attemptedToolVerificationRef.current.add(key);
     void reverifyProvider(selectedProvider.id, model).catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_01", "A handled interface operation failed.", caughtError, "sessions_page"); return undefined; });
-  }, [coreState, model, modelVerification, reverifyProvider, runtimeKind, selectedProvider, view]);
+  }, [coreState, embeddedSideChat, model, modelVerification, reverifyProvider, runtimeKind, selectedProvider, view]);
 
   useEffect(() => {
     if (runtimeKind !== "harness" || !allowSubagents || coreState !== "online" || !subagentProvider || !subagentModel.trim() || subagentModelVerification) return;
@@ -1797,12 +1918,12 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   }, [allowSubagents, coreState, reverifyProvider, runtimeKind, subagentModel, subagentModelVerification, subagentProvider]);
 
   useEffect(() => {
-    if (!assistantDrafts.length) return;
+    if (embeddedSideChat || !assistantDrafts.length) return;
     if (view === "terminal") setTerminalAssistantOpen(true);
     setExpandedContextIndex(undefined);
     setConversationOpen(true);
     globalThis.requestAnimationFrame?.(() => composerRef.current?.focus());
-  }, [assistantDrafts, view]);
+  }, [assistantDrafts, embeddedSideChat, view]);
 
   useComposerAutosize(composerRef, draft, CHAT_COMPOSER_MAX_HEIGHT, `${view}:${conversationOpen}:${sessionId ?? "new"}`);
 
@@ -1829,7 +1950,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   }, [clearExecutionDraft, executionDraft]);
 
   useEffect(() => {
-    if (!api || coreState !== "online" || !engagement) {
+    if (embeddedSideChat || !api || coreState !== "online" || !engagement) {
       setCommandRuntimeReady(false);
       setToolRuntimeReason("Command runtime configuration is unavailable.");
       return;
@@ -1846,7 +1967,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       setToolRuntimeReason("Command runtime configuration is unavailable.");
     });
     return () => { active = false; };
-  }, [api, coreState, engagement]);
+  }, [api, coreState, embeddedSideChat, engagement]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1970,13 +2091,17 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       || reconcilingTerminalHarnessTurnsRef.current.has(key)) return;
     const generation = sessionSelectionGenerationRef.current;
     reconcilingTerminalHarnessTurnsRef.current.add(key);
-    void api.listChatMessages(sessionId).then(async authoritative => {
+    void readRecentChatHistory(api, sessionId).then(async recent => {
+      const authoritative = recent.active;
       if (!authoritative.some(message => message.role === "assistant"
         && message.harnessTurnId === turnId)) return;
       const recovered = await recoverHarnessHistory(
         authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId),
       );
       if (sessionSelectionGenerationRef.current !== generation) return;
+      setHistoryBeforeId(recent.beforeId);
+      setHasOlderHistory(recent.hasOlder);
+      setReplacedMessages(recent.replaced);
       setMessages(recovered);
       if (harnessProgress?.turnId === turnId) {
         setSending(false);
@@ -2037,14 +2162,16 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       void logCaughtDiagnostic("interface.sessions_page.harness_sessions", "Harness sessions could not be loaded.", caughtError, "sessions_page");
       if (active) setHarnessSessions([]);
     });
-    void api.listMcpServers().then((nextServers) => {
-      if (active) setMcpServers(nextServers.filter((item) => item.enabled));
-    }).catch((caughtError) => {
-      void logCaughtDiagnostic("interface.sessions_page.mcp_servers", "MCP servers could not be loaded.", caughtError, "sessions_page");
-      if (active) setMcpServers([]);
-    });
+    if (!embeddedSideChat) {
+      void api.listMcpServers().then((nextServers) => {
+        if (active) setMcpServers(nextServers.filter((item) => item.enabled));
+      }).catch((caughtError) => {
+        void logCaughtDiagnostic("interface.sessions_page.mcp_servers", "MCP servers could not be loaded.", caughtError, "sessions_page");
+        if (active) setMcpServers([]);
+      });
+    }
     return () => { active = false; };
-  }, [api, coreState, engagement]);
+  }, [api, coreState, embeddedSideChat, engagement]);
 
   useEffect(() => {
     if (
@@ -2123,7 +2250,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     const harnessSkillsAvailable = runtimeKind === "harness"
       && Boolean(selectedHarness?.capabilities?.skillInvocation)
       && Boolean(selectedHarness?.nativeCapabilities.skills);
-    if (!api || !engagement || (runtimeKind === "harness" && !harnessSkillsAvailable)) {
+    if (embeddedSideChat || !api || !engagement || (runtimeKind === "harness" && !harnessSkillsAvailable)) {
       setHarnessSkills([]);
       setHarnessSkillsLoading(false);
       return;
@@ -2148,9 +2275,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
         if (!controller.signal.aborted) setHarnessSkillsLoading(false);
       });
     return () => controller.abort();
-  }, [api, engagement, runtimeKind, selectedHarness, projectCatalogKey]);
+  }, [api, embeddedSideChat, engagement, runtimeKind, selectedHarness, projectCatalogKey]);
   useEffect(() => {
-    if (!api || !engagement || runtimeKind !== "provider") {
+    if (embeddedSideChat || !api || !engagement || runtimeKind !== "provider") {
       setNativeHooks([]);
       setSelectedHookIds([]);
       setNativeHookError(undefined);
@@ -2168,15 +2295,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       setNativeHookError(error instanceof Error ? error.message : "Hooks could not be discovered.");
     });
     return () => controller.abort();
-  }, [api, engagement, runtimeKind, projectCatalogKey]);
-  useEffect(() => {
-    if (assistantSettingsOpen || view === "chat") setProjectCatalogKey(key => key + 1);
-  }, [assistantSettingsOpen, view]);
-  useEffect(() => {
-    const refresh = () => setProjectCatalogKey(key => key + 1);
-    window.addEventListener("focus", refresh);
-    return () => window.removeEventListener("focus", refresh);
-  }, []);
+  }, [api, embeddedSideChat, engagement, runtimeKind, projectCatalogKey]);
   useEffect(() => {
     if (runtimeKind !== "provider") return;
     if (!enabledProviders.length) {
@@ -2281,7 +2400,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   }, [api, contextRefreshKey, coreState, sending, sessionId]);
 
   useEffect(() => {
-    if (!api || coreState !== "online" || !engagement) {
+    if (embeddedSideChat || !api || coreState !== "online" || !engagement) {
       setExecutionCapabilities(undefined);
       return;
     }
@@ -2290,7 +2409,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       .then(setExecutionCapabilities)
       .catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_04", "A handled interface operation failed.", caughtError, "sessions_page"); return setExecutionCapabilities(undefined); });
     return () => controller.abort();
-  }, [api, coreState, engagement]);
+  }, [api, coreState, embeddedSideChat, engagement]);
 
   useEffect(() => {
     if (!api || coreState !== "online" || !engagement) {
@@ -2299,16 +2418,16 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     }
     const controller = new AbortController();
     void (async () => {
-      const page = await api.listChatSessions(engagement.id, controller.signal);
-      if (!embeddedSideChat || !requestedSessionId) return page.items;
-      // Temporary side chats are intentionally absent from the project list.
-      // Fetch the one named by the URL so the pane survives a refresh.
+      if (!embeddedSideChat) return (await api.listChatSessions(engagement.id, controller.signal)).items;
+      if (!requestedSessionId) return [];
+      // The focused pane needs its own durable session, not a second copy of
+      // the project's conversation catalog. This also survives a refresh.
       const side = await api.getChatSession(requestedSessionId, controller.signal);
       if (!side.isSideChat || side.engagementId !== engagement.id) {
         if (!controller.signal.aborted) onSideChatUnavailable?.();
         return [];
       }
-      return [side, ...page.items];
+      return [side];
     })()
       .then((items) => { if (!controller.signal.aborted) setSessions(items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))); })
       .catch((error) => {
@@ -2409,10 +2528,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     if (!api || !engagement) return;
     const requestedEngagementId = engagement.id;
     const selectionGeneration = sessionSelectionGenerationRef.current;
-    const page = await api.listChatSessions(requestedEngagementId);
-    const listed = embeddedSideChat && requestedSessionId
-      ? [await api.getChatSession(requestedSessionId), ...page.items]
-      : page.items;
+    const listed = embeddedSideChat
+      ? requestedSessionId ? [await api.getChatSession(requestedSessionId)] : []
+      : (await api.listChatSessions(requestedEngagementId)).items;
     if (activeEngagementIdRef.current !== requestedEngagementId) return;
     // A read that started before a save may answer after it; keep the newer copy.
     setSessions((current) => reconcileListedSessions(current, listed));
@@ -2482,7 +2600,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
 
   const sessionActivityPollRef = useRef<VisiblePoll | undefined>(undefined);
   useEffect(() => {
-    if ((!conversationPanelOpen && !mobileListOpen) || view !== "chat") return;
+    if (embeddedSideChat || (!conversationPanelOpen && !mobileListOpen) || view !== "chat") return;
     const controller = new AbortController();
     const poll = startVisiblePoll({
       intervalMs: SESSION_ACTIVITY_POLL_MS,
@@ -2493,13 +2611,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     sessionActivityPollRef.current = poll;
     window.addEventListener("focus", poll.poke);
     return () => { controller.abort(); sessionActivityPollRef.current = undefined; window.removeEventListener("focus", poll.poke); };
-  }, [conversationPanelOpen, mobileListOpen, refreshSessionActivity, view]);
+  }, [conversationPanelOpen, embeddedSideChat, mobileListOpen, refreshSessionActivity, view]);
 
   // Subagent conversations are saved while the parent turn is still running.
   // The inspector follows their runtime state; the visible sidebar must also
   // follow Core's durable conversation list, including background parents.
   useEffect(() => {
-    if (!api || !engagement || coreState !== "online" || view !== "chat" || (!conversationPanelOpen && !mobileListOpen)) return;
+    if (embeddedSideChat || !api || !engagement || coreState !== "online" || view !== "chat" || (!conversationPanelOpen && !mobileListOpen)) return;
     const controller = new AbortController();
     const requestedEngagementId = engagement.id;
     const poll = startVisiblePoll({
@@ -2525,7 +2643,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     });
     window.addEventListener("focus", poll.poke);
     return () => { controller.abort(); window.removeEventListener("focus", poll.poke); };
-  }, [api, engagement, coreState, view, conversationPanelOpen, mobileListOpen]);
+  }, [api, engagement, coreState, embeddedSideChat, view, conversationPanelOpen, mobileListOpen]);
 
   const resetConversation = (open: boolean, options: { discardDraft?: boolean } = {}) => {
     previewOwnerRef.current = "";
@@ -3312,6 +3430,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       openSessionChatView(id);
     }
     setLoadingHistory(true);
+    setHistoryBeforeId(undefined);
+    setHasOlderHistory(false);
+    setOlderHistoryError(undefined);
     setChatError(undefined);
     setFailedProviderRecovery(undefined);
     setHarnessProgress(undefined);
@@ -3347,10 +3468,12 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
         (turn) => ({turn} as const),
         (error: unknown) => ({error} as const),
       );
-      const history = await api.listChatMessages(id, loadController.signal, {includeReplaced: true});
+      const recent = await readRecentChatHistory(api, id, loadController.signal);
       if (!selectionIsCurrent()) return;
-      const replacedHistory = history.filter((message) => message.replacedAt);
-      const activeHistory = history.filter((message) => !message.replacedAt);
+      setHistoryBeforeId(recent.beforeId);
+      setHasOlderHistory(recent.hasOlder);
+      const replacedHistory = recent.replaced;
+      const activeHistory = recent.active;
       const recoveredHistory = await recoverHarnessHistory(activeHistory.map(persistedMessage), turnId => api.getHarnessTurn(turnId, loadController.signal));
       if (!selectionIsCurrent()) return;
       const restoredToolCards: ToolLifecycleCard[] = activeHistory.flatMap((message) => message.role === "assistant"
@@ -3583,9 +3706,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
             if (!selectionIsCurrent()) return;
             setResolvedApproval(undefined);
             harnessFollowDetachRef.current = undefined;
-            void api.listChatMessages(id).then(async (authoritative) => {
+            void readRecentChatHistory(api, id).then(async (recent) => {
+              const authoritative = recent.active;
               const recovered = await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId));
               if (!selectionIsCurrent()) return;
+              setHistoryBeforeId(recent.beforeId);
+              setHasOlderHistory(recent.hasOlder);
+              setReplacedMessages(recent.replaced);
               setMessages(recovered);
               const completedOwner = authoritative.find((message) => message.role === "assistant" && message.harnessTurnId === turnId);
               if (completedOwner) await loadHistoricalHarnessActivity(persistedMessage(completedOwner));
@@ -3653,6 +3780,55 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     }
   };
 
+  async function loadOlderHistory(targetMessageId?: string) {
+    if (!api || !sessionId || !hasOlderHistory || !historyBeforeId || olderHistoryReadRef.current) return;
+    olderHistoryReadRef.current = true;
+    setOlderHistoryLoading(true);
+    setOlderHistoryError(undefined);
+    const generation = sessionSelectionGenerationRef.current;
+    try {
+      let before = historyBeforeId;
+      let hasMore = true;
+      const older: PersistedChatMessage[] = [];
+      do {
+        const page = await api.listChatMessages(sessionId, undefined, {
+          includeReplaced: true,
+          limit: CHAT_HISTORY_PAGE_SIZE + 1,
+          beforeMessageId: before,
+        });
+        if (generation !== sessionSelectionGenerationRef.current) return;
+        hasMore = page.length > CHAT_HISTORY_PAGE_SIZE;
+        const batch = hasMore ? page.slice(1) : page;
+        if (!batch.length) break;
+        older.unshift(...batch);
+        before = batch[0].id;
+      } while (targetMessageId && !older.some(item => item.id === targetMessageId) && hasMore);
+      if (generation !== sessionSelectionGenerationRef.current) return;
+      setHistoryBeforeId(before);
+      setHasOlderHistory(hasMore);
+      const active = older.filter(item => !item.replacedAt);
+      const restored = await recoverHarnessHistory(active.map(persistedMessage), id => api.getHarnessTurn(id));
+      if (generation !== sessionSelectionGenerationRef.current) return;
+      setMessages(current => [...restored, ...current]);
+      setReplacedMessages(current => [...older.filter(item => item.replacedAt), ...current]);
+      setToolCards(current => [...active.flatMap(message => message.role === "assistant"
+        ? (message.toolResults ?? []).map(result => ({
+            assistantId: message.id, toolCallId: result.toolCallId,
+            capability: result.capability, displayName: result.displayName,
+            status: result.status, summary: result.summary,
+            evidenceIds: result.evidenceIds, resultArtifactId: result.resultArtifactId,
+            artifacts: [], receipt: result.receipt,
+          })) : []), ...current]);
+    } catch (error) {
+      if (generation !== sessionSelectionGenerationRef.current) return;
+      void logCaughtDiagnostic("interface.sessions_page.older_history", "Earlier messages could not be loaded.", error, "sessions_page");
+      setOlderHistoryError(error instanceof Error ? error.message : "Earlier messages could not be loaded.");
+    } finally {
+      olderHistoryReadRef.current = false;
+      if (generation === sessionSelectionGenerationRef.current) setOlderHistoryLoading(false);
+    }
+  }
+
   const observedQueueRef = useRef("");
   const queueTurnSignature = `${sessionId}:${coreQueue.queue?.items.filter(item => item.turn_id).map(item => `${item.turn_id}:${item.status}`).join("|") ?? ""}`;
   useEffect(() => {
@@ -3715,6 +3891,8 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     if (sideChatBusy) return;
     if (sideChatId) { await closeSideChat(); return; }
     if (!api || !sessionId) return;
+    performance.clearMarks("nebula.side_chat.open_start");
+    performance.mark("nebula.side_chat.open_start");
     const sourceSessionId = sessionId;
     setSideChatBusy(true);
     setSideChatError(undefined);
@@ -3731,13 +3909,10 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
         }
         return;
       }
-      // Core saves the operator's message before an active turn streams. The
-      // rendered transcript can still hold that message as an optimistic row.
-      const history = await api.listChatMessages(sourceSessionId);
-      const boundary = history[history.length - 1];
-      if (!boundary) throw new Error("No saved message is available yet. Retry once the turn starts.");
       const source = sessions.find(item => item.id === sourceSessionId);
-      const fork = await api.forkChatSession(sourceSessionId, boundary.id, `Side chat · ${source?.title ?? "Conversation"}`.slice(0, 300), undefined, true);
+      // Core chooses the latest saved message atomically with the fork read.
+      // Reading the full parent transcript here delayed opening large chats.
+      const fork = await api.forkChatSession(sourceSessionId, undefined, `Side chat · ${source?.title ?? "Conversation"}`.slice(0, 300), undefined, true, true);
       // A delayed fork belongs to its source conversation, even if the
       // operator selected another main conversation while Core was saving it.
       if (latestSearchParams().get("session") === sourceSessionId) {
@@ -3831,6 +4006,31 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     }
     return {anchoredReplacements: anchored, leadingReplacements: leading};
   }, [replacedGroups, messages]);
+  const showHistoryHeader = (hasOlderHistory && (!embeddedSideChat || showInheritedHistory)) || leadingReplacements.length > 0;
+  const virtualMessageOffset = showHistoryHeader ? 1 : 0;
+  const transcriptVirtualizer = useVirtualizer({
+    count: visibleMessages.length + virtualMessageOffset,
+    getScrollElement: () => chatViewportRef.current,
+    estimateSize: () => 240,
+    getItemKey: (index) => index === 0 && showHistoryHeader
+      ? "history-header"
+      : visibleMessages[index - virtualMessageOffset]?.runtimeId ?? visibleMessages[index - virtualMessageOffset]?.id ?? index,
+    overscan: 4,
+    anchorTo: (loadingHistory && restoredScrollRef.current?.followBottom === false) || !chatFollowBottomRef.current ? "start" : "end",
+    followOnAppend: !((loadingHistory && restoredScrollRef.current?.followBottom === false) || !chatFollowBottomRef.current),
+    scrollEndThreshold: 80,
+  });
+  // A newly measured long row may start above the viewport yet still span
+  // the reader's position. Correcting for its full size would undo an upward
+  // scroll, especially in WebKit. Only rows wholly above need compensation.
+  transcriptVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (item, _delta, instance) =>
+    item.end <= (instance.scrollOffset ?? 0) && instance.scrollDirection !== "backward";
+  const transcriptHeight = transcriptVirtualizer.getTotalSize();
+  useLayoutEffect(() => {
+    if (chatFollowBottomRef.current && chatViewportRef.current) {
+      chatViewportRef.current.scrollTop = chatViewportRef.current.scrollHeight;
+    }
+  }, [transcriptHeight]);
 
   const pendingApprovalToRestore = pendingApprovalId(authoritativeState, authoritativeState?.turn_id ?? undefined);
   useEffect(() => {
@@ -4728,10 +4928,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
           setLiveGoalTokenEstimate(0);
         }
         if (runtimeKind === "harness") {
-          const authoritative = await api.listChatMessages(returnedSessionId);
+          const recent = await readRecentChatHistory(api, returnedSessionId);
           const recovered = await recoverHarnessHistory(
-            authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId),
+            recent.active.map(persistedMessage), turnId => api.getHarnessTurn(turnId),
           );
+          setHistoryBeforeId(recent.beforeId);
+          setHasOlderHistory(recent.hasOlder);
+          setReplacedMessages(recent.replaced);
           setMessages(current => current.some(message => message.id === userId)
             ? recovered : current);
         }
@@ -4798,9 +5001,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       }
       if (returnedSessionId && !cancelled) {
         try {
-          const authoritative = await api.listChatMessages(returnedSessionId);
+          const recent = await readRecentChatHistory(api, returnedSessionId);
+          const authoritative = recent.active;
           if (authoritative.length) {
             const recovered = await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId));
+            setHistoryBeforeId(recent.beforeId);
+            setHasOlderHistory(recent.hasOlder);
+            setReplacedMessages(recent.replaced);
             setMessages((current) => {
               if (!finalAnswerRetryable || !failedTurnId) return recovered;
               const failedAssistant = current.find((message) => message.id === assistantId);
@@ -5470,12 +5677,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   const setBrowserEngine = (engine: "managed" | "native") => {
     updateSearchParams(params => params.set("browserEngine", engine), { replace: true });
   };
-  const [browserAssistantOpen, setBrowserAssistantOpen] = useState(false);
   const attachBrowserContext = useCallback((request: Parameters<typeof requestChatContext>[0]) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }, [requestChatContext]);
-  const [browserControlsOpen, setBrowserControlsOpen] = useState(true);
-  const [browserControlEnabled, setBrowserControlEnabled] = useState(false);
-  const [terminalToolbarHost, setTerminalToolbarHost] = useState<HTMLDivElement | null>(null);
-  const [browserActionContainer, setBrowserActionContainer] = useState<HTMLDivElement | null>(null);
   const runInTerminal = useCallback((candidate: FencedRunCandidate) => {
     setTerminalCommandRequest({ id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`, source: candidate.source });
     if (view === "chat" && !compact) {
@@ -5487,38 +5689,14 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     setTerminalAssistantOpen(!compact);
     setView("terminal");
   }, [compact, setChatTerminalOpen, setView, view]);
-  // A phone never splits the chat: the terminal is its own tab there.
-  const chatTerminalVisible = view === "chat" && chatTerminalOpen && !sideChatId && !compact && Boolean(api && engagement);
-  const sideChatSplit = useResizableSplitPane("nebula.side-chat.ratio", Boolean(sideChatId) && view === "chat" && !embeddedSideChat);
-  const chatTerminalSize = useResizableSidePanel({
-    defaultWidth: 520,
-    enabled: chatTerminalVisible && !chatTerminalStacked,
-    label: "Resize terminal",
-    maxWidth: 960,
-    minPrimaryWidth: 420,
-    minWidth: 360,
-    storageKey: "nebula.chat-side-terminal.width",
+  // Parent composer keystrokes and stream frames must not render the second
+  // transcript. These callbacks keep their identity while using the latest
+  // parent state when the operator actually closes or reveals the pane.
+  const sideChatActions = useStableActions({
+    close: () => { void closeSideChat(); },
+    showConversations: () => setMobileListOpen(true),
+    unavailable: unavailableSideChat,
   });
-  const [conversationPanelWidth, setConversationPanelWidth] = useState<number>();
-  const [sessionInspectorWidth, setSessionInspectorWidth] = useState<number>();
-  useEffect(() => {
-    if (!sessionInspectorOpen) setSessionInspectorWidth(undefined);
-  }, [sessionInspectorOpen]);
-  const conversationPanelSize = useResizableSidePanel({
-    defaultWidth: 280,
-    enabled: view === "chat" && conversationPanelOpen && !compact,
-    label: "Resize conversations",
-    maxWidth: 520,
-    minPrimaryWidth: 420 + (sessionInspectorWidth ?? 0),
-    minWidth: 240,
-    onWidthChange: setConversationPanelWidth,
-    side: "left",
-    storageKey: "nebula.conversations.width",
-  });
-  const sessionLayoutStyle = {
-    "--conversation-panel-width": `${conversationPanelWidth ?? 280}px`,
-    "--session-inspector-width": `${sessionInspectorWidth ?? 280}px`,
-  } as CSSProperties;
   const collapseBrowserAssistant = () => {
     setBrowserAssistantOpen(false);
     requestAnimationFrame(() => document.querySelector<HTMLButtonElement>('button[aria-controls="browser-assistant-panel"]')?.focus({ preventScroll: true }));
@@ -5692,10 +5870,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
                 }} />
                 </div>
               </section>, document.body)}
-              <AssistantRuntimeProvider runtime={chatRuntime} key={sessionId || "new-conversation"}>
-                <ThreadPrimitive.Root className="chat-thread">
+              <div className="chat-thread" key={sessionId || "new-conversation"}>
                   {loadingHistory && messages.length > 0 && <div className="chat-thinking chat-syncing" role="status"><LoaderCircle className="spin" size={14} /> Showing saved messages · syncing…</div>}
-                  <ThreadPrimitive.Viewport
+                  <div
                     ref={chatViewportRef}
                     className="chat-scroll"
                     aria-live="polite"
@@ -5703,7 +5880,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
                       const viewport = event.currentTarget;
                       if (!viewport.clientHeight) return;
                       const geometry = {scrollTop: viewport.scrollTop, scrollHeight: viewport.scrollHeight, clientHeight: viewport.clientHeight};
-                      const atBottom = followsChatBottom(chatScrollGeometryRef.current, geometry, chatFollowBottomRef.current);
+                      const jump = chatScrollJumpRef.current;
+                      const distanceFromBottom = geometry.scrollHeight - geometry.scrollTop - geometry.clientHeight;
+                      const atBottom = jump === "top" ? false : jump === "bottom" ? true
+                        : followsChatBottom(chatScrollGeometryRef.current, geometry, chatFollowBottomRef.current);
+                      if ((jump === "top" && geometry.scrollTop <= 2) || (jump === "bottom" && distanceFromBottom <= 2)) {
+                        chatScrollJumpRef.current = null;
+                      }
                       chatScrollGeometryRef.current = geometry;
                       chatReadingPositionRef.current = {sessionId, scrollTop: viewport.scrollTop, followBottom: atBottom};
                       chatFollowBottomRef.current = atBottom;
@@ -5715,27 +5898,35 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
                     onTouchMove={event => {const y = event.touches[0]?.clientY; if (y !== undefined && chatTouchYRef.current !== undefined && y > chatTouchYRef.current) chatFollowBottomRef.current = false; chatTouchYRef.current = y;}}
                     onKeyDown={event => {if (["ArrowUp", "PageUp", "Home"].includes(event.key)) chatFollowBottomRef.current = false;}}
                     onPointerDown={event => {if (event.target === event.currentTarget) chatFollowBottomRef.current = false;}}
-                    autoScroll={!restoredScrollRef.current || restoredScrollRef.current.followBottom}
-                    scrollToBottomOnInitialize={!restoredScrollRef.current}
-                    scrollToBottomOnRunStart
-                    scrollToBottomOnThreadSwitch={!restoredScrollRef.current}
-                    turnAnchor="bottom"
                   >
                 {messages.length > 0 && hasOlderMessages && <button className="chat-scroll-jump chat-scroll-to-top" type="button" aria-label="Scroll to earliest message" title="Scroll to earliest message" onClick={() => {
+                  chatScrollJumpRef.current = "top";
                   chatFollowBottomRef.current = false;
-                  if (chatViewportRef.current) chatViewportRef.current.scrollTop = 0;
+                  setHasNewerMessages(true);
                   setHasOlderMessages(false);
+                  requestAnimationFrame(() => {
+                    if (chatViewportRef.current) chatViewportRef.current.scrollTop = 0;
+                    transcriptVirtualizer.scrollToIndex(0, {align: "start"});
+                  });
                 }}><ChevronDown size={16} aria-hidden="true" /></button>}
-                {leadingReplacements.map((group) => <ReplacedMessages group={group} key={group.id} />)}
-                {loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <ThreadPrimitive.Messages>{({ message: threadMessage }) => {
-                  const message = messagesById.get(threadMessage.id);
+                {loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <div className="chat-virtual-list" style={{height: transcriptVirtualizer.getTotalSize(), position: "relative"}}>{transcriptVirtualizer.getVirtualItems().map((virtualItem) => {
+                  const itemStyle: CSSProperties = {position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualItem.start}px)`};
+                  if (showHistoryHeader && virtualItem.index === 0) return <div key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}>
+                    {hasOlderHistory && (!embeddedSideChat || showInheritedHistory) && <div className="chat-older-history">
+                      <button className="button quiet" type="button" disabled={olderHistoryLoading} onClick={() => void loadOlderHistory()}>
+                        {olderHistoryLoading ? "Loading earlier messages…" : "Load earlier messages"}
+                      </button>
+                      {olderHistoryError && <DiagnosticErrorNotice error={olderHistoryError} fallback="Earlier messages could not be loaded. Retry." compact />}
+                    </div>}
+                    {leadingReplacements.map((group) => <ReplacedMessages group={group} key={group.id} />)}
+                  </div>;
+                  const message = visibleMessages[virtualItem.index - virtualMessageOffset];
                   if (!message) return null;
                   const editing = messageEdit?.messageId === message.id ? messageEdit : undefined;
                   const historicalTurnId = historicalHarnessTurnId(message);
                   const interactions = pendingInteractionsByTurn.get(message.harnessTurnId) ?? NO_INTERACTIONS;
                   const approvalHere = pendingResponse?.assistantId === message.id && pendingResponseActive ? transcriptApproval : undefined;
-                  return <ChatTranscriptRow
-                    key={message.runtimeId ?? message.id}
+                  return <div key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}><ChatTranscriptRow
                     message={message}
                     shared={transcriptShared}
                     actions={transcriptActions}
@@ -5759,18 +5950,25 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
                     harnessProgressDetail={message.state === "streaming" && !message.content ? visibleHarnessProgress?.detail : undefined}
                     approval={approvalHere}
                     focusPendingAction={approvalHere || interactions.length ? focusPendingAction : undefined}
-                  />;
-                }}</ThreadPrimitive.Messages> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Ask a question or bring something you want to work on.</p><div className="assistant-starters">{["Ask about this project", "Review a document"].map((label) => <button className="button quiet" type="button" disabled={!runtimeReady} key={label} onClick={() => { updateComposerDraft(label === "Review a document" ? "Please review the document I attach. " : "Help me understand this project. "); composerRef.current?.focus(); }}>{label}</button>)}{imageInputEnabled && <button className="button quiet" type="button" onClick={() => imageInputRef.current?.click()}>Attach images</button>}</div></div>}
+                  /></div>;
+                })}</div> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Ask a question or bring something you want to work on.</p><div className="assistant-starters">{["Ask about this project", "Review a document"].map((label) => <button className="button quiet" type="button" disabled={!runtimeReady} key={label} onClick={() => { updateComposerDraft(label === "Review a document" ? "Please review the document I attach. " : "Help me understand this project. "); composerRef.current?.focus(); }}>{label}</button>)}{imageInputEnabled && <button className="button quiet" type="button" onClick={() => imageInputRef.current?.click()}>Attach images</button>}</div></div>}
                     {pendingSubagentApproval && <ChatSubagentAttention
                       subagents={subagentState.subagents}
                       onReview={() => updateSearchParams(next => next.set("drawer", "subagents"))}
                     />}
-                    {messages.length > 0 && hasNewerMessages && <ThreadPrimitive.ScrollToBottom className="chat-scroll-jump chat-scroll-to-bottom" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => { chatFollowBottomRef.current = true; }}>
+                    {messages.length > 0 && hasNewerMessages && <button className="chat-scroll-jump chat-scroll-to-bottom" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => {
+                      chatScrollJumpRef.current = "bottom";
+                      chatFollowBottomRef.current = true;
+                      setHasNewerMessages(false);
+                      requestAnimationFrame(() => {
+                        transcriptVirtualizer.scrollToEnd();
+                        if (chatViewportRef.current) chatViewportRef.current.scrollTop = chatViewportRef.current.scrollHeight;
+                      });
+                    }}>
                       <ChevronDown size={16} aria-hidden="true" />
-                    </ThreadPrimitive.ScrollToBottom>}
-                  </ThreadPrimitive.Viewport>
-                </ThreadPrimitive.Root>
-              </AssistantRuntimeProvider>
+                    </button>}
+                  </div>
+              </div>
               {decisionNotice && <ResolvedApprovalNotice status={decisionNotice.status}
                 busy={reloadingConversation || harnessControlBusy}
                 canStop={runtimeKind !== "harness" || selectedHarness?.capabilities?.interruption !== false}
@@ -5863,7 +6061,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   );
 
   if (embeddedSideChat) {
-    const parentTitle = sessions.find(item => item.id === activeChatSession?.parentSessionId)?.title ?? "Parent conversation";
+    const parentTitle = sideChatParentTitle ?? "Parent conversation";
     return <section className="side-chat-pane" id="workbench-side-chat" role="region" aria-label="Side chat">
       <header className="side-chat-header">
         <button className="icon-button subtle side-chat-back" type="button" aria-label="Close side chat" title="Close and discard this side chat" disabled={sideChatClosing} onClick={onCloseSideChat}><ChevronLeft size={18} aria-hidden="true" /></button>
@@ -5874,7 +6072,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       {sideChatCloseError && <DiagnosticErrorNotice error={sideChatCloseError} fallback="Could not close the side chat. Retry." compact />}
       <div className="side-chat-context">
         <span className="side-chat-parent-link">From {parentTitle}</span>
-        <button className="side-chat-history-toggle" type="button" aria-expanded={showInheritedHistory} onClick={() => setShowInheritedHistory(current => !current)}><History size={15} aria-hidden="true" /> Inherited history · {inheritedMessageCount} message{inheritedMessageCount === 1 ? "" : "s"} <ChevronDown size={14} aria-hidden="true" /></button>
+        <button className="side-chat-history-toggle" type="button" aria-expanded={showInheritedHistory} onClick={() => setShowInheritedHistory(current => !current)}><History size={15} aria-hidden="true" /> Inherited history{inheritedMessageCount === undefined ? "" : ` · ${inheritedMessageCount} message${inheritedMessageCount === 1 ? "" : "s"}`} <ChevronDown size={14} aria-hidden="true" /></button>
         {!showInheritedHistory && <small>Only saved messages from the parent are carried over.</small>}
       </div>
       {assistantPanel}
@@ -5882,7 +6080,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   }
 
   return (
-    <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}`}>
+    <WorkbenchLayout view={view} chatTerminalOpen={chatTerminalOpen} sideChatId={sideChatId} compact={compact} hasWorkspace={Boolean(api && engagement)} conversationPanelOpen={conversationPanelOpen} sessionInspectorOpen={sessionInspectorOpen}>
+      {({chatTerminalVisible, chatTerminalStacked, sideChatSplit, chatTerminalSize, conversationPanelSize, conversationPanelWidth, setSessionInspectorWidth, sessionLayoutStyle}) => <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}`}>
+      <WorkbenchGuideAction onOpen={() => setAssistantSettingsOpen(true)} assistantSettingsOpen={assistantSettingsOpen} view={view} refreshCatalog={refreshProjectCatalog} />
       <PageHeader
         title="Workbench"
         description="Start in Terminal, edit shared code, browse a target, ask the assistant, or open your project files."
@@ -6074,7 +6274,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
           ) : (
             assistantPanel
           )}
-          {view === "chat" && sideChatId && <>{sideChatSplit.resizeHandle}<SessionsPage key={`side-chat:${sideChatId}`} embeddedSideChat onCloseSideChat={() => void closeSideChat()} onShowConversations={() => setMobileListOpen(true)} sideChatConversationListOpen={mobileListOpen} onSideChatUnavailable={unavailableSideChat} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} /></>}
+          {view === "chat" && sideChatId && <>{sideChatSplit.resizeHandle}<MemoizedSideChat key={`side-chat:${sideChatId}`} embeddedSideChat sideChatParentTitle={sessions.find(item => item.id === sessionId)?.title} onCloseSideChat={sideChatActions.close} onShowConversations={sideChatActions.showConversations} sideChatConversationListOpen={mobileListOpen} onSideChatUnavailable={sideChatActions.unavailable} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} /></>}
         </section>
 
         {(view === "chat" || view === "browser") && agentView !== "closed" && api && engagement && sessionId && <AgentViewPanel
@@ -6121,6 +6321,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       {mobileMoreOpen && <MobileMorePanel view={view} onSelectView={setView} onFocusMode={() => setFullScreen(true)} onClose={() => setMobileMoreOpen(false)} />}
       {artifactInspector && <ModalSurface as="section" className="provider-dialog resource-dialog" labelledBy="artifact-inspector-title" onClose={() => setArtifactInspector(undefined)}><header><div><small>Untrusted tool data · bounded retrieval</small><h2 id="artifact-inspector-title">{artifactInspector.capability} artifacts</h2></div><button className="icon-button subtle" type="button" aria-label="Close artifact inspector" onClick={() => setArtifactInspector(undefined)}><X size={17} /></button></header>{artifactInspector.receipt && <div className="knowledge-status" role="status"><ShieldCheck size={15} /><span>Receipt {String(artifactInspector.receipt.status ?? artifactInspector.status)} · parser {String((artifactInspector.receipt.parser as Record<string, unknown> | undefined)?.state ?? "not configured")}{Array.isArray(artifactInspector.receipt.warnings) && artifactInspector.receipt.warnings.length ? ` · ${artifactInspector.receipt.warnings.join(" · ")}` : ""}</span></div>}<div className="runtime-resource-list">{artifactInspector.artifacts.length ? artifactInspector.artifacts.map((artifact) => <article className="runtime-resource-card" key={artifact.artifactId}><header><div><strong>{artifact.filename ?? artifact.kind}</strong><code title={artifact.sha256}>{artifact.sha256.slice(0, 16)}…</code></div><span>{artifact.truncated ? "truncated" : artifact.searchable ? "searchable" : "binary"}</span></header><small>{artifact.byteCount.toLocaleString()} retained byte{artifact.byteCount === 1 ? "" : "s"}{artifact.observedByteCount !== artifact.byteCount ? ` · ${artifact.observedByteCount.toLocaleString()} observed` : ""} · {artifact.mediaType}</small><footer>{artifact.searchable && <button className="button quiet" type="button" onClick={() => void readArtifact(artifact.artifactId)} disabled={artifactBusy}>Read excerpt</button>}<button className="button quiet" type="button" onClick={() => void saveRawArtifact(artifact)}>Save acknowledged raw</button></footer></article>) : <p>Artifact references are available through search for this historical or gateway result.</p>}</div><form className="chat-composer" onSubmit={(event) => void searchArtifacts(event)}><label>Search all searchable artifacts<input value={artifactQuery} maxLength={512} placeholder="open 443/tcp" onChange={(event) => setArtifactQuery(event.target.value)} /></label><button className="button primary" type="submit" disabled={artifactBusy || !artifactQuery.trim()}><Search size={14} /> {artifactBusy ? "Searching…" : "Search"}</button></form>{artifactError && <DiagnosticErrorNotice error={artifactError} fallback="Artifact retrieval failed." compact />}{artifactSearch && <section><h3>Search matches</h3>{artifactSearch.matches.length ? artifactSearch.matches.map((match, index) => <article className="panel" key={`${match.artifactId}-${match.line}-${index}`}><header><strong>{match.filename ?? match.artifactId}</strong><button className="button quiet" type="button" onClick={() => void readArtifact(match.artifactId, Math.max(1, match.line - 10))}>Read around line {match.line}</button></header><pre>{match.context.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre></article>) : <p>No matching lines.</p>}{artifactSearch.truncated && <small>More matches are available with the continuation cursor.</small>}</section>}{artifactRead && <section><h3>{artifactRead.filename ?? artifactRead.artifactId}</h3>{artifactRead.searchable ? <pre>{artifactRead.lines.map((line) => `${line.line}: ${line.text}${line.lineTruncated ? "…" : ""}`).join("\n")}</pre> : <p>This binary artifact is retained but not searchable.</p>}{artifactRead.continuationStartingLine && <button className="button quiet" type="button" onClick={() => void readArtifact(artifactRead.artifactId, artifactRead.continuationStartingLine)}>Read next lines</button>}</section>}<footer><span>Excerpts are redacted, line-numbered, and capped at 8 KiB.</span><button className="button secondary" type="button" onClick={() => setArtifactInspector(undefined)}>Close</button></footer></ModalSurface>}
       {runCandidate && api && engagement && <ExecutionReviewDialog api={api} engagementId={engagement.id} candidate={runCandidate} capabilities={executionCapabilities} onClose={() => setRunCandidate(undefined)} onStarted={() => { setExecutionRefresh((value) => value + 1); setView("activity"); }} />}
-    </div>
+    </div>}
+    </WorkbenchLayout>
   );
 }
+
+const MemoizedSideChat = memo(ConversationPane);
