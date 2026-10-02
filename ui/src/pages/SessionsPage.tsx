@@ -49,12 +49,7 @@ import { MobileApprovals } from "../components/MobileApprovals";
 import { lazy, memo, startTransition, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent as ReactClipboardEvent, type CSSProperties, type DragEvent as ReactDragEvent, type FormEvent, type KeyboardEvent } from "react";
 import {useComposerAutosize} from "./useComposerAutosize";
 import { createPortal } from "react-dom";
-import {
-  AssistantRuntimeProvider,
-  ThreadPrimitive,
-  useExternalStoreRuntime,
-  type ThreadMessageLike,
-} from "@assistant-ui/react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   Activity,
   Archive,
@@ -383,6 +378,21 @@ const PUBLISHED_RESULTS_IDLE_POLL_MS = 16_000;
 /** Conversation-list activity reads; an unchanged, idle list backs off to the second. */
 const SESSION_ACTIVITY_POLL_MS = 5_000;
 const SESSION_ACTIVITY_IDLE_POLL_MS = 20_000;
+const CHAT_HISTORY_PAGE_SIZE = 60;
+
+async function readRecentChatHistory(api: ApiClient, id: string, signal?: AbortSignal) {
+  const page = await api.listChatMessages(id, signal, {
+    includeReplaced: true, limit: CHAT_HISTORY_PAGE_SIZE + 1,
+  });
+  const hasOlder = page.length > CHAT_HISTORY_PAGE_SIZE;
+  const history = hasOlder ? page.slice(1) : page;
+  return {
+    active: history.filter(message => !message.replacedAt),
+    replaced: history.filter(message => message.replacedAt),
+    beforeId: history[0]?.id,
+    hasOlder,
+  };
+}
 
 interface ConversationMessage extends ReconciledConversationMessage {}
 
@@ -456,39 +466,6 @@ function AssistantLedgerEntryDetails({ entry }: { entry: ActivityLedgerEntry }) 
     {item.usage && item.usage.totalTokens > 0 && <small>{item.usage.totalTokens.toLocaleString()} tokens{item.usage.reasoningTokens ? ` · ${item.usage.reasoningTokens.toLocaleString()} reasoning` : ""}{harnessCostLabel(item) ? ` · ${harnessCostLabel(item)}` : ""}{item.usage.durationMs ? ` · ${(item.usage.durationMs / 1000).toFixed(1)}s` : ""}</small>}
     {item.artifactIds.length > 0 && <div className="scope-chip-list">{item.artifactIds.map((id) => <span title={id} key={id}>Artifact {id.slice(0, 8)}</span>)}</div>}
   </div>;
-}
-
-function assistantMessageStatus(message: ConversationMessage): ThreadMessageLike["status"] {
-  switch (message.state) {
-    case "streaming":
-      return { type: "running" };
-    case "waiting_approval":
-      return { type: "requires-action", reason: "interrupt" };
-    case "cancelled":
-      return { type: "incomplete", reason: "cancelled" };
-    case "error":
-      return { type: "incomplete", reason: "error", error: message.detail ?? "Chat response failed." };
-    default:
-      return { type: "complete", reason: "stop" };
-  }
-}
-
-function convertConversationMessage(message: ConversationMessage): ThreadMessageLike {
-  return {
-    id: message.runtimeId ?? message.id,
-    role: message.role === "system" ? "assistant" : message.role,
-    content: message.content,
-    createdAt: new Date(message.createdAt),
-    status: message.role === "assistant" ? assistantMessageStatus(message) : undefined,
-    metadata: {
-      custom: {
-        durable: message.durable,
-        sequence: message.sequence,
-        state: message.state,
-        role: message.role,
-      },
-    },
-  };
 }
 
 function makeId(prefix: string): string {
@@ -746,7 +723,13 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       <header>{message.role === "assistant" && <><strong>{shared.assistantSource}</strong>{shared.runtimeConfiguration && <span>{shared.runtimeConfiguration}</span>}</>}{agentMessage && <><strong>Message from {agentMessageSender}</strong><span>main agent</span></>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
       {message.role === "assistant" && message.toolSuggestions && <ToolSuggestionChip summary={message.toolSuggestions} />}
       {message.role === "assistant" && !progressContent && <HarnessThinking items={messageActivityItems} />}
-      {message.role === "assistant" && !progressContent && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming" && Boolean(message.reasoning)} />}
+      {message.role === "assistant" && !progressContent && <ThinkingDisclosure
+        text={message.reasoning}
+        streaming={message.state === "streaming" && Boolean(message.reasoning)}
+        load={!message.reasoning && message.metadata?.reasoning_available === true && shared.api && shared.sessionId
+          ? () => shared.api!.getChatMessageReasoning(shared.sessionId, message.id)
+          : undefined}
+      />}
       {displayContent && (editing
           ? <form className="chat-message-edit" onSubmit={event => {event.preventDefault(); void actions.resendEditedMessage();}}>
             <textarea
@@ -849,7 +832,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
   );
 });
 
-export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShowConversations, sideChatConversationListOpen = false, onSideChatUnavailable, sideChatClosing = false, sideChatCloseError }: { embeddedSideChat?: boolean; onCloseSideChat?: () => void; onShowConversations?: () => void; sideChatConversationListOpen?: boolean; onSideChatUnavailable?: () => void; sideChatClosing?: boolean; sideChatCloseError?: string } = {}) {
+export function SessionsPage({ embeddedSideChat = false, sideChatParentTitle, onCloseSideChat, onShowConversations, sideChatConversationListOpen = false, onSideChatUnavailable, sideChatClosing = false, sideChatCloseError }: { embeddedSideChat?: boolean; sideChatParentTitle?: string; onCloseSideChat?: () => void; onShowConversations?: () => void; sideChatConversationListOpen?: boolean; onSideChatUnavailable?: () => void; sideChatClosing?: boolean; sideChatCloseError?: string } = {}) {
   const confirm = useConfirmation();
   const { openSetting } = useChrome();
   const compact = useCompactLayout();
@@ -1296,6 +1279,11 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     [subagentState.subagents],
   );
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyBeforeId, setHistoryBeforeId] = useState<string>();
+  const [hasOlderHistory, setHasOlderHistory] = useState(false);
+  const [olderHistoryLoading, setOlderHistoryLoading] = useState(false);
+  const [olderHistoryError, setOlderHistoryError] = useState<string>();
+  const olderHistoryReadRef = useRef(false);
   const [sessionReadReady, setSessionReadReady] = useState(true);
   const chatPreviews = useMemo(() => new ChatPreviewCache<{
     messages: ConversationMessage[];
@@ -1347,9 +1335,15 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   useEffect(() => {
     const messageId = searchParams.get("message");
     if (!messageId || loadingHistory) return;
-    const element = document.getElementById(`chat-message-${messageId}`);
-    if (element) { chatFollowBottomRef.current = false; element.scrollIntoView({block: "center"}); element.focus({preventScroll: true}); }
-  }, [searchParams, loadingHistory, messages.length]);
+    const index = visibleMessages.findIndex(message => message.id === messageId);
+    if (index >= 0) {
+      chatFollowBottomRef.current = false;
+      transcriptVirtualizer.scrollToIndex(index + virtualMessageOffset, {align: "center"});
+      const frame = requestAnimationFrame(() => document.getElementById(`chat-message-${messageId}`)?.focus({preventScroll: true}));
+      return () => cancelAnimationFrame(frame);
+    }
+    if (hasOlderHistory && !olderHistoryReadRef.current) void loadOlderHistory(messageId);
+  }, [searchParams, loadingHistory, messages.length, hasOlderHistory]);
   const chatFollowBottomRef = useRef(true);
   const chatScrollGeometryRef = useRef<ChatScrollGeometry | undefined>(undefined);
   const chatReadingPositionRef = useRef<{sessionId: string; scrollTop: number; followBottom: boolean}>({sessionId: "", scrollTop: 0, followBottom: true});
@@ -1447,18 +1441,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   const followUpStorageKeyRef = useRef("");
   const followUpAutoDrainRef = useRef(false);
   const followUpDrainIdRef = useRef<string | undefined>(undefined);
-  const inheritedMessageCount = embeddedSideChat ? messages.filter(message => message.sourceMessageId).length : 0;
+  const inheritedMessageCount = embeddedSideChat
+    ? sessions.find(item => item.id === sessionId)?.inheritedMessageCount
+      ?? (hasOlderHistory ? undefined : messages.filter(message => message.sourceMessageId).length)
+    : 0;
   const visibleMessages = useMemo(() => embeddedSideChat && !showInheritedHistory
     ? messages.filter(message => !message.sourceMessageId)
     : messages, [embeddedSideChat, messages, showInheritedHistory]);
-  const chatRuntimeStore = useMemo(() => ({
-    messages: visibleMessages,
-    convertMessage: convertConversationMessage,
-    isLoading: loadingHistory,
-    isRunning: sending,
-    onNew: async () => undefined,
-  }), [loadingHistory, sending, visibleMessages]);
-  const chatRuntime = useExternalStoreRuntime(chatRuntimeStore);
   useLayoutEffect(() => {
     chatScrollGeometryRef.current = undefined;
     const position = restoredScrollRef.current;
@@ -1469,11 +1458,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     const restore = () => {
       chatFollowBottomRef.current = position.followBottom;
       setHasNewerMessages(!position.followBottom);
-      if (chatViewportRef.current && !position.followBottom) chatViewportRef.current.scrollTop = position.scrollTop;
+      if (chatViewportRef.current && !position.followBottom) {
+        chatViewportRef.current.scrollTop = position.scrollTop;
+        transcriptVirtualizer.scrollToOffset(position.scrollTop);
+      }
       setHasOlderMessages((chatViewportRef.current?.scrollTop ?? 0) > 24);
     };
     restore();
-    // The external thread store commits its message rows after the parent render.
     const frame = requestAnimationFrame(restore);
     return () => cancelAnimationFrame(frame);
   }, [conversationOpen, sessionId]);
@@ -1488,22 +1479,8 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       if (chatFollowBottomRef.current) viewport.scrollTop = viewport.scrollHeight;
     };
     scrollToLatest();
-    // Message rows and rich content can finish laying out after the parent frame.
-    const observer = new ResizeObserver(scrollToLatest);
-    observer.observe(viewport);
-    const observeRows = () => {
-      observer.disconnect();
-      observer.observe(viewport);
-      for (const child of viewport.children) observer.observe(child);
-      scrollToLatest();
-    };
-    const rowsObserver = new MutationObserver(observeRows);
-    rowsObserver.observe(viewport, {childList: true});
-    observeRows();
     const frame = globalThis.requestAnimationFrame?.(scrollToLatest);
     return () => {
-      rowsObserver.disconnect();
-      observer.disconnect();
       if (frame !== undefined) globalThis.cancelAnimationFrame?.(frame);
     };
   }, [conversationOpen, loadingHistory, messages, sending, sessionId, view]);
@@ -1511,32 +1488,6 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     if (!import.meta.env.DEV || (view !== "chat" && view !== "browser") || !conversationOpen || !chatViewportRef.current) return;
     return attachChatScrollTrace(chatViewportRef.current);
   }, [conversationOpen, sessionId, view]);
-  const messagesById = useMemo(
-    () => new Map(messages.map((message) => [message.runtimeId ?? message.id, message])),
-    [messages],
-  );
-  // Rows measured at their current message version. The size is only the
-  // placeholder until a row first renders (``contain-intrinsic-size: auto``
-  // remembers real sizes after that), so a streaming frame measures just the
-  // row that changed rather than forcing layout on every message.
-  const measuredMessagesRef = useRef(new WeakSet<ConversationMessage>());
-  useLayoutEffect(() => {
-    if (loadingHistory) measuredMessagesRef.current = new WeakSet();
-    for (const message of messages) {
-      const element = document.getElementById(`chat-message-${message.id}`);
-      if (!element) continue;
-      if (loadingHistory) {
-        element.classList.remove("render-contained");
-        element.style.removeProperty("--chat-message-intrinsic-size");
-        continue;
-      }
-      if (measuredMessagesRef.current.has(message) && element.classList.contains("render-contained")) continue;
-      const height = Math.max(1, Math.ceil(element.getBoundingClientRect().height));
-      element.style.setProperty("--chat-message-intrinsic-size", `${height}px`);
-      element.classList.add("render-contained");
-      measuredMessagesRef.current.add(message);
-    }
-  }, [loadingHistory, messages, sessionId]);
   const activityItemsByAssistantId = useMemo(
     () => groupByAssistantId(activityItems.filter(shouldShowActivityItem)),
     [activityItems],
@@ -1829,7 +1780,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   }, [clearExecutionDraft, executionDraft]);
 
   useEffect(() => {
-    if (!api || coreState !== "online" || !engagement) {
+    if (embeddedSideChat || !api || coreState !== "online" || !engagement) {
       setCommandRuntimeReady(false);
       setToolRuntimeReason("Command runtime configuration is unavailable.");
       return;
@@ -1846,7 +1797,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       setToolRuntimeReason("Command runtime configuration is unavailable.");
     });
     return () => { active = false; };
-  }, [api, coreState, engagement]);
+  }, [api, coreState, embeddedSideChat, engagement]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1970,13 +1921,17 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       || reconcilingTerminalHarnessTurnsRef.current.has(key)) return;
     const generation = sessionSelectionGenerationRef.current;
     reconcilingTerminalHarnessTurnsRef.current.add(key);
-    void api.listChatMessages(sessionId).then(async authoritative => {
+    void readRecentChatHistory(api, sessionId).then(async recent => {
+      const authoritative = recent.active;
       if (!authoritative.some(message => message.role === "assistant"
         && message.harnessTurnId === turnId)) return;
       const recovered = await recoverHarnessHistory(
         authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId),
       );
       if (sessionSelectionGenerationRef.current !== generation) return;
+      setHistoryBeforeId(recent.beforeId);
+      setHasOlderHistory(recent.hasOlder);
+      setReplacedMessages(recent.replaced);
       setMessages(recovered);
       if (harnessProgress?.turnId === turnId) {
         setSending(false);
@@ -2281,7 +2236,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   }, [api, contextRefreshKey, coreState, sending, sessionId]);
 
   useEffect(() => {
-    if (!api || coreState !== "online" || !engagement) {
+    if (embeddedSideChat || !api || coreState !== "online" || !engagement) {
       setExecutionCapabilities(undefined);
       return;
     }
@@ -2290,7 +2245,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       .then(setExecutionCapabilities)
       .catch((caughtError) => { void logCaughtDiagnostic("interface.sessions_page.caught_failure_04", "A handled interface operation failed.", caughtError, "sessions_page"); return setExecutionCapabilities(undefined); });
     return () => controller.abort();
-  }, [api, coreState, engagement]);
+  }, [api, coreState, embeddedSideChat, engagement]);
 
   useEffect(() => {
     if (!api || coreState !== "online" || !engagement) {
@@ -2299,16 +2254,16 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     }
     const controller = new AbortController();
     void (async () => {
-      const page = await api.listChatSessions(engagement.id, controller.signal);
-      if (!embeddedSideChat || !requestedSessionId) return page.items;
-      // Temporary side chats are intentionally absent from the project list.
-      // Fetch the one named by the URL so the pane survives a refresh.
+      if (!embeddedSideChat) return (await api.listChatSessions(engagement.id, controller.signal)).items;
+      if (!requestedSessionId) return [];
+      // The focused pane needs its own durable session, not a second copy of
+      // the project's conversation catalog. This also survives a refresh.
       const side = await api.getChatSession(requestedSessionId, controller.signal);
       if (!side.isSideChat || side.engagementId !== engagement.id) {
         if (!controller.signal.aborted) onSideChatUnavailable?.();
         return [];
       }
-      return [side, ...page.items];
+      return [side];
     })()
       .then((items) => { if (!controller.signal.aborted) setSessions(items.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))); })
       .catch((error) => {
@@ -2409,10 +2364,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     if (!api || !engagement) return;
     const requestedEngagementId = engagement.id;
     const selectionGeneration = sessionSelectionGenerationRef.current;
-    const page = await api.listChatSessions(requestedEngagementId);
-    const listed = embeddedSideChat && requestedSessionId
-      ? [await api.getChatSession(requestedSessionId), ...page.items]
-      : page.items;
+    const listed = embeddedSideChat
+      ? requestedSessionId ? [await api.getChatSession(requestedSessionId)] : []
+      : (await api.listChatSessions(requestedEngagementId)).items;
     if (activeEngagementIdRef.current !== requestedEngagementId) return;
     // A read that started before a save may answer after it; keep the newer copy.
     setSessions((current) => reconcileListedSessions(current, listed));
@@ -2482,7 +2436,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
 
   const sessionActivityPollRef = useRef<VisiblePoll | undefined>(undefined);
   useEffect(() => {
-    if ((!conversationPanelOpen && !mobileListOpen) || view !== "chat") return;
+    if (embeddedSideChat || (!conversationPanelOpen && !mobileListOpen) || view !== "chat") return;
     const controller = new AbortController();
     const poll = startVisiblePoll({
       intervalMs: SESSION_ACTIVITY_POLL_MS,
@@ -2493,13 +2447,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     sessionActivityPollRef.current = poll;
     window.addEventListener("focus", poll.poke);
     return () => { controller.abort(); sessionActivityPollRef.current = undefined; window.removeEventListener("focus", poll.poke); };
-  }, [conversationPanelOpen, mobileListOpen, refreshSessionActivity, view]);
+  }, [conversationPanelOpen, embeddedSideChat, mobileListOpen, refreshSessionActivity, view]);
 
   // Subagent conversations are saved while the parent turn is still running.
   // The inspector follows their runtime state; the visible sidebar must also
   // follow Core's durable conversation list, including background parents.
   useEffect(() => {
-    if (!api || !engagement || coreState !== "online" || view !== "chat" || (!conversationPanelOpen && !mobileListOpen)) return;
+    if (embeddedSideChat || !api || !engagement || coreState !== "online" || view !== "chat" || (!conversationPanelOpen && !mobileListOpen)) return;
     const controller = new AbortController();
     const requestedEngagementId = engagement.id;
     const poll = startVisiblePoll({
@@ -2525,7 +2479,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     });
     window.addEventListener("focus", poll.poke);
     return () => { controller.abort(); window.removeEventListener("focus", poll.poke); };
-  }, [api, engagement, coreState, view, conversationPanelOpen, mobileListOpen]);
+  }, [api, engagement, coreState, embeddedSideChat, view, conversationPanelOpen, mobileListOpen]);
 
   const resetConversation = (open: boolean, options: { discardDraft?: boolean } = {}) => {
     previewOwnerRef.current = "";
@@ -3312,6 +3266,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       openSessionChatView(id);
     }
     setLoadingHistory(true);
+    setHistoryBeforeId(undefined);
+    setHasOlderHistory(false);
+    setOlderHistoryError(undefined);
     setChatError(undefined);
     setFailedProviderRecovery(undefined);
     setHarnessProgress(undefined);
@@ -3347,10 +3304,12 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
         (turn) => ({turn} as const),
         (error: unknown) => ({error} as const),
       );
-      const history = await api.listChatMessages(id, loadController.signal, {includeReplaced: true});
+      const recent = await readRecentChatHistory(api, id, loadController.signal);
       if (!selectionIsCurrent()) return;
-      const replacedHistory = history.filter((message) => message.replacedAt);
-      const activeHistory = history.filter((message) => !message.replacedAt);
+      setHistoryBeforeId(recent.beforeId);
+      setHasOlderHistory(recent.hasOlder);
+      const replacedHistory = recent.replaced;
+      const activeHistory = recent.active;
       const recoveredHistory = await recoverHarnessHistory(activeHistory.map(persistedMessage), turnId => api.getHarnessTurn(turnId, loadController.signal));
       if (!selectionIsCurrent()) return;
       const restoredToolCards: ToolLifecycleCard[] = activeHistory.flatMap((message) => message.role === "assistant"
@@ -3583,9 +3542,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
             if (!selectionIsCurrent()) return;
             setResolvedApproval(undefined);
             harnessFollowDetachRef.current = undefined;
-            void api.listChatMessages(id).then(async (authoritative) => {
+            void readRecentChatHistory(api, id).then(async (recent) => {
+              const authoritative = recent.active;
               const recovered = await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId));
               if (!selectionIsCurrent()) return;
+              setHistoryBeforeId(recent.beforeId);
+              setHasOlderHistory(recent.hasOlder);
+              setReplacedMessages(recent.replaced);
               setMessages(recovered);
               const completedOwner = authoritative.find((message) => message.role === "assistant" && message.harnessTurnId === turnId);
               if (completedOwner) await loadHistoricalHarnessActivity(persistedMessage(completedOwner));
@@ -3652,6 +3615,55 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       }
     }
   };
+
+  async function loadOlderHistory(targetMessageId?: string) {
+    if (!api || !sessionId || !hasOlderHistory || !historyBeforeId || olderHistoryReadRef.current) return;
+    olderHistoryReadRef.current = true;
+    setOlderHistoryLoading(true);
+    setOlderHistoryError(undefined);
+    const generation = sessionSelectionGenerationRef.current;
+    try {
+      let before = historyBeforeId;
+      let hasMore = true;
+      const older: PersistedChatMessage[] = [];
+      do {
+        const page = await api.listChatMessages(sessionId, undefined, {
+          includeReplaced: true,
+          limit: CHAT_HISTORY_PAGE_SIZE + 1,
+          beforeMessageId: before,
+        });
+        if (generation !== sessionSelectionGenerationRef.current) return;
+        hasMore = page.length > CHAT_HISTORY_PAGE_SIZE;
+        const batch = hasMore ? page.slice(1) : page;
+        if (!batch.length) break;
+        older.unshift(...batch);
+        before = batch[0].id;
+      } while (targetMessageId && !older.some(item => item.id === targetMessageId) && hasMore);
+      if (generation !== sessionSelectionGenerationRef.current) return;
+      setHistoryBeforeId(before);
+      setHasOlderHistory(hasMore);
+      const active = older.filter(item => !item.replacedAt);
+      const restored = await recoverHarnessHistory(active.map(persistedMessage), id => api.getHarnessTurn(id));
+      if (generation !== sessionSelectionGenerationRef.current) return;
+      setMessages(current => [...restored, ...current]);
+      setReplacedMessages(current => [...older.filter(item => item.replacedAt), ...current]);
+      setToolCards(current => [...active.flatMap(message => message.role === "assistant"
+        ? (message.toolResults ?? []).map(result => ({
+            assistantId: message.id, toolCallId: result.toolCallId,
+            capability: result.capability, displayName: result.displayName,
+            status: result.status, summary: result.summary,
+            evidenceIds: result.evidenceIds, resultArtifactId: result.resultArtifactId,
+            artifacts: [], receipt: result.receipt,
+          })) : []), ...current]);
+    } catch (error) {
+      if (generation !== sessionSelectionGenerationRef.current) return;
+      void logCaughtDiagnostic("interface.sessions_page.older_history", "Earlier messages could not be loaded.", error, "sessions_page");
+      setOlderHistoryError(error instanceof Error ? error.message : "Earlier messages could not be loaded.");
+    } finally {
+      olderHistoryReadRef.current = false;
+      if (generation === sessionSelectionGenerationRef.current) setOlderHistoryLoading(false);
+    }
+  }
 
   const observedQueueRef = useRef("");
   const queueTurnSignature = `${sessionId}:${coreQueue.queue?.items.filter(item => item.turn_id).map(item => `${item.turn_id}:${item.status}`).join("|") ?? ""}`;
@@ -3731,13 +3743,10 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
         }
         return;
       }
-      // Core saves the operator's message before an active turn streams. The
-      // rendered transcript can still hold that message as an optimistic row.
-      const history = await api.listChatMessages(sourceSessionId);
-      const boundary = history[history.length - 1];
-      if (!boundary) throw new Error("No saved message is available yet. Retry once the turn starts.");
       const source = sessions.find(item => item.id === sourceSessionId);
-      const fork = await api.forkChatSession(sourceSessionId, boundary.id, `Side chat · ${source?.title ?? "Conversation"}`.slice(0, 300), undefined, true);
+      // Core chooses the latest saved message atomically with the fork read.
+      // Reading the full parent transcript here delayed opening large chats.
+      const fork = await api.forkChatSession(sourceSessionId, undefined, `Side chat · ${source?.title ?? "Conversation"}`.slice(0, 300), undefined, true, true);
       // A delayed fork belongs to its source conversation, even if the
       // operator selected another main conversation while Core was saving it.
       if (latestSearchParams().get("session") === sourceSessionId) {
@@ -3831,6 +3840,20 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
     }
     return {anchoredReplacements: anchored, leadingReplacements: leading};
   }, [replacedGroups, messages]);
+  const showHistoryHeader = (hasOlderHistory && (!embeddedSideChat || showInheritedHistory)) || leadingReplacements.length > 0;
+  const virtualMessageOffset = showHistoryHeader ? 1 : 0;
+  const transcriptVirtualizer = useVirtualizer({
+    count: visibleMessages.length + virtualMessageOffset,
+    getScrollElement: () => chatViewportRef.current,
+    estimateSize: () => 240,
+    getItemKey: (index) => index === 0 && showHistoryHeader
+      ? "history-header"
+      : visibleMessages[index - virtualMessageOffset]?.runtimeId ?? visibleMessages[index - virtualMessageOffset]?.id ?? index,
+    overscan: 4,
+    anchorTo: (loadingHistory && restoredScrollRef.current?.followBottom === false) || !chatFollowBottomRef.current ? "start" : "end",
+    followOnAppend: !((loadingHistory && restoredScrollRef.current?.followBottom === false) || !chatFollowBottomRef.current),
+    scrollEndThreshold: 80,
+  });
 
   const pendingApprovalToRestore = pendingApprovalId(authoritativeState, authoritativeState?.turn_id ?? undefined);
   useEffect(() => {
@@ -4728,10 +4751,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
           setLiveGoalTokenEstimate(0);
         }
         if (runtimeKind === "harness") {
-          const authoritative = await api.listChatMessages(returnedSessionId);
+          const recent = await readRecentChatHistory(api, returnedSessionId);
           const recovered = await recoverHarnessHistory(
-            authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId),
+            recent.active.map(persistedMessage), turnId => api.getHarnessTurn(turnId),
           );
+          setHistoryBeforeId(recent.beforeId);
+          setHasOlderHistory(recent.hasOlder);
+          setReplacedMessages(recent.replaced);
           setMessages(current => current.some(message => message.id === userId)
             ? recovered : current);
         }
@@ -4798,9 +4824,13 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       }
       if (returnedSessionId && !cancelled) {
         try {
-          const authoritative = await api.listChatMessages(returnedSessionId);
+          const recent = await readRecentChatHistory(api, returnedSessionId);
+          const authoritative = recent.active;
           if (authoritative.length) {
             const recovered = await recoverHarnessHistory(authoritative.map(persistedMessage), turnId => api.getHarnessTurn(turnId));
+            setHistoryBeforeId(recent.beforeId);
+            setHasOlderHistory(recent.hasOlder);
+            setReplacedMessages(recent.replaced);
             setMessages((current) => {
               if (!finalAnswerRetryable || !failedTurnId) return recovered;
               const failedAssistant = current.find((message) => message.id === assistantId);
@@ -5692,10 +5722,9 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
                 }} />
                 </div>
               </section>, document.body)}
-              <AssistantRuntimeProvider runtime={chatRuntime} key={sessionId || "new-conversation"}>
-                <ThreadPrimitive.Root className="chat-thread">
+              <div className="chat-thread" key={sessionId || "new-conversation"}>
                   {loadingHistory && messages.length > 0 && <div className="chat-thinking chat-syncing" role="status"><LoaderCircle className="spin" size={14} /> Showing saved messages · syncing…</div>}
-                  <ThreadPrimitive.Viewport
+                  <div
                     ref={chatViewportRef}
                     className="chat-scroll"
                     aria-live="polite"
@@ -5715,27 +5744,31 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
                     onTouchMove={event => {const y = event.touches[0]?.clientY; if (y !== undefined && chatTouchYRef.current !== undefined && y > chatTouchYRef.current) chatFollowBottomRef.current = false; chatTouchYRef.current = y;}}
                     onKeyDown={event => {if (["ArrowUp", "PageUp", "Home"].includes(event.key)) chatFollowBottomRef.current = false;}}
                     onPointerDown={event => {if (event.target === event.currentTarget) chatFollowBottomRef.current = false;}}
-                    autoScroll={!restoredScrollRef.current || restoredScrollRef.current.followBottom}
-                    scrollToBottomOnInitialize={!restoredScrollRef.current}
-                    scrollToBottomOnRunStart
-                    scrollToBottomOnThreadSwitch={!restoredScrollRef.current}
-                    turnAnchor="bottom"
                   >
                 {messages.length > 0 && hasOlderMessages && <button className="chat-scroll-jump chat-scroll-to-top" type="button" aria-label="Scroll to earliest message" title="Scroll to earliest message" onClick={() => {
                   chatFollowBottomRef.current = false;
                   if (chatViewportRef.current) chatViewportRef.current.scrollTop = 0;
+                  transcriptVirtualizer.scrollToIndex(0, {align: "start"});
                   setHasOlderMessages(false);
                 }}><ChevronDown size={16} aria-hidden="true" /></button>}
-                {leadingReplacements.map((group) => <ReplacedMessages group={group} key={group.id} />)}
-                {loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <ThreadPrimitive.Messages>{({ message: threadMessage }) => {
-                  const message = messagesById.get(threadMessage.id);
+                {loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <div className="chat-virtual-list" style={{height: transcriptVirtualizer.getTotalSize(), position: "relative"}}>{transcriptVirtualizer.getVirtualItems().map((virtualItem) => {
+                  const itemStyle: CSSProperties = {position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualItem.start}px)`};
+                  if (showHistoryHeader && virtualItem.index === 0) return <div key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}>
+                    {hasOlderHistory && (!embeddedSideChat || showInheritedHistory) && <div className="chat-older-history">
+                      <button className="button quiet" type="button" disabled={olderHistoryLoading} onClick={() => void loadOlderHistory()}>
+                        {olderHistoryLoading ? "Loading earlier messages…" : "Load earlier messages"}
+                      </button>
+                      {olderHistoryError && <DiagnosticErrorNotice error={olderHistoryError} fallback="Earlier messages could not be loaded. Retry." compact />}
+                    </div>}
+                    {leadingReplacements.map((group) => <ReplacedMessages group={group} key={group.id} />)}
+                  </div>;
+                  const message = visibleMessages[virtualItem.index - virtualMessageOffset];
                   if (!message) return null;
                   const editing = messageEdit?.messageId === message.id ? messageEdit : undefined;
                   const historicalTurnId = historicalHarnessTurnId(message);
                   const interactions = pendingInteractionsByTurn.get(message.harnessTurnId) ?? NO_INTERACTIONS;
                   const approvalHere = pendingResponse?.assistantId === message.id && pendingResponseActive ? transcriptApproval : undefined;
-                  return <ChatTranscriptRow
-                    key={message.runtimeId ?? message.id}
+                  return <div key={virtualItem.key} data-index={virtualItem.index} ref={transcriptVirtualizer.measureElement} style={itemStyle}><ChatTranscriptRow
                     message={message}
                     shared={transcriptShared}
                     actions={transcriptActions}
@@ -5759,18 +5792,17 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
                     harnessProgressDetail={message.state === "streaming" && !message.content ? visibleHarnessProgress?.detail : undefined}
                     approval={approvalHere}
                     focusPendingAction={approvalHere || interactions.length ? focusPendingAction : undefined}
-                  />;
-                }}</ThreadPrimitive.Messages> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Ask a question or bring something you want to work on.</p><div className="assistant-starters">{["Ask about this project", "Review a document"].map((label) => <button className="button quiet" type="button" disabled={!runtimeReady} key={label} onClick={() => { updateComposerDraft(label === "Review a document" ? "Please review the document I attach. " : "Help me understand this project. "); composerRef.current?.focus(); }}>{label}</button>)}{imageInputEnabled && <button className="button quiet" type="button" onClick={() => imageInputRef.current?.click()}>Attach images</button>}</div></div>}
+                  /></div>;
+                })}</div> : <div className="empty-state compact"><MessageSquare size={23} /><strong>Start an analyst conversation</strong><p>Ask a question or bring something you want to work on.</p><div className="assistant-starters">{["Ask about this project", "Review a document"].map((label) => <button className="button quiet" type="button" disabled={!runtimeReady} key={label} onClick={() => { updateComposerDraft(label === "Review a document" ? "Please review the document I attach. " : "Help me understand this project. "); composerRef.current?.focus(); }}>{label}</button>)}{imageInputEnabled && <button className="button quiet" type="button" onClick={() => imageInputRef.current?.click()}>Attach images</button>}</div></div>}
                     {pendingSubagentApproval && <ChatSubagentAttention
                       subagents={subagentState.subagents}
                       onReview={() => updateSearchParams(next => next.set("drawer", "subagents"))}
                     />}
-                    {messages.length > 0 && hasNewerMessages && <ThreadPrimitive.ScrollToBottom className="chat-scroll-jump chat-scroll-to-bottom" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => { chatFollowBottomRef.current = true; }}>
+                    {messages.length > 0 && hasNewerMessages && <button className="chat-scroll-jump chat-scroll-to-bottom" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => { chatFollowBottomRef.current = true; transcriptVirtualizer.scrollToEnd(); }}>
                       <ChevronDown size={16} aria-hidden="true" />
-                    </ThreadPrimitive.ScrollToBottom>}
-                  </ThreadPrimitive.Viewport>
-                </ThreadPrimitive.Root>
-              </AssistantRuntimeProvider>
+                    </button>}
+                  </div>
+              </div>
               {decisionNotice && <ResolvedApprovalNotice status={decisionNotice.status}
                 busy={reloadingConversation || harnessControlBusy}
                 canStop={runtimeKind !== "harness" || selectedHarness?.capabilities?.interruption !== false}
@@ -5863,7 +5895,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
   );
 
   if (embeddedSideChat) {
-    const parentTitle = sessions.find(item => item.id === activeChatSession?.parentSessionId)?.title ?? "Parent conversation";
+    const parentTitle = sideChatParentTitle ?? "Parent conversation";
     return <section className="side-chat-pane" id="workbench-side-chat" role="region" aria-label="Side chat">
       <header className="side-chat-header">
         <button className="icon-button subtle side-chat-back" type="button" aria-label="Close side chat" title="Close and discard this side chat" disabled={sideChatClosing} onClick={onCloseSideChat}><ChevronLeft size={18} aria-hidden="true" /></button>
@@ -5874,7 +5906,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
       {sideChatCloseError && <DiagnosticErrorNotice error={sideChatCloseError} fallback="Could not close the side chat. Retry." compact />}
       <div className="side-chat-context">
         <span className="side-chat-parent-link">From {parentTitle}</span>
-        <button className="side-chat-history-toggle" type="button" aria-expanded={showInheritedHistory} onClick={() => setShowInheritedHistory(current => !current)}><History size={15} aria-hidden="true" /> Inherited history · {inheritedMessageCount} message{inheritedMessageCount === 1 ? "" : "s"} <ChevronDown size={14} aria-hidden="true" /></button>
+        <button className="side-chat-history-toggle" type="button" aria-expanded={showInheritedHistory} onClick={() => setShowInheritedHistory(current => !current)}><History size={15} aria-hidden="true" /> Inherited history{inheritedMessageCount === undefined ? "" : ` · ${inheritedMessageCount} message${inheritedMessageCount === 1 ? "" : "s"}`} <ChevronDown size={14} aria-hidden="true" /></button>
         {!showInheritedHistory && <small>Only saved messages from the parent are carried over.</small>}
       </div>
       {assistantPanel}
@@ -6074,7 +6106,7 @@ export function SessionsPage({ embeddedSideChat = false, onCloseSideChat, onShow
           ) : (
             assistantPanel
           )}
-          {view === "chat" && sideChatId && <>{sideChatSplit.resizeHandle}<SessionsPage key={`side-chat:${sideChatId}`} embeddedSideChat onCloseSideChat={() => void closeSideChat()} onShowConversations={() => setMobileListOpen(true)} sideChatConversationListOpen={mobileListOpen} onSideChatUnavailable={unavailableSideChat} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} /></>}
+          {view === "chat" && sideChatId && <>{sideChatSplit.resizeHandle}<SessionsPage key={`side-chat:${sideChatId}`} embeddedSideChat sideChatParentTitle={sessions.find(item => item.id === sessionId)?.title} onCloseSideChat={() => void closeSideChat()} onShowConversations={() => setMobileListOpen(true)} sideChatConversationListOpen={mobileListOpen} onSideChatUnavailable={unavailableSideChat} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} /></>}
         </section>
 
         {(view === "chat" || view === "browser") && agentView !== "closed" && api && engagement && sessionId && <AgentViewPanel

@@ -291,6 +291,21 @@
       {"area":"conversation-switch-performance","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"conversation switching commits URL identity","runtime":"mock","shard":"1/1"},
       {"area":"conversation-switch-performance","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade conversation switching restores durable Core history promptly","runtime":"real-core","shard":"1/1"}
     ],
+    "chat-history-performance": [
+      {"area":"chat-history-performance","project":"desktop","test_match":"tests/interface.spec.ts","grep":"conversation switching pages long history and renders only nearby transcript rows","runtime":"mock","shard":"1/1"},
+      {"area":"chat-history-performance","project":"compact","test_match":"tests/interface.spec.ts","grep":"conversation switching pages long history and renders only nearby transcript rows","runtime":"mock","shard":"1/1"},
+      {"area":"chat-history-performance","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"conversation switching pages long history and renders only nearby transcript rows","runtime":"mock","shard":"1/1"},
+      {"area":"chat-history-performance","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"conversation switching pages long history and renders only nearby transcript rows","runtime":"mock","shard":"1/1"},
+      {"area":"chat-history-performance","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"conversation switching pages long history and renders only nearby transcript rows","runtime":"mock","shard":"1/1"},
+      {"area":"chat-history-performance","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"conversation switching pages long history and renders only nearby transcript rows","runtime":"mock","shard":"1/1"},
+      {"area":"chat-history-performance","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"conversation switching pages long history and renders only nearby transcript rows","runtime":"mock","shard":"1/1"},
+      {"area":"chat-history-performance","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"conversation switching pages long history and renders only nearby transcript rows","runtime":"mock","shard":"1/1"}
+    ],
+    "chat-stream-scroll": [
+      {"area":"chat-stream-scroll","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization completed harness output keeps one continuous transcript scroll","runtime":"mock","shard":"1/1"},
+      {"area":"chat-stream-scroll","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"stabilization completed harness output keeps one continuous transcript scroll","runtime":"mock","shard":"1/1"},
+      {"area":"chat-stream-scroll","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"stabilization completed harness output keeps one continuous transcript scroll","runtime":"mock","shard":"1/1"}
+    ],
     "conversation-panel-sizing": [
       {"area":"conversation-panel-sizing","project":"desktop","test_match":"tests/interface.spec.ts","grep":"conversation switching keeps side panels adjustable and mobile drawers intact","runtime":"mock","shard":"1/1"},
       {"area":"conversation-panel-sizing","project":"compact","test_match":"tests/interface.spec.ts","grep":"conversation switching keeps side panels adjustable and mobile drawers intact","runtime":"mock","shard":"1/1"},

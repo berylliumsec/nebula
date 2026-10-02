@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { HarnessThinking, ThinkingDisclosure } from "./HarnessThinking";
 
 describe("ThinkingDisclosure", () => {
@@ -38,6 +38,26 @@ describe("ThinkingDisclosure", () => {
   it("does not render when the model returned no thoughts", () => {
     const { container } = render(<ThinkingDisclosure text="" />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("loads saved thoughts only after expansion", async () => {
+    const load = vi.fn(async () => "Saved reasoning from Core.");
+    render(<ThinkingDisclosure load={load} />);
+    expect(load).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByText("Thinking"));
+    expect(await screen.findByText("Saved reasoning from Core.")).toBeVisible();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a failed saved-thought read in place", async () => {
+    const load = vi.fn().mockRejectedValueOnce(new Error("Core is reconnecting"))
+      .mockResolvedValueOnce("Recovered reasoning.");
+    render(<ThinkingDisclosure load={load} />);
+    await userEvent.click(screen.getByText("Thinking"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Core is reconnecting");
+    await userEvent.click(screen.getByRole("button", {name: "Retry"}));
+    expect(await screen.findByText("Recovered reasoning.")).toBeVisible();
+    expect(load).toHaveBeenCalledTimes(2);
   });
 
   it("keeps model paragraph boundaries semantic inside the disclosure", async () => {

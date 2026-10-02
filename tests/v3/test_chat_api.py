@@ -360,6 +360,65 @@ def test_chat_image_upload_preview_and_arbitrary_message_fork(tmp_path, monkeypa
     ).json()
     assert [message["source_message_id"] for message in side_messages] == [boundary.id]
 
+    original_transaction = store.transaction
+    fork_transactions = 0
+
+    def count_fork_transaction():
+        nonlocal fork_transactions
+        fork_transactions += 1
+        return original_transaction()
+
+    monkeypatch.setattr(store, "transaction", count_fork_transaction)
+    latest_side = client.post(
+        f"/api/v1/chat/sessions/{session_id}/fork",
+        headers=_auth(),
+        json={"through_latest": True, "side_chat": True},
+    )
+    monkeypatch.setattr(store, "transaction", original_transaction)
+    assert latest_side.status_code == 201, latest_side.text
+    assert fork_transactions == 1
+    assert latest_side.json()["metadata"]["inherited_message_count"] == 2
+    latest_messages = client.get(
+        f"/api/v1/chat/sessions/{latest_side.json()['id']}/messages", headers=_auth()
+    ).json()
+    assert [message["source_message_id"] for message in latest_messages] == [
+        message["id"] for message in client.get(
+            f"/api/v1/chat/sessions/{session_id}/messages", headers=_auth()
+        ).json()
+    ]
+    assert client.post(
+        f"/api/v1/chat/sessions/{session_id}/fork",
+        headers=_auth(), json={"through_latest": True},
+    ).status_code == 422
+
+    store.create(ChatMessage(
+        engagement_id=engagement.id, session_id=session_id, sequence=3,
+        role=ChatRole.ASSISTANT, content="A later saved answer.",
+        reasoning="Large saved reasoning stays in Core.",
+    ))
+    recent = client.get(
+        f"/api/v1/chat/sessions/{session_id}/messages?include_replaced=true&limit=2",
+        headers=_auth(),
+    )
+    assert recent.status_code == 200, recent.text
+    assert [item["sequence"] for item in recent.json()] == [2, 3]
+    assert recent.json()[-1]["reasoning"] == ""
+    assert recent.json()[-1]["metadata"]["reasoning_available"] is True
+    older = client.get(
+        f"/api/v1/chat/sessions/{session_id}/messages?include_replaced=true&limit=2"
+        f"&before_message_id={recent.json()[0]['id']}", headers=_auth(),
+    )
+    assert [item["sequence"] for item in older.json()] == [1]
+    reasoning = client.get(
+        f"/api/v1/chat/sessions/{session_id}/messages/{recent.json()[-1]['id']}/reasoning",
+        headers=_auth(),
+    )
+    assert reasoning.json() == {"reasoning": "Large saved reasoning stays in Core."}
+    assert client.get(
+        f"/api/v1/chat/sessions/{latest_side.json()['id']}/messages/{recent.json()[-1]['id']}/reasoning",
+        headers=_auth(),
+    ).status_code == 404
+
 
 def test_side_chat_snapshots_active_provider_turn_without_copying_goal(tmp_path):
     store = NebulaStore(tmp_path / "active-provider-side-chat.db")

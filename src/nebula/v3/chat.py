@@ -13342,6 +13342,28 @@ class ChatService:
         session = self.store.get(ChatSession, session_id)
         return self._session_messages(session, include_replaced=include_replaced)
 
+    def session_messages_page(
+        self, session_id: str, *, limit: int, before_message_id: str | None = None
+    ) -> list[ChatMessage]:
+        """Read one recent window for the UI; Core still retains the full history."""
+
+        self.store.get(ChatSession, session_id)
+        before = (
+            self.store.get(ChatMessage, before_message_id)
+            if before_message_id
+            else None
+        )
+        if before is not None and before.session_id != session_id:
+            raise ChatHistoryConflict(
+                "history cursor does not belong to this conversation"
+            )
+        messages = self.store.list_session_entities(
+            ChatMessage, session_id, newest_first=True, limit=limit, before=before
+        )
+        return sorted(
+            messages, key=lambda item: (item.sequence, item.created_at, item.id)
+        )
+
     def attach_native_run_to_chat(self, run_id: str) -> ChatSession:
         """Create or return the durable provider chat that continues a mission result."""
 
@@ -13429,6 +13451,7 @@ class ChatService:
         *,
         through_message_id: str | None = None,
         before_message_id: str | None = None,
+        through_latest: bool = False,
         title: str | None = None,
         side_chat: bool = False,
         harness_session_id: str | None = None,
@@ -13441,13 +13464,17 @@ class ChatService:
                 "conversation cannot be forked while a response is active"
             )
         messages = self._session_messages(source)
-        boundary = next(
-            (
-                message
-                for message in messages
-                if message.id == (through_message_id or before_message_id)
-            ),
-            None,
+        boundary = (
+            messages[-1]
+            if through_latest and messages
+            else next(
+                (
+                    message
+                    for message in messages
+                    if message.id == (through_message_id or before_message_id)
+                ),
+                None,
+            )
         )
         if boundary is None:
             raise ChatHistoryConflict(
@@ -13457,73 +13484,77 @@ class ChatService:
             raise ChatConfigurationError(
                 "harness conversation forks require an independent harness session"
             )
-        fork = self.store.create(
-            ChatSession(
-                id=str(uuid4()),
-                engagement_id=source.engagement_id,
-                title=(title or f"{source.title} (fork)")[:300],
-                backend=source.backend,
-                provider_profile_id=source.provider_profile_id,
-                harness_profile_id=source.harness_profile_id,
-                harness_session_id=(
-                    harness_session_id
-                    if source.backend == ChatBackend.HARNESS
-                    else None
-                ),
-                model=source.model,
-                parent_session_id=source.id,
-                forked_from_message_id=boundary.id,
-                metadata={
-                    **(
-                        {}
-                        if side_chat
-                        else {
-                            key: value
-                            for key, value in source.metadata.items()
-                            if key not in _FORK_PRIVATE_METADATA_KEYS
-                        }
-                    ),
-                    "forked_from_session_id": source.id,
-                    "forked_from_message_id": boundary.id,
-                    "workspace_is_shared": not side_chat,
-                    "side_chat": side_chat,
-                    "branch_before_message": bool(before_message_id),
-                    "harness_context_handoff_pending": (
-                        source.backend == ChatBackend.HARNESS
-                    ),
-                },
-            )
-        )
-        for message in messages:
-            if message.sequence > boundary.sequence or (
-                before_message_id and message.sequence == boundary.sequence
-            ):
-                break
-            self.store.create(
-                ChatMessage(
-                    id=str(uuid4()),
-                    engagement_id=fork.engagement_id,
-                    session_id=fork.id,
-                    sequence=message.sequence,
-                    role=message.role,
-                    content=message.content,
-                    content_blocks=message.content_blocks,
-                    source_message_id=message.id,
-                    provider_profile_id=message.provider_profile_id,
-                    model=message.model,
-                    usage=None if side_chat else message.usage,
-                    finish_reason=None if side_chat else message.finish_reason,
-                    provider_request_id=None
+        copied_messages = [
+            message
+            for message in messages
+            if message.sequence < boundary.sequence
+            or (message.sequence == boundary.sequence and not before_message_id)
+        ]
+        fork = ChatSession(
+            id=str(uuid4()),
+            engagement_id=source.engagement_id,
+            title=(title or f"{source.title} (fork)")[:300],
+            backend=source.backend,
+            provider_profile_id=source.provider_profile_id,
+            harness_profile_id=source.harness_profile_id,
+            harness_session_id=(
+                harness_session_id if source.backend == ChatBackend.HARNESS else None
+            ),
+            model=source.model,
+            parent_session_id=source.id,
+            forked_from_message_id=boundary.id,
+            metadata={
+                **(
+                    {}
                     if side_chat
-                    else message.provider_request_id,
-                    citations=message.citations,
-                    metadata=(
-                        {"fork_source_message_id": message.id}
-                        if side_chat
-                        else {**message.metadata, "fork_source_message_id": message.id}
-                    ),
-                )
+                    else {
+                        key: value
+                        for key, value in source.metadata.items()
+                        if key not in _FORK_PRIVATE_METADATA_KEYS
+                    }
+                ),
+                "forked_from_session_id": source.id,
+                "forked_from_message_id": boundary.id,
+                "workspace_is_shared": not side_chat,
+                "side_chat": side_chat,
+                **(
+                    {"inherited_message_count": len(copied_messages)}
+                    if side_chat
+                    else {}
+                ),
+                "branch_before_message": bool(before_message_id),
+                "harness_context_handoff_pending": (
+                    source.backend == ChatBackend.HARNESS
+                ),
+            },
+        )
+        inherited = [
+            ChatMessage(
+                id=str(uuid4()),
+                engagement_id=fork.engagement_id,
+                session_id=fork.id,
+                sequence=message.sequence,
+                role=message.role,
+                content=message.content,
+                content_blocks=message.content_blocks,
+                source_message_id=message.id,
+                provider_profile_id=message.provider_profile_id,
+                model=message.model,
+                usage=None if side_chat else message.usage,
+                finish_reason=None if side_chat else message.finish_reason,
+                provider_request_id=None if side_chat else message.provider_request_id,
+                citations=message.citations,
+                metadata=(
+                    {"fork_source_message_id": message.id}
+                    if side_chat
+                    else {**message.metadata, "fork_source_message_id": message.id}
+                ),
             )
+            for message in copied_messages
+        ]
+        with self.store.transaction() as transaction:
+            transaction.add(fork)
+            transaction.add_chat_messages(inherited)
         from .chat_decisions import fork_decisions
         from .chat_goals import ChatGoalService
         from .storage import NotFoundError
