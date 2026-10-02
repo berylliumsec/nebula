@@ -4,7 +4,7 @@ export interface WorkspaceLink { path: string; line?: number }
 export function workspaceLink(href: string, workspacePath?: string): WorkspaceLink | undefined {
   if (!href || href.startsWith("//") || href.includes("?") || /[\\\u0000-\u001f]/.test(href)) return undefined;
   let value: string;
-  try { value = decodeURIComponent(href); } catch { return undefined; }
+  try { value = decodeURIComponent(href); } catch { /* diagnostic-expected: malformed agent links stay inert. */ return undefined; }
   if (value.includes("%") || value.startsWith("//") || /[\\\u0000-\u001f]/.test(value)) return undefined;
   const fragment = value.match(/#L(\d+)(?:C\d+)?$/i);
   if (fragment) value = value.slice(0, fragment.index);
@@ -25,6 +25,5 @@ export function workspaceLink(href: string, workspacePath?: string): WorkspaceLi
 }
 
 export function webLink(href: string): boolean {
-  try { return ["http:", "https:"].includes(new URL(href).protocol); }
-  catch { return false; }
+  return URL.canParse(href) && ["http:", "https:"].includes(new URL(href).protocol);
 }
