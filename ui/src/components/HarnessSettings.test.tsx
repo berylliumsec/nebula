@@ -9,6 +9,7 @@ import {HarnessSettings} from "./HarnessSettings";
 const profile: HarnessProfile = {
   id: "saved", name: "Local fixture", kind: "grok_acp", connectionMode: "spawn", transport: "stdio",
   executable: "/disposable/inert-fixture", authMode: "existing_session", models: ["fixture-model"],
+  permissionMode: "managed",
   enabled: true, localOnly: true, permitsSensitiveData: false, autoShareToolResults: false, revision: 1,
   nativeCapabilities: {workspaceAccess: "none", shell: false, webSearch: false, webFetch: false, browser: false, computerUse: false, imageGeneration: false, skills: false, subagents: false},
 };
@@ -92,6 +93,31 @@ it("shows harnesses while the MCP catalog is still pending", async () => {
 });
 
 for (const vendor of ["Grok", "Codex"] as const) {
+  it(`saves and displays unrestricted ${vendor} permission mode`, async () => {
+    let saved: HarnessProfile | undefined;
+    api.listHarnesses.mockImplementation(async () => saved ? [saved] : []);
+    api.createHarness.mockImplementation(async (body: {permission_mode: HarnessProfile["permissionMode"]}) => (saved = {
+      ...profile,
+      name: `${vendor} unrestricted`,
+      kind: vendor === "Grok" ? "grok_acp" : "codex_app_server",
+      permissionMode: body.permission_mode,
+    }));
+    api.checkHarness.mockResolvedValue({healthy: true});
+    render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", {name: `Add ${vendor}`}));
+    const dialog = screen.getByRole("dialog");
+    await user.type(within(dialog).getByRole("textbox", {name: "Name"}), `${vendor} unrestricted`);
+    await user.type(within(dialog).getByRole("textbox", {name: vendor === "Grok" ? "Absolute Grok executable path" : "Absolute executable path"}), "/bin/true");
+    await user.selectOptions(within(dialog).getByRole("combobox", {name: "Harness permissions"}), "unrestricted");
+    expect(dialog).toHaveTextContent(/Requires Host mode and project authorization Allow all/);
+    await user.click(within(dialog).getByRole("button", {name: "Save harness"}));
+    await waitFor(() => expect(api.createHarness).toHaveBeenCalledWith(expect.objectContaining({permission_mode: "unrestricted"})));
+    expect(await screen.findByText("Unrestricted · Host mode only")).toBeVisible();
+    await user.click(screen.getByRole("button", {name: `Edit ${vendor} unrestricted`}));
+    expect(within(screen.getByRole("dialog")).getByRole("combobox", {name: "Harness permissions"})).toHaveValue("unrestricted");
+  });
+
   it(`saves a separate ${vendor} account home and shows its host login command`, async () => {
     api.listHarnesses.mockResolvedValue([]);
     api.listMcpServers.mockResolvedValue([]);

@@ -1,31 +1,33 @@
 {
-  "change_digest": "5f80d0854c0cf49b6b156fd2236f3f05530cd601750dab4cbc3b9d9d86e09226",
-  "reviewed_by": "Codex focused review of agent link routing through chat, Code, and Browser",
-  "reason": "The changed journey is clicking file and web links in an assistant transcript. Component tests cover workspace path boundaries, safe Markdown rendering, and editor loading. The named mocked Playwright journey checks visible Code navigation, reload, and device-browser opening across the permanent desktop and mobile matrix. One production LAN journey uses a disposable real Core, durable reply, and actual workspace file. The shared browser specs and impact manifest contain only these named journeys and their catalog entries. The production LAN case specifically covers the insecure-origin request-ID fallback that the real-Core run exposed. The native Browser component test checks scoped navigation after the durable browser session loads. The malformed-link catch is classified for the frontend diagnostics audit.",
-  "exclusions": "No Python or Rust code changed. Provider execution beyond the local response fixture, other chat journeys, browser research tools, and full suites are outside the link-navigation diff. Native desktop browser navigation requires a Tauri device and is reported separately from web-browser coverage.",
+  "change_digest": "73129f848ec619c127550169a010a605850c342a46bf45c564294d681b4e7aa6",
+  "reviewed_by": "Codex focused review of Codex and Grok harness permission setup",
+  "reason": "The changed journey is saving a Codex or Grok harness permission choice, seeing it after refresh, and using the frozen choice in a Host-mode session. Exact Python cases check the Host and Allow all gate, Codex thread approval and sandbox values, and Grok launch flags with Docker containment. Touched component files cover the setup form and its consumers. The existing account setup browser journey covers both vendors, saved profiles, edit and reload, real Core, production assets, and the permanent desktop and mobile profiles over a LAN origin.",
+  "exclusions": "No Rust code changed. Other assistant, MCP, browser, and command-runtime journeys are outside this profile-mode diff. The browser fixture uses inert vendors, so local adapter contract tests establish exact vendor arguments; an authenticated full-access vendor turn and physical mobile devices are separate live checks.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 69,
+    "python": 4,
+    "frontend": 21,
     "native": 0,
-    "playwright": 9
+    "playwright": 8
   },
-  "python": [],
+  "python": [
+    "tests/v3/test_harness_adapters.py::test_grok_host_session_preserves_native_tools_and_user_bus",
+    "tests/v3/test_harness_adapters.py::test_codex_unrestricted_host_session_sets_vendor_approval_and_sandbox",
+    "tests/v3/test_harnesses.py::test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_choice"
+  ],
   "frontend": [
-    "ui/src/components/assistantLinks.test.ts",
-    "ui/src/components/assistantMarkdown.test.tsx",
-    "ui/src/components/CodeEditorPanel.test.tsx",
-    "ui/src/components/WorkbenchBrowser.test.tsx"
+    "ui/src/components/HarnessSettings.test.tsx",
+    "ui/src/components/PostToolAssistant.test.tsx",
+    "ui/src/components/PostToolAssistantSettings.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:assistant-links/desktop",
-    "entry:assistant-links/compact",
-    "entry:assistant-links/mobile-chromium-small",
-    "entry:assistant-links/mobile-chromium-ledger-390",
-    "entry:assistant-links/mobile-chromium-wide",
-    "entry:assistant-links/mobile-webkit-small",
-    "entry:assistant-links/mobile-webkit",
-    "entry:assistant-links/mobile-webkit-wide",
-    "entry:assistant-links/assistant-real-desktop"
+    "entry:harness-accounts/assistant-real-desktop",
+    "entry:harness-accounts/assistant-real-compact",
+    "entry:harness-accounts/assistant-real-chromium-320",
+    "entry:harness-accounts/assistant-real-chromium-390",
+    "entry:harness-accounts/assistant-real-chromium-430",
+    "entry:harness-accounts/assistant-real-webkit-320",
+    "entry:harness-accounts/assistant-real-webkit-390",
+    "entry:harness-accounts/assistant-real-webkit-430"
   ]
 }

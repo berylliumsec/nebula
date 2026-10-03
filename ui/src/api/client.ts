@@ -1530,6 +1530,7 @@ interface WireHarnessProfile extends WireEntity {
   auth_mode: HarnessProfile["authMode"];
   secret_ref?: string | null;
   default_model?: string | null;
+  permission_mode?: HarnessProfile["permissionMode"];
   enabled: boolean;
   privacy?: {
     local_only?: boolean;
@@ -3682,6 +3683,7 @@ function mapHarnessProfile(value: WireHarnessProfile): HarnessProfile {
     authMode: value.auth_mode,
     secretRef: value.secret_ref ?? undefined,
     defaultModel: value.default_model ?? undefined,
+    permissionMode: value.permission_mode === "unrestricted" ? "unrestricted" : "managed",
     authenticationState: value.capabilities?.authentication_state ?? "unverified",
     sessionState: value.capabilities?.session_state ?? "unverified",
     turnState: value.capabilities?.turn_state ?? "unverified",

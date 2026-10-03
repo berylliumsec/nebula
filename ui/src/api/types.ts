@@ -2324,6 +2324,7 @@ export interface HarnessProfile {
   authMode: "existing_session" | "secret_ref" | "endpoint_bearer";
   secretRef?: string;
   defaultModel?: string;
+  permissionMode: "managed" | "unrestricted";
   models: string[];
   modelOptions?: HarnessModelOptions[];
   enabled: boolean;
