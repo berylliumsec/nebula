@@ -114,6 +114,17 @@ def test_binary_staged_content_blocks(repo: tuple[Path, dict[str, str]]) -> None
     assert "Binary" in result.stderr
 
 
+@pytest.mark.parametrize("size, allowed", [(1000 * 1024, True), (1000 * 1024 + 1, False)])
+def test_staged_text_file_limit(repo: tuple[Path, dict[str, str]], size: int, allowed: bool) -> None:
+    path, env = repo
+    (path / "large.txt").write_text("a" * size)
+    git(path, "add", "large.txt")
+    result = run_guard(path, env)
+    assert (result.returncode == 0) is allowed
+    if not allowed:
+        assert "Staged file exceeds 1024000 bytes" in result.stderr
+
+
 def test_git_commit_invokes_both_hooks(repo: tuple[Path, dict[str, str]]) -> None:
     path, env = repo
     scripts = path / "scripts"

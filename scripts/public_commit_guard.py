@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 MAX_FILES = 80
-MAX_FILE_BYTES = 256 * 1024
+MAX_FILE_BYTES = 1000 * 1024
 MAX_TOTAL_BYTES = 1024 * 1024
 TIMEOUT_SECONDS = 240
 SCHEMA = {

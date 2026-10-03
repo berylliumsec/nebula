@@ -19,7 +19,7 @@ and retried; the hooks have no allow override.
 The review prompt contains complete staged versions of changed text files, not
 the unstaged working tree. Codex sends that prompt to its configured model
 provider. Non-text files, submodules, and files over the review
-limits block for separate inspection. Review the staged content with
+limits (1000 KiB per file, 1 MiB total) block for separate inspection. Review the staged content with
 `git diff --cached` and make a smaller text-only commit where possible. Do not
 paste private research into a public issue, PR, or CI log while resolving a block.
 
