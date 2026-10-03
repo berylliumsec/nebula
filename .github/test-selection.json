@@ -1,25 +1,22 @@
 {
-  "change_digest": "12cf62d076978a78edd1c9f151b4631197ecdd6fc9417b65d589b3cbaec45715",
-  "reviewed_by": "Codex focused review on codex/project-switcher-redesign",
-  "reason": "This change redesigns the Project Switcher presentation while preserving Core-backed project catalog and archive state and URL-backed project selection. The SideNav component file contains 25 focused component tests for dialog focus, active and archived search, and create failure. The project-switcher-search catalog selects eight mocked browser profiles for responsive project search and one real-Core LAN journey for project selection and reload. CSS audit and production build are separate validation gates.",
-  "exclusions": "Python backend and native Rust code are unchanged. Unrelated UI journeys and catalog areas are excluded. The selected browser entries cover desktop 1440 px, compact 1024 px, mobile Chromium 320/390/430 px, mobile WebKit 320/390/430 px, and the real-Core LAN journey. Mobile profiles use browser emulation; no physical devices are available.",
+  "change_digest": "2a12d965e0d2ec9bef5eedad96750337341e6ed549db10e42225819bdbadc137",
+  "reviewed_by": "Codex install routing and alpha.23 release review",
+  "reason": "The source diff changes the public install destination and synchronizes the next Linux release version. One site-link regression, two build-metadata tests, and three exact release/version contract tests cover those changes. The APT publication pipeline and browser journey are verified separately.",
+  "exclusions": "No app UI, Core behavior, updater logic, or native code changed. Frontend, native, and app Playwright suites are excluded. The static public pages receive a separate desktop and mobile browser check; release preparation compiles and smoke-tests packages. Full suites are excluded.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 25,
-    "native": 0,
-    "playwright": 9
+    "python": 6,
+    "frontend": 0,
+    "playwright": 0,
+    "native": 0
   },
-  "python_versions": [
-    "3.12"
+  "python": [
+    "tests/v3/test_install_routing.py",
+    "tests/v3/test_version.py",
+    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
+    "tests/v3/test_packaging.py::test_protected_release_distribution_is_linux_x86_64_only",
+    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract"
   ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/components/SideNav.test.tsx"
-  ],
-  "native": [],
-  "playwright": [
-    "area:project-switcher-search"
-  ]
+  "frontend": [],
+  "playwright": [],
+  "native": []
 }
