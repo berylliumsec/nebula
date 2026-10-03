@@ -918,6 +918,7 @@ class Engagement(Entity):
     client_name: str | None = None
     owner_id: str | None = None
     tags: list[str] = Field(default_factory=list)
+    work_enabled: bool = False
     workspace_path: str | None = Field(default=None, max_length=4096)
     assistant_defaults: AssistantDefaults = Field(default_factory=AssistantDefaults)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -931,6 +932,38 @@ class Engagement(Entity):
         if not candidate.is_absolute() or candidate == Path("/"):
             raise ValueError("workspace_path must be an absolute non-root folder")
         return str(candidate)
+
+
+class WorkItem(Entity):
+    """A project-scoped task; chat goals and runs remain independent records."""
+
+    entity_kind: ClassVar[str] = "work_items"
+    engagement_id: str
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", max_length=20_000)
+    status: Literal["backlog", "ready", "in_progress", "blocked", "review", "done"] = "backlog"
+    priority: Literal["low", "normal", "high", "urgent"] = "normal"
+    assignee_session_id: str | None = Field(default=None, max_length=200)
+    source_kind: Literal["chat", "mission", "manual", "import"] = "manual"
+    source_id: str | None = Field(default=None, max_length=200)
+    last_update_at: datetime | None = None
+
+
+class WorkUpdate(Entity):
+    """Append-only progress, blocker, or status update with source attribution."""
+
+    entity_kind: ClassVar[str] = "work_updates"
+    engagement_id: str
+    item_id: str
+    summary: str = Field(min_length=1, max_length=4_000)
+    next_step: str | None = Field(default=None, max_length=2_000)
+    blocker: str | None = Field(default=None, max_length=2_000)
+    status: Literal["backlog", "ready", "in_progress", "blocked", "review", "done"]
+    actor_kind: Literal["operator", "agent", "import"]
+    actor_id: str = Field(min_length=1, max_length=200)
+    source_session_id: str | None = Field(default=None, max_length=200)
+    source_turn_id: str | None = Field(default=None, max_length=200)
+    source_run_id: str | None = Field(default=None, max_length=200)
 
 
 class AutomationProjectPolicy(Entity):
@@ -4969,6 +5002,8 @@ ENTITY_MODELS: tuple[type[Entity], ...] = (
     StructuredResult,
     GuideProgress,
     Engagement,
+    WorkItem,
+    WorkUpdate,
     ScopePolicy,
     AutomationProjectPolicy,
     VpnProfile,

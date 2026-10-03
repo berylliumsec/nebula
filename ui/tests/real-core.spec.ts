@@ -330,6 +330,69 @@ test("assistant upgrade OpenRouter policy persists through production LAN reload
   }
 });
 
+test("work hub project board keeps check-ins after refresh and agent access revocation", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    const projectResponse = await api.post("engagements", { data: { name: "Documentation portal" } });
+    expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
+    const project = await projectResponse.json() as { id: string };
+    const pairingApi = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+    const pairing = await (await pairingApi.post("auth/pairings", { data: { name: "Work browser" } })).json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Work browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    const mobileMore = page.getByRole("button", { name: "More workbench views" });
+    if (await mobileMore.isVisible()) {
+      await mobileMore.click();
+      await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Work" }).click();
+    } else {
+      const sidebar = page.getByRole("button", { name: "Show sidebar" });
+      if (await sidebar.isVisible()) await sidebar.click();
+      await page.getByRole("link", { name: "Work", exact: true }).click();
+    }
+    await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
+    await page.locator(".work-project-list").getByRole("link", { name: /Documentation portal/ }).click();
+    await expect(page.getByRole("button", { name: "Enable agent tools" })).toBeVisible();
+    await page.getByRole("button", { name: "Enable agent tools" }).click();
+    await expect(page.getByRole("button", { name: "Agent tools on" })).toBeVisible();
+    await page.getByRole("button", { name: "New item" }).click();
+    const dialog = page.getByRole("dialog", { name: "New work item" });
+    await dialog.getByRole("textbox", { name: "Title" }).fill("Build the search page");
+    await dialog.getByRole("textbox", { name: "Description" }).fill("Add filters and result cards");
+    await dialog.getByRole("button", { name: "Create item" }).click();
+    await expect(page.getByRole("heading", { name: "Build the search page" })).toBeVisible();
+    const updateForm = page.getByRole("heading", { name: "Post an update" }).locator("..");
+    await updateForm.getByRole("textbox", { name: "Progress" }).fill("Search layout is ready");
+    await updateForm.getByRole("textbox", { name: "Next step" }).fill("Review copy");
+    await updateForm.getByRole("combobox", { name: "Status" }).selectOption("review");
+    await updateForm.getByRole("button", { name: "Save update" }).click();
+    await expect(page.locator(".work-timeline")).toContainText("Search layout is ready");
+    const itemUrl = page.url();
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Build the search page" })).toBeVisible();
+    await expect(page.locator(".work-timeline")).toContainText("Search layout is ready");
+    await page.getByRole("button", { name: "Agent tools on" }).click();
+    await expect(page.getByRole("button", { name: "Enable agent tools" })).toBeVisible();
+    await expect(page.locator(".work-timeline")).toContainText("Search layout is ready");
+    const itemId = new URL(itemUrl).pathname.split("/").at(-1);
+    const itemResponse = await api.get(`engagements/${project.id}/work/${itemId}`);
+    expect(itemResponse.ok()).toBe(true);
+    expect((await itemResponse.json() as { status: string }).status).toBe("review");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    const accessibility = await new AxeBuilder({ page }).include(".work-page").analyze();
+    expect(accessibility.violations).toEqual([]);
+    await testInfo.attach("work-hub", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), projectId: project.id, itemId }), contentType: "application/json" });
+    await page.screenshot({ path: testInfo.outputPath("work-hub.png"), animations: "disabled" });
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
 test("assistant upgrade real Core retains editable goal skills through source loss", async ({ page }) => {
   test.setTimeout(90_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
