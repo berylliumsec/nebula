@@ -107,7 +107,9 @@ jobs:
     needs: validate
     if: inputs.create_draft == true
     runs-on: ubuntu-22.04
-    environment: desktop-release
+    environment:
+      name: desktop-release
+      deployment: false
     permissions:
       contents: write
       actions: read

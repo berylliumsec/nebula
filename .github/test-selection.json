@@ -1,10 +1,10 @@
 {
-  "change_digest": "54458f0fafdaae4109fc7dd3237763ce4f0957d2c001816df200fe435066ad59",
-  "reviewed_by": "Codex install routing and beta.1 release review",
-  "reason": "The source diff changes the public install destination and synchronizes the next Linux beta release version. One site-link regression, two build-metadata tests, and three exact release/version contract tests cover those changes. The APT publication pipeline and browser journey are verified separately.",
+  "change_digest": "e2d8a7e435053cf0f45965a5cc74b3789a9970c1ef3cdce0bb3c861103518d27",
+  "reviewed_by": "Codex install routing, beta.1, and release-environment review",
+  "reason": "The source diff changes the public install destination, synchronizes the Linux beta version, and suppresses GitHub deployment records for three protected release jobs. One site-link regression, two build-metadata tests, and four exact release/version/workflow contract tests cover those changes. The APT publication pipeline and browser journey are verified separately.",
   "exclusions": "No app UI, Core behavior, updater logic, or native code changed. Frontend, native, and app Playwright suites are excluded. The static public pages receive a separate desktop and mobile browser check; release preparation compiles and smoke-tests packages. Full suites are excluded.",
   "expected_tests": {
-    "python": 6,
+    "python": 7,
     "frontend": 0,
     "playwright": 0,
     "native": 0
@@ -14,6 +14,7 @@
     "tests/v3/test_version.py",
     "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
     "tests/v3/test_packaging.py::test_protected_release_distribution_is_linux_x86_64_only",
+    "tests/v3/test_packaging.py::test_protected_release_jobs_do_not_create_deployment_records",
     "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract"
   ],
   "frontend": [],
