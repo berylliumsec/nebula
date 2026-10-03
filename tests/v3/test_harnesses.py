@@ -1684,7 +1684,9 @@ def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path):
     asyncio.run(scenario())
 
 
-def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_choice(tmp_path):
+def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_choice(
+    tmp_path,
+):
     store, engagement, profile, _, _, runtime = _runtime(tmp_path)
 
     class HostCommands:
@@ -1706,7 +1708,9 @@ def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_choice
         {"permission_mode": "unrestricted"},
         expected_revision=profile.revision,
     )
-    with pytest.raises(HarnessConfigurationError, match="requires project authorization Allow all"):
+    with pytest.raises(
+        HarnessConfigurationError, match="requires project authorization Allow all"
+    ):
         runtime.create_session(
             engagement_id=engagement.id, profile_id=profile.id, model=None
         )
@@ -1737,7 +1741,10 @@ def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_choice
         {"permission_mode": "managed"},
         expected_revision=profile.revision,
     )
-    assert store.get(HarnessSession, session.id).metadata["harness_permission_mode"] == "unrestricted"
+    assert (
+        store.get(HarnessSession, session.id).metadata["harness_permission_mode"]
+        == "unrestricted"
+    )
     next_session = runtime.create_session(
         engagement_id=engagement.id, profile_id=profile.id, model=None
     )

@@ -506,7 +506,9 @@ def test_codex_unrestricted_host_session_sets_vendor_approval_and_sandbox(tmp_pa
                     permission_handler=no_permission,
                 )
             )
-            thread = next(params for method, params in rpc.calls if method == "thread/start")
+            thread = next(
+                params for method, params in rpc.calls if method == "thread/start"
+            )
             assert thread["sandbox"] == expected_sandbox
             assert thread["approvalPolicy"] == expected_policy
             await connection.close()
