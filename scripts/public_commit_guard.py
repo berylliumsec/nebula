@@ -258,7 +258,7 @@ def review(directory: Path, expected_ids: list[str], codex: str) -> dict:
         ):
             raise GuardError("Codex review was incomplete or inconsistent.")
         if verdict["decision"] != "allow":
-            return verdict
+            return {**verdict, "review_part_ids": batch_ids}
     return {"decision": "allow", "category": "none", "reviewed_files": expected_ids}
 
 
@@ -280,7 +280,8 @@ def main() -> int:
         if args.message and args.message.read_bytes() != message:
             raise GuardError("The commit message changed during review; retry the commit.")
         if verdict["decision"] != "allow":
-            raise GuardError(f"Codex marked the commit {verdict['decision']} ({verdict['category']}).")
+            parts = ", ".join(verdict.get("review_part_ids", []))
+            raise GuardError(f"Codex marked the commit {verdict['decision']} ({verdict['category']}) in review part {parts}.")
     except (GuardError, OSError) as exc:
         print(f"Nebula public commit blocked: {exc}", file=sys.stderr)
         return 1

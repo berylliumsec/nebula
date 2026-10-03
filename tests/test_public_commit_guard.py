@@ -132,6 +132,7 @@ def test_later_part_of_large_staged_file_can_block(repo: tuple[Path, dict[str, s
     result = run_guard(path, env)
     assert result.returncode == 1
     assert "block (research_data)" in result.stderr
+    assert "review part 0001.02" in result.stderr
 
 
 def test_git_commit_invokes_both_hooks(repo: tuple[Path, dict[str, str]]) -> None:
