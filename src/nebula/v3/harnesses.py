@@ -65,14 +65,19 @@ from jsonschema import Draft7Validator
 from jsonschema.exceptions import ValidationError
 from packaging.version import InvalidVersion, Version
 from pydantic import Field, StringConstraints, field_validator
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from .chat import (
     ChatError,
+    ChatHistoryConflict,
     ChatPrivacyError,
     ChatRequestMessage,
+    ChatService,
     HarnessKnowledgeSearchResult,
     resolve_chat_model_content,
 )
+from .chat_turn_headers import session_turn_headers
 from .chat_subagents import (
     HARNESS_WAIT_DEFAULT_SECONDS,
     HARNESS_WAIT_MAX_SECONDS,
@@ -143,6 +148,7 @@ from .domain import (
     message_is_replaced,
     utc_now,
 )
+from .database import EntityRow
 from .model_pricing import CATALOG_VERIFIED_ON, codex_model_pricing
 from .browser_companion_tools import companion_components, companion_spec
 from .browser_tools import AUTONOMOUS_BROWSER_TOOLS, combine_tool_components
@@ -9801,6 +9807,21 @@ class HarnessRuntimeService:
             expected_revision=session.revision,
         )
 
+    def _assert_chat_turn_available(
+        self, chat_session_id: str, *, database: Session | None = None
+    ) -> None:
+        if database is None:
+            with self.store.database.session() as opened:
+                self._assert_chat_turn_available(chat_session_id, database=opened)
+            return
+        if any(
+            ChatService._header_is_pending(turn)
+            for turn in session_turn_headers(database, chat_session_id)
+        ):
+            raise ChatHistoryConflict(
+                "This conversation already has an active response. Wait for it to finish or stop it before sending another message."
+            )
+
     def prepare_chat(
         self,
         *,
@@ -9922,6 +9943,10 @@ class HarnessRuntimeService:
             chat = self.store.get(ChatSession, chat_session_id)
             if chat.engagement_id != engagement_id:
                 raise HarnessStateError("chat belongs to a different project")
+            # A busy vendor session may be forked for independent work, but a
+            # conversation has only one active response owner. Reject a stale
+            # send before changing its harness binding or saving its message.
+            self._assert_chat_turn_available(chat.id)
             session = (
                 self.store.get(HarnessSession, chat.harness_session_id)
                 if chat.backend == ChatBackend.HARNESS and chat.harness_session_id
@@ -10393,6 +10418,13 @@ class HarnessRuntimeService:
             engagement_id, chat.id, include_replaced=True
         )
         with self.store.transaction() as transaction:
+            # Serialize competing sends on PostgreSQL and recheck in the same
+            # transaction that saves the turn. SQLite writes are serialized by
+            # its single-writer transaction boundary.
+            transaction.session.execute(
+                select(EntityRow.id).where(EntityRow.id == chat.id).with_for_update()
+            ).scalar_one()
+            self._assert_chat_turn_available(chat.id, database=transaction.session)
             transaction.add(chat_turn)
             transaction.add(harness_turn)
             from .chat_queue import link_queue_turn
