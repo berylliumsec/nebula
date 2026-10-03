@@ -85,6 +85,11 @@ export function ActivityLedger({
   const active = model.status === "active" || model.status === "queued" || model.status === "attention";
   const attentionEntries = model.entries.filter((entry) => entry.status === "attention" || (!compact && entry.status === "failed"));
   const receipt = receiptParts(model);
+  const compactReceipt = [
+    model.actionCount ? `${model.actionCount} action${model.actionCount === 1 ? "" : "s"}` : "",
+    model.attentionCount ? `${model.attentionCount} warning${model.attentionCount === 1 ? "" : "s"}` : "",
+    model.artifactCount ? `${model.artifactCount} artifact${model.artifactCount === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
   const meaningful = Boolean(progress) || model.entries.some((entry) => entry.countsAsAction || entry.artifactIds.length || entry.evidenceIds.length || entry.outputs.length || Boolean(entry.sourceItem?.streams.commentary?.trim()) || ["checkpoint", "plan", "goal", "file_change"].includes(entry.kind ?? "") || entry.kind === "reasoning" || ["attention", "failed", "cancelled"].includes(entry.status));
   if (compact && model.status === "complete" && !meaningful && !historyPending && !model.artifactCount && !model.attentionCount) return null;
   return (
@@ -138,8 +143,8 @@ export function ActivityLedger({
       <footer className="activity-ledger-footer">
         <span>{compact
           ? progress
-            ? [progress.receipt, ...receipt].join(" · ")
-            : [active ? `${model.entries.length} activity step${model.entries.length === 1 ? "" : "s"}` : activityLedgerStatusLabel(model.status), ...receipt].join(" · ")
+            ? [progress.receipt, ...compactReceipt].join(" · ")
+            : [active ? "Work in progress" : activityLedgerStatusLabel(model.status), ...compactReceipt].join(" · ")
           : `${model.actionCount} actions`}</span>
         <button
           type="button"
@@ -157,7 +162,7 @@ export function ActivityLedger({
       </footer>
 
       {expanded && <div className="activity-ledger-audit" id={auditId}>
-        <header><strong>{progress ? "Work" : "Activity"}</strong>{model.entries.length > 0 && <small>Newest first</small>}</header>
+        <header><strong>{progress ? "Work" : "Activity"}</strong>{model.entries.length > 0 && <small>{receipt.join(" · ")} · newest first</small>}</header>
         {progress && <div className="activity-ledger-progress-details">{progress.details}</div>}
         {model.entries.length > 0 ? <ol>
           {model.entries.map((entry) => {
