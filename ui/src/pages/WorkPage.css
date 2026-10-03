@@ -38,6 +38,9 @@
 .work-attention-row > span { min-width: 0; flex: 1; }
 .work-attention-row > svg:last-child { color: var(--muted); }
 .work-attention-row:hover, .work-project-list a:hover, .work-update-preview:hover { background: var(--surface-hover); }
+.work-project-search { padding: 12px 18px; border-bottom: 1px solid var(--border-soft); }
+.work-project-search input { box-sizing: border-box; width: min(360px, 100%); min-height: 44px; padding: 10px 12px; color: var(--text-strong); background: var(--surface-raised); border: 1px solid var(--border-soft); border-radius: 9px; font: inherit; }
+.work-project-search input::placeholder { color: var(--muted); }
 .work-project-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .work-project-list a { display: flex; align-items: center; gap: 12px; text-decoration: none; min-width: 0; padding: 16px 18px; border-bottom: 1px solid var(--border-soft); }
 .work-project-list a > span:first-child { flex: 1; min-width: 0; }

@@ -186,7 +186,7 @@ from .container_terminal import (
     TERMINAL_MAX_DURATION_SECONDS,
 )
 from .database import Database
-from .work import WorkCheckIn, WorkCreate, WorkPatch, WorkService
+from .work import WorkCheckIn, WorkCreate, WorkImportBatch, WorkImportResult, WorkPatch, WorkService
 from .event_history import pause_between_batches, prune_orphaned_event_history
 from .diagnostics import (
     DiagnosticManager,
@@ -7350,8 +7350,11 @@ def create_app(
         tags=["work"],
         dependencies=[Depends(require_auth)],
     )
-    async def all_work_items() -> list[WorkItem]:
-        return store.list_entities(WorkItem, limit=1000, newest_first=True)
+    async def all_work_items(
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=500, ge=1, le=500),
+    ) -> list[WorkItem]:
+        return store.list_entities(WorkItem, offset=offset, limit=limit, newest_first=True)
 
     @app.get(
         f"{API_PREFIX}/work/updates",
@@ -7359,8 +7362,26 @@ def create_app(
         tags=["work"],
         dependencies=[Depends(require_auth)],
     )
-    async def recent_work_updates() -> list[WorkUpdate]:
-        return store.list_entities(WorkUpdate, limit=100, newest_first=True)
+    async def recent_work_updates(
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> list[WorkUpdate]:
+        return store.list_entities(WorkUpdate, offset=offset, limit=limit, newest_first=True)
+
+    @app.post(
+        f"{API_PREFIX}/work/import",
+        response_model=WorkImportResult,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def import_work(body: WorkImportBatch) -> WorkImportResult:
+        projects = [
+            project.model_copy(update={
+                "workspace_path": _resolve_engagement_workspace_path(project.workspace_path),
+            }) if project.workspace_path else project
+            for project in body.projects
+        ]
+        return work_service.import_batch(body.model_copy(update={"projects": projects}))
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work",

@@ -9,10 +9,16 @@ const { workspace, saved } = vi.hoisted(() => {
   const saved = {
     enabled: false,
     item: { id: "item-1", engagement_id: project.id, title: "Build the search page", description: "Add filters", status: "in_progress", priority: "normal", assignee_session_id: "session-1", source_kind: "chat", source_id: "session-1", created_at: "2026-01-01T12:00:00Z", updated_at: "2026-01-01T12:00:00Z", last_update_at: null } as Record<string, unknown>,
+    items: [] as Array<Record<string, unknown>>,
     updates: [] as Array<Record<string, unknown>>,
   };
   const request = vi.fn(async (path: string, init?: RequestInit) => {
-    if (path === "work/items") return [saved.item];
+    if (path.startsWith("work/items?")) {
+      const query = new URLSearchParams(path.split("?")[1]);
+      const offset = Number(query.get("offset") ?? 0);
+      const limit = Number(query.get("limit") ?? 500);
+      return saved.items.slice(offset, offset + limit);
+    }
     if (path.endsWith("/work/setting") && init?.method === "PATCH") { saved.enabled = !saved.enabled; return { work_enabled: saved.enabled }; }
     if (path.endsWith("/work/item-1/updates") && init?.method === "POST") {
       const body = JSON.parse(String(init.body));
@@ -40,6 +46,7 @@ function openItem() {
 describe("Work operator journey", () => {
   beforeEach(() => {
     saved.enabled = false; saved.updates = []; saved.item.status = "in_progress"; saved.item.last_update_at = null;
+    saved.items = [saved.item]; workspace.engagements = [workspace.engagement];
     vi.clearAllMocks();
   });
 
@@ -77,5 +84,19 @@ describe("Work operator journey", () => {
     expect(await screen.findByText("Review documentation")).toBeVisible();
     expect(screen.getByText(/No Work item linked/)).toBeVisible();
     expect(screen.getByRole("link", { name: "Open Review documentation" })).toHaveAttribute("href", "/projects/project-1/workbench?session=session-2");
+  });
+
+  it("pages Work items and lets the operator find a project in a large import", async () => {
+    const user = userEvent.setup();
+    saved.items = Array.from({ length: 501 }, (_, index) => ({ ...saved.item, id: `import-${index}`, title: `Imported item ${index}`, assignee_session_id: null }));
+    workspace.engagements = [workspace.engagement, ...Array.from({ length: 100 }, (_, index) => ({
+      id: `project-${index + 2}`, name: `Sample project ${index + 1}`, status: "active", workEnabled: false,
+    }))];
+    render(<MemoryRouter initialEntries={["/work"]}><Routes><Route path="/work" element={<WorkPage />} /></Routes></MemoryRouter>);
+    expect(await screen.findByText("Showing 80 of 101 projects. Search to narrow the list.")).toBeVisible();
+    expect(workspace.api.request).toHaveBeenCalledWith("work/items?offset=500&limit=500", expect.any(Object));
+    expect(screen.queryByRole("link", { name: /Sample project 100/ })).not.toBeInTheDocument();
+    await user.type(screen.getByRole("searchbox", { name: "Search projects" }), "Sample project 100");
+    expect(screen.getByRole("link", { name: /Sample project 100/ })).toBeVisible();
   });
 });

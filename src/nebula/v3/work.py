@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from hashlib import sha256
+import json
 from typing import Literal
 from uuid import NAMESPACE_URL, uuid5
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
-from .domain import AgentRun, ChatSession, Engagement, NebulaModel, RiskClass, ScopePolicy, WorkItem, WorkUpdate, utc_now
+from .domain import AgentRun, ChatSession, Engagement, EngagementStatus, NebulaModel, RiskClass, ScopePolicy, WorkItem, WorkUpdate, utc_now
 from .runtime_platform import RuntimeToolComponents
+from .setup import create_engagement_with_default_scope
 from .storage import ConflictError, NebulaStore, NotFoundError
 from .tools import IdempotencyBehavior, ToolExecutionResult, ToolInvocation, ToolSpec
 from pathlib import Path
@@ -42,6 +45,71 @@ class WorkPatch(NebulaModel):
     description: str | None = Field(default=None, max_length=20_000)
     priority: WorkPriority | None = None
     assignee_session_id: str | None = Field(default=None, max_length=200)
+
+
+class WorkImportUpdate(NebulaModel):
+    summary: str = Field(min_length=1, max_length=4_000)
+    next_step: str | None = Field(default=None, max_length=2_000)
+    blocker: str | None = Field(default=None, max_length=2_000)
+    status: WorkStatus | None = None
+
+
+class WorkImportItem(NebulaModel):
+    external_id: str = Field(min_length=1, max_length=200)
+    title: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", max_length=20_000)
+    status: WorkStatus = "backlog"
+    priority: WorkPriority = "normal"
+    update: WorkImportUpdate | None = None
+
+
+class WorkImportProject(NebulaModel):
+    external_id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=300)
+    description: str = Field(default="", max_length=20_000)
+    status: EngagementStatus = EngagementStatus.DRAFT
+    engagement_id: str | None = None
+    workspace_path: str | None = Field(default=None, max_length=4096)
+    items: list[WorkImportItem] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def unique_items(self) -> "WorkImportProject":
+        if self.engagement_id is not None and self.workspace_path is not None:
+            raise ValueError("workspace_path cannot change an existing project during import")
+        ids = [item.external_id for item in self.items]
+        if len(ids) != len(set(ids)):
+            raise ValueError("import item external IDs must be unique in each project")
+        return self
+
+
+class WorkImportBatch(NebulaModel):
+    source: str = Field(min_length=1, max_length=100)
+    projects: list[WorkImportProject] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def bounded_unique_projects(self) -> "WorkImportBatch":
+        ids = [project.external_id for project in self.projects]
+        if len(ids) != len(set(ids)):
+            raise ValueError("import project external IDs must be unique in each batch")
+        if sum(len(project.items) for project in self.projects) > 500:
+            raise ValueError("an import batch may contain at most 500 items")
+        return self
+
+
+class WorkImportItemResult(NebulaModel):
+    external_id: str
+    item_id: str
+    update_id: str | None = None
+
+
+class WorkImportProjectResult(NebulaModel):
+    external_id: str
+    engagement_id: str
+    items: list[WorkImportItemResult]
+
+
+class WorkImportResult(NebulaModel):
+    projects: list[WorkImportProjectResult]
 
 
 class WorkService:
@@ -177,6 +245,70 @@ class WorkService:
             return False
         latest = self.last_agent_update(engagement_id, actor_id, mission=mission)
         return (now or utc_now()) - max(started_at, latest or started_at) >= timedelta(minutes=20)
+
+    def import_batch(self, batch: WorkImportBatch) -> WorkImportResult:
+        """Create source-identified projects and Work without overwriting later edits."""
+
+        actor_id = f"import:{batch.source}"
+        results: list[WorkImportProjectResult] = []
+        for project in batch.projects:
+            if project.engagement_id is not None:
+                engagement = self.store.get(Engagement, project.engagement_id)
+            else:
+                identity = json.dumps([batch.source, project.external_id], separators=(",", ":"))
+                project_id = str(uuid5(NAMESPACE_URL, f"nebula:work-import-project:{identity}"))
+                try:
+                    engagement = self.store.get(Engagement, project_id)
+                except NotFoundError:
+                    candidate = Engagement(
+                        id=project_id, name=project.name, description=project.description,
+                        status=project.status, workspace_path=project.workspace_path,
+                        metadata={"work_import": {"source": batch.source, "external_id": project.external_id}},
+                    )
+                    try:
+                        engagement = create_engagement_with_default_scope(self.store, candidate)
+                    except ConflictError:
+                        engagement = self.store.get(Engagement, project_id)
+                if engagement.metadata.get("work_import") != {
+                    "source": batch.source, "external_id": project.external_id,
+                }:
+                    raise ConflictError("import project ID belongs to a different source")
+            item_results: list[WorkImportItemResult] = []
+            for entry in project.items:
+                identity = json.dumps([project.external_id, entry.external_id], separators=(",", ":"))
+                request_id = sha256(identity.encode("utf-8")).hexdigest()
+                item = self.create(
+                    engagement.id,
+                    WorkCreate(
+                        title=entry.title, description=entry.description,
+                        status=entry.status, priority=entry.priority,
+                        source_kind="import", source_id=entry.external_id,
+                        request_id=request_id,
+                    ),
+                    actor_id=actor_id,
+                )
+                update_id = None
+                if entry.update is not None:
+                    update = self.check_in(
+                        engagement.id, item.id,
+                        WorkCheckIn(
+                            summary=entry.update.summary,
+                            next_step=entry.update.next_step,
+                            blocker=entry.update.blocker,
+                            status=entry.update.status,
+                            request_id=request_id,
+                        ),
+                        actor_kind="import", actor_id=actor_id,
+                    )
+                    update_id = update.id
+                item_results.append(WorkImportItemResult(
+                    external_id=entry.external_id, item_id=item.id, update_id=update_id,
+                ))
+            results.append(WorkImportProjectResult(
+                external_id=project.external_id, engagement_id=engagement.id,
+                items=item_results,
+            ))
+        return WorkImportResult(projects=results)
 
 
 WORK_ROUTING_INSTRUCTIONS = """

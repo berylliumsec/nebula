@@ -30,6 +30,8 @@ const columns: { id: Status; label: string }[] = [
 const label = (status: Status) => columns.find((column) => column.id === status)?.label ?? status;
 const time = (value: string | null | undefined) => value ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "No update yet";
 const errorText = (value: unknown) => value instanceof Error ? value.message : "Core could not load Work. Try again.";
+const workPageSize = 500;
+const visibleProjectLimit = 80;
 
 export function WorkPage() {
   const { api, engagement, engagements, coreState } = useWorkspace();
@@ -46,6 +48,7 @@ export function WorkPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [showCreate, setShowCreate] = useState(false);
+  const [projectQuery, setProjectQuery] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [createProjectId, setCreateProjectId] = useState(engagement?.id ?? "");
@@ -59,8 +62,17 @@ export function WorkPage() {
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!api) return;
     try {
-      const loaded = await api.request<WorkItem[]>(projectId
-        ? `engagements/${encodeURIComponent(projectId)}/work` : "work/items", { signal });
+      let loaded: WorkItem[];
+      if (projectId) {
+        loaded = await api.request<WorkItem[]>(`engagements/${encodeURIComponent(projectId)}/work`, { signal });
+      } else {
+        loaded = [];
+        for (let offset = 0; ; offset += workPageSize) {
+          const page = await api.request<WorkItem[]>(`work/items?offset=${offset}&limit=${workPageSize}`, { signal });
+          loaded.push(...page);
+          if (page.length < workPageSize) break;
+        }
+      }
       if (signal?.aborted) return;
       setItems(loaded);
       if (projectId) {
@@ -75,17 +87,19 @@ export function WorkPage() {
         const updates = await api.request<WorkUpdate[]>("work/updates", { signal });
         if (signal?.aborted) return;
         setRecent(updates);
-        const activeProjects = engagements.filter((project) => project.status !== "archived");
+        const linkedProjects = new Set(loaded.filter((item) => item.assignee_session_id).map((item) => item.engagement_id));
+        const activeProjects = engagements.filter((project) => project.status !== "archived"
+          && (project.workEnabled || project.id === engagement?.id || linkedProjects.has(project.id)));
         const states = await Promise.allSettled(activeProjects.map(async (project) => ({
           projectId: project.id,
           activity: await api.listChatSessionActivity(project.id, signal),
           sessions: await api.listChatSessions(project.id, signal),
         })));
         if (signal?.aborted) return;
-        const loaded = states.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
-        setActivity(Object.fromEntries(loaded.flatMap((result) => result.activity.map((entry) => [entry.sessionId, entry.state] as const))));
-        setActivityProjects(Object.fromEntries(loaded.flatMap((result) => result.activity.map((entry) => [entry.sessionId, result.projectId] as const))));
-        setSessions(Object.fromEntries(loaded.flatMap((result) => result.sessions.items.map((session) => [session.id, session] as const))));
+        const activityRows = states.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+        setActivity(Object.fromEntries(activityRows.flatMap((result) => result.activity.map((entry) => [entry.sessionId, entry.state] as const))));
+        setActivityProjects(Object.fromEntries(activityRows.flatMap((result) => result.activity.map((entry) => [entry.sessionId, result.projectId] as const))));
+        setSessions(Object.fromEntries(activityRows.flatMap((result) => result.sessions.items.map((session) => [session.id, session] as const))));
       }
       setError(undefined);
     } catch (failure) {
@@ -93,7 +107,7 @@ export function WorkPage() {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [api, engagements, projectId]);
+  }, [api, engagement?.id, engagements, projectId]);
 
   useEffect(() => { setEnabled(selectedProject?.workEnabled ?? false); }, [projectId, selectedProject?.workEnabled]);
 
@@ -119,6 +133,19 @@ export function WorkPage() {
   useEffect(() => { if (engagement?.id && !createProjectId) setCreateProjectId(engagement.id); }, [engagement?.id, createProjectId]);
 
   const counts = useMemo(() => Object.fromEntries(columns.map((column) => [column.id, items.filter((item) => item.status === column.id).length])) as Record<Status, number>, [items]);
+  const filteredProjects = useMemo(() => engagements.filter((project) => project.status !== "archived"
+    && project.name.toLocaleLowerCase().includes(projectQuery.trim().toLocaleLowerCase())), [engagements, projectQuery]);
+  const visibleProjects = filteredProjects.slice(0, visibleProjectLimit);
+  const projectCounts = useMemo(() => {
+    const byProject = new Map<string, { active: number; blocked: number }>();
+    for (const item of items) {
+      const counts = byProject.get(item.engagement_id) ?? { active: 0, blocked: 0 };
+      if (item.status === "in_progress") counts.active += 1;
+      if (item.status === "blocked") counts.blocked += 1;
+      byProject.set(item.engagement_id, counts);
+    }
+    return byProject;
+  }, [items]);
   const working = useMemo(() => items.filter((item) => item.assignee_session_id && activity[item.assignee_session_id] === "working" && item.status !== "done"), [items, activity]);
   const workingAgents = useMemo(() => Object.entries(activity).filter(([, state]) => state === "working").map(([sessionId]) => ({
     sessionId,
@@ -213,11 +240,14 @@ export function WorkPage() {
             {!counts.blocked && !stalled.length && <p className="work-empty-inline">No blocked items or overdue check-ins.</p>}
           </section>
         </div>
-        <section className="work-panel work-projects" aria-labelledby="work-projects-title"><div className="work-panel-head"><h2 id="work-projects-title">Projects</h2><span>{engagements.length}</span></div>
-          <div className="work-project-list">{engagements.filter((project) => project.status !== "archived").map((project) => {
-            const projectItems = items.filter((item) => item.engagement_id === project.id);
-            return <Link key={project.id} to={projectSurface(project.id, "work")}><span><strong>{project.name}</strong><small>{project.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><span>{projectItems.filter((item) => item.status === "in_progress").length} active · {projectItems.filter((item) => item.status === "blocked").length} blocked</span><ArrowRight size={16} /></Link>;
+        <section className="work-panel work-projects" aria-labelledby="work-projects-title"><div className="work-panel-head"><h2 id="work-projects-title">Projects</h2><span>{filteredProjects.length}</span></div>
+          <div className="work-project-search"><input type="search" aria-label="Search projects" placeholder="Search projects" value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} /></div>
+          <div className="work-project-list">{visibleProjects.map((project) => {
+            const projectItems = projectCounts.get(project.id) ?? { active: 0, blocked: 0 };
+            return <Link key={project.id} to={projectSurface(project.id, "work")}><span><strong>{project.name}</strong><small>{project.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><span>{projectItems.active} active · {projectItems.blocked} blocked</span><ArrowRight size={16} /></Link>;
           })}</div>
+          {filteredProjects.length > visibleProjectLimit && <p className="work-empty-inline">Showing {visibleProjectLimit} of {filteredProjects.length} projects. Search to narrow the list.</p>}
+          {!filteredProjects.length && <p className="work-empty-inline">No projects match your search.</p>}
         </section>
         <section className="work-panel" aria-labelledby="work-recent-title"><div className="work-panel-head"><h2 id="work-recent-title">Recent check-ins</h2><span>{recent.length}</span></div>
           {recent.slice(0, 12).map((update) => { const item = items.find((candidate) => candidate.id === update.item_id); return <Link className="work-update-preview" key={update.id} to={projectSurface(update.engagement_id, "work", update.item_id)}><span><strong>{item?.title ?? "Work item"}</strong><small>{projectName(update.engagement_id)} · {time(update.created_at)}</small></span><p>{update.summary}</p></Link>; })}

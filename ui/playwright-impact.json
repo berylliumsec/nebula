@@ -51,7 +51,15 @@
       {"area":"work-hub","project":"assistant-real-chromium-430","test_match":"tests/real-core.spec.ts","grep":"work hub project board keeps check-ins after refresh and agent access revocation","runtime":"real-core","shard":"1/1"},
       {"area":"work-hub","project":"assistant-real-webkit-320","test_match":"tests/real-core.spec.ts","grep":"work hub project board keeps check-ins after refresh and agent access revocation","runtime":"real-core","shard":"1/1"},
       {"area":"work-hub","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"work hub project board keeps check-ins after refresh and agent access revocation","runtime":"real-core","shard":"1/1"},
-      {"area":"work-hub","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"work hub project board keeps check-ins after refresh and agent access revocation","runtime":"real-core","shard":"1/1"}
+      {"area":"work-hub","project":"assistant-real-webkit-430","test_match":"tests/real-core.spec.ts","grep":"work hub project board keeps check-ins after refresh and agent access revocation","runtime":"real-core","shard":"1/1"},
+      {"area":"work-hub","project":"assistant-real-desktop","test_match":"tests/work-import.spec.ts","grep":"work hub import finds a project and its saved task after refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"work-hub","project":"assistant-real-compact","test_match":"tests/work-import.spec.ts","grep":"work hub import finds a project and its saved task after refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"work-hub","project":"assistant-real-chromium-320","test_match":"tests/work-import.spec.ts","grep":"work hub import finds a project and its saved task after refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"work-hub","project":"assistant-real-chromium-390","test_match":"tests/work-import.spec.ts","grep":"work hub import finds a project and its saved task after refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"work-hub","project":"assistant-real-chromium-430","test_match":"tests/work-import.spec.ts","grep":"work hub import finds a project and its saved task after refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"work-hub","project":"assistant-real-webkit-320","test_match":"tests/work-import.spec.ts","grep":"work hub import finds a project and its saved task after refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"work-hub","project":"assistant-real-webkit-390","test_match":"tests/work-import.spec.ts","grep":"work hub import finds a project and its saved task after refresh","runtime":"real-core","shard":"1/1"},
+      {"area":"work-hub","project":"assistant-real-webkit-430","test_match":"tests/work-import.spec.ts","grep":"work hub import finds a project and its saved task after refresh","runtime":"real-core","shard":"1/1"}
     ],
     "assistant-links": [
       {"area":"assistant-links","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization assistant links open workspace files in Code and web pages in the device browser","runtime":"mock","shard":"1/1"},
