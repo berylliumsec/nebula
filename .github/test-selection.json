@@ -1,12 +1,12 @@
 {
-  "change_digest": "5b9728e601919143ac7d17d61f3d5a78804e96cd42675a77ee09961d225205c1",
-  "reviewed_by": "Codex focused Work hub review after Studio polish rebase",
-  "reason": "The diff adds opt-in Work persistence, MCP and harness check-ins, an authenticated project import API, and a Studio-style responsive hub. Twenty-one Python tests, four component tests, and sixteen production-bundle real-Core browser journeys cover import retries, authorization, pagination, board updates, accessibility, and phone layouts. The frontend diagnostics audit confirms every Work failure handler is classified. Ruff lint and format, the Python diagnostic audit, and mypy also pass.",
-  "exclusions": "No native code changed. Unrelated Python, frontend, and browser journeys and full suites are excluded. Browser profiles are emulated; physical-device validation is separate.",
+  "change_digest": "c9fe2e871f781ae5cb127cd1ee174ba0cc6639e151fd98ed6f1d2836a660eee5",
+  "reviewed_by": "Codex README image review, 2026-10-03",
+  "reason": "The diff only replaces the README hero screenshot and its caption with a capture from the current production bundle against a fresh isolated Core. No executable UI, API, or native behavior changes. The image was visually inspected at its full 1440x900 resolution and the README target is checked locally.",
+  "exclusions": "No Python, frontend, Playwright, or native test cases apply to a documentation image replacement. Full suites and unrelated operator journeys are excluded. The browser capture used desktop Chromium on loopback; it does not claim mobile, LAN, or physical-device feature validation.",
   "expected_tests": {
-    "python": 21,
-    "frontend": 4,
-    "playwright": 16,
+    "python": 0,
+    "frontend": 0,
+    "playwright": 0,
     "native": 0
   },
   "python_versions": [
@@ -14,31 +14,8 @@
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_work.py",
-    "tests/v3/test_work_gateway.py",
-    "tests/test_public_commit_guard.py"
-  ],
-  "frontend": [
-    "ui/src/pages/WorkPage.test.tsx"
-  ],
-  "playwright": [
-    "entry:work-hub/assistant-real-desktop",
-    "entry:work-hub/assistant-real-compact",
-    "entry:work-hub/assistant-real-chromium-320",
-    "entry:work-hub/assistant-real-chromium-390",
-    "entry:work-hub/assistant-real-chromium-430",
-    "entry:work-hub/assistant-real-webkit-320",
-    "entry:work-hub/assistant-real-webkit-390",
-    "entry:work-hub/assistant-real-webkit-430",
-    "entry:work-import/assistant-real-desktop",
-    "entry:work-import/assistant-real-compact",
-    "entry:work-import/assistant-real-chromium-320",
-    "entry:work-import/assistant-real-chromium-390",
-    "entry:work-import/assistant-real-chromium-430",
-    "entry:work-import/assistant-real-webkit-320",
-    "entry:work-import/assistant-real-webkit-390",
-    "entry:work-import/assistant-real-webkit-430"
-  ],
+  "python": [],
+  "frontend": [],
+  "playwright": [],
   "native": []
 }
