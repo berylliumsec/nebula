@@ -455,24 +455,57 @@ _GATEWAY_WORK_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
     ),
     "work.create": (
         "Create a project work item for the task you are doing. Give a stable request_id for retry safety.",
-        {"type": "object", "properties": {
-            "title": {"type": "string", "minLength": 1, "maxLength": 300},
-            "description": {"type": "string", "maxLength": 20000},
-            "status": {"type": "string", "enum": ["backlog", "ready", "in_progress", "blocked", "review", "done"]},
-            "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
-            "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
-        }, "required": ["title"], "additionalProperties": False},
+        {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "minLength": 1, "maxLength": 300},
+                "description": {"type": "string", "maxLength": 20000},
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "backlog",
+                        "ready",
+                        "in_progress",
+                        "blocked",
+                        "review",
+                        "done",
+                    ],
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": ["low", "normal", "high", "urgent"],
+                },
+                "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            },
+            "required": ["title"],
+            "additionalProperties": False,
+        },
     ),
     "work.check_in": (
         "Post a concise progress update to an item. Include what changed, the next step, and any blocker. Update proactively about every 30 minutes of active work. Give a stable request_id for retry safety.",
-        {"type": "object", "properties": {
-            "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
-            "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
-            "next_step": {"type": "string", "maxLength": 2000},
-            "blocker": {"type": "string", "maxLength": 2000},
-            "status": {"type": "string", "enum": ["backlog", "ready", "in_progress", "blocked", "review", "done"]},
-            "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
-        }, "required": ["item_id", "summary"], "additionalProperties": False},
+        {
+            "type": "object",
+            "properties": {
+                "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+                "next_step": {"type": "string", "maxLength": 2000},
+                "blocker": {"type": "string", "maxLength": 2000},
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "backlog",
+                        "ready",
+                        "in_progress",
+                        "blocked",
+                        "review",
+                        "done",
+                    ],
+                },
+                "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            },
+            "required": ["item_id", "summary"],
+            "additionalProperties": False,
+        },
     ),
 }
 
@@ -817,7 +850,11 @@ def _harness_developer_instructions(
         + (f"Available Nebula tools: {tool_names}. " if tool_names else "")
         + (
             "Work is enabled for this project. Use work.list, work.create, and work.check_in to keep the operator informed. Create or claim a work item when you start substantial work. Post a factual check-in at meaningful changes and about every 30 minutes of active work; include your next step and blockers. "
-            if any(str(item.get("name") or "").startswith("work.") or str(item.get("name") or "").startswith("work_") for item in gateway_tools)
+            if any(
+                str(item.get("name") or "").startswith("work.")
+                or str(item.get("name") or "").startswith("work_")
+                for item in gateway_tools
+            )
             else ""
         )
         + (
@@ -8181,8 +8218,13 @@ class HarnessRuntimeService:
                 actor_id = turn.chat_session_id or turn.run_id
                 if actor_id is None:
                     continue
-                if not self.work.update_due(turn.engagement_id, actor_id, turn.started_at,
-                                            mission=turn.run_id is not None, now=now):
+                if not self.work.update_due(
+                    turn.engagement_id,
+                    actor_id,
+                    turn.started_at,
+                    mission=turn.run_id is not None,
+                    now=now,
+                ):
                     continue
                 previous = self._work_nudged_at.get(turn.id)
                 if previous is not None and now - previous < timedelta(minutes=20):
@@ -8190,13 +8232,22 @@ class HarnessRuntimeService:
                 await self.steer_turn(
                     turn.id,
                     "Work check-in is due. Use work.list to find your item, then work.check_in with what changed, your next step, and any blocker. If no item exists, create one first. Continue your work after the update.",
-                    actor_id="nebula-work", title="Work check-in due",
+                    actor_id="nebula-work",
+                    title="Work check-in due",
                     summary="Nebula asked the active agent for a project Work update.",
                 )
                 self._work_nudged_at[turn.id] = now
-            except (NotFoundError, HarnessStateError, HarnessTransportError):
-                # A turn may finish during the scan, or its adapter may not accept steering.
+            except (NotFoundError, HarnessStateError):
+                # diagnostic-expected: the turn finished or cannot accept steering.
                 continue
+            except HarnessTransportError as exc:
+                record_caught_exception(
+                    "harnesses",
+                    "harnesses.work_check_in_prompt_failed",
+                    "A running agent could not receive its Work check-in prompt.",
+                    exc,
+                    stage="work-check-in",
+                )
         for turn_id in list(self._work_nudged_at):
             if turn_id not in active_ids:
                 del self._work_nudged_at[turn_id]
@@ -13087,13 +13138,23 @@ class HarnessRuntimeService:
                         },
                     }
                 )
-        if self.work.enabled(current.engagement_id) and not current.metadata.get("analysis_only"):
+        if self.work.enabled(current.engagement_id) and not current.metadata.get(
+            "analysis_only"
+        ):
             for name, (description, schema) in _GATEWAY_WORK_SCHEMAS.items():
-                tools.append({
-                    "name": name, "description": description, "inputSchema": schema,
-                    "annotations": {"readOnlyHint": name == "work.list", "destructiveHint": False,
-                                    "idempotentHint": name == "work.list", "openWorldHint": False},
-                })
+                tools.append(
+                    {
+                        "name": name,
+                        "description": description,
+                        "inputSchema": schema,
+                        "annotations": {
+                            "readOnlyHint": name == "work.list",
+                            "destructiveHint": False,
+                            "idempotentHint": name == "work.list",
+                            "openWorldHint": False,
+                        },
+                    }
+                )
         for name, schema in _GATEWAY_RETRIEVAL_SCHEMAS.items():
             tools.append(
                 {
@@ -13824,9 +13885,14 @@ class HarnessRuntimeService:
         """Use the active turn's project and actor, never caller-supplied scope."""
 
         if not self.work.enabled(turn.engagement_id):
-            raise ToolNotPermitted("Work MCP is off for this project.", rule="work.turned_off")
+            raise ToolNotPermitted(
+                "Work MCP is off for this project.", rule="work.turned_off"
+            )
         if turn.metadata.get("analysis_only"):
-            raise ToolNotPermitted("Work MCP is unavailable in analysis-only turns.", rule="work.analysis_only")
+            raise ToolNotPermitted(
+                "Work MCP is unavailable in analysis-only turns.",
+                rule="work.analysis_only",
+            )
         actor_id = turn.chat_session_id or turn.run_id or turn.id
         call = ToolCall(
             engagement_id=turn.engagement_id,
@@ -13845,21 +13911,36 @@ class HarnessRuntimeService:
         self._attach_gateway_tool_call(turn, call.id)
         try:
             if name == "work.list":
-                result: dict[str, Any] = {"items": [
-                    item.model_dump(mode="json") for item in self.work.list(turn.engagement_id)
-                ]}
+                result: dict[str, Any] = {
+                    "items": [
+                        item.model_dump(mode="json")
+                        for item in self.work.list(turn.engagement_id)
+                    ]
+                }
             elif name == "work.create":
                 data = WorkCreate.model_validate(arguments)
                 if turn.chat_session_id is None:
-                    data = data.model_copy(update={"source_kind": "mission", "source_id": turn.run_id})
-                item = self.work.create(turn.engagement_id, data, actor_id=actor_id,
-                                        source_session_id=turn.chat_session_id)
+                    data = data.model_copy(
+                        update={"source_kind": "mission", "source_id": turn.run_id}
+                    )
+                item = self.work.create(
+                    turn.engagement_id,
+                    data,
+                    actor_id=actor_id,
+                    source_session_id=turn.chat_session_id,
+                )
                 result = {"item": item.model_dump(mode="json")}
             else:
                 item_id = str(arguments["item_id"])
-                data = WorkCheckIn.model_validate({key: value for key, value in arguments.items() if key != "item_id"})
+                check_in_data = WorkCheckIn.model_validate(
+                    {key: value for key, value in arguments.items() if key != "item_id"}
+                )
                 update = self.work.check_in(
-                    turn.engagement_id, item_id, data, actor_kind="agent", actor_id=actor_id,
+                    turn.engagement_id,
+                    item_id,
+                    check_in_data,
+                    actor_kind="agent",
+                    actor_id=actor_id,
                     source_session_id=turn.chat_session_id,
                     source_turn_id=turn.chat_turn_id or turn.id,
                     source_run_id=turn.run_id,
@@ -13870,8 +13951,11 @@ class HarnessRuntimeService:
             raise
         self._finish_gateway_call(call.id, result=result)
         serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
-        return {"content": [{"type": "text", "text": serialized}],
-                "structuredContent": result, "isError": False}
+        return {
+            "content": [{"type": "text", "text": serialized}],
+            "structuredContent": result,
+            "isError": False,
+        }
 
     def _finish_gateway_call(
         self,
