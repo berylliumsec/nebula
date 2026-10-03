@@ -238,12 +238,58 @@ class WorkService:
                 continue
         raise ConflictError("project Work setting changed concurrently; retry")
 
-    def _session(self, engagement_id: str, session_id: str | None) -> None:
+    def _session(
+        self,
+        engagement_id: str,
+        session_id: str | None,
+        *,
+        allow_parent: bool = False,
+    ) -> None:
         if session_id is None:
             return
         session = self.store.get(ChatSession, session_id)
-        if session.engagement_id != engagement_id:
-            raise NotFoundError("conversation does not belong to this project")
+        if session.engagement_id == engagement_id:
+            return
+        if (
+            allow_parent
+            and self.store.get(Engagement, engagement_id).parent_engagement_id
+            == session.engagement_id
+        ):
+            return
+        raise NotFoundError("conversation does not belong to this project")
+
+    def agent_project(self, engagement_id: str, project_name: str | None = None) -> str:
+        """Resolve this project or one directly linked child for a Work tool."""
+        if not self.enabled(engagement_id):
+            raise ValueError("Work is off for this project")
+        if not project_name:
+            return engagement_id
+        projects = self.store.find_entities(
+            Engagement,
+            {"name": project_name, "parent_engagement_id": engagement_id},
+            limit=2,
+        )
+        if not projects:
+            raise NotFoundError("linked Work project not found")
+        if len(projects) != 1:
+            raise ConflictError("linked Work project name is ambiguous")
+        if not projects[0].work_enabled:
+            raise ValueError("Work is off for this project")
+        return projects[0].id
+
+    def agent_item_project(self, engagement_id: str, item_id: str) -> str:
+        """Allow a Work tool to use an item in its project or a direct child."""
+        if not self.enabled(engagement_id):
+            raise ValueError("Work is off for this project")
+        item = self.store.get(WorkItem, item_id)
+        if item.engagement_id == engagement_id:
+            return engagement_id
+        project = self.store.get(Engagement, item.engagement_id)
+        if project.parent_engagement_id != engagement_id:
+            raise NotFoundError("work item does not belong to this project")
+        if not project.work_enabled:
+            raise ValueError("Work is off for this project")
+        return project.id
 
     def get(self, engagement_id: str, item_id: str) -> WorkItem:
         item = self.store.get(WorkItem, item_id)
@@ -379,9 +425,19 @@ class WorkService:
         source_session_id: str | None = None,
         source_turn_id: str | None = None,
         source_run_id: str | None = None,
+        allow_parent_source_session: bool = False,
         notify: bool = True,
     ) -> WorkUpdate:
-        self._session(engagement_id, source_session_id)
+        self._session(
+            engagement_id,
+            source_session_id,
+            allow_parent=allow_parent_source_session,
+        )
+        source_engagement_id = (
+            self.store.get(ChatSession, source_session_id).engagement_id
+            if source_session_id is not None
+            else None
+        )
         update_id = (
             str(
                 uuid5(
@@ -419,6 +475,7 @@ class WorkService:
                     actor_kind=actor_kind,
                     actor_id=actor_id,
                     source_session_id=source_session_id,
+                    source_engagement_id=source_engagement_id,
                     source_turn_id=source_turn_id,
                     source_run_id=source_run_id,
                 )
@@ -433,6 +490,7 @@ class WorkService:
                     actor_kind=actor_kind,
                     actor_id=actor_id,
                     source_session_id=source_session_id,
+                    source_engagement_id=source_engagement_id,
                     source_turn_id=source_turn_id,
                     source_run_id=source_run_id,
                 )
@@ -610,7 +668,8 @@ class WorkService:
 
 WORK_AVAILABLE_INSTRUCTIONS = (
     "Project Work is available. Use work_list to find tasks, work_create to create "
-    "a task, and work_check_in to post an update when appropriate."
+    "a task, and work_check_in to post an update when appropriate. For a linked "
+    "child project, pass its name as project_name to work_list or work_create."
 )
 
 
@@ -630,25 +689,42 @@ class WorkBroker:
             raise ValueError("Work is off for this project")
         actor_id = invocation.chat_session_id or invocation.run_id
         if invocation.tool_name == "work_list":
+            target_id = self.service.agent_project(
+                invocation.engagement_id,
+                invocation.arguments.get("project_name"),
+            )
             return ToolExecutionResult(
                 output={
                     "items": [
                         item.model_dump(mode="json")
-                        for item in self.service.list(invocation.engagement_id)
+                        for item in self.service.list(target_id)
                     ]
                 }
             )
         if invocation.tool_name == "work_create":
-            data = WorkCreate.model_validate(invocation.arguments)
-            item = self.service.create(
+            target_id = self.service.agent_project(
                 invocation.engagement_id,
+                invocation.arguments.get("project_name"),
+            )
+            data = WorkCreate.model_validate(
+                {k: v for k, v in invocation.arguments.items() if k != "project_name"}
+            )
+            item = self.service.create(
+                target_id,
                 data,
                 actor_id=actor_id,
-                source_session_id=invocation.chat_session_id,
+                source_session_id=(
+                    invocation.chat_session_id
+                    if target_id == invocation.engagement_id
+                    else None
+                ),
             )
             return ToolExecutionResult(output={"item": item.model_dump(mode="json")})
         if invocation.tool_name == "work_check_in":
             item_id = str(invocation.arguments["item_id"])
+            target_id = self.service.agent_item_project(
+                invocation.engagement_id, item_id
+            )
             check_in_data = WorkCheckIn.model_validate(
                 {
                     key: value
@@ -657,7 +733,7 @@ class WorkBroker:
                 }
             )
             update = self.service.check_in(
-                invocation.engagement_id,
+                target_id,
                 item_id,
                 check_in_data,
                 actor_kind="agent",
@@ -665,6 +741,7 @@ class WorkBroker:
                 source_session_id=invocation.chat_session_id,
                 source_turn_id=invocation.chat_turn_id,
                 source_run_id=None if invocation.chat_session_id else invocation.run_id,
+                allow_parent_source_session=True,
             )
             return ToolExecutionResult(
                 output={"update": update.model_dump(mode="json")}
@@ -680,8 +757,8 @@ def work_components(
 ) -> RuntimeToolComponents:
     fields = {
         "work_list": (
-            "List this project's Work items before creating a new one.",
-            {},
+            "List this project's Work items, or a linked child project's items by name.",
+            {"project_name": {"type": "string", "minLength": 1, "maxLength": 300}},
             [],
         ),
         "work_create": (
@@ -705,11 +782,12 @@ def work_components(
                     "enum": ["low", "normal", "high", "urgent"],
                 },
                 "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "project_name": {"type": "string", "minLength": 1, "maxLength": 300},
             },
             ["title"],
         ),
         "work_check_in": (
-            "Post progress, next step, and blocker. Give request_id for retry safety.",
+            "Post progress to this project's item or a linked child project's item. Give request_id for retry safety.",
             {
                 "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
                 "summary": {"type": "string", "minLength": 1, "maxLength": 4000},

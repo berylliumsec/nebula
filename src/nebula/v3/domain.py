@@ -965,6 +965,7 @@ class WorkUpdate(Entity):
     actor_kind: Literal["operator", "agent", "import"]
     actor_id: str = Field(min_length=1, max_length=200)
     source_session_id: str | None = Field(default=None, max_length=200)
+    source_engagement_id: str | None = Field(default=None, max_length=200)
     source_turn_id: str | None = Field(default=None, max_length=200)
     source_run_id: str | None = Field(default=None, max_length=200)
 
