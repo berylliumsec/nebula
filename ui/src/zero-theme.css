@@ -2,18 +2,18 @@
 
 :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) {
   color-scheme: dark;
-  --canvas: #020203;
-  --surface: rgb(12 13 16 / 76%);
-  --surface-raised: rgb(20 21 25 / 90%);
-  --surface-overlay: #141519;
-  --surface-muted: rgb(8 9 12 / 82%);
-  --surface-hover: rgb(42 45 52 / 72%);
-  --border: rgb(222 233 255 / 13%);
-  --border-soft: rgb(222 233 255 / 7%);
-  --text: #d4d9e2;
-  --text-strong: #f8f9fb;
-  --muted: #9ba4b2;
-  --muted-strong: #bcc3ce;
+  --canvas: #191b1e;
+  --surface: #24272b;
+  --surface-raised: #30343a;
+  --surface-overlay: #34383e;
+  --surface-muted: #292d31;
+  --surface-hover: #3b4047;
+  --border: #515862;
+  --border-soft: #3c4249;
+  --text: #e4e8ed;
+  --text-strong: #f7f8fa;
+  --muted: #adb6c1;
+  --muted-strong: #c4cbd4;
   --blue: #68a8ff;
   --blue-bright: #9cc8ff;
   --blue-muted: rgb(72 145 255 / 17%);
@@ -27,10 +27,10 @@
   --focus: #b9d9ff;
   --shadow: 0 30px 90px rgb(0 0 0 / 55%);
   --radius: 20px;
-  --zero-glass: linear-gradient(135deg, rgb(27 29 35 / 80%), rgb(8 9 12 / 70%));
-  --zero-glass-soft: linear-gradient(135deg, rgb(30 32 38 / 56%), rgb(8 9 12 / 48%));
+  --zero-glass: var(--surface-raised);
+  --zero-glass-soft: var(--surface);
   --zero-reflection: linear-gradient(transparent, transparent);
-  --zero-blue-glow: 0 18px 60px rgb(35 101 184 / 12%);
+  --zero-blue-glow: none;
 }
 
 :root[data-theme="zero-light"] {
@@ -747,4 +747,45 @@
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) body::before,
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) body::after,
   :root:is([data-theme="zero-dark"], [data-theme="zero-light"]) .zero-layer-shell::before { display: none; }
+}
+
+/* The dark Zero palette uses quiet, opaque charcoal layers. The shared Zero
+   geometry stays intact; only its former near-black glass is replaced. */
+:root[data-theme="zero-dark"] body { background: var(--canvas); }
+:root[data-theme="zero-dark"] body::before { display: none; }
+:root[data-theme="zero-dark"] .zero-layer-shell::before {
+  border-color: var(--border-soft);
+  background: var(--canvas);
+  box-shadow: none;
+}
+:root[data-theme="zero-dark"] .zero-status-band,
+:root[data-theme="zero-dark"] .side-nav.zero-anchor-dock {
+  border-color: var(--border-soft);
+  background: var(--surface);
+  box-shadow: none;
+}
+:root[data-theme="zero-dark"] .main-content {
+  border-color: var(--border-soft);
+  background: var(--canvas);
+  box-shadow: none;
+}
+:root[data-theme="zero-dark"] .sessions-page.full-screen { background: var(--canvas); }
+:root[data-theme="zero-dark"] .session-workspace,
+:root[data-theme="zero-dark"] :where(.terminal-workspace, .container-terminal-live, .xterm-shell, .workbench-browser) {
+  background: var(--canvas);
+}
+:root[data-theme="zero-dark"] :where(.terminal-tab-bar, .terminal-tab-item.active,
+  .container-terminal-live > header, .container-terminal-live > footer, .terminal-live-notices > p:not(.terminal-network-warning)) {
+  border-color: var(--border-soft);
+  background: var(--surface);
+}
+:root[data-theme="zero-dark"] .terminal-overflow-menu { background: var(--surface-raised); }
+:root[data-theme="zero-dark"] :where(.project-tabs, .settings-tabs, .segmented-control) {
+  border-color: var(--border-soft);
+  background: var(--surface);
+}
+:root[data-theme="zero-dark"] .button.secondary { background: var(--surface-raised); }
+:root[data-theme="zero-dark"] :where(input, textarea, select, .search-field, .chat-composer) {
+  border-color: var(--border-soft);
+  background-color: var(--surface-raised);
 }
