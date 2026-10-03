@@ -22,6 +22,9 @@ provider. Non-text files, submodules, and files over the review
 limits (1000 KiB per file, 1 MiB total) block for separate inspection. Review the staged content with
 `git diff --cached` and make a smaller text-only commit where possible. Do not
 paste private research into a public issue, PR, or CI log while resolving a block.
+Large accepted text files are reviewed in bounded, overlapping segments. Every
+segment must receive a complete allow verdict; a block, uncertainty, or missing
+segment blocks the commit.
 
 These are local Git hooks. `git -c core.hooksPath=/dev/null commit` and
 `git commit --no-verify` can bypass them. Other clones need installation too.

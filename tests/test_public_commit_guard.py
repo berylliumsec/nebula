@@ -37,11 +37,11 @@ import sys
 args = sys.argv[1:]
 directory = Path(args[args.index('-C') + 1])
 output = Path(args[args.index('-o') + 1])
-manifest = json.loads((directory / 'manifest.json').read_text())
-files = manifest['files']
-content = ''.join((directory / 'files' / item['id']).read_text() for item in files)
-if manifest['message_included']:
-    content += (directory / 'commit-message.txt').read_text()
+payload = json.loads(sys.stdin.read().split('STAGED_COMMIT_DATA_JSON:\\n', 1)[1])
+files = payload['files']
+content = ''.join(item['content'] for item in files)
+if payload['commit_message']:
+    content += payload['commit_message']
 if 'FAIL_REVIEW' in content:
     sys.exit(2)
 if 'INDEX_CHANGE' in content:
@@ -123,6 +123,15 @@ def test_staged_text_file_limit(repo: tuple[Path, dict[str, str]], size: int, al
     assert (result.returncode == 0) is allowed
     if not allowed:
         assert "Staged file exceeds 1024000 bytes" in result.stderr
+
+
+def test_later_part_of_large_staged_file_can_block(repo: tuple[Path, dict[str, str]]) -> None:
+    path, env = repo
+    (path / "large.txt").write_text("Public text.\n" * 10_000 + "PRIVATE_RESEARCH\n")
+    git(path, "add", "large.txt")
+    result = run_guard(path, env)
+    assert result.returncode == 1
+    assert "block (research_data)" in result.stderr
 
 
 def test_git_commit_invokes_both_hooks(repo: tuple[Path, dict[str, str]]) -> None:
