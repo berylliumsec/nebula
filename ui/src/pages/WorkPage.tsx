@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { ArrowLeft, ArrowRight, CircleAlert, Clock3, ListTodo, Plus, RefreshCw, X } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { ChatSessionActivity, ChatSessionSummary } from "../api/types";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { projectSurface } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
 import "./WorkPage.css";
@@ -103,7 +104,10 @@ export function WorkPage() {
       }
       setError(undefined);
     } catch (failure) {
-      if (!signal?.aborted) setError(errorText(failure));
+      if (!signal?.aborted) {
+        void logCaughtDiagnostic("interface.work_page.refresh_failed", "Work data could not be loaded.", failure, "work_page");
+        setError(errorText(failure));
+      }
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
@@ -123,7 +127,12 @@ export function WorkPage() {
     if (!api || !projectId || !itemId) { setItemUpdates([]); return; }
     const controller = new AbortController();
     const load = () => api.request<WorkUpdate[]>(`engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(itemId)}/updates`, { signal: controller.signal })
-      .then(setItemUpdates).catch((failure: unknown) => { if (!controller.signal.aborted) setError(errorText(failure)); });
+      .then(setItemUpdates).catch((failure: unknown) => {
+        if (!controller.signal.aborted) {
+          void logCaughtDiagnostic("interface.work_page.updates_failed", "Work updates could not be loaded.", failure, "work_page");
+          setError(errorText(failure));
+        }
+      });
     void load();
     const interval = window.setInterval(() => void load(), 30_000);
     return () => { controller.abort(); window.clearInterval(interval); };
@@ -170,7 +179,10 @@ export function WorkPage() {
       setTitle(""); setDescription(""); setShowCreate(false);
       await refresh();
       navigate(projectSurface(target, "work", item.id));
-    } catch (failure) { setError(errorText(failure)); }
+    } catch (failure) {
+      void logCaughtDiagnostic("interface.work_page.create_failed", "A Work task could not be created.", failure, "work_page");
+      setError(errorText(failure));
+    }
     finally { setBusy(false); }
   };
 
@@ -185,7 +197,10 @@ export function WorkPage() {
       setSummary(""); setNextStep(""); setBlocker("");
       await refresh();
       setItemUpdates(await api.request<WorkUpdate[]>(`engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(selectedItem.id)}/updates`));
-    } catch (failure) { setError(errorText(failure)); }
+    } catch (failure) {
+      void logCaughtDiagnostic("interface.work_page.check_in_failed", "A Work update could not be saved.", failure, "work_page");
+      setError(errorText(failure));
+    }
     finally { setBusy(false); }
   };
 
@@ -198,7 +213,10 @@ export function WorkPage() {
       });
       setEnabled(saved.work_enabled);
       await refresh();
-    } catch (failure) { setError(errorText(failure)); }
+    } catch (failure) {
+      void logCaughtDiagnostic("interface.work_page.setting_failed", "Work agent access could not be changed.", failure, "work_page");
+      setError(errorText(failure));
+    }
     finally { setBusy(false); }
   };
 
