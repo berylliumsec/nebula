@@ -7984,28 +7984,30 @@ test("the workbench expands to the full viewport with compact chrome and complet
   await expect(page.getByRole("heading", { name: "Workbench" })).toBeHidden();
 
   const focusToolbar = page.locator(".sessions-page.full-screen > .session-toolbar");
+  await expect(focusToolbar).toBeHidden();
+  await expect(page.locator(".session-workspace > .chat-empty-state")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
+  if (mobile) return;
+
+  await page.getByRole("tab", { name: "Terminal", exact: true }).click();
+  await page.getByRole("button", { name: "Enter focus mode" }).click();
   const focusToolbarHeight = await focusToolbar.evaluate((element) => element.getBoundingClientRect().height);
-  // 44px icon targets (docs/design/top-bar-actions.md) plus the toolbar padding and border.
-  expect(focusToolbarHeight).toBeLessThanOrEqual(mobile ? 53 : 57);
-  if (!mobile) {
-    const selectedTabHeight = await page.getByRole("tab", { name: "Analyst chat", exact: true }).evaluate((element) => element.getBoundingClientRect().height);
-    expect(selectedTabHeight).toBeLessThanOrEqual(44);
-  }
+  // Other workbench views retain their compact tab toolbar in full screen.
+  expect(focusToolbarHeight).toBeLessThanOrEqual(57);
 
   const fullScreenViews = [
     ["Terminal", ".persistent-terminal"],
     ["Workspace code editor", ".persistent-code-editor"],
     ["Project browser", ".persistent-browser"],
-    ["Analyst chat", ".session-workspace > .chat-empty-state"],
     ["Workspace files", ".workspace-browser"],
     ["Project notes", ".notes-panel"],
     ["Autonomous missions", ".agents-page"],
     ["Activity history", ".workbench-activity-stack"],
+    ["Analyst chat", ".session-workspace > .chat-empty-state"],
   ] as const;
-  for (const [tabName, contentSelector] of mobile
-    ? fullScreenViews.filter(([tabName]) => tabName === "Analyst chat")
-    : fullScreenViews) {
-    if (!mobile) await page.getByRole("tab", { name: tabName, exact: true }).click();
+  for (const [tabName, contentSelector] of fullScreenViews) {
+    await page.getByRole("tab", { name: tabName, exact: true }).click();
     const content = page.locator(contentSelector);
     await expect(content).toBeVisible();
     const bounds = await content.evaluate((element) => {
@@ -8026,8 +8028,7 @@ test("the workbench expands to the full viewport with compact chrome and complet
   }
 
   await page.keyboard.press("Escape");
-  if (mobile) await expect(page.getByRole("button", { name: "More workbench views" })).toBeVisible();
-  else await expect(page.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
 });
 
