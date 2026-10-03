@@ -135,6 +135,18 @@ def test_later_part_of_large_staged_file_can_block(repo: tuple[Path, dict[str, s
     assert "review part 0001.02" in result.stderr
 
 
+def test_exact_public_part_does_not_block_new_safe_text(repo: tuple[Path, dict[str, str]]) -> None:
+    path, env = repo
+    source = path / "large.txt"
+    public_text = "UNSURE_RESEARCH already published.\n" + "Public text.\n" * 10_000
+    source.write_text(public_text)
+    git(path, "add", "large.txt")
+    git(path, "commit", "-m", "Existing public text")
+    source.write_text(public_text + "A new safe line.\n")
+    git(path, "add", "large.txt")
+    assert run_guard(path, env).returncode == 0
+
+
 def test_git_commit_invokes_both_hooks(repo: tuple[Path, dict[str, str]]) -> None:
     path, env = repo
     scripts = path / "scripts"
