@@ -114,6 +114,7 @@ export interface EngagementSummary {
   clientName?: string;
   status: "draft" | "active" | "paused" | "complete" | "archived";
   tags: string[];
+  workEnabled: boolean;
   workspacePath?: string;
   createdAt: string;
   updatedAt: string;

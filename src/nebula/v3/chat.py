@@ -317,6 +317,7 @@ from .chat_agent_messages import (
     agent_message_components,
     contract_digest_segment as agent_message_digest_segment,
 )
+from .work import WORK_ROUTING_INSTRUCTIONS, WorkService, work_components
 from .tool_results import (
     MAX_MODEL_ARTIFACT_REFS,
     TOOL_RESULT_SCHEMA,
@@ -340,6 +341,13 @@ if TYPE_CHECKING:
     from .chat_goals import ChatGoalService
     from .chat_schedules import ChatScheduleService
     from .runtime_platform import RuntimePlatform, RuntimeToolComponents
+
+
+_WORK_CHECK_IN_REMINDER = (
+    "\n\nWork check-in is due: use work_list to find your item, then work_check_in "
+    "with what changed, your next step, and any blocker. Create an item first "
+    "if none exists. Continue the task after posting the update."
+)
 
 
 class ChatError(RuntimeError):
@@ -1527,6 +1535,7 @@ def _routing_instructions(names: Collection[str], max_active_subagents: Any) -> 
             else ""
         )
         + (AGENT_MESSAGE_ROUTING_INSTRUCTIONS if "send_agent_message" in names else "")
+        + (WORK_ROUTING_INSTRUCTIONS if "work_check_in" in names else "")
         + (NOTES_ROUTING_INSTRUCTIONS if NOTES_WRITE_TOOL_NAME in names else "")
         + (
             KNOWLEDGE_SEARCH_ROUTING_INSTRUCTIONS
@@ -2583,6 +2592,7 @@ class ChatService:
         tool_suggestion_client: Callable[[], JevClient | None] | None = None,
     ) -> None:
         self.store = store
+        self.work = WorkService(store)
         self.tool_suggestion_client = (
             tool_suggestion_client or JevClient.from_environment
         )
@@ -5450,6 +5460,12 @@ class ChatService:
         agent_messaging_enabled = bool(
             request.allow_agent_messaging and not subagent_child and engagement_id
         )
+        work_enabled = bool(
+            engagement_id
+            and self.work.enabled(engagement_id)
+            and not (session and session.metadata.get("side_chat") is True)
+            and profile.tools_verified_for(selected_model)
+        )
         # Every subagent turn can message the assistant that delegated to it,
         # so it always routes tools, even when its task has no others.
         child_messaging = bool(subagent_child and engagement_id)
@@ -5458,6 +5474,7 @@ class ChatService:
             or subagents_enabled
             or child_messaging
             or agent_messaging_enabled
+            or work_enabled
             or request.mcp_server_ids
             or request.ssh_environment_ids
             or any(item.resources for item in skill_snapshots)
@@ -5520,6 +5537,8 @@ class ChatService:
         instructions = _CHAT_BASE_INSTRUCTIONS + decision_instructions(
             operator_decisions
         )
+        if work_enabled:
+            instructions += "\n\n" + WORK_ROUTING_INSTRUCTIONS
         if subagent_child:
             instructions += SUBAGENT_CHILD_INSTRUCTIONS
         if goal is not None:
@@ -5637,6 +5656,7 @@ class ChatService:
                 ("subagents", subagents_enabled),
                 ("messages to the parent agent", child_messaging),
                 ("agent messaging", agent_messaging_enabled),
+                ("project Work", work_enabled),
             )
             if selected
         ]
@@ -5715,6 +5735,7 @@ class ChatService:
                     and not subagents_enabled
                     and not child_messaging
                     and not agent_messaging_enabled
+                    and not work_enabled
                 ):
                     raise ChatConfigurationError(
                         "no runtime capabilities were selected"
@@ -5796,6 +5817,23 @@ class ChatService:
                         agent_message_components(
                             self.agent_messages,
                             engagement_id=engagement_id,
+                            workspace=(
+                                tool_components.workspace
+                                if tool_components is not None
+                                else Path(
+                                    (engagement.workspace_path if engagement else None)
+                                    or "."
+                                ).resolve()
+                            ),
+                            scope=tool_components.scope if tool_components else None,
+                        ),
+                    )
+                if work_enabled:
+                    tool_components = combine_tool_components(
+                        tool_components,
+                        work_components(
+                            self.work,
+                            engagement_id,
                             workspace=(
                                 tool_components.workspace
                                 if tool_components is not None
@@ -6255,6 +6293,7 @@ class ChatService:
                     "allow_subagents": subagents_enabled,
                     "subagent_child": child_messaging,
                     "allow_agent_messaging": agent_messaging_enabled,
+                    "work_enabled": work_enabled,
                     "max_active_subagents": (
                         request.max_active_subagents if subagents_enabled else None
                     ),
@@ -6487,7 +6526,10 @@ class ChatService:
         recoveries: list[str] = []
         while True:
             try:
-                request = self._with_current_goal_time_instruction(prepared, request)
+                request = self._with_current_work_instruction(
+                    prepared,
+                    self._with_current_goal_time_instruction(prepared, request),
+                )
                 self._record_provider_request(prepared, request)
                 response = await prepared.provider.complete(request)
                 break
@@ -6527,6 +6569,27 @@ class ChatService:
             return request
         updated = request.model_copy(update={"instructions": instructions})
         return self._fit_turn_goal_request(prepared, updated)
+
+    def _with_current_work_instruction(
+        self, prepared: PreparedChat, request: ModelRequest
+    ) -> ModelRequest:
+        """Tell a long-running provider turn when its Work check-in is due."""
+
+        turn = prepared.turn
+        instructions = (request.instructions or "").replace(_WORK_CHECK_IN_REMINDER, "")
+        if (
+            turn is not None
+            and turn.request_snapshot.get("work_enabled") is True
+            and self.work.update_due(
+                turn.engagement_id,
+                turn.session_id,
+                turn.admitted_at or turn.created_at,
+            )
+        ):
+            instructions += _WORK_CHECK_IN_REMINDER
+        if instructions == (request.instructions or ""):
+            return request
+        return request.model_copy(update={"instructions": instructions})
 
     def _goal_time_wait_due(self, turn: ChatTurn, now: datetime) -> bool:
         """A parked subagent wait crossed a goal warning threshold."""
@@ -7022,7 +7085,10 @@ class ChatService:
         while True:
             output_started = False
             try:
-                request = self._with_current_goal_time_instruction(prepared, request)
+                request = self._with_current_work_instruction(
+                    prepared,
+                    self._with_current_goal_time_instruction(prepared, request),
+                )
                 self._record_provider_request(prepared, request)
                 async for event in prepared.provider.stream(request):
                     if (
@@ -12139,6 +12205,25 @@ class ChatService:
                     agent_message_components(
                         self.agent_messages,
                         engagement_id=turn.engagement_id,
+                        workspace=(
+                            components.workspace
+                            if components is not None
+                            else Path(
+                                self.store.get(
+                                    Engagement, turn.engagement_id
+                                ).workspace_path
+                                or "."
+                            ).resolve()
+                        ),
+                        scope=components.scope if components else None,
+                    ),
+                )
+            if turn.request_snapshot.get("work_enabled"):
+                components = combine_tool_components(
+                    components,
+                    work_components(
+                        self.work,
+                        turn.engagement_id,
                         workspace=(
                             components.workspace
                             if components is not None

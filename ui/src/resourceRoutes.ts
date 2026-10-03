@@ -1,7 +1,7 @@
 import type { ResourceKind } from "./api/types";
 import { logCaughtDiagnostic } from "./diagnostics";
 
-export type ProjectSurface = "workbench" | "assets" | "evidence" | "sources" | "results" | "findings" | "reports";
+export type ProjectSurface = "workbench" | "work" | "assets" | "evidence" | "sources" | "results" | "findings" | "reports";
 
 export const projectRoot = (projectId: string) => `/projects/${encodeURIComponent(projectId)}`;
 
@@ -32,7 +32,7 @@ export function resourcePath(projectId: string | undefined, kind: ResourceKind, 
 }
 
 export function canonicalNavigationPath(legacyPath: string, projectId?: string): string {
-  if (legacyPath === "/settings" || legacyPath === "/library") return legacyPath;
+  if (legacyPath === "/settings" || legacyPath === "/library" || legacyPath === "/work") return legacyPath;
   if (!projectId) return legacyPath;
   if (legacyPath === "/") return projectSurface(projectId, "workbench");
   if (legacyPath === "/findings") return projectSurface(projectId, "findings");

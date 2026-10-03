@@ -467,6 +467,7 @@ interface WireEngagement extends WireEntity {
   client_name?: string | null;
   status: EngagementSummary["status"];
   tags?: string[];
+  work_enabled?: boolean;
   workspace_path?: string | null;
   metadata?: JsonObject;
   assistant_defaults?: WireAssistantDefaults;
@@ -2256,6 +2257,7 @@ function mapEngagement(value: WireEngagement): EngagementSummary {
     clientName: value.client_name ?? undefined,
     status: value.status,
     tags: value.tags ?? [],
+    workEnabled: value.work_enabled === true,
     workspacePath: value.workspace_path ?? undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,

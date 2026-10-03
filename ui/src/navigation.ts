@@ -3,6 +3,7 @@ import {
   BookMarked,
   FileText,
   FolderKanban,
+  ListTodo,
   Settings,
   PanelsTopLeft,
   type LucideIcon,
@@ -30,6 +31,16 @@ export const navigationItems: NavigationItem[] = [
     description: "Terminal, assistant, files, and activity",
     icon: PanelsTopLeft,
     shortcut: "G O",
+    group: "workspace",
+  },
+  {
+    commandId: "navigate.work",
+    path: "/work",
+    label: "Work",
+    aliases: ["Board", "Tasks", "Progress", "Agents"],
+    description: "Project work, agent activity, and check-ins",
+    icon: ListTodo,
+    shortcut: "G W",
     group: "workspace",
   },
   {
@@ -88,6 +99,7 @@ export const navigationItems: NavigationItem[] = [
 // Canonical project surfaces and the navigation item that owns each one.
 const projectSurfaceItemPaths: Record<string, string> = {
   workbench: "/",
+  work: "/work",
   findings: "/findings",
   reports: "/reports",
   assets: "/project",

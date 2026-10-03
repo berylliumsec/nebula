@@ -186,6 +186,14 @@ from .container_terminal import (
     TERMINAL_MAX_DURATION_SECONDS,
 )
 from .database import Database
+from .work import (
+    WorkCheckIn,
+    WorkCreate,
+    WorkImportBatch,
+    WorkImportResult,
+    WorkPatch,
+    WorkService,
+)
 from .event_history import pause_between_batches, prune_orphaned_event_history
 from .diagnostics import (
     DiagnosticManager,
@@ -291,6 +299,8 @@ from .domain import (
     ContextSnapshotStatus,
     DeviceCapabilitySnapshot,
     Engagement,
+    WorkItem,
+    WorkUpdate,
     Entity,
     Evidence,
     GeneratedDraft,
@@ -1595,6 +1605,7 @@ def create_app(
     elif database is not None:
         raise ValueError("pass either store or database, not both")
     relation_service = ResourceRelationService(store)
+    work_service = WorkService(store)
     action_registry = ActionRegistry(store)
     action_broker = ActionBroker(store)
     federated_search = FederatedSearch(store, action_registry)
@@ -2240,6 +2251,16 @@ def create_app(
                     # Its scans run off the event loop and read only rows
                     # that can still need recovery; each step fails alone.
                     await provider_chat.recovery_tick()
+                    try:
+                        await harness_runtime.nudge_work_updates()
+                    except Exception as exc:
+                        record_caught_exception(
+                            "work",
+                            "work.nudge_tick_failed",
+                            "A Work check-in pass failed; the next pass retries.",
+                            exc,
+                            stage="schedule",
+                        )
 
             schedule_loop = create_diagnostic_task(
                 _chat_schedule_loop(),
@@ -7331,6 +7352,128 @@ def create_app(
     )
     async def get_assistant_defaults(engagement_id: str) -> AssistantDefaults:
         return store.get(Engagement, engagement_id).assistant_defaults
+
+    @app.get(
+        f"{API_PREFIX}/work/items",
+        response_model=list[WorkItem],
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def all_work_items(
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=500, ge=1, le=500),
+    ) -> list[WorkItem]:
+        return store.list_entities(
+            WorkItem, offset=offset, limit=limit, newest_first=True
+        )
+
+    @app.get(
+        f"{API_PREFIX}/work/updates",
+        response_model=list[WorkUpdate],
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def recent_work_updates(
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> list[WorkUpdate]:
+        return store.list_entities(
+            WorkUpdate, offset=offset, limit=limit, newest_first=True
+        )
+
+    @app.post(
+        f"{API_PREFIX}/work/import",
+        response_model=WorkImportResult,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def import_work(body: WorkImportBatch) -> WorkImportResult:
+        projects = [
+            project.model_copy(
+                update={
+                    "workspace_path": _resolve_engagement_workspace_path(
+                        project.workspace_path
+                    ),
+                }
+            )
+            if project.workspace_path
+            else project
+            for project in body.projects
+        ]
+        return work_service.import_batch(body.model_copy(update={"projects": projects}))
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/work",
+        response_model=list[WorkItem],
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_work(engagement_id: str) -> list[WorkItem]:
+        return work_service.list(engagement_id)
+
+    @app.patch(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/work/setting",
+        response_model=Engagement,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def set_work_enabled(
+        engagement_id: str, enabled: bool = Body(embed=True)
+    ) -> Engagement:
+        return work_service.set_enabled(engagement_id, enabled)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/work",
+        response_model=WorkItem,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def create_work(engagement_id: str, body: WorkCreate) -> WorkItem:
+        return work_service.create(engagement_id, body, actor_id=active_operator_id())
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/work/{{item_id}}",
+        response_model=WorkItem,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def get_work(engagement_id: str, item_id: str) -> WorkItem:
+        return work_service.get(engagement_id, item_id)
+
+    @app.patch(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/work/{{item_id}}",
+        response_model=WorkItem,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def patch_work(engagement_id: str, item_id: str, body: WorkPatch) -> WorkItem:
+        return work_service.patch(engagement_id, item_id, body)
+
+    @app.get(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/work/{{item_id}}/updates",
+        response_model=list[WorkUpdate],
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def list_work_updates(engagement_id: str, item_id: str) -> list[WorkUpdate]:
+        return work_service.updates(engagement_id, item_id)
+
+    @app.post(
+        f"{API_PREFIX}/engagements/{{engagement_id}}/work/{{item_id}}/updates",
+        response_model=WorkUpdate,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def add_work_update(
+        engagement_id: str, item_id: str, body: WorkCheckIn
+    ) -> WorkUpdate:
+        return work_service.check_in(
+            engagement_id,
+            item_id,
+            body,
+            actor_kind="operator",
+            actor_id=active_operator_id(),
+        )
 
     @app.patch(
         f"{API_PREFIX}/engagements/{{engagement_id}}/assistant-defaults",
