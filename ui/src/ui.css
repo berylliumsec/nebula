@@ -14,11 +14,55 @@
 @import url("./guides.css") layer(components);
 @import url("./structured-results.css") layer(components);
 @import url("./chat-subagents.css") layer(components);
+@import url("./chat-studio.css") layer(components);
 @import url("./calm-themes.css") layer(themes);
 @import url("./calm-responsive.css") layer(responsive);
 @import url("./vendor-canvas.css") layer(vendor-canvas);
 @import url("./zero-theme.css");
 @import url("./mobile-shell.css");
+
+/* Chat focus uses the full viewport for one conversation. Keep temporary panes
+   mounted so leaving focus restores them with their current state. */
+:root[data-nebula-chat-focus="true"] .app-shell > :is(.top-bar, .side-nav, .mobile-companion-nav) { display: none !important; }
+.sessions-page.chat-focus.full-screen { padding: 0; background: var(--canvas); }
+.sessions-page.chat-focus > .session-toolbar { display: none; }
+.sessions-page.chat-focus > .session-layout.chat,
+.sessions-page.chat-focus > .session-layout.chat.conversation-panel-open,
+.sessions-page.chat-focus > .session-layout.chat.inspector-open {
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr);
+  border: 0;
+  border-radius: 0;
+}
+.sessions-page.chat-focus .session-layout.chat > :is(.session-list, .session-inspector, .agent-view-panel, .agent-view-launcher) { display: none !important; }
+.sessions-page.chat-focus .session-workspace,
+.sessions-page.chat-focus .session-workspace:is(.side-chat-open, .chat-terminal-open) {
+  display: flex !important;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  flex-direction: column;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--canvas);
+}
+.sessions-page.chat-focus .session-workspace > :is(.side-chat-divider, .side-chat-pane, .chat-side-terminal, .side-chat-resize-handle) { display: none !important; }
+.sessions-page.chat-focus .conversation-toolbar { flex: 0 0 auto; min-height: 64px; padding: 8px 20px; border-bottom: 1px solid var(--border-soft); border-radius: 0; }
+.sessions-page.chat-focus .conversation-toolbar .session-conversations-toggle,
+.sessions-page.chat-focus .conversation-toolbar .session-toolbar-actions > :not(.workbench-full-screen-toggle),
+.sessions-page.chat-focus .mobile-conversation-header > :is(.mobile-drawer-toggle, .mobile-new-chat) { display: none !important; }
+.sessions-page.chat-focus .conversation-toolbar .workbench-full-screen-toggle { display: inline-flex; width: 44px; height: 44px; flex: 0 0 44px; }
+.sessions-page.chat-focus .chat-studio { grid-template-columns: minmax(0, 1fr) !important; }
+.sessions-page.chat-focus .chat-studio-rail { display: none !important; }
+.sessions-page.chat-focus .chat-studio .chat-scroll { --chat-reading-track: 920px; }
+.sessions-page.chat-focus .chat-studio .chat-composer { width: min(920px, calc(100% - 32px)); }
+@media (max-width: 760px) {
+  .sessions-page.chat-focus .mobile-conversation-header.conversation-toolbar { grid-template-columns: minmax(0, 1fr) 44px; padding-inline: 12px; }
+  .sessions-page.chat-focus .mobile-conversation-title { grid-column: 1; }
+  .sessions-page.chat-focus .mobile-conversation-header > .workbench-full-screen-toggle { grid-column: 2; }
+  .sessions-page.chat-focus .chat-studio .chat-composer { width: calc(100% - 24px); }
+}
 
 /* The shell allocates notice height before the bounded workbench. A 100%-height
    page plus a sibling banner clips the composer behind the navigation dock. */
@@ -186,6 +230,17 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 .harness-thinking > summary { cursor: pointer; min-height: 44px; padding: 10px 4px; }
 .harness-thinking > summary span { margin-inline-start: 12px; font-size: 0.85em; }
 .harness-thinking > summary:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.harness-thinking-body { max-height: min(340px, 42vh); overflow-y: auto; overscroll-behavior: contain; padding: 2px 4px 10px; }
+.harness-thinking-count { margin: 0 0 5px; color: var(--muted); font-size: 11px; }
+.harness-thinking-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.harness-thinking-list li { min-width: 0; padding: 7px 0 7px 12px; border-left: 1px solid var(--border-soft); color: var(--muted-strong); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.harness-thinking-list li + li { border-top: 1px solid color-mix(in srgb, var(--border-soft) 55%, transparent); }
+.harness-thinking-list .assistant-markdown :is(h1, h2, h3, h4, h5, h6, p) { margin: 0; color: inherit; font-size: 12px; font-weight: var(--weight-regular); line-height: 1.5; }
+.harness-thinking-list .assistant-markdown :is(ul, ol, pre) { margin-block: 5px; }
+.harness-thinking-more { display: inline-flex; min-height: 36px; align-items: center; margin-top: 8px; padding: 0 8px; border: 0; border-radius: 8px; color: var(--blue-bright); background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
+.harness-thinking-more:hover { background: var(--surface-hover); }
+.harness-thinking-more:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (pointer: coarse) { .harness-thinking-more { min-height: 44px; } }
 .harness-reasoning-summary { min-width: 0; overflow-wrap: anywhere; }
 .harness-reasoning-summary > .assistant-markdown > :first-child { margin-top: 0; }
 .harness-reasoning-summary > .assistant-markdown > :last-child { margin-bottom: 0; }
