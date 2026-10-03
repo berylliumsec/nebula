@@ -214,6 +214,7 @@ const CHAT_TERMINAL_OPEN_KEY = "nebula.chat-terminal.open";
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
 const sessionViews = new Set<string>(["chat", "code", "terminal", "browser", "missions", "activity", "workspace", "notes"] satisfies SessionView[]);
 const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace", "browser"]);
+const focusedWorkbenchViews = new Set<SessionView>(["chat", "code", "browser", "workspace"]);
 
 function sessionViewFromParam(value: string | null): SessionView | undefined {
   const view = value === "executions" ? "activity" : value === "files" ? "workspace" : value;
@@ -1128,7 +1129,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   };
   const mobileConversationMenuRef = useRef<HTMLDivElement>(null);
   const mobileConversationActionsRef = useRef<HTMLButtonElement>(null);
-  const chatFocusWasActive = useRef(false);
+  const workbenchFocusWasActive = useRef(false);
   const requestedDrawer = searchParams.get("drawer") ?? "";
   const drawerTab: "context" | "results" | "subagents" =
     requestedDrawer === "results" ? "results"
@@ -1885,23 +1886,23 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
   useEffect(() => {
     if (embeddedSideChat) return;
-    const chatFocused = fullScreen && view === "chat";
+    const workbenchFocused = fullScreen && focusedWorkbenchViews.has(view);
     let frame = 0;
-    if (chatFocused) {
-      document.documentElement.dataset.nebulaChatFocus = "true";
+    if (workbenchFocused) {
+      document.documentElement.dataset.nebulaWorkbenchFocus = "true";
       frame = requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(
-        ".sessions-page.chat-focus .workbench-full-screen-toggle"
+        ".sessions-page.workbench-focus .workbench-full-screen-toggle"
       )?.focus({ preventScroll: true }));
     } else {
-      delete document.documentElement.dataset.nebulaChatFocus;
-      if (chatFocusWasActive.current) frame = requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(
+      delete document.documentElement.dataset.nebulaWorkbenchFocus;
+      if (workbenchFocusWasActive.current) frame = requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(
         window.matchMedia("(max-width: 760px)").matches
           ? 'button[aria-label="More workbench views"]'
           : 'button[aria-label="Enter focus mode"]'
       )?.focus({ preventScroll: true }));
     }
-    chatFocusWasActive.current = chatFocused;
-    return () => { cancelAnimationFrame(frame); delete document.documentElement.dataset.nebulaChatFocus; };
+    workbenchFocusWasActive.current = workbenchFocused;
+    return () => { cancelAnimationFrame(frame); delete document.documentElement.dataset.nebulaWorkbenchFocus; };
   }, [embeddedSideChat, fullScreen, view]);
 
   useEffect(() => {
@@ -6089,7 +6090,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   );
 
   const newChatAction = view === "chat" ? <PageHeaderAction className="button primary compact-new-chat" label="New chat" icon={<Plus size={18} />} disabled={!engagement} title={!engagement ? "Create or select a project before starting chat" : "New chat"} onClick={newConversation} /> : undefined;
-  const workbenchToolbar = (
+  const focusedWorkbenchToolbar = fullScreen && view !== "chat" && focusedWorkbenchViews.has(view);
+  const workbenchToolbar = focusedWorkbenchToolbar ? (
+      <Toolbar className="session-toolbar focused-workbench-toolbar" label="Focus mode controls">
+        <strong className="focused-workbench-title">{view === "workspace" ? "Files" : view === "code" ? "Code" : "Browser"}</strong>
+        <div className="session-toolbar-actions">{focusAction}</div>
+      </Toolbar>
+  ) : (
       <Toolbar className={`session-toolbar compact-workbench-toolbar${fullScreen ? "" : " in-shell-header"}`} label="Workbench controls" primaryAction={fullScreen ? newChatAction : undefined}>
         <TabBar className="session-tabs workbench-view-tabs" label="Workbench views" value={view} onChange={setView} items={[
           { id: "chat", label: "Assistant", ariaLabel: "Analyst chat", className: "workbench-primary-tab", icon: <MessageSquare size={18} /> },
@@ -6130,7 +6137,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
   return (
     <WorkbenchLayout view={view} chatTerminalOpen={chatTerminalOpen} sideChatId={sideChatId} compact={compact} hasWorkspace={Boolean(api && engagement)} conversationPanelOpen={conversationPanelOpen} sessionInspectorOpen={sessionInspectorOpen}>
-      {({chatTerminalVisible, chatTerminalStacked, sideChatSplit, chatTerminalSize, conversationPanelSize, conversationPanelWidth, setSessionInspectorWidth, sessionLayoutStyle}) => <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}${fullScreen && view === "chat" ? " chat-focus" : ""}`}>
+      {({chatTerminalVisible, chatTerminalStacked, sideChatSplit, chatTerminalSize, conversationPanelSize, conversationPanelWidth, setSessionInspectorWidth, sessionLayoutStyle}) => <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}${fullScreen && focusedWorkbenchViews.has(view) ? " workbench-focus" : ""}${fullScreen && view === "chat" ? " chat-focus" : ""}`}>
       <WorkbenchGuideAction onOpen={() => setAssistantSettingsOpen(true)} assistantSettingsOpen={assistantSettingsOpen} view={view} refreshCatalog={refreshProjectCatalog} />
       <PageHeader
         title="Workbench"

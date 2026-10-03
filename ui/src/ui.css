@@ -21,9 +21,32 @@
 @import url("./zero-theme.css");
 @import url("./mobile-shell.css");
 
+/* Focus keeps each work surface in the viewport and restores its mounted state on exit. */
+:root[data-nebula-workbench-focus="true"] .app-shell > :is(.top-bar, .side-nav, .mobile-companion-nav) { display: none !important; }
+:root[data-theme] .sessions-page.workbench-focus.full-screen { padding: 0; background: var(--canvas); }
+.sessions-page.workbench-focus > .session-layout { border: 0; border-radius: 0; }
+:root[data-theme] .sessions-page.workbench-focus .session-workspace { padding: 0; border: 0; border-radius: 0; background: var(--canvas); }
+.sessions-page.workbench-focus :is(.code-editor-panel, .integrated-browser-layout, .workspace-browser) { border: 0; border-radius: 0; }
+.sessions-page.workbench-focus > .focused-workbench-toolbar {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  border-radius: 0;
+  background: var(--canvas);
+}
+.sessions-page.workbench-focus .focused-workbench-title { min-width: 0; color: var(--text-secondary); font-size: 13px; font-weight: var(--weight-semibold); }
+.sessions-page.workbench-focus .focused-workbench-toolbar .workbench-full-screen-toggle { display: inline-flex; width: 44px; height: 44px; }
+.sessions-page.workbench-focus .mobile-view-header { display: none; }
+@media (max-width: 760px) {
+  .sessions-page.workbench-focus > .focused-workbench-toolbar { padding-inline: 8px; }
+}
+
 /* Chat focus uses the full viewport for one conversation. Keep temporary panes
    mounted so leaving focus restores them with their current state. */
-:root[data-nebula-chat-focus="true"] .app-shell > :is(.top-bar, .side-nav, .mobile-companion-nav) { display: none !important; }
 .sessions-page.chat-focus.full-screen { padding: 0; background: var(--canvas); }
 .sessions-page.chat-focus > .session-toolbar { display: none; }
 .sessions-page.chat-focus > .session-layout.chat,
@@ -62,6 +85,17 @@
   .sessions-page.chat-focus .mobile-conversation-title { grid-column: 1; }
   .sessions-page.chat-focus .mobile-conversation-header > .workbench-full-screen-toggle { grid-column: 2; }
   .sessions-page.chat-focus .chat-studio .chat-composer { width: calc(100% - 24px); }
+}
+
+/* The surrounding search field owns its fill and focus ring in every theme. */
+:root[data-theme] .session-list-search input,
+:root[data-theme] .session-list-search input:focus,
+:root[data-theme] .session-list-search input:focus-visible {
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  box-shadow: none;
+  background: transparent;
 }
 
 /* The shell allocates notice height before the bounded workbench. A 100%-height

@@ -577,10 +577,11 @@ kbd { font-size: 11px; }
 .session-list > header .session-list-header-actions { flex-direction: row; gap: 2px; }
 .session-list > header span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 .session-list > header strong { margin-top: 2px; font-size: 12px; }
-.session-list-search { display: flex; min-height: 42px; align-items: center; gap: 7px; margin: 7px 8px 0; padding: 0 7px 0 10px; border: 1px solid var(--border-soft); border-radius: 8px; color: var(--muted); background: var(--canvas); }
-.session-list-search:focus-within { border-color: var(--focus); }
-.session-list-search input { min-width: 0; height: 38px; flex: 1; border: 0; outline: 0; color: var(--text); background: transparent; font: inherit; font-size: 12px; }
-.session-list-search .icon-button { width: 32px; height: 32px; }
+.session-list-search { display: flex; min-height: 44px; align-items: center; gap: 7px; margin: 7px 8px 0; padding: 0 4px 0 10px; border: 1px solid var(--border-soft); border-radius: 10px; color: var(--muted); background: var(--canvas); }
+.session-list-search:focus-within { border-color: var(--focus); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 20%, transparent); }
+.session-list-search input { min-width: 0; height: 42px; flex: 1; padding: 0; border: 0; border-radius: 0; outline: 0; box-shadow: none; color: var(--text); background: transparent; appearance: none; font: inherit; font-size: 12px; }
+.session-list-search input::-webkit-search-cancel-button { display: none; }
+.session-list-search .icon-button { width: 44px; height: 44px; }
 .session-new-chat { display: grid; min-height: 46px; grid-template-columns: 18px minmax(0, 1fr); align-items: center; gap: 8px; margin: 8px 8px 0; padding: 7px 10px; border: 1px solid color-mix(in srgb, var(--blue) 40%, var(--border)); border-radius: var(--radius-control); color: var(--action-primary-text); background: var(--action-primary); text-align: left; cursor: pointer; }
 .session-new-chat:hover, .session-new-chat:focus-visible { background: var(--action-primary-hover); }
 .session-new-chat:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
