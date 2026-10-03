@@ -1,27 +1,23 @@
 {
-  "change_digest": "92376a9e721ac36c6a7687e8ee11ca54da33dc38355fec6fd906ed2f4953f85c",
-  "reviewed_by": "Codex focused Work conversation navigation review",
-  "reason": "Work agent, assignee, and check-in links now select the chat view along with the conversation session. Seven Work component tests check those destinations. Eight production-bundle Core browser journeys click a synthetic agent activity row at desktop and emulated phone widths.",
-  "exclusions": "No backend or native code changed, so Python and native tests are excluded. Unrelated frontend and browser journeys and full suites are excluded. Browser profiles are emulated; physical-device validation is separate.",
+  "change_digest": "e2d8a7e435053cf0f45965a5cc74b3789a9970c1ef3cdce0bb3c861103518d27",
+  "reviewed_by": "Codex install routing, beta.1, and release-environment review",
+  "reason": "The source diff changes the public install destination, synchronizes the Linux beta version, and suppresses GitHub deployment records for three protected release jobs. One site-link regression, two build-metadata tests, and four exact release/version/workflow contract tests cover those changes. The APT publication pipeline and browser journey are verified separately.",
+  "exclusions": "No app UI, Core behavior, updater logic, or native code changed. Frontend, native, and app Playwright suites are excluded. The static public pages receive a separate desktop and mobile browser check; release preparation compiles and smoke-tests packages. Full suites are excluded.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 7,
-    "playwright": 8,
+    "python": 7,
+    "frontend": 0,
+    "playwright": 0,
     "native": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/pages/WorkPage.test.tsx"
+  "python": [
+    "tests/v3/test_install_routing.py",
+    "tests/v3/test_version.py",
+    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
+    "tests/v3/test_packaging.py::test_protected_release_distribution_is_linux_x86_64_only",
+    "tests/v3/test_packaging.py::test_protected_release_jobs_do_not_create_deployment_records",
+    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract"
   ],
-  "playwright": [
-    "entry:work-import/assistant-real-desktop",
-    "entry:work-import/assistant-real-compact",
-    "entry:work-import/assistant-real-chromium-320",
-    "entry:work-import/assistant-real-chromium-390",
-    "entry:work-import/assistant-real-chromium-430",
-    "entry:work-import/assistant-real-webkit-320",
-    "entry:work-import/assistant-real-webkit-390",
-    "entry:work-import/assistant-real-webkit-430"
-  ],
+  "frontend": [],
+  "playwright": [],
   "native": []
 }
