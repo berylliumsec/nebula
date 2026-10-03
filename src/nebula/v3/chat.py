@@ -318,12 +318,6 @@ from .chat_agent_messages import (
     contract_digest_segment as agent_message_digest_segment,
 )
 from .work import WORK_ROUTING_INSTRUCTIONS, WorkService, work_components
-
-_WORK_CHECK_IN_REMINDER = (
-    "\n\nWork check-in is due: use work_list to find your item, then work_check_in "
-    "with what changed, your next step, and any blocker. Create an item first "
-    "if none exists. Continue the task after posting the update."
-)
 from .tool_results import (
     MAX_MODEL_ARTIFACT_REFS,
     TOOL_RESULT_SCHEMA,
@@ -347,6 +341,13 @@ if TYPE_CHECKING:
     from .chat_goals import ChatGoalService
     from .chat_schedules import ChatScheduleService
     from .runtime_platform import RuntimePlatform, RuntimeToolComponents
+
+
+_WORK_CHECK_IN_REMINDER = (
+    "\n\nWork check-in is due: use work_list to find your item, then work_check_in "
+    "with what changed, your next step, and any blocker. Create an item first "
+    "if none exists. Continue the task after posting the update."
+)
 
 
 class ChatError(RuntimeError):
@@ -5460,7 +5461,8 @@ class ChatService:
             request.allow_agent_messaging and not subagent_child and engagement_id
         )
         work_enabled = bool(
-            engagement_id and self.work.enabled(engagement_id)
+            engagement_id
+            and self.work.enabled(engagement_id)
             and not (session and session.metadata.get("side_chat") is True)
             and profile.tools_verified_for(selected_model)
         )
@@ -5830,9 +5832,16 @@ class ChatService:
                     tool_components = combine_tool_components(
                         tool_components,
                         work_components(
-                            self.work, engagement_id,
-                            workspace=(tool_components.workspace if tool_components is not None
-                                       else Path((engagement.workspace_path if engagement else None) or ".").resolve()),
+                            self.work,
+                            engagement_id,
+                            workspace=(
+                                tool_components.workspace
+                                if tool_components is not None
+                                else Path(
+                                    (engagement.workspace_path if engagement else None)
+                                    or "."
+                                ).resolve()
+                            ),
                             scope=tool_components.scope if tool_components else None,
                         ),
                     )
@@ -6518,7 +6527,8 @@ class ChatService:
         while True:
             try:
                 request = self._with_current_work_instruction(
-                    prepared, self._with_current_goal_time_instruction(prepared, request)
+                    prepared,
+                    self._with_current_goal_time_instruction(prepared, request),
                 )
                 self._record_provider_request(prepared, request)
                 response = await prepared.provider.complete(request)
@@ -6571,7 +6581,8 @@ class ChatService:
             turn is not None
             and turn.request_snapshot.get("work_enabled") is True
             and self.work.update_due(
-                turn.engagement_id, turn.session_id,
+                turn.engagement_id,
+                turn.session_id,
                 turn.admitted_at or turn.created_at,
             )
         ):
@@ -7075,7 +7086,8 @@ class ChatService:
             output_started = False
             try:
                 request = self._with_current_work_instruction(
-                    prepared, self._with_current_goal_time_instruction(prepared, request)
+                    prepared,
+                    self._with_current_goal_time_instruction(prepared, request),
                 )
                 self._record_provider_request(prepared, request)
                 async for event in prepared.provider.stream(request):
@@ -12210,9 +12222,18 @@ class ChatService:
                 components = combine_tool_components(
                     components,
                     work_components(
-                        self.work, turn.engagement_id,
-                        workspace=(components.workspace if components is not None
-                                   else Path(self.store.get(Engagement, turn.engagement_id).workspace_path or ".").resolve()),
+                        self.work,
+                        turn.engagement_id,
+                        workspace=(
+                            components.workspace
+                            if components is not None
+                            else Path(
+                                self.store.get(
+                                    Engagement, turn.engagement_id
+                                ).workspace_path
+                                or "."
+                            ).resolve()
+                        ),
                         scope=components.scope if components else None,
                     ),
                 )

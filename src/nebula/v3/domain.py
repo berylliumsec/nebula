@@ -941,7 +941,9 @@ class WorkItem(Entity):
     engagement_id: str
     title: str = Field(min_length=1, max_length=300)
     description: str = Field(default="", max_length=20_000)
-    status: Literal["backlog", "ready", "in_progress", "blocked", "review", "done"] = "backlog"
+    status: Literal["backlog", "ready", "in_progress", "blocked", "review", "done"] = (
+        "backlog"
+    )
     priority: Literal["low", "normal", "high", "urgent"] = "normal"
     assignee_session_id: str | None = Field(default=None, max_length=200)
     source_kind: Literal["chat", "mission", "manual", "import"] = "manual"
