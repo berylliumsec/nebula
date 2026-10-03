@@ -1,5 +1,5 @@
 {
-  "change_digest": "2a12d965e0d2ec9bef5eedad96750337341e6ed549db10e42225819bdbadc137",
+  "change_digest": "13b56f976252fefd6144529255560b0b4ec378fddd9dd9fecfe846211ee1a58e",
   "reviewed_by": "Codex install routing and alpha.23 release review",
   "reason": "The source diff changes the public install destination and synchronizes the next Linux release version. One site-link regression, two build-metadata tests, and three exact release/version contract tests cover those changes. The APT publication pipeline and browser journey are verified separately.",
   "exclusions": "No app UI, Core behavior, updater logic, or native code changed. Frontend, native, and app Playwright suites are excluded. The static public pages receive a separate desktop and mobile browser check; release preparation compiles and smoke-tests packages. Full suites are excluded.",
