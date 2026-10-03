@@ -186,7 +186,14 @@ from .container_terminal import (
     TERMINAL_MAX_DURATION_SECONDS,
 )
 from .database import Database
-from .work import WorkCheckIn, WorkCreate, WorkImportBatch, WorkImportResult, WorkPatch, WorkService
+from .work import (
+    WorkCheckIn,
+    WorkCreate,
+    WorkImportBatch,
+    WorkImportResult,
+    WorkPatch,
+    WorkService,
+)
 from .event_history import pause_between_batches, prune_orphaned_event_history
 from .diagnostics import (
     DiagnosticManager,
@@ -2248,9 +2255,11 @@ def create_app(
                         await harness_runtime.nudge_work_updates()
                     except Exception as exc:
                         record_caught_exception(
-                            "work", "work.nudge_tick_failed",
+                            "work",
+                            "work.nudge_tick_failed",
                             "A Work check-in pass failed; the next pass retries.",
-                            exc, stage="schedule",
+                            exc,
+                            stage="schedule",
                         )
 
             schedule_loop = create_diagnostic_task(
@@ -7354,7 +7363,9 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=500, ge=1, le=500),
     ) -> list[WorkItem]:
-        return store.list_entities(WorkItem, offset=offset, limit=limit, newest_first=True)
+        return store.list_entities(
+            WorkItem, offset=offset, limit=limit, newest_first=True
+        )
 
     @app.get(
         f"{API_PREFIX}/work/updates",
@@ -7366,7 +7377,9 @@ def create_app(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
     ) -> list[WorkUpdate]:
-        return store.list_entities(WorkUpdate, offset=offset, limit=limit, newest_first=True)
+        return store.list_entities(
+            WorkUpdate, offset=offset, limit=limit, newest_first=True
+        )
 
     @app.post(
         f"{API_PREFIX}/work/import",
@@ -7376,9 +7389,15 @@ def create_app(
     )
     async def import_work(body: WorkImportBatch) -> WorkImportResult:
         projects = [
-            project.model_copy(update={
-                "workspace_path": _resolve_engagement_workspace_path(project.workspace_path),
-            }) if project.workspace_path else project
+            project.model_copy(
+                update={
+                    "workspace_path": _resolve_engagement_workspace_path(
+                        project.workspace_path
+                    ),
+                }
+            )
+            if project.workspace_path
+            else project
             for project in body.projects
         ]
         return work_service.import_batch(body.model_copy(update={"projects": projects}))
@@ -7398,7 +7417,9 @@ def create_app(
         tags=["work"],
         dependencies=[Depends(require_auth)],
     )
-    async def set_work_enabled(engagement_id: str, enabled: bool = Body(embed=True)) -> Engagement:
+    async def set_work_enabled(
+        engagement_id: str, enabled: bool = Body(embed=True)
+    ) -> Engagement:
         return work_service.set_enabled(engagement_id, enabled)
 
     @app.post(
@@ -7443,8 +7464,16 @@ def create_app(
         tags=["work"],
         dependencies=[Depends(require_auth)],
     )
-    async def add_work_update(engagement_id: str, item_id: str, body: WorkCheckIn) -> WorkUpdate:
-        return work_service.check_in(engagement_id, item_id, body, actor_kind="operator", actor_id=active_operator_id())
+    async def add_work_update(
+        engagement_id: str, item_id: str, body: WorkCheckIn
+    ) -> WorkUpdate:
+        return work_service.check_in(
+            engagement_id,
+            item_id,
+            body,
+            actor_kind="operator",
+            actor_id=active_operator_id(),
+        )
 
     @app.patch(
         f"{API_PREFIX}/engagements/{{engagement_id}}/assistant-defaults",

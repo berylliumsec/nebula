@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 from datetime import datetime, timedelta
 from hashlib import sha256
 import json
@@ -10,7 +11,18 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import Field, model_validator
 
-from .domain import AgentRun, ChatSession, Engagement, EngagementStatus, NebulaModel, RiskClass, ScopePolicy, WorkItem, WorkUpdate, utc_now
+from .domain import (
+    AgentRun,
+    ChatSession,
+    Engagement,
+    EngagementStatus,
+    NebulaModel,
+    RiskClass,
+    ScopePolicy,
+    WorkItem,
+    WorkUpdate,
+    utc_now,
+)
 from .runtime_platform import RuntimeToolComponents
 from .setup import create_engagement_with_default_scope
 from .storage import ConflictError, NebulaStore, NotFoundError
@@ -75,7 +87,9 @@ class WorkImportProject(NebulaModel):
     @model_validator(mode="after")
     def unique_items(self) -> "WorkImportProject":
         if self.engagement_id is not None and self.workspace_path is not None:
-            raise ValueError("workspace_path cannot change an existing project during import")
+            raise ValueError(
+                "workspace_path cannot change an existing project during import"
+            )
         ids = [item.external_id for item in self.items]
         if len(ids) != len(set(ids)):
             raise ValueError("import item external IDs must be unique in each project")
@@ -125,8 +139,14 @@ class WorkService:
             if project.work_enabled == enabled:
                 return project
             try:
-                return self.store.update(Engagement, engagement_id, {"work_enabled": enabled}, expected_revision=project.revision)
+                return self.store.update(
+                    Engagement,
+                    engagement_id,
+                    {"work_enabled": enabled},
+                    expected_revision=project.revision,
+                )
             except ConflictError:
+                # diagnostic-expected: concurrent settings edits are retried.
                 continue
         raise ConflictError("project Work setting changed concurrently; retry")
 
@@ -145,13 +165,30 @@ class WorkService:
 
     def list(self, engagement_id: str, *, limit: int = 500) -> list[WorkItem]:
         self.store.get(Engagement, engagement_id)
-        return self.store.list_entities(WorkItem, engagement_id=engagement_id, limit=limit, newest_first=True)
+        return self.store.list_entities(
+            WorkItem, engagement_id=engagement_id, limit=limit, newest_first=True
+        )
 
-    def updates(self, engagement_id: str, item_id: str, *, limit: int = 200) -> list[WorkUpdate]:
+    def updates(
+        self, engagement_id: str, item_id: str, *, limit: int = 200
+    ) -> builtins.list[WorkUpdate]:
         self.get(engagement_id, item_id)
-        return self.store.find_entities(WorkUpdate, {"item_id": item_id}, engagement_id=engagement_id, limit=limit, newest_first=True)
+        return self.store.find_entities(
+            WorkUpdate,
+            {"item_id": item_id},
+            engagement_id=engagement_id,
+            limit=limit,
+            newest_first=True,
+        )
 
-    def create(self, engagement_id: str, data: WorkCreate, *, actor_id: str, source_session_id: str | None = None) -> WorkItem:
+    def create(
+        self,
+        engagement_id: str,
+        data: WorkCreate,
+        *,
+        actor_id: str,
+        source_session_id: str | None = None,
+    ) -> WorkItem:
         self.store.get(Engagement, engagement_id)
         self._session(engagement_id, data.assignee_session_id)
         self._session(engagement_id, source_session_id)
@@ -162,20 +199,54 @@ class WorkService:
             if run.engagement_id != engagement_id:
                 raise NotFoundError("mission does not belong to this project")
         if source_session_id is not None:
-            data = data.model_copy(update={"source_kind": "chat", "source_id": source_session_id,
-                                           "assignee_session_id": data.assignee_session_id or source_session_id})
-        item_id = str(uuid5(NAMESPACE_URL, f"nebula:work:{engagement_id}:{actor_id}:{data.request_id}")) if data.request_id else None
+            data = data.model_copy(
+                update={
+                    "source_kind": "chat",
+                    "source_id": source_session_id,
+                    "assignee_session_id": data.assignee_session_id
+                    or source_session_id,
+                }
+            )
+        item_id = (
+            str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"nebula:work:{engagement_id}:{actor_id}:{data.request_id}",
+                )
+            )
+            if data.request_id
+            else None
+        )
         if item_id:
             try:
                 return self.get(engagement_id, item_id)
             except NotFoundError:
+                # diagnostic-expected: an unused request ID has no existing item.
                 pass
-        item = WorkItem(id=item_id, engagement_id=engagement_id, title=data.title, description=data.description,
-                        status=data.status, priority=data.priority, assignee_session_id=data.assignee_session_id,
-                        source_kind=data.source_kind, source_id=data.source_id) if item_id else WorkItem(
-                            engagement_id=engagement_id, title=data.title, description=data.description,
-                            status=data.status, priority=data.priority, assignee_session_id=data.assignee_session_id,
-                            source_kind=data.source_kind, source_id=data.source_id)
+        item = (
+            WorkItem(
+                id=item_id,
+                engagement_id=engagement_id,
+                title=data.title,
+                description=data.description,
+                status=data.status,
+                priority=data.priority,
+                assignee_session_id=data.assignee_session_id,
+                source_kind=data.source_kind,
+                source_id=data.source_id,
+            )
+            if item_id
+            else WorkItem(
+                engagement_id=engagement_id,
+                title=data.title,
+                description=data.description,
+                status=data.status,
+                priority=data.priority,
+                assignee_session_id=data.assignee_session_id,
+                source_kind=data.source_kind,
+                source_id=data.source_id,
+            )
+        )
         try:
             return self.store.create(item)
         except ConflictError:
@@ -184,67 +255,141 @@ class WorkService:
             raise
 
     def patch(self, engagement_id: str, item_id: str, data: WorkPatch) -> WorkItem:
-        changes = {key: value for key, value in data.model_dump(exclude_unset=True).items()
-                   if value is not None or key == "assignee_session_id"}
+        changes = {
+            key: value
+            for key, value in data.model_dump(exclude_unset=True).items()
+            if value is not None or key == "assignee_session_id"
+        }
         self._session(engagement_id, changes.get("assignee_session_id"))
         for _ in range(3):
             item = self.get(engagement_id, item_id)
             if not changes:
                 return item
             try:
-                return self.store.update(WorkItem, item_id, changes, expected_revision=item.revision)
+                return self.store.update(
+                    WorkItem, item_id, changes, expected_revision=item.revision
+                )
             except ConflictError:
+                # diagnostic-expected: a concurrent edit retries with the latest revision.
                 continue
         raise ConflictError("work item changed concurrently; retry")
 
-    def check_in(self, engagement_id: str, item_id: str, data: WorkCheckIn, *, actor_kind: Literal["operator", "agent", "import"],
-                 actor_id: str, source_session_id: str | None = None, source_turn_id: str | None = None,
-                 source_run_id: str | None = None) -> WorkUpdate:
+    def check_in(
+        self,
+        engagement_id: str,
+        item_id: str,
+        data: WorkCheckIn,
+        *,
+        actor_kind: Literal["operator", "agent", "import"],
+        actor_id: str,
+        source_session_id: str | None = None,
+        source_turn_id: str | None = None,
+        source_run_id: str | None = None,
+    ) -> WorkUpdate:
         self._session(engagement_id, source_session_id)
-        update_id = str(uuid5(NAMESPACE_URL, f"nebula:work-update:{engagement_id}:{actor_id}:{data.request_id}")) if data.request_id else None
+        update_id = (
+            str(
+                uuid5(
+                    NAMESPACE_URL,
+                    f"nebula:work-update:{engagement_id}:{actor_id}:{data.request_id}",
+                )
+            )
+            if data.request_id
+            else None
+        )
         if update_id:
             try:
                 existing = self.store.get(WorkUpdate, update_id)
-                if existing.engagement_id == engagement_id and existing.item_id == item_id:
+                if (
+                    existing.engagement_id == engagement_id
+                    and existing.item_id == item_id
+                ):
                     return existing
                 raise ConflictError("request_id is already used for another work item")
             except NotFoundError:
+                # diagnostic-expected: an unused request ID has no existing update.
                 pass
         for _ in range(3):
             item = self.get(engagement_id, item_id)
             status = "blocked" if data.blocker else (data.status or item.status)
-            update = WorkUpdate(id=update_id, engagement_id=engagement_id, item_id=item_id, summary=data.summary,
-                                next_step=data.next_step, blocker=data.blocker, status=status, actor_kind=actor_kind,
-                                actor_id=actor_id, source_session_id=source_session_id, source_turn_id=source_turn_id,
-                                source_run_id=source_run_id) if update_id else WorkUpdate(
-                                    engagement_id=engagement_id, item_id=item_id, summary=data.summary,
-                                    next_step=data.next_step, blocker=data.blocker, status=status, actor_kind=actor_kind,
-                                    actor_id=actor_id, source_session_id=source_session_id, source_turn_id=source_turn_id,
-                                    source_run_id=source_run_id)
+            update = (
+                WorkUpdate(
+                    id=update_id,
+                    engagement_id=engagement_id,
+                    item_id=item_id,
+                    summary=data.summary,
+                    next_step=data.next_step,
+                    blocker=data.blocker,
+                    status=status,
+                    actor_kind=actor_kind,
+                    actor_id=actor_id,
+                    source_session_id=source_session_id,
+                    source_turn_id=source_turn_id,
+                    source_run_id=source_run_id,
+                )
+                if update_id
+                else WorkUpdate(
+                    engagement_id=engagement_id,
+                    item_id=item_id,
+                    summary=data.summary,
+                    next_step=data.next_step,
+                    blocker=data.blocker,
+                    status=status,
+                    actor_kind=actor_kind,
+                    actor_id=actor_id,
+                    source_session_id=source_session_id,
+                    source_turn_id=source_turn_id,
+                    source_run_id=source_run_id,
+                )
+            )
             try:
                 with self.store.transaction() as transaction:
                     transaction.add(update)
-                    transaction.update(WorkItem, item.id, {"status": status, "last_update_at": update.created_at}, expected_revision=item.revision)
+                    transaction.update(
+                        WorkItem,
+                        item.id,
+                        {"status": status, "last_update_at": update.created_at},
+                        expected_revision=item.revision,
+                    )
                 return update
             except ConflictError:
+                # diagnostic-expected: concurrent check-ins retry after an ID lookup.
                 if update_id:
                     try:
                         return self.store.get(WorkUpdate, update_id)
                     except NotFoundError:
+                        # diagnostic-expected: the conflicting write was another item edit.
                         pass
         raise ConflictError("work item changed concurrently; retry")
 
-    def last_agent_update(self, engagement_id: str, actor_id: str, *, mission: bool = False) -> datetime | None:
+    def last_agent_update(
+        self, engagement_id: str, actor_id: str, *, mission: bool = False
+    ) -> datetime | None:
         key = "source_run_id" if mission else "source_session_id"
-        updates = self.store.find_entities(WorkUpdate, {key: actor_id, "actor_kind": "agent"},
-                                           engagement_id=engagement_id, limit=1, newest_first=True)
+        updates = self.store.find_entities(
+            WorkUpdate,
+            {key: actor_id, "actor_kind": "agent"},
+            engagement_id=engagement_id,
+            limit=1,
+            newest_first=True,
+        )
         return updates[0].created_at if updates else None
 
-    def update_due(self, engagement_id: str, actor_id: str, started_at: datetime, *, mission: bool = False, now: datetime | None = None) -> bool:
+    def update_due(
+        self,
+        engagement_id: str,
+        actor_id: str,
+        started_at: datetime,
+        *,
+        mission: bool = False,
+        now: datetime | None = None,
+    ) -> bool:
         if not self.enabled(engagement_id):
             return False
         latest = self.last_agent_update(engagement_id, actor_id, mission=mission)
-        return (now or utc_now()) - max(started_at, latest or started_at) >= timedelta(minutes=20)
+        return (now or utc_now()) - max(started_at, latest or started_at) >= timedelta(
+            minutes=20
+        )
 
     def import_batch(self, batch: WorkImportBatch) -> WorkImportResult:
         """Create source-identified projects and Work without overwriting later edits."""
@@ -255,34 +400,58 @@ class WorkService:
             if project.engagement_id is not None:
                 engagement = self.store.get(Engagement, project.engagement_id)
             else:
-                identity = json.dumps([batch.source, project.external_id], separators=(",", ":"))
-                project_id = str(uuid5(NAMESPACE_URL, f"nebula:work-import-project:{identity}"))
+                identity = json.dumps(
+                    [batch.source, project.external_id], separators=(",", ":")
+                )
+                project_id = str(
+                    uuid5(NAMESPACE_URL, f"nebula:work-import-project:{identity}")
+                )
                 try:
                     engagement = self.store.get(Engagement, project_id)
                 except NotFoundError:
+                    # diagnostic-expected: this source project has not been imported yet.
                     candidate = Engagement(
-                        id=project_id, name=project.name, description=project.description,
-                        status=project.status, workspace_path=project.workspace_path,
-                        metadata={"work_import": {"source": batch.source, "external_id": project.external_id}},
+                        id=project_id,
+                        name=project.name,
+                        description=project.description,
+                        status=project.status,
+                        workspace_path=project.workspace_path,
+                        metadata={
+                            "work_import": {
+                                "source": batch.source,
+                                "external_id": project.external_id,
+                            }
+                        },
                     )
                     try:
-                        engagement = create_engagement_with_default_scope(self.store, candidate)
+                        engagement = create_engagement_with_default_scope(
+                            self.store, candidate
+                        )
                     except ConflictError:
+                        # diagnostic-expected: another importer created this source project.
                         engagement = self.store.get(Engagement, project_id)
                 if engagement.metadata.get("work_import") != {
-                    "source": batch.source, "external_id": project.external_id,
+                    "source": batch.source,
+                    "external_id": project.external_id,
                 }:
-                    raise ConflictError("import project ID belongs to a different source")
+                    raise ConflictError(
+                        "import project ID belongs to a different source"
+                    )
             item_results: list[WorkImportItemResult] = []
             for entry in project.items:
-                identity = json.dumps([project.external_id, entry.external_id], separators=(",", ":"))
+                identity = json.dumps(
+                    [project.external_id, entry.external_id], separators=(",", ":")
+                )
                 request_id = sha256(identity.encode("utf-8")).hexdigest()
                 item = self.create(
                     engagement.id,
                     WorkCreate(
-                        title=entry.title, description=entry.description,
-                        status=entry.status, priority=entry.priority,
-                        source_kind="import", source_id=entry.external_id,
+                        title=entry.title,
+                        description=entry.description,
+                        status=entry.status,
+                        priority=entry.priority,
+                        source_kind="import",
+                        source_id=entry.external_id,
                         request_id=request_id,
                     ),
                     actor_id=actor_id,
@@ -290,7 +459,8 @@ class WorkService:
                 update_id = None
                 if entry.update is not None:
                     update = self.check_in(
-                        engagement.id, item.id,
+                        engagement.id,
+                        item.id,
                         WorkCheckIn(
                             summary=entry.update.summary,
                             next_step=entry.update.next_step,
@@ -298,16 +468,24 @@ class WorkService:
                             status=entry.update.status,
                             request_id=request_id,
                         ),
-                        actor_kind="import", actor_id=actor_id,
+                        actor_kind="import",
+                        actor_id=actor_id,
                     )
                     update_id = update.id
-                item_results.append(WorkImportItemResult(
-                    external_id=entry.external_id, item_id=item.id, update_id=update_id,
-                ))
-            results.append(WorkImportProjectResult(
-                external_id=project.external_id, engagement_id=engagement.id,
-                items=item_results,
-            ))
+                item_results.append(
+                    WorkImportItemResult(
+                        external_id=entry.external_id,
+                        item_id=item.id,
+                        update_id=update_id,
+                    )
+                )
+            results.append(
+                WorkImportProjectResult(
+                    external_id=project.external_id,
+                    engagement_id=engagement.id,
+                    items=item_results,
+                )
+            )
         return WorkImportResult(projects=results)
 
 
@@ -323,60 +501,146 @@ class WorkBroker:
     def __init__(self, service: WorkService) -> None:
         self.service = service
 
-    async def execute(self, invocation: ToolInvocation, scope: ScopePolicy, *, approval: object | None = None) -> ToolExecutionResult:
+    async def execute(
+        self,
+        invocation: ToolInvocation,
+        scope: ScopePolicy,
+        *,
+        approval: object | None = None,
+    ) -> ToolExecutionResult:
         del scope, approval
         if not self.service.enabled(invocation.engagement_id):
             raise ValueError("Work is off for this project")
         actor_id = invocation.chat_session_id or invocation.run_id
         if invocation.tool_name == "work_list":
-            return ToolExecutionResult(output={"items": [item.model_dump(mode="json") for item in self.service.list(invocation.engagement_id)]})
+            return ToolExecutionResult(
+                output={
+                    "items": [
+                        item.model_dump(mode="json")
+                        for item in self.service.list(invocation.engagement_id)
+                    ]
+                }
+            )
         if invocation.tool_name == "work_create":
             data = WorkCreate.model_validate(invocation.arguments)
-            item = self.service.create(invocation.engagement_id, data, actor_id=actor_id,
-                                       source_session_id=invocation.chat_session_id)
+            item = self.service.create(
+                invocation.engagement_id,
+                data,
+                actor_id=actor_id,
+                source_session_id=invocation.chat_session_id,
+            )
             return ToolExecutionResult(output={"item": item.model_dump(mode="json")})
         if invocation.tool_name == "work_check_in":
             item_id = str(invocation.arguments["item_id"])
-            data = WorkCheckIn.model_validate({key: value for key, value in invocation.arguments.items() if key != "item_id"})
+            check_in_data = WorkCheckIn.model_validate(
+                {
+                    key: value
+                    for key, value in invocation.arguments.items()
+                    if key != "item_id"
+                }
+            )
             update = self.service.check_in(
-                invocation.engagement_id, item_id, data, actor_kind="agent", actor_id=actor_id,
-                source_session_id=invocation.chat_session_id, source_turn_id=invocation.chat_turn_id,
+                invocation.engagement_id,
+                item_id,
+                check_in_data,
+                actor_kind="agent",
+                actor_id=actor_id,
+                source_session_id=invocation.chat_session_id,
+                source_turn_id=invocation.chat_turn_id,
                 source_run_id=None if invocation.chat_session_id else invocation.run_id,
             )
-            return ToolExecutionResult(output={"update": update.model_dump(mode="json")})
+            return ToolExecutionResult(
+                output={"update": update.model_dump(mode="json")}
+            )
         raise ValueError("unknown Work tool")
 
 
-def work_components(service: WorkService, engagement_id: str, workspace: Path, scope: ScopePolicy | None = None) -> RuntimeToolComponents:
+def work_components(
+    service: WorkService,
+    engagement_id: str,
+    workspace: Path,
+    scope: ScopePolicy | None = None,
+) -> RuntimeToolComponents:
     fields = {
-        "work_list": ("List this project's Work items before creating a new one.", {}, []),
-        "work_create": ("Create a Work item. Give request_id for retry safety.", {
-            "title": {"type": "string", "minLength": 1, "maxLength": 300},
-            "description": {"type": "string", "maxLength": 20000},
-            "status": {"type": "string", "enum": ["backlog", "ready", "in_progress", "blocked", "review", "done"]},
-            "priority": {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
-            "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
-        }, ["title"]),
-        "work_check_in": ("Post progress, next step, and blocker. Give request_id for retry safety.", {
-            "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
-            "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
-            "next_step": {"type": "string", "maxLength": 2000},
-            "blocker": {"type": "string", "maxLength": 2000},
-            "status": {"type": "string", "enum": ["backlog", "ready", "in_progress", "blocked", "review", "done"]},
-            "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
-        }, ["item_id", "summary"]),
+        "work_list": (
+            "List this project's Work items before creating a new one.",
+            {},
+            [],
+        ),
+        "work_create": (
+            "Create a Work item. Give request_id for retry safety.",
+            {
+                "title": {"type": "string", "minLength": 1, "maxLength": 300},
+                "description": {"type": "string", "maxLength": 20000},
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "backlog",
+                        "ready",
+                        "in_progress",
+                        "blocked",
+                        "review",
+                        "done",
+                    ],
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": ["low", "normal", "high", "urgent"],
+                },
+                "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            },
+            ["title"],
+        ),
+        "work_check_in": (
+            "Post progress, next step, and blocker. Give request_id for retry safety.",
+            {
+                "item_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+                "next_step": {"type": "string", "maxLength": 2000},
+                "blocker": {"type": "string", "maxLength": 2000},
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "backlog",
+                        "ready",
+                        "in_progress",
+                        "blocked",
+                        "review",
+                        "done",
+                    ],
+                },
+                "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            },
+            ["item_id", "summary"],
+        ),
     }
     specs = {
-        name: ToolSpec(name=name, description=description,
-                       input_schema={"type": "object", "properties": properties, "required": required, "additionalProperties": False},
-                       output_schema={"type": "object", "additionalProperties": True},
-                       risk_class=RiskClass.LOCAL_READ,
-                       idempotency=IdempotencyBehavior.SAFE if name == "work_list" else IdempotencyBehavior.KEY_REQUIRED,
-                       budget_class="artifact_query")
+        name: ToolSpec(
+            name=name,
+            description=description,
+            input_schema={
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": False,
+            },
+            output_schema={"type": "object", "additionalProperties": True},
+            risk_class=RiskClass.LOCAL_READ,
+            idempotency=IdempotencyBehavior.SAFE
+            if name == "work_list"
+            else IdempotencyBehavior.KEY_REQUIRED,
+            budget_class="artifact_query",
+        )
         for name, (description, properties, required) in fields.items()
     }
     return RuntimeToolComponents(
         broker=WorkBroker(service),
-        scope=scope or ScopePolicy(id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement_id}")), engagement_id=engagement_id),
-        workspace=workspace, specs=specs, runtime_digest="work-v1",
+        scope=scope
+        or ScopePolicy(
+            id=str(uuid5(NAMESPACE_URL, f"nebula:skill-scope:{engagement_id}")),
+            engagement_id=engagement_id,
+        ),
+        workspace=workspace,
+        specs=specs,
+        runtime_digest="work-v1",
     )

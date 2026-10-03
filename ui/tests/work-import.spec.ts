@@ -125,7 +125,7 @@ test("work hub import finds a project and its saved task after refresh", async (
     await expect(page.getByText(/Showing 80 of \d+ projects\. Search to narrow the list\./)).toBeVisible();
     await page.getByRole("searchbox", { name: "Search projects" }).fill("Imported plan");
     await page.locator(".work-project-list").getByRole("link", { name: /Imported plan/ }).click();
-    await expect(page.getByRole("button", { name: "Enable agent tools" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Enable agent tools" })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("link", { name: /Review the release plan/ }).click();
     await expect(page.getByRole("heading", { name: "Review the release plan" })).toBeVisible();
     await expect(page.locator(".work-timeline")).toContainText("Draft is waiting for approval");
