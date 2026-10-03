@@ -69,9 +69,9 @@ describe("ActivityLedger", () => {
     const ledger = screen.getByRole("region", { name: "Work summary" });
     expect(within(ledger).getByText("Saving verified findings.")).toBeVisible();
     expect(within(ledger).getByRole("list", { name: "Work phases" })).toBeVisible();
-    expect(within(ledger).queryByText("Newest first")).toBeNull();
+    expect(within(ledger).queryByText(/newest first/)).toBeNull();
     await user.click(within(ledger).getByRole("button", { name: "Show activity" }));
-    expect(within(ledger).getByText("Newest first")).toBeVisible();
+    expect(within(ledger).getByText(/newest first/)).toBeVisible();
     expect(within(ledger).getByRole("button", { name: "Hide activity" })).toHaveAttribute("aria-expanded", "true");
   });
 
@@ -88,7 +88,7 @@ describe("ActivityLedger", () => {
     const { rerender } = render(<ActivityLedger model={model()} />);
     await user.click(screen.getByRole("button", { name: "Show activity" }));
     rerender(<ActivityLedger model={model({ status: "complete", currentAction: undefined })} />);
-    expect(screen.getByText("Newest first")).toBeVisible();
+    expect(screen.getByText(/newest first/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Hide activity" })).toHaveAttribute("aria-expanded", "true");
   });
 
@@ -180,21 +180,24 @@ it("keeps commentary-only completed work behind one disclosure", async () => {
     renderEntryDetails={() => <p>The full saved update.</p>}
   />);
   const ledger = screen.getByRole("region", { name: "Work summary" });
-  expect(ledger).toHaveTextContent("1 update");
+  expect(ledger).toHaveTextContent("Completed");
+  expect(ledger).not.toHaveTextContent("1 update");
   expect(ledger).not.toHaveTextContent("thinking episode");
   expect(within(ledger).queryByText("The full saved update.")).toBeNull();
   await userEvent.click(within(ledger).getByRole("button", { name: "Show activity" }));
+  expect(ledger).toHaveTextContent("1 update");
   await userEvent.click(within(ledger).getByText("Review sources"));
   expect(within(ledger).getByText("The full saved update.")).toBeVisible();
 });
 
-it("shows one compact running state and a step count", () => {
+it("shows one compact running state without the raw activity step count", () => {
   render(<ActivityLedger compact model={model({ durationMs: 74_000 })} />);
   const ledger = screen.getByRole("region", { name: "Work summary" });
   expect(within(ledger).getByText("Running", { selector: ".activity-ledger-compact-header strong" })).toBeVisible();
   expect(within(ledger).getByText("1m 14s")).toBeVisible();
   expect(within(ledger).getByText("Saving verified findings.")).toBeVisible();
-  expect(ledger).toHaveTextContent("1 activity step");
+  expect(ledger).toHaveTextContent("Work in progress · 2 actions");
+  expect(ledger).not.toHaveTextContent("activity step");
 });
 
 it("keeps assistant technical failures opt-in while exposing requests for attention", async () => {
@@ -211,8 +214,10 @@ it("keeps assistant technical failures opt-in while exposing requests for attent
 
 it("keeps completed reasoning without text discoverable", async () => {
   render(<ActivityLedger compact model={model({status: "complete", actionCount: 0, entries: [{...model().entries[0], kind: "reasoning", status: "complete", countsAsAction: false, label: "Reasoning", summary: undefined, payload: {reasoning_summary_state: "not_provided"}}]})} />);
-  expect(screen.getByText(/1 thinking episode/)).toBeVisible();
+  expect(screen.getByRole("region", { name: "Work summary" })).toHaveTextContent("Completed");
+  expect(screen.queryByText(/1 thinking episode/)).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", {name: "Show activity"}));
+  expect(screen.getByText(/1 thinking episode/)).toBeVisible();
   expect(screen.getByText("Reasoning")).toBeVisible();
 });
 

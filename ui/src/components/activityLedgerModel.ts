@@ -212,6 +212,19 @@ function meaningfulLabel(title: string | undefined, summary: string | undefined,
   return firstSentence(summary) ?? PHASE_LABELS[phase];
 }
 
+/** Keep protocol lifecycle labels in the audit, not in the main progress line. */
+function currentActionLabel(entry: ActivityLedgerEntry | undefined, goalStep: string | undefined): string | undefined {
+  if (!entry) return goalStep;
+  if (entry.status === "attention") return entry.label;
+  const identity = [entry.label, entry.sourceItem?.title].filter(Boolean).join(" ");
+  if (/(?:subagent[./_-]wait|wait[_-]?subagents)/i.test(identity)) return "Waiting for delegated agents";
+  if (/\b(?:MCP|Harness)\b.*\btool (?:started|completed)\b/i.test(entry.label)
+    || /\b(?:item upsert|output delta)\b/i.test(entry.label)) {
+    return goalStep || PHASE_LABELS[entry.phase];
+  }
+  return entry.label || goalStep;
+}
+
 function harnessUsageLabel(item: HarnessActivityItem): string | undefined {
   if (!item.usage?.totalTokens) return undefined;
   const parts = [`${item.usage.totalTokens.toLocaleString()} tokens`];
@@ -473,7 +486,7 @@ export function buildActivityLedger(options: {
     status: overallStatus(options.status, uniqueEntries),
     entries: [...uniqueEntries].reverse(),
     phases,
-    currentAction: current?.label || goal?.currentStep || goal?.objective,
+    currentAction: currentActionLabel(current, goal?.currentStep || goal?.objective),
     actionCount: uniqueEntries.filter((entry) => entry.countsAsAction).length,
     attentionCount: uniqueEntries.filter((entry) => ["attention", "failed"].includes(entry.status)).length,
     artifactCount: artifacts.size,

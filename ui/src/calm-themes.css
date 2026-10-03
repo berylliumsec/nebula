@@ -25,7 +25,7 @@
    raised composer. Operator turns read as compact bubbles in every theme. */
 :root:is([data-theme="dark"], [data-theme="light"]) .top-bar { background: var(--canvas); }
 :root:is([data-theme="dark"], [data-theme="light"]) .chat-composer { border-color: var(--border-soft); background: var(--surface-raised); box-shadow: 0 10px 30px rgb(0 0 0 / 28%); }
-:root[data-theme="dark"] .side-nav { background: #090b0e; }
+:root[data-theme="dark"] .side-nav { background: var(--surface); }
 :root:is([data-theme="dark"], [data-theme="light"]) .button.primary:disabled { color: var(--muted); background: var(--surface-hover); opacity: 1; }
 :root:is([data-theme="dark"], [data-theme="light"]) .workspace-notices { background: transparent; }
 :root[data-theme="light"] .side-nav { background: var(--surface-muted); }

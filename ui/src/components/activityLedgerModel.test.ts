@@ -219,6 +219,20 @@ describe("activity ledger presentation model", () => {
     expect(model.entries.map((entry) => entry.label)).toEqual(["Grep", "workspace · read_file"]);
   });
 
+  it("keeps raw tool events in activity without promoting them as the main headline", () => {
+    const model = activityLedgerFromHarness("Work summary", "streaming", [
+      harnessItem({
+        key: "wait",
+        kind: "tool",
+        title: "subagent.wait",
+        status: "running",
+        payload: { display_name: "chat · MCP nebula/subagent.wait tool started" },
+      }),
+    ]);
+    expect(model.currentAction).toBe("Waiting for delegated agents");
+    expect(model.entries[0].label).toBe("chat · MCP nebula/subagent.wait tool started");
+  });
+
   it("prefers the readable name Core sends with a brokered call on a harness turn", () => {
     const model = activityLedgerFromHarness("Work summary", "complete", [
       harnessItem({

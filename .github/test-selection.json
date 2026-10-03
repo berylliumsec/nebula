@@ -1,23 +1,27 @@
 {
-  "change_digest": "da655b0a1d9d6e17f8900df73f32b1ceb2d16df09ecee580ae00d684e04b228b",
-  "reviewed_by": "Codex focused review for public commit privacy guard",
-  "reason": "The branch adds shared local Git hooks that send exact staged text to Codex and block sensitive, uncertain, failed, or incomplete verdicts. Nine collected Python cases exercise the index snapshot, verdict boundary, installer, and both real Git hook entry points.",
-  "exclusions": "No UI, browser, native, or product runtime behavior changes. Unrelated Python files and full suites are excluded. A synthetic live Codex CLI smoke check is separate from the mocked boundary tests.",
+  "change_digest": "239ec776eb0e920c9ba6123274d9736375b6068a3dac09447224bf951c273091",
+  "reviewed_by": "Codex focused guard and Studio interface review after rebase",
+  "reason": "The diff raises the public commit guard's per-file limit to 1000 KiB and reviews new staged text in bounded segments. Studio chat, both dark palettes, and focus mode change. Thirteen guard tests, thirty-eight component tests, and six production-bundle browser journeys cover these boundaries on desktop Chromium and 320 px mobile Chromium and WebKit.",
+  "exclusions": "No Core API, native, provider execution, or deployment code changed. Unrelated Python and browser journeys and full suites are excluded. Browser fixtures use mock Core data; an isolated real-Core smoke checks the served production entry path. Physical-device and populated real-Core workflows remain unverified.",
   "expected_tests": {
-    "python": 9,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
+    "python": 13,
+    "frontend": 38,
+    "playwright": 6,
+    "native": 0
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/test_public_commit_guard.py"
+  "python": ["tests/test_public_commit_guard.py"],
+  "frontend": [
+    "ui/src/components/HarnessThinking.test.tsx",
+    "ui/src/components/activityLedgerModel.test.ts",
+    "ui/src/components/ActivityLedger.test.tsx"
   ],
-  "frontend": [],
-  "native": [],
-  "playwright": []
+  "playwright": [
+    "entry:studio-conversation/desktop",
+    "entry:studio-conversation/mobile-chromium-small",
+    "entry:studio-conversation/mobile-webkit-small"
+  ],
+  "native": []
 }

@@ -13,6 +13,7 @@ import { useChatComposerAnchor } from "./useChatComposerAnchor";
 import { ChatTurnDetails } from "../components/ChatTurnDetails";
 import { WorkingContextPanel, contextUsePercent } from "../components/WorkingContextPanel";
 import { ChatCatchUp } from "../components/ChatCatchUp";
+import { ChatStudioRail } from "../components/ChatStudioRail";
 import { ResolvedApprovalNotice } from "../components/ResolvedApprovalNotice";
 import { isPendingRequest, pendingApprovalId, useSessionState } from "./useSessionState";
 import { RefreshCw } from "lucide-react";
@@ -1071,6 +1072,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const confirm = useConfirmation();
   const { openSetting } = useChrome();
   const compact = useCompactLayout();
+  const [studioGoalOpen, setStudioGoalOpen] = useState(false);
   const {
     assistantDraftNotice,
     assistantDrafts,
@@ -1126,6 +1128,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   };
   const mobileConversationMenuRef = useRef<HTMLDivElement>(null);
   const mobileConversationActionsRef = useRef<HTMLButtonElement>(null);
+  const chatFocusWasActive = useRef(false);
   const requestedDrawer = searchParams.get("drawer") ?? "";
   const drawerTab: "context" | "results" | "subagents" =
     requestedDrawer === "results" ? "results"
@@ -1879,6 +1882,27 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     window.addEventListener("keydown", exitFullScreen);
     return () => window.removeEventListener("keydown", exitFullScreen);
   }, [fullScreen, mobileMoreOpen]);
+
+  useEffect(() => {
+    if (embeddedSideChat) return;
+    const chatFocused = fullScreen && view === "chat";
+    let frame = 0;
+    if (chatFocused) {
+      document.documentElement.dataset.nebulaChatFocus = "true";
+      frame = requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(
+        ".sessions-page.chat-focus .workbench-full-screen-toggle"
+      )?.focus({ preventScroll: true }));
+    } else {
+      delete document.documentElement.dataset.nebulaChatFocus;
+      if (chatFocusWasActive.current) frame = requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(
+        window.matchMedia("(max-width: 760px)").matches
+          ? 'button[aria-label="More workbench views"]'
+          : 'button[aria-label="Enter focus mode"]'
+      )?.focus({ preventScroll: true }));
+    }
+    chatFocusWasActive.current = chatFocused;
+    return () => { cancelAnimationFrame(frame); delete document.documentElement.dataset.nebulaChatFocus; };
+  }, [embeddedSideChat, fullScreen, view]);
 
   useEffect(() => {
     if (!mobileConversationMenuOpen && !mobileListOpen) return;
@@ -5725,6 +5749,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           </button>;
   const conversationTitle = sessions.find(session => session.id === sessionId)?.title
     ?? (loadingHistory ? "Loading conversation…" : conversationOpen ? "New conversation" : "No conversation open");
+  const studioRailAvailable = Boolean(sessionId && !fullScreen && !embeddedSideChat && !sideChatId
+    && !chatTerminalOpen && !sessionInspectorOpen);
   const conversationActions = (
         <div className="session-toolbar-actions" role="toolbar" aria-label="Conversation actions">
           {view === "chat" && conversationOpen && transcriptSearchAction}
@@ -6025,7 +6051,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               </div>
               <form className="chat-composer" onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
               <div className="chat-composer-context" role="region" aria-label="Composer context and activity" tabIndex={0}>
-              {runtimeKind === "provider" && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <ProviderGoalPanel api={api} sessionId={sessionId || undefined} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} settingsBusy={assistantSettingsBusy} onCreate={createGoalConversation} onChange={setProviderGoal} onWorkDispatched={async () => { if (sessionId) await selectSession(sessionId, false); }} />}</>}
+              {runtimeKind === "provider" && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <div id="chat-studio-goal-editor" className="chat-studio-goal-editor"><ProviderGoalPanel api={api} sessionId={sessionId || undefined} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} settingsBusy={assistantSettingsBusy} onCreate={createGoalConversation} onChange={setProviderGoal} onWorkDispatched={async () => { if (sessionId) await selectSession(sessionId, false); }} /></div>}</>}
               {sessionId && !pendingSubagentApproval && <ChatSubagentRail
                 subagents={subagentState.subagents}
                 open={sessionInspectorOpen && drawerTab === "subagents"}
@@ -6104,7 +6130,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
   return (
     <WorkbenchLayout view={view} chatTerminalOpen={chatTerminalOpen} sideChatId={sideChatId} compact={compact} hasWorkspace={Boolean(api && engagement)} conversationPanelOpen={conversationPanelOpen} sessionInspectorOpen={sessionInspectorOpen}>
-      {({chatTerminalVisible, chatTerminalStacked, sideChatSplit, chatTerminalSize, conversationPanelSize, conversationPanelWidth, setSessionInspectorWidth, sessionLayoutStyle}) => <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}`}>
+      {({chatTerminalVisible, chatTerminalStacked, sideChatSplit, chatTerminalSize, conversationPanelSize, conversationPanelWidth, setSessionInspectorWidth, sessionLayoutStyle}) => <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}${fullScreen && view === "chat" ? " chat-focus" : ""}`}>
       <WorkbenchGuideAction onOpen={() => setAssistantSettingsOpen(true)} assistantSettingsOpen={assistantSettingsOpen} view={view} refreshCatalog={refreshProjectCatalog} />
       <PageHeader
         title="Workbench"
@@ -6220,7 +6246,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           >
             <PanelLeft size={18} aria-hidden="true" />
           </button>}
-            <strong className="conversation-toolbar-title" title={conversationTitle}>{conversationTitle}</strong>
+            <div className="conversation-heading"><strong className="conversation-toolbar-title" title={conversationTitle}>{conversationTitle}</strong><small>{engagement?.name ?? "Assistant"} · {assistantSource}{runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}</small></div>
             {conversationActions}
           </header>}
 
@@ -6297,7 +6323,22 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           ) : !conversationOpen ? (
             <div className="empty-state chat-empty-state"><MessageSquare size={24} /><strong>No conversation open</strong><p>Select a saved conversation or start a new chat when you are ready.</p><button className="button primary" type="button" disabled={!engagement} onClick={newConversation}><Plus size={15} /> Start new chat</button></div>
           ) : (
-            assistantPanel
+            <div className="chat-studio" data-rail={studioRailAvailable} data-goal-open={studioGoalOpen}>
+              {assistantPanel}
+              {studioRailAvailable && <ChatStudioRail
+                goal={runtimeKind === "provider" ? providerGoal : undefined}
+                harnessGoal={runtimeKind === "harness" ? harnessActivity?.goal : undefined}
+                subagents={subagentState.subagents}
+                activity={runtimeKind === "harness" ? harnessActivity : undefined}
+                pendingRequests={pendingHarnessRequests}
+                sessionId={sessionId}
+                goalEditorOpen={studioGoalOpen}
+                canEditGoal={runtimeKind === "provider" && Boolean(api)}
+                onToggleGoal={() => setStudioGoalOpen(open => !open)}
+                onOpenSubagents={() => updateSearchParams(next => next.set("drawer", "subagents"))}
+                onOpenSessionDetails={() => updateSearchParams(next => next.set("drawer", "context"))}
+              />}
+            </div>
           )}
           {view === "chat" && sideChatId && <>{sideChatSplit.resizeHandle}<MemoizedSideChat key={`side-chat:${sideChatId}`} embeddedSideChat sideChatParentTitle={sessions.find(item => item.id === sessionId)?.title} onCloseSideChat={sideChatActions.close} onShowConversations={sideChatActions.showConversations} sideChatConversationListOpen={mobileListOpen} onSideChatUnavailable={sideChatActions.unavailable} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} /></>}
         </section>

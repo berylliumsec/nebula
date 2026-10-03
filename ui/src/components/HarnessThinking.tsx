@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { reasoningSummaryState, reasoningSummaryText, type HarnessActivityItem } from "../pages/harnessActivity";
 import { HarnessMarkdown } from "./HarnessMarkdown";
@@ -43,10 +43,36 @@ export function ThinkingDisclosure({
 export function HarnessThinking({ items }: { items: HarnessActivityItem[] }) {
   const thoughts = items.filter((item) => reasoningSummaryText(item) || reasoningSummaryState(item) === "pending");
   const [expanded, setExpanded] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const disclosureRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (!expanded) return;
+    // The thread follows the latest message. Keep the control in view when a
+    // long saved summary opens above the reply and changes the scroll height.
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        disclosureRef.current?.querySelector("summary")?.scrollIntoView?.({ block: "start", behavior: "instant" });
+      });
+    });
+    return () => { cancelAnimationFrame(firstFrame); cancelAnimationFrame(secondFrame); };
+  }, [expanded]);
   if (!thoughts.length) return null;
   const active = thoughts.some((item) => ["running", "streaming", "pending"].includes(item.status ?? ""));
-  return <details className="harness-thinking" aria-label="Harness thinking" onToggle={(event) => setExpanded(event.currentTarget.open)}>
-    <summary>{active ? "Thinking…" : "Thinking"}<span>{thoughts.length > 1 ? `${thoughts.length} sections` : ""}</span></summary>
-    {expanded && thoughts.map((item) => <HarnessMarkdown content={reasoningSummaryText(item) || "Waiting for a summary from the harness…"} key={item.key} />)}
+  const visible = showAll ? thoughts : thoughts.slice(-8);
+  return <details ref={disclosureRef} className="harness-thinking" aria-label="Harness thinking" onToggle={(event) => {
+    setExpanded(event.currentTarget.open);
+    if (!event.currentTarget.open) setShowAll(false);
+  }}>
+    <summary>{active ? "Thinking…" : "Thinking"}<span>{thoughts.length > 1 ? `${thoughts.length} updates` : ""}</span></summary>
+    {expanded && <div className="harness-thinking-body">
+      {thoughts.length > 8 && !showAll && <p className="harness-thinking-count">Latest 8 of {thoughts.length}</p>}
+      <ol className="harness-thinking-list" aria-label="Thinking summaries">
+        {visible.map((item) => <li key={item.key}><HarnessMarkdown content={reasoningSummaryText(item) || "Waiting for a summary from the harness…"} /></li>)}
+      </ol>
+      {thoughts.length > 8 && <button className="harness-thinking-more" type="button" onClick={() => setShowAll((value) => !value)}>
+        {showAll ? "Show latest 8" : `Show all ${thoughts.length}`}
+      </button>}
+    </div>}
   </details>;
 }

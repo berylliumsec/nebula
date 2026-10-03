@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { HarnessActivityItem } from "../pages/harnessActivity";
 import { HarnessThinking, ThinkingDisclosure } from "./HarnessThinking";
 
 describe("ThinkingDisclosure", () => {
@@ -71,5 +72,31 @@ describe("ThinkingDisclosure", () => {
     expect(paragraphs).toHaveLength(2);
     expect(paragraphs[0]).toHaveTextContent("First reasoning paragraph.");
     expect(paragraphs[1]).toHaveTextContent("Second reasoning paragraph.");
+  });
+
+  it("shows a bounded recent history before loading every thinking update", async () => {
+    const items: HarnessActivityItem[] = Array.from({ length: 12 }, (_, index) => ({
+      assistantId: "assistant-1",
+      key: `thought-${index}`,
+      type: "reasoning",
+      kind: "reasoning",
+      vendor: "codex_app_server" as const,
+      status: "completed",
+      title: "Reasoning",
+      sequence: index,
+      streams: { reasoning_summary: `Checking step ${index + 1}` },
+      payload: {},
+      artifactIds: [],
+    }));
+    render(<HarnessThinking items={items} />);
+
+    await userEvent.click(screen.getByText("Thinking"));
+    expect(screen.getByText("Latest 8 of 12")).toBeVisible();
+    expect(screen.queryByText("Checking step 1")).not.toBeInTheDocument();
+    expect(screen.getByText("Checking step 12")).toBeVisible();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show all 12" }));
+    expect(screen.getByText("Checking step 1")).toBeVisible();
+    expect(screen.getAllByRole("listitem")).toHaveLength(12);
   });
 });
