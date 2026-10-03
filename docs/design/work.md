@@ -9,6 +9,7 @@ the local Core database.
 | --- | --- | --- | --- |
 | Find Work | Work appears in navigation and lists projects | UI route and Core projects | component and browser |
 | Agent access | A new project exposes Work MCP tools; a project turned off does not | Core `Engagement.work_enabled` | API and gateway |
+| Linked project access | A parent agent can find and check in to a directly linked child project's Work; unrelated and disabled projects stay inaccessible | Core project hierarchy and Work item ownership | provider and gateway |
 | Create item | A saved item appears in its project board | Core `WorkItem` | API and real Core browser |
 | Check in | An update appears in history and changes item status | Core `WorkUpdate` and `WorkItem` | service, API, real Core browser |
 | Track agent | A live assigned conversation appears as working; a blocked task stays distinct from activity | Core chat activity and Work records | browser |
@@ -23,8 +24,12 @@ the local Core database.
 The built-in session MCP gateway supplies `work.list`, `work.create`, and
 `work.check_in` to managed harness agents. Provider-chat agents receive equivalent
 Core-owned tools through their normal tool broker. Both paths use the same Work
-service and project boundary. The gateway derives its project and actor from the
-active turn. An agent cannot choose a different project in tool arguments.
+service. A parent agent can pass a directly linked child project's name to
+`work.list` or `work.create`, then check in to an item returned for that child.
+The gateway derives the actor from the active turn and verifies the direct
+parent-child link and both projects' Work settings. Unrelated projects remain
+inaccessible. A parent check-in records the source conversation's project so
+the Work page opens the correct conversation.
 Nebula names the available Work tools in eligible agent turns. It does not
 steer agents for timed Work updates. An authenticated Core event stream signals
 saved changes to the Work page. The page refetches authoritative records after

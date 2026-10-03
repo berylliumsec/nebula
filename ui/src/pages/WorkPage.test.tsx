@@ -119,6 +119,20 @@ describe("Work operator journey", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Live");
   });
 
+  it("links a child project check-in to its parent conversation", async () => {
+    saved.updates = [{
+      id: "parent-update", engagement_id: "project-1", item_id: "item-1",
+      summary: "Research checkpoint", status: "in_progress", actor_kind: "agent",
+      actor_id: "parent-session", source_session_id: "parent-session",
+      source_engagement_id: "parent-project", created_at: "2026-01-01T14:00:00Z",
+    }];
+    openItem();
+    expect(await screen.findByText("Research checkpoint")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open conversation" })).toHaveAttribute(
+      "href", "/projects/parent-project/workbench?view=chat&session=parent-session"
+    );
+  });
+
   it("pages Work items and lets the operator find a project in a large import", async () => {
     const user = userEvent.setup();
     saved.items = Array.from({ length: 501 }, (_, index) => ({ ...saved.item, id: `import-${index}`, title: `Imported item ${index}`, assignee_session_id: null }));

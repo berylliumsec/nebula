@@ -450,8 +450,12 @@ _GATEWAY_AGENT_MESSAGE_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
 
 _GATEWAY_WORK_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
     "work.list": (
-        "List this project's work items. Use this before creating duplicates.",
-        {"type": "object", "properties": {}, "additionalProperties": False},
+        "List this project's work items, or a linked child project's items by name. Use this before creating duplicates.",
+        {
+            "type": "object",
+            "properties": {"project_name": {"type": "string", "minLength": 1, "maxLength": 300}},
+            "additionalProperties": False,
+        },
     ),
     "work.create": (
         "Create a project work item for the task you are doing. Give a stable request_id for retry safety.",
@@ -476,13 +480,14 @@ _GATEWAY_WORK_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
                     "enum": ["low", "normal", "high", "urgent"],
                 },
                 "request_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "project_name": {"type": "string", "minLength": 1, "maxLength": 300},
             },
             "required": ["title"],
             "additionalProperties": False,
         },
     ),
     "work.check_in": (
-        "Post a concise progress update to an item. Include what changed, the next step, and any blocker. Give a stable request_id for retry safety.",
+        "Post a concise progress update to this project's item or a linked child project's item. Include what changed, the next step, and any blocker. Give a stable request_id for retry safety.",
         {
             "type": "object",
             "properties": {
@@ -849,7 +854,7 @@ def _harness_developer_instructions(
         )
         + (f"Available Nebula tools: {tool_names}. " if tool_names else "")
         + (
-            "Project Work is available through work.list, work.create, and work.check_in. Use these tools to record work when appropriate. "
+            "Project Work is available through work.list, work.create, and work.check_in. For a linked child project, pass its name as project_name to work.list or work.create, then check in by item ID. Use these tools to record work when appropriate. "
             if any(
                 str(item.get("name") or "").startswith("work.")
                 or str(item.get("name") or "").startswith("work_")
@@ -13862,32 +13867,45 @@ class HarnessRuntimeService:
         self._attach_gateway_tool_call(turn, call.id)
         try:
             if name == "work.list":
+                target_id = self.work.agent_project(
+                    turn.engagement_id, arguments.get("project_name")
+                )
                 result: dict[str, Any] = {
                     "items": [
                         item.model_dump(mode="json")
-                        for item in self.work.list(turn.engagement_id)
+                        for item in self.work.list(target_id)
                     ]
                 }
             elif name == "work.create":
-                data = WorkCreate.model_validate(arguments)
+                target_id = self.work.agent_project(
+                    turn.engagement_id, arguments.get("project_name")
+                )
+                data = WorkCreate.model_validate(
+                    {key: value for key, value in arguments.items() if key != "project_name"}
+                )
                 if turn.chat_session_id is None:
                     data = data.model_copy(
                         update={"source_kind": "mission", "source_id": turn.run_id}
                     )
                 item = self.work.create(
-                    turn.engagement_id,
+                    target_id,
                     data,
                     actor_id=actor_id,
-                    source_session_id=turn.chat_session_id,
+                    source_session_id=(
+                        turn.chat_session_id
+                        if target_id == turn.engagement_id
+                        else None
+                    ),
                 )
                 result = {"item": item.model_dump(mode="json")}
             else:
                 item_id = str(arguments["item_id"])
+                target_id = self.work.agent_item_project(turn.engagement_id, item_id)
                 check_in_data = WorkCheckIn.model_validate(
                     {key: value for key, value in arguments.items() if key != "item_id"}
                 )
                 update = self.work.check_in(
-                    turn.engagement_id,
+                    target_id,
                     item_id,
                     check_in_data,
                     actor_kind="agent",
@@ -13895,6 +13913,7 @@ class HarnessRuntimeService:
                     source_session_id=turn.chat_session_id,
                     source_turn_id=turn.chat_turn_id or turn.id,
                     source_run_id=turn.run_id,
+                    allow_parent_source_session=True,
                 )
                 result = {"update": update.model_dump(mode="json")}
         except Exception as exc:
