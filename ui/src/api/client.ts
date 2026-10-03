@@ -468,6 +468,7 @@ interface WireEngagement extends WireEntity {
   status: EngagementSummary["status"];
   tags?: string[];
   work_enabled?: boolean;
+  parent_engagement_id?: string | null;
   workspace_path?: string | null;
   metadata?: JsonObject;
   assistant_defaults?: WireAssistantDefaults;
@@ -2258,6 +2259,7 @@ function mapEngagement(value: WireEngagement): EngagementSummary {
     status: value.status,
     tags: value.tags ?? [],
     workEnabled: value.work_enabled === true,
+    parentEngagementId: value.parent_engagement_id ?? undefined,
     workspacePath: value.workspace_path ?? undefined,
     createdAt: value.created_at,
     updatedAt: value.updated_at,
@@ -5295,6 +5297,46 @@ export class ApiClient {
       return undefined as T;
     }
     return this.parseJson<T>(response, init);
+  }
+
+  async watchWorkChanges(
+    onChange: (kind: "work" | "projects") => void,
+    onReady: () => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const headers = this.authorizeHeaders(new Headers({ Accept: "text/event-stream" }));
+    const response = await this.fetchImpl(`${this.baseUrl}/work/events`, {
+      headers,
+      credentials: "same-origin",
+      signal,
+    });
+    if (!response.ok) throw await responseError(response);
+    if (!response.body) throw new Error("Core did not provide a Work event stream.");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let pending = "";
+    try {
+      while (!signal.aborted) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true }).replaceAll("\r\n", "\n");
+        let end = pending.indexOf("\n\n");
+        while (end >= 0) {
+          const frame = pending.slice(0, end);
+          pending = pending.slice(end + 2);
+          const event = frame.split("\n").find((line) => line.startsWith("event: "))?.slice(7);
+          if (event === "ready") onReady();
+          if (event === "change") {
+            const data = frame.split("\n").find((line) => line.startsWith("data: "))?.slice(6);
+            const kind = data ? (JSON.parse(data) as { kind?: string }).kind : undefined;
+            if (kind === "work" || kind === "projects") onChange(kind);
+          }
+          end = pending.indexOf("\n\n");
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
   }
 
   /**

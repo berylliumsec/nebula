@@ -7,11 +7,12 @@ from nebula.v3.credentials import CredentialStore
 from nebula.v3.domain import (
     Engagement,
     HarnessKind,
+    HarnessNativeCapabilities,
     HarnessProfile,
     HarnessSession,
     WorkUpdate,
 )
-from nebula.v3.harnesses import HarnessRuntimeService
+from nebula.v3.harnesses import HarnessRuntimeService, _harness_developer_instructions
 from nebula.v3.storage import NebulaStore
 
 
@@ -36,7 +37,7 @@ def _runtime(tmp_path):
     return store, engagement, profile, runtime
 
 
-def test_builtin_work_gateway_is_opt_in_scoped_and_retains_updates(tmp_path):
+def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, runtime = _runtime(tmp_path)
         _chat, _chat_turn, turn = runtime.prepare_chat(
@@ -49,11 +50,6 @@ def test_builtin_work_gateway_is_opt_in_scoped_and_retains_updates(tmp_path):
             mcp_server_ids=[],
         )
         session = store.get(HarnessSession, turn.harness_session_id)
-        assert not any(
-            tool["name"].startswith("work.")
-            for tool in runtime._gateway_catalog(session)["tools"]
-        )
-        runtime.work.set_enabled(engagement.id, True)
         assert {
             tool["name"] for tool in runtime._gateway_catalog(session)["tools"]
         } >= {
@@ -61,6 +57,14 @@ def test_builtin_work_gateway_is_opt_in_scoped_and_retains_updates(tmp_path):
             "work.create",
             "work.check_in",
         }
+        instructions = _harness_developer_instructions(
+            session,
+            HarnessNativeCapabilities(),
+            vendor="Codex",
+            gateway_tools=tuple(runtime._gateway_catalog(session)["tools"]),
+        )
+        assert "Project Work is available" in instructions
+        assert "minutes" not in instructions
         runtime._active[session.id] = SimpleNamespace(
             turn_id=turn.id, connection=None, task=None
         )
@@ -93,6 +97,10 @@ def test_builtin_work_gateway_is_opt_in_scoped_and_retains_updates(tmp_path):
             == turn.chat_session_id
         )
         runtime.work.set_enabled(engagement.id, False)
+        assert not any(
+            tool["name"].startswith("work.")
+            for tool in runtime._gateway_catalog(session)["tools"]
+        )
         denied = await runtime._gateway_call(
             session,
             "work.check_in",

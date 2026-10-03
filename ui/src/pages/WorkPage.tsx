@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, CircleAlert, Clock3, ListTodo, Plus, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, CircleAlert, Clock3, ListTodo, Plus, RefreshCw, X } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import type { ChatSessionActivity, ChatSessionSummary } from "../api/types";
+import type { ChatSessionActivity } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { projectSurface } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
@@ -22,6 +22,10 @@ type WorkUpdate = {
   source_session_id: string | null; source_turn_id: string | null;
   source_run_id: string | null; created_at: string;
 };
+type WorkAgentActivity = {
+  session_id: string; engagement_id: string; title: string;
+  state: "working" | "waiting"; turn_id: string;
+};
 
 const columns: { id: Status; label: string }[] = [
   { id: "backlog", label: "Backlog" }, { id: "ready", label: "Ready" },
@@ -35,21 +39,23 @@ const workPageSize = 500;
 const visibleProjectLimit = 80;
 
 export function WorkPage() {
-  const { api, engagement, engagements, coreState } = useWorkspace();
+  const { api, engagement, engagements, coreState, retryResource } = useWorkspace();
   const { projectId, itemId } = useParams();
   const navigate = useNavigate();
   const [items, setItems] = useState<WorkItem[]>([]);
   const [recent, setRecent] = useState<WorkUpdate[]>([]);
   const [itemUpdates, setItemUpdates] = useState<WorkUpdate[]>([]);
-  const [sessions, setSessions] = useState<Record<string, ChatSessionSummary>>({});
+  const [sessionTitles, setSessionTitles] = useState<Record<string, string>>({});
   const [activity, setActivity] = useState<Record<string, ChatSessionActivity["state"]>>({});
   const [activityProjects, setActivityProjects] = useState<Record<string, string>>({});
   const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [liveState, setLiveState] = useState<"connecting" | "live" | "reconnecting" | "offline">("connecting");
   const [showCreate, setShowCreate] = useState(false);
   const [projectQuery, setProjectQuery] = useState("");
+  const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [createProjectId, setCreateProjectId] = useState(engagement?.id ?? "");
@@ -58,6 +64,19 @@ export function WorkPage() {
   const [blocker, setBlocker] = useState("");
   const [nextStatus, setNextStatus] = useState<Status>("in_progress");
   const selectedProject = engagements.find((project) => project.id === projectId);
+  const activeProjects = useMemo(() => engagements.filter((project) => project.status !== "archived"), [engagements]);
+  const projectById = useMemo(() => new Map(activeProjects.map((project) => [project.id, project])), [activeProjects]);
+  const childrenByParent = useMemo(() => {
+    const children = new Map<string, typeof activeProjects>();
+    for (const project of activeProjects) {
+      if (!project.parentEngagementId || !projectById.has(project.parentEngagementId)) continue;
+      const siblings = children.get(project.parentEngagementId) ?? [];
+      siblings.push(project);
+      children.set(project.parentEngagementId, siblings);
+    }
+    return children;
+  }, [activeProjects, projectById]);
+  const directChildren = childrenByParent.get(projectId ?? "") ?? [];
   const selectedItem = items.find((item) => item.id === itemId);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
@@ -76,31 +95,30 @@ export function WorkPage() {
       }
       if (signal?.aborted) return;
       setItems(loaded);
+      if (projectId && itemId) {
+        const updates = await api.request<WorkUpdate[]>(`engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(itemId)}/updates`, { signal });
+        if (signal?.aborted) return;
+        setItemUpdates(updates);
+      } else {
+        setItemUpdates([]);
+      }
       if (projectId) {
         const [sessionPage, active] = await Promise.all([
           api.listChatSessions(projectId, signal), api.listChatSessionActivity(projectId, signal),
         ]);
         if (signal?.aborted) return;
-        setSessions(Object.fromEntries(sessionPage.items.map((session) => [session.id, session])));
+        setSessionTitles(Object.fromEntries(sessionPage.items.map((session) => [session.id, session.title])));
         setActivity(Object.fromEntries(active.map((session) => [session.sessionId, session.state])));
         setActivityProjects(Object.fromEntries(active.map((session) => [session.sessionId, projectId])));
       } else {
         const updates = await api.request<WorkUpdate[]>("work/updates", { signal });
         if (signal?.aborted) return;
         setRecent(updates);
-        const linkedProjects = new Set(loaded.filter((item) => item.assignee_session_id).map((item) => item.engagement_id));
-        const activeProjects = engagements.filter((project) => project.status !== "archived"
-          && (project.workEnabled || project.id === engagement?.id || linkedProjects.has(project.id)));
-        const states = await Promise.allSettled(activeProjects.map(async (project) => ({
-          projectId: project.id,
-          activity: await api.listChatSessionActivity(project.id, signal),
-          sessions: await api.listChatSessions(project.id, signal),
-        })));
+        const agents = await api.request<WorkAgentActivity[]>("work/agents", { signal });
         if (signal?.aborted) return;
-        const activityRows = states.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
-        setActivity(Object.fromEntries(activityRows.flatMap((result) => result.activity.map((entry) => [entry.sessionId, entry.state] as const))));
-        setActivityProjects(Object.fromEntries(activityRows.flatMap((result) => result.activity.map((entry) => [entry.sessionId, result.projectId] as const))));
-        setSessions(Object.fromEntries(activityRows.flatMap((result) => result.sessions.items.map((session) => [session.id, session] as const))));
+        setActivity(Object.fromEntries(agents.map((agent) => [agent.session_id, agent.state])));
+        setActivityProjects(Object.fromEntries(agents.map((agent) => [agent.session_id, agent.engagement_id])));
+        setSessionTitles(Object.fromEntries(agents.map((agent) => [agent.session_id, agent.title])));
       }
       setError(undefined);
     } catch (failure) {
@@ -111,7 +129,7 @@ export function WorkPage() {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [api, engagement?.id, engagements, projectId]);
+  }, [api, projectId, itemId]);
 
   useEffect(() => { setEnabled(selectedProject?.workEnabled ?? false); }, [projectId, selectedProject?.workEnabled]);
 
@@ -119,52 +137,121 @@ export function WorkPage() {
     const controller = new AbortController();
     setLoading(true);
     void refresh(controller.signal);
-    const interval = window.setInterval(() => void refresh(controller.signal), 30_000);
-    return () => { controller.abort(); window.clearInterval(interval); };
+    return () => controller.abort();
   }, [refresh]);
 
   useEffect(() => {
-    if (!api || !projectId || !itemId) { setItemUpdates([]); return; }
+    if (!api || coreState !== "online") { setLiveState("offline"); return; }
+    setLiveState("connecting");
     const controller = new AbortController();
-    const load = () => api.request<WorkUpdate[]>(`engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(itemId)}/updates`, { signal: controller.signal })
-      .then(setItemUpdates).catch((failure: unknown) => {
-        if (!controller.signal.aborted) {
-          void logCaughtDiagnostic("interface.work_page.updates_failed", "Work updates could not be loaded.", failure, "work_page");
-          setError(errorText(failure));
+    let pending = false;
+    let projectsPending = false;
+    let refreshing = false;
+    const reload = (kind: "work" | "projects") => {
+      pending = true;
+      projectsPending ||= kind === "projects";
+      if (refreshing) return;
+      refreshing = true;
+      void (async () => {
+        while (pending && !controller.signal.aborted) {
+          const refreshProjects = projectsPending;
+          pending = false;
+          projectsPending = false;
+          try {
+            if (refreshProjects) await retryResource("projects");
+            await refresh(controller.signal);
+          } catch (failure) {
+            if (!controller.signal.aborted) {
+              void logCaughtDiagnostic("interface.work_page.live_refresh_failed", "Live Work data could not be loaded.", failure, "work_page");
+              setError(errorText(failure));
+            }
+          }
         }
-      });
-    void load();
-    const interval = window.setInterval(() => void load(), 30_000);
-    return () => { controller.abort(); window.clearInterval(interval); };
-  }, [api, projectId, itemId]);
+        refreshing = false;
+      })();
+    };
+    void (async () => {
+      while (!controller.signal.aborted) {
+        try {
+          await api.watchWorkChanges(reload, () => {
+            setLiveState("live");
+            reload("work");
+          }, controller.signal);
+        } catch (failure) {
+          if (!controller.signal.aborted) {
+            void logCaughtDiagnostic("interface.work_page.live_stream_failed", "Work live updates disconnected.", failure, "work_page");
+          }
+        }
+        if (controller.signal.aborted) break;
+        setLiveState("reconnecting");
+        await new Promise<void>((resolve) => {
+          const timeout = window.setTimeout(resolve, 1_000);
+          controller.signal.addEventListener("abort", () => { window.clearTimeout(timeout); resolve(); }, { once: true });
+        });
+      }
+    })();
+    return () => controller.abort();
+  }, [api, coreState, refresh, retryResource]);
 
   useEffect(() => { if (selectedItem) setNextStatus(selectedItem.status); }, [selectedItem?.id, selectedItem?.status]);
   useEffect(() => { if (engagement?.id && !createProjectId) setCreateProjectId(engagement.id); }, [engagement?.id, createProjectId]);
 
   const counts = useMemo(() => Object.fromEntries(columns.map((column) => [column.id, items.filter((item) => item.status === column.id).length])) as Record<Status, number>, [items]);
-  const filteredProjects = useMemo(() => engagements.filter((project) => project.status !== "archived"
-    && project.name.toLocaleLowerCase().includes(projectQuery.trim().toLocaleLowerCase())), [engagements, projectQuery]);
-  const visibleProjects = filteredProjects.slice(0, visibleProjectLimit);
+  const projectRows = useMemo(() => {
+    const query = projectQuery.trim().toLocaleLowerCase();
+    const matching = new Set(activeProjects.filter((project) => !query || project.name.toLocaleLowerCase().includes(query)).map((project) => project.id));
+    const included = new Set(matching);
+    for (const project of activeProjects) {
+      if (!matching.has(project.id)) continue;
+      let ancestorId = project.parentEngagementId;
+      const seen = new Set<string>();
+      while (ancestorId && !seen.has(ancestorId) && projectById.has(ancestorId)) {
+        included.add(ancestorId);
+        seen.add(ancestorId);
+        ancestorId = projectById.get(ancestorId)?.parentEngagementId;
+      }
+    }
+    const rows: { project: typeof activeProjects[number]; depth: number }[] = [];
+    const visited = new Set<string>();
+    const visit = (project: typeof activeProjects[number], depth: number) => {
+      if (visited.has(project.id) || !included.has(project.id)) return;
+      visited.add(project.id);
+      rows.push({ project, depth });
+      if (query || expandedProjects.has(project.id)) {
+        for (const child of childrenByParent.get(project.id) ?? []) visit(child, depth + 1);
+      }
+    };
+    for (const project of activeProjects) {
+      if (!project.parentEngagementId || !projectById.has(project.parentEngagementId)) visit(project, 0);
+    }
+    return { rows, count: query ? matching.size : activeProjects.length };
+  }, [activeProjects, childrenByParent, expandedProjects, projectById, projectQuery]);
+  const visibleProjects = projectRows.rows.slice(0, visibleProjectLimit);
   const projectCounts = useMemo(() => {
     const byProject = new Map<string, { active: number; blocked: number }>();
     for (const item of items) {
-      const counts = byProject.get(item.engagement_id) ?? { active: 0, blocked: 0 };
-      if (item.status === "in_progress") counts.active += 1;
-      if (item.status === "blocked") counts.blocked += 1;
-      byProject.set(item.engagement_id, counts);
+      let projectId: string | undefined = item.engagement_id;
+      const seen = new Set<string>();
+      while (projectId && !seen.has(projectId)) {
+        seen.add(projectId);
+        const counts = byProject.get(projectId) ?? { active: 0, blocked: 0 };
+        if (item.status === "in_progress") counts.active += 1;
+        if (item.status === "blocked") counts.blocked += 1;
+        byProject.set(projectId, counts);
+        projectId = projectById.get(projectId)?.parentEngagementId;
+      }
     }
     return byProject;
-  }, [items]);
+  }, [items, projectById]);
   const working = useMemo(() => items.filter((item) => item.assignee_session_id && activity[item.assignee_session_id] === "working" && item.status !== "done"), [items, activity]);
   const workingAgents = useMemo(() => Object.entries(activity).filter(([, state]) => state === "working").map(([sessionId]) => ({
     sessionId,
     projectId: activityProjects[sessionId],
-    title: sessions[sessionId]?.title || "Active conversation",
+    title: sessionTitles[sessionId] || "Active conversation",
     item: working.find((candidate) => candidate.assignee_session_id === sessionId),
-  })).filter((entry) => Boolean(entry.projectId)), [activity, activityProjects, sessions, working]);
-  const stalled = useMemo(() => working.filter((item) => Date.now() - new Date(item.last_update_at ?? item.created_at).getTime() > 30 * 60_000), [working]);
+  })).filter((entry) => Boolean(entry.projectId)), [activity, activityProjects, sessionTitles, working]);
   const projectName = (id: string) => engagements.find((project) => project.id === id)?.name ?? "Project unavailable";
-  const assignee = (item: WorkItem) => item.assignee_session_id ? sessions[item.assignee_session_id]?.title ?? "Agent session" : "Unassigned";
+  const assignee = (item: WorkItem) => item.assignee_session_id ? sessionTitles[item.assignee_session_id] ?? "Agent session" : "Unassigned";
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
@@ -196,7 +283,6 @@ export function WorkPage() {
       });
       setSummary(""); setNextStep(""); setBlocker("");
       await refresh();
-      setItemUpdates(await api.request<WorkUpdate[]>(`engagements/${encodeURIComponent(projectId)}/work/${encodeURIComponent(selectedItem.id)}/updates`));
     } catch (failure) {
       void logCaughtDiagnostic("interface.work_page.check_in_failed", "A Work update could not be saved.", failure, "work_page");
       setError(errorText(failure));
@@ -229,17 +315,19 @@ export function WorkPage() {
         <p className="work-lede">{projectId ? "Plan tasks and follow agent check-ins in one place." : "See what agents are doing across your projects."}</p>
       </div>
       <div className="work-head-actions">
+        <span className={`work-live-state ${liveState}`} role="status">{liveState === "live" ? "Live" : liveState === "connecting" ? "Connecting…" : liveState === "offline" ? "Offline" : "Reconnecting…"}</span>
         <button className="button quiet work-refresh" type="button" aria-label="Refresh Work" title="Refresh Work" onClick={() => void refresh()}><RefreshCw size={16} /></button>
-        {projectId && <button className="button quiet" type="button" disabled={busy || coreState !== "online"} onClick={() => void toggle()}>{enabled ? "Agent tools on" : "Enable agent tools"}</button>}
+        {projectId && <button className="button quiet" type="button" disabled={busy || coreState !== "online"} onClick={() => void toggle()}>{enabled ? "Disable agent tools" : "Enable agent tools"}</button>}
         <button className="button primary" type="button" disabled={!api || coreState !== "online"} onClick={() => setShowCreate(true)}><Plus size={16} /> New item</button>
       </div>
     </header>
-    {projectId && <p className="work-setting-note">{enabled ? "Agents can update this project through Nebula's built-in MCP. Nebula prompts active agents after 20 minutes without a check-in." : "Agent tools are off. Existing Work records remain visible. Enable them when agents should post updates."}</p>}
+    {projectId && <p className="work-setting-note">{enabled ? "Agents can update this project through Nebula's built-in MCP. New updates appear live." : "Agent tools are off. Existing Work records remain visible. Enable them when agents should post updates."}</p>}
+    {projectId && selectedProject?.parentEngagementId && projectById.has(selectedProject.parentEngagementId) && <Link className="work-parent-link" to={projectSurface(selectedProject.parentEngagementId, "work")}><ArrowLeft size={14} /> {projectById.get(selectedProject.parentEngagementId)?.name}</Link>}
     {error && <div className="work-error" role="alert"><CircleAlert size={17} /><span>{error}</span><button type="button" className="button quiet" onClick={() => void refresh()}>Retry</button></div>}
     {loading ? <div className="work-loading" role="status">Loading Work…</div> : <>
       <section className="work-summary" aria-label="Work summary">
         <div><strong>{workingAgents.length}</strong><span>Working now</span></div>
-        <div><strong>{stalled.length}</strong><span>Check-ins due</span></div>
+        <div><strong>{counts.in_progress}</strong><span>In progress</span></div>
         <div><strong>{counts.blocked}</strong><span>Blocked</span></div>
         <div><strong>{counts.review}</strong><span>In review</span></div>
       </section>
@@ -253,25 +341,31 @@ export function WorkPage() {
             </li>)}</ul> : <p className="work-empty-inline">No agents are working right now.</p>}
           </section>
           <section className="work-panel" aria-labelledby="work-attention-title">
-            <div className="work-panel-head"><h2 id="work-attention-title">Needs attention</h2><span>{counts.blocked + stalled.length}</span></div>
-            {[...items.filter((item) => item.status === "blocked"), ...stalled.filter((item) => item.status !== "blocked")].slice(0, 8).map((item) => <Link className="work-attention-row" key={item.id} to={projectSurface(item.engagement_id, "work", item.id)}><CircleAlert size={16} /><span><strong>{item.title}</strong><small>{projectName(item.engagement_id)} · {item.status === "blocked" ? "Blocked" : "Check-in due"}</small></span><ArrowRight size={15} /></Link>)}
-            {!counts.blocked && !stalled.length && <p className="work-empty-inline">No blocked items or overdue check-ins.</p>}
+            <div className="work-panel-head"><h2 id="work-attention-title">Needs attention</h2><span>{counts.blocked}</span></div>
+            {items.filter((item) => item.status === "blocked").slice(0, 8).map((item) => <Link className="work-attention-row" key={item.id} to={projectSurface(item.engagement_id, "work", item.id)}><CircleAlert size={16} /><span><strong>{item.title}</strong><small>{projectName(item.engagement_id)} · Blocked</small></span><ArrowRight size={15} /></Link>)}
+            {!counts.blocked && <p className="work-empty-inline">No blocked items.</p>}
           </section>
         </div>
-        <section className="work-panel work-projects" aria-labelledby="work-projects-title"><div className="work-panel-head"><h2 id="work-projects-title">Projects</h2><span>{filteredProjects.length}</span></div>
+        <section className="work-panel work-projects" aria-labelledby="work-projects-title"><div className="work-panel-head"><h2 id="work-projects-title">Projects</h2><span>{projectRows.count}</span></div>
           <div className="work-project-search"><input type="search" aria-label="Search projects" placeholder="Search projects" value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} /></div>
-          <div className="work-project-list">{visibleProjects.map((project) => {
+          <div className="work-project-list">{visibleProjects.map(({ project, depth }) => {
             const projectItems = projectCounts.get(project.id) ?? { active: 0, blocked: 0 };
-            return <Link key={project.id} to={projectSurface(project.id, "work")}><span><strong>{project.name}</strong><small>{project.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><span>{projectItems.active} active · {projectItems.blocked} blocked</span><ArrowRight size={16} /></Link>;
+            const childCount = childrenByParent.get(project.id)?.length ?? 0;
+            const expanded = Boolean(projectQuery.trim()) || expandedProjects.has(project.id);
+            return <div className={`work-project-row${depth ? " is-child" : ""}`} key={project.id} style={{ paddingLeft: Math.min(depth, 5) * 22 }}>
+              {childCount > 0 ? <button type="button" aria-label={`${expanded ? "Hide" : "Show"} subprojects of ${project.name}`} aria-expanded={expanded} onClick={() => setExpandedProjects((current) => { const next = new Set(current); if (next.has(project.id)) next.delete(project.id); else next.add(project.id); return next; })}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button> : <span className="work-project-spacer" />}
+              <Link to={projectSurface(project.id, "work")}><span><strong>{project.name}</strong><small>{childCount ? `${childCount} subprojects · ` : ""}{project.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><span>{projectItems.active} active · {projectItems.blocked} blocked</span><ArrowRight size={16} /></Link>
+            </div>;
           })}</div>
-          {filteredProjects.length > visibleProjectLimit && <p className="work-empty-inline">Showing {visibleProjectLimit} of {filteredProjects.length} projects. Search to narrow the list.</p>}
-          {!filteredProjects.length && <p className="work-empty-inline">No projects match your search.</p>}
+          {projectRows.rows.length > visibleProjectLimit && <p className="work-empty-inline">Showing {visibleProjectLimit} rows. Search to narrow the list.</p>}
+          {!projectRows.count && <p className="work-empty-inline">No projects match your search.</p>}
         </section>
         <section className="work-panel" aria-labelledby="work-recent-title"><div className="work-panel-head"><h2 id="work-recent-title">Recent check-ins</h2><span>{recent.length}</span></div>
           {recent.slice(0, 12).map((update) => { const item = items.find((candidate) => candidate.id === update.item_id); return <Link className="work-update-preview" key={update.id} to={projectSurface(update.engagement_id, "work", update.item_id)}><span><strong>{item?.title ?? "Work item"}</strong><small>{projectName(update.engagement_id)} · {time(update.created_at)}</small></span><p>{update.summary}</p></Link>; })}
-          {!recent.length && <p className="work-empty-inline">No check-ins yet. Agents can post one after you enable their project tools.</p>}
+          {!recent.length && <p className="work-empty-inline">No check-ins yet. Agents can post updates from their project tools.</p>}
         </section>
       </> : <>
+        {directChildren.length > 0 && <section className="work-panel work-subprojects" aria-labelledby="work-subprojects-title"><div className="work-panel-head"><h2 id="work-subprojects-title">Subprojects</h2><span>{directChildren.length}</span></div><div className="work-project-search"><input type="search" aria-label="Search subprojects" placeholder="Search subprojects" value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} /></div><div className="work-project-list">{directChildren.filter((child) => child.name.toLocaleLowerCase().includes(projectQuery.trim().toLocaleLowerCase())).slice(0, visibleProjectLimit).map((child) => <div className="work-project-row" key={child.id}><span className="work-project-spacer" /><Link to={projectSurface(child.id, "work")}><span><strong>{child.name}</strong><small>{child.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><ArrowRight size={16} /></Link></div>)}</div>{directChildren.length > visibleProjectLimit && <p className="work-empty-inline">Showing up to {visibleProjectLimit} matches. Search to narrow the list.</p>}</section>}
         <div className={`work-project-layout${itemId ? " has-detail" : ""}`}>
           <section className="work-board" aria-label="Project board">
             {columns.map((column) => <section className="work-column" key={column.id} aria-labelledby={`work-column-${column.id}`}>

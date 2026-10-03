@@ -482,7 +482,7 @@ _GATEWAY_WORK_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
         },
     ),
     "work.check_in": (
-        "Post a concise progress update to an item. Include what changed, the next step, and any blocker. Update proactively about every 30 minutes of active work. Give a stable request_id for retry safety.",
+        "Post a concise progress update to an item. Include what changed, the next step, and any blocker. Give a stable request_id for retry safety.",
         {
             "type": "object",
             "properties": {
@@ -849,7 +849,7 @@ def _harness_developer_instructions(
         )
         + (f"Available Nebula tools: {tool_names}. " if tool_names else "")
         + (
-            "Work is enabled for this project. Use work.list, work.create, and work.check_in to keep the operator informed. Create or claim a work item when you start substantial work. Post a factual check-in at meaningful changes and about every 30 minutes of active work; include your next step and blockers. "
+            "Project Work is available through work.list, work.create, and work.check_in. Use these tools to record work when appropriate. "
             if any(
                 str(item.get("name") or "").startswith("work.")
                 or str(item.get("name") or "").startswith("work_")
@@ -8126,7 +8126,6 @@ class HarnessRuntimeService:
         self._broker_approval_ids: set[str] = set()
         self._locks: dict[str, asyncio.Lock] = {}
         self._active: dict[str, _ActiveTurn] = {}
-        self._work_nudged_at: dict[str, datetime] = {}
         self._approval_futures: dict[
             str, asyncio.Future[HarnessPermissionDecision]
         ] = {}
@@ -8203,54 +8202,6 @@ class HarnessRuntimeService:
                 return False
             return True
         return False
-
-    async def nudge_work_updates(self) -> None:
-        """Prompt active harness agents after twenty minutes without a check-in."""
-
-        now = utc_now()
-        active_ids: set[str] = set()
-        for active in list(self._active.values()):
-            try:
-                turn = self.store.get(HarnessTurn, active.turn_id)
-                active_ids.add(turn.id)
-                if turn.status != HarnessTurnStatus.RUNNING or turn.started_at is None:
-                    continue
-                actor_id = turn.chat_session_id or turn.run_id
-                if actor_id is None:
-                    continue
-                if not self.work.update_due(
-                    turn.engagement_id,
-                    actor_id,
-                    turn.started_at,
-                    mission=turn.run_id is not None,
-                    now=now,
-                ):
-                    continue
-                previous = self._work_nudged_at.get(turn.id)
-                if previous is not None and now - previous < timedelta(minutes=20):
-                    continue
-                await self.steer_turn(
-                    turn.id,
-                    "Work check-in is due. Use work.list to find your item, then work.check_in with what changed, your next step, and any blocker. If no item exists, create one first. Continue your work after the update.",
-                    actor_id="nebula-work",
-                    title="Work check-in due",
-                    summary="Nebula asked the active agent for a project Work update.",
-                )
-                self._work_nudged_at[turn.id] = now
-            except (NotFoundError, HarnessStateError):
-                # diagnostic-expected: the turn finished or cannot accept steering.
-                continue
-            except HarnessTransportError as exc:
-                record_caught_exception(
-                    "harnesses",
-                    "harnesses.work_check_in_prompt_failed",
-                    "A running agent could not receive its Work check-in prompt.",
-                    exc,
-                    stage="work-check-in",
-                )
-        for turn_id in list(self._work_nudged_at):
-            if turn_id not in active_ids:
-                del self._work_nudged_at[turn_id]
 
     async def _steer_subagent_update(self, chat_session_id: str, text: str) -> bool:
         """Add a subagent update to the chat's running harness turn.

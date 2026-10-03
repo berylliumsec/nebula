@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import builtins
-from datetime import datetime, timedelta
 from hashlib import sha256
 import json
+from threading import Lock
 from typing import Literal
 from uuid import NAMESPACE_URL, uuid5
+from weakref import WeakKeyDictionary
 
 from pydantic import Field, model_validator
 
@@ -21,7 +23,6 @@ from .domain import (
     ScopePolicy,
     WorkItem,
     WorkUpdate,
-    utc_now,
 )
 from .runtime_platform import RuntimeToolComponents
 from .setup import create_engagement_with_default_scope
@@ -81,6 +82,7 @@ class WorkImportProject(NebulaModel):
     description: str = Field(default="", max_length=20_000)
     status: EngagementStatus = EngagementStatus.DRAFT
     engagement_id: str | None = None
+    parent_engagement_id: str | None = None
     workspace_path: str | None = Field(default=None, max_length=4096)
     items: list[WorkImportItem] = Field(default_factory=list, max_length=100)
 
@@ -90,6 +92,8 @@ class WorkImportProject(NebulaModel):
             raise ValueError(
                 "workspace_path cannot change an existing project during import"
             )
+        if self.engagement_id is not None and self.parent_engagement_id is not None:
+            raise ValueError("use the project batch API to link an existing project")
         ids = [item.external_id for item in self.items]
         if len(ids) != len(set(ids)):
             raise ValueError("import item external IDs must be unique in each project")
@@ -126,9 +130,89 @@ class WorkImportResult(NebulaModel):
     projects: list[WorkImportProjectResult]
 
 
+class WorkProjectBatchUpdate(NebulaModel):
+    project_ids: list[str] = Field(min_length=1, max_length=100)
+    parent_engagement_id: str | None = None
+    work_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def valid_batch(self) -> "WorkProjectBatchUpdate":
+        if len(self.project_ids) != len(set(self.project_ids)):
+            raise ValueError("project IDs must be unique")
+        if self.parent_engagement_id is None and self.work_enabled is None:
+            raise ValueError("parent_engagement_id or work_enabled is required")
+        return self
+
+
+class WorkProjectBatchResult(NebulaModel):
+    updated: int
+
+
+class WorkAgentActivity(NebulaModel):
+    session_id: str
+    engagement_id: str
+    title: str
+    state: Literal["working", "waiting"]
+    turn_id: str
+
+
+class WorkChangeFeed:
+    """In-process signals; clients reread Core after connecting or a change."""
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._subscribers: set[tuple[asyncio.AbstractEventLoop, asyncio.Queue[str]]] = (
+            set()
+        )
+
+    def subscribe(self) -> asyncio.Queue[str]:
+        subscriber = (asyncio.get_running_loop(), asyncio.Queue[str](maxsize=1))
+        with self._lock:
+            self._subscribers.add(subscriber)
+        return subscriber[1]
+
+    def unsubscribe(self, queue: asyncio.Queue[str]) -> None:
+        with self._lock:
+            self._subscribers = {
+                subscriber
+                for subscriber in self._subscribers
+                if subscriber[1] is not queue
+            }
+
+    def publish(self, kind: Literal["work", "projects"] = "work") -> None:
+        with self._lock:
+            subscribers = tuple(self._subscribers)
+        for loop, queue in subscribers:
+            try:
+                loop.call_soon_threadsafe(self._enqueue, queue, kind)
+            except RuntimeError:
+                self.unsubscribe(queue)
+
+    @staticmethod
+    def _enqueue(queue: asyncio.Queue[str], kind: str) -> None:
+        if queue.full() and queue.get_nowait() == "projects":
+            kind = "projects"
+        queue.put_nowait(kind)
+
+
+_feeds_lock = Lock()
+_feeds: WeakKeyDictionary[NebulaStore, WorkChangeFeed] = WeakKeyDictionary()
+
+
+def work_change_feed(store: NebulaStore) -> WorkChangeFeed:
+    with _feeds_lock:
+        feed = _feeds.get(store)
+        if feed is None:
+            feed = WorkChangeFeed()
+            _feeds[store] = feed
+            store.on_chat_activity_change(feed.publish)
+        return feed
+
+
 class WorkService:
     def __init__(self, store: NebulaStore) -> None:
         self.store = store
+        self.changes = work_change_feed(store)
 
     def enabled(self, engagement_id: str) -> bool:
         return self.store.get(Engagement, engagement_id).work_enabled
@@ -139,12 +223,14 @@ class WorkService:
             if project.work_enabled == enabled:
                 return project
             try:
-                return self.store.update(
+                updated = self.store.update(
                     Engagement,
                     engagement_id,
                     {"work_enabled": enabled},
                     expected_revision=project.revision,
                 )
+                self.changes.publish("projects")
+                return updated
             except ConflictError:
                 # diagnostic-expected: concurrent settings edits are retried.
                 continue
@@ -188,6 +274,7 @@ class WorkService:
         *,
         actor_id: str,
         source_session_id: str | None = None,
+        notify: bool = True,
     ) -> WorkItem:
         self.store.get(Engagement, engagement_id)
         self._session(engagement_id, data.assignee_session_id)
@@ -248,7 +335,10 @@ class WorkService:
             )
         )
         try:
-            return self.store.create(item)
+            created = self.store.create(item)
+            if notify:
+                self.changes.publish()
+            return created
         except ConflictError:
             if item_id:
                 return self.get(engagement_id, item_id)
@@ -266,9 +356,11 @@ class WorkService:
             if not changes:
                 return item
             try:
-                return self.store.update(
+                updated = self.store.update(
                     WorkItem, item_id, changes, expected_revision=item.revision
                 )
+                self.changes.publish()
+                return updated
             except ConflictError:
                 # diagnostic-expected: a concurrent edit retries with the latest revision.
                 continue
@@ -285,6 +377,7 @@ class WorkService:
         source_session_id: str | None = None,
         source_turn_id: str | None = None,
         source_run_id: str | None = None,
+        notify: bool = True,
     ) -> WorkUpdate:
         self._session(engagement_id, source_session_id)
         update_id = (
@@ -351,6 +444,8 @@ class WorkService:
                         {"status": status, "last_update_at": update.created_at},
                         expected_revision=item.revision,
                     )
+                if notify:
+                    self.changes.publish()
                 return update
             except ConflictError:
                 # diagnostic-expected: concurrent check-ins retry after an ID lookup.
@@ -361,35 +456,6 @@ class WorkService:
                         # diagnostic-expected: the conflicting write was another item edit.
                         pass
         raise ConflictError("work item changed concurrently; retry")
-
-    def last_agent_update(
-        self, engagement_id: str, actor_id: str, *, mission: bool = False
-    ) -> datetime | None:
-        key = "source_run_id" if mission else "source_session_id"
-        updates = self.store.find_entities(
-            WorkUpdate,
-            {key: actor_id, "actor_kind": "agent"},
-            engagement_id=engagement_id,
-            limit=1,
-            newest_first=True,
-        )
-        return updates[0].created_at if updates else None
-
-    def update_due(
-        self,
-        engagement_id: str,
-        actor_id: str,
-        started_at: datetime,
-        *,
-        mission: bool = False,
-        now: datetime | None = None,
-    ) -> bool:
-        if not self.enabled(engagement_id):
-            return False
-        latest = self.last_agent_update(engagement_id, actor_id, mission=mission)
-        return (now or utc_now()) - max(started_at, latest or started_at) >= timedelta(
-            minutes=20
-        )
 
     def import_batch(self, batch: WorkImportBatch) -> WorkImportResult:
         """Create source-identified projects and Work without overwriting later edits."""
@@ -415,6 +481,7 @@ class WorkService:
                         name=project.name,
                         description=project.description,
                         status=project.status,
+                        parent_engagement_id=project.parent_engagement_id,
                         workspace_path=project.workspace_path,
                         metadata={
                             "work_import": {
@@ -423,6 +490,8 @@ class WorkService:
                             }
                         },
                     )
+                    if project.parent_engagement_id is not None:
+                        self.store.get(Engagement, project.parent_engagement_id)
                     try:
                         engagement = create_engagement_with_default_scope(
                             self.store, candidate
@@ -455,6 +524,7 @@ class WorkService:
                         request_id=request_id,
                     ),
                     actor_id=actor_id,
+                    notify=False,
                 )
                 update_id = None
                 if entry.update is not None:
@@ -470,6 +540,7 @@ class WorkService:
                         ),
                         actor_kind="import",
                         actor_id=actor_id,
+                        notify=False,
                     )
                     update_id = update.id
                 item_results.append(
@@ -486,15 +557,59 @@ class WorkService:
                     items=item_results,
                 )
             )
+        self.changes.publish("projects")
         return WorkImportResult(projects=results)
 
+    def update_projects(self, batch: WorkProjectBatchUpdate) -> WorkProjectBatchResult:
+        """Link existing projects in bounded, atomic batches."""
 
-WORK_ROUTING_INSTRUCTIONS = """
-Project Work is enabled. Use work_list to find or reuse a work item, work_create
-when starting substantial work, and work_check_in to report factual progress,
-next steps, and blockers. Check in at meaningful changes and about every 30
-minutes of active work. A Work item tracks progress; it does not prove a claim.
-"""
+        parent_id = batch.parent_engagement_id
+        if parent_id is not None:
+            self.store.get(Engagement, parent_id)
+        projects = [
+            self.store.get(Engagement, project_id) for project_id in batch.project_ids
+        ]
+        if parent_id is not None:
+            for project in projects:
+                if project.id == parent_id:
+                    raise ConflictError("a project cannot be its own parent")
+                ancestor_id = parent_id
+                seen: set[str] = set()
+                while ancestor_id is not None:
+                    if ancestor_id == project.id or ancestor_id in seen:
+                        raise ConflictError("project hierarchy would contain a cycle")
+                    seen.add(ancestor_id)
+                    ancestor_id = self.store.get(
+                        Engagement, ancestor_id
+                    ).parent_engagement_id
+        updated = 0
+        with self.store.transaction() as transaction:
+            for project in projects:
+                changes: dict[str, str | bool] = {}
+                if parent_id is not None and project.parent_engagement_id != parent_id:
+                    changes["parent_engagement_id"] = parent_id
+                if (
+                    batch.work_enabled is not None
+                    and project.work_enabled != batch.work_enabled
+                ):
+                    changes["work_enabled"] = batch.work_enabled
+                if changes:
+                    transaction.update(
+                        Engagement,
+                        project.id,
+                        changes,
+                        expected_revision=project.revision,
+                    )
+                    updated += 1
+        if updated:
+            self.changes.publish("projects")
+        return WorkProjectBatchResult(updated=updated)
+
+
+WORK_AVAILABLE_INSTRUCTIONS = (
+    "Project Work is available. Use work_list to find tasks, work_create to create "
+    "a task, and work_check_in to post an update when appropriate."
+)
 
 
 class WorkBroker:
