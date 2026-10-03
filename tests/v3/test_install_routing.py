@@ -26,4 +26,7 @@ def test_public_site_leads_to_signed_apt_installation() -> None:
     links = _Links()
     links.feed(site.read_text(encoding="utf-8"))
 
-    assert ("Install Nebula", "https://berylliumsec.github.io/nebula-apt/") in links.links
+    assert (
+        "Install Nebula",
+        "https://berylliumsec.github.io/nebula-apt/",
+    ) in links.links
