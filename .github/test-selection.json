@@ -1,27 +1,26 @@
 {
-  "change_digest": "239ec776eb0e920c9ba6123274d9736375b6068a3dac09447224bf951c273091",
-  "reviewed_by": "Codex focused guard and Studio interface review after rebase",
-  "reason": "The diff raises the public commit guard's per-file limit to 1000 KiB and reviews new staged text in bounded segments. Studio chat, both dark palettes, and focus mode change. Thirteen guard tests, thirty-eight component tests, and six production-bundle browser journeys cover these boundaries on desktop Chromium and 320 px mobile Chromium and WebKit.",
-  "exclusions": "No Core API, native, provider execution, or deployment code changed. Unrelated Python and browser journeys and full suites are excluded. Browser fixtures use mock Core data; an isolated real-Core smoke checks the served production entry path. Physical-device and populated real-Core workflows remain unverified.",
+  "change_digest": "27c4acf0ba808c8017622ff82f2b3bed2a4ec83a4b7fe4846d0ccfe0aa0debcc",
+  "reviewed_by": "Codex focused Nebula interface review",
+  "reason": "The diff changes the conversation search field and the transient focus presentation of Code, Browser, and Files. Fifteen catalogued browser cases cover search interaction and computed styling, focus entry and exit, geometry, keyboard focus, the existing full-screen flow, and a disposable real-Core project. Focus crosses 1440 and 1024 px desktop Chromium plus 320, 390, and 430 px mobile Chromium and WebKit; the other mock journeys use desktop and 320 px mobile profiles.",
+  "exclusions": "No Core API, durable state, provider, native, or command runtime behavior changed. The selected browser journeys cover the visible UI behavior; Python, frontend unit, native, unrelated browser journeys, and full suites are excluded. The disposable real-Core browser check uses the served production bundle. Physical devices are unavailable.",
   "expected_tests": {
-    "python": 13,
-    "frontend": 38,
-    "playwright": 6,
+    "python": 0,
+    "frontend": 0,
+    "playwright": 15,
     "native": 0
   },
-  "python_versions": ["3.12"],
-  "python_browser": false,
-  "python_node": false,
-  "python": ["tests/test_public_commit_guard.py"],
-  "frontend": [
-    "ui/src/components/HarnessThinking.test.tsx",
-    "ui/src/components/activityLedgerModel.test.ts",
-    "ui/src/components/ActivityLedger.test.tsx"
-  ],
+  "python": [],
+  "frontend": [],
   "playwright": [
-    "entry:studio-conversation/desktop",
-    "entry:studio-conversation/mobile-chromium-small",
-    "entry:studio-conversation/mobile-webkit-small"
+    "entry:workbench-focus-polish/desktop",
+    "entry:workbench-focus-polish/compact",
+    "entry:workbench-focus-polish/mobile-chromium-small",
+    "entry:workbench-focus-polish/mobile-chromium",
+    "entry:workbench-focus-polish/mobile-chromium-wide",
+    "entry:workbench-focus-polish/mobile-webkit-small",
+    "entry:workbench-focus-polish/mobile-webkit",
+    "entry:workbench-focus-polish/mobile-webkit-wide",
+    "entry:workbench-focus-polish/assistant-real-desktop"
   ],
   "native": []
 }

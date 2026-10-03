@@ -2144,6 +2144,44 @@ test("a paired browser can revoke itself without a stale authentication error", 
   }
 });
 
+test("assistant upgrade focused work surfaces retain real Core project context", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore();
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const response = await api.get("engagements");
+    expect(response.ok(), await response.text()).toBe(true);
+    const projects = await response.json() as Array<{ id: string }>;
+    expect(projects[0]?.id).toBeTruthy();
+    await page.addInitScript((projectId) => localStorage.setItem("nebula.engagement", projectId), projects[0].id);
+    await page.goto(`${core.origin}/#token=${encodeURIComponent(core.token)}`);
+    await expect(coreConnected(page)).toBeVisible({ timeout: 20_000 });
+    for (const { tab, view, content } of [
+      { tab: "Workspace code editor", view: "code", content: ".persistent-code-editor" },
+      { tab: "Project browser", view: "browser", content: ".persistent-browser" },
+      { tab: "Workspace files", view: "workspace", content: ".workspace-browser" },
+    ]) {
+      await page.getByRole("tab", { name: tab, exact: true }).click();
+      await expect(page.locator(content)).toBeVisible();
+      await page.getByRole("button", { name: "Enter focus mode" }).click();
+      await expect(page.locator(`.sessions-page.workbench-focus.full-screen > .session-layout.${view}`)).toBeVisible();
+      await expect(page.locator(content)).toBeVisible();
+      await expect(page.locator(".workbench-view-tabs")).toHaveCount(0);
+      await page.getByRole("button", { name: "Exit full screen workbench" }).evaluate(button => button.blur());
+      await page.screenshot({ path: testInfo.outputPath(`real-core-${view}-focus.png`) });
+      await page.getByRole("button", { name: "Exit full screen workbench" }).click();
+      await expect(page.locator(content)).toBeVisible();
+      await expect(page.locator(".sessions-page.workbench-focus")).toHaveCount(0);
+    }
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
 test("assistant upgrade mobile Code keeps its controls readable and saves to authoritative real-Core state", async ({ page }) => {
   test.setTimeout(120_000);
   // WebKit fill() can report success without inserting into a shadow-root

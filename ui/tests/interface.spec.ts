@@ -7998,13 +7998,9 @@ test("the workbench expands to the full viewport with compact chrome and complet
 
   const fullScreenViews = [
     ["Terminal", ".persistent-terminal"],
-    ["Workspace code editor", ".persistent-code-editor"],
-    ["Project browser", ".persistent-browser"],
-    ["Workspace files", ".workspace-browser"],
     ["Project notes", ".notes-panel"],
     ["Autonomous missions", ".agents-page"],
     ["Activity history", ".workbench-activity-stack"],
-    ["Analyst chat", ".session-workspace > .chat-empty-state"],
   ] as const;
   for (const [tabName, contentSelector] of fullScreenViews) {
     await page.getByRole("tab", { name: tabName, exact: true }).click();
@@ -8030,6 +8026,106 @@ test("the workbench expands to the full viewport with compact chrome and complet
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
+});
+
+test("phone shell Code Browser and Files focus leaves only the work surface and exit control", async ({ page }, testInfo) => {
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await page.route("**/api/v1/engagements/scratch-project/browser-companion", route => route.fulfill({ json: {
+    session_id: "focus-browser", active_tab_id: null, tabs: [], page_state_reset: false,
+  } }));
+  await page.route("**/api/v1/browser-companion/focus-browser/**", route => {
+    const path = new URL(route.request().url()).pathname;
+    return route.fulfill({ json: path.endsWith("/control") ? { paused: true, approval_policy: "on_boundary" }
+      : path.endsWith("/operations") ? { tabs: [] } : [] });
+  });
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const views = [
+    { label: "Code", tab: "Workspace code editor", content: ".persistent-code-editor", control: ".code-editor-panel" },
+    { label: "Browser", tab: "Project browser", content: ".persistent-browser", control: ".persistent-browser > .integrated-browser-page > .browser-workspace-toolbar" },
+    { label: "Files", tab: "Workspace files", content: ".workspace-browser", control: ".workspace-browser-toolbar" },
+  ] as const;
+  for (const { label, tab, content, control } of views) {
+    if (mobile) {
+      await page.getByRole("button", { name: "More workbench views" }).click();
+      await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: label, exact: true }).click();
+      await page.getByRole("button", { name: "More workbench views" }).click();
+      await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Focus mode" }).click();
+    } else {
+      await page.getByRole("tab", { name: tab, exact: true }).click();
+      await page.getByRole("button", { name: "Enter focus mode" }).click();
+    }
+    const focused = page.locator(".sessions-page.workbench-focus.full-screen");
+    await expect(focused).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-nebula-workbench-focus", "true");
+    await expect.poll(() => page.locator(".app-shell > .top-bar, .app-shell > .side-nav, .app-shell > .mobile-companion-nav").evaluateAll(elements =>
+      elements.every(element => getComputedStyle(element).display === "none"))).toBe(true);
+    await expect(focused.locator(".workbench-view-tabs")).toHaveCount(0);
+    await expect(focused.locator(".focused-workbench-title")).toHaveText(label);
+    await expect(focused.locator(control)).toBeVisible();
+    await expect(focused.locator(content)).toBeVisible();
+    const exit = focused.getByRole("button", { name: "Exit full screen workbench" });
+    await expect(exit).toBeFocused();
+    const bounds = await focused.evaluate(element => {
+      const rect = element.getBoundingClientRect();
+      const workspace = element.querySelector(".session-workspace")!.getBoundingClientRect();
+      const toolbar = element.querySelector(".focused-workbench-toolbar")!.getBoundingClientRect();
+      return { left: rect.left, top: rect.top, right: innerWidth - rect.right, bottom: innerHeight - rect.bottom,
+        workspaceWidth: workspace.width, workspaceHeight: workspace.height, toolbarHeight: toolbar.height };
+    });
+    expect(Math.max(...[bounds.left, bounds.top, bounds.right, bounds.bottom].map(Math.abs)), label).toBeLessThanOrEqual(1);
+    expect(bounds.workspaceWidth, label).toBeGreaterThanOrEqual((page.viewportSize()?.width ?? 1440) - 2);
+    expect(bounds.workspaceHeight, label).toBeGreaterThan(300);
+    expect(bounds.toolbarHeight, label).toBeLessThanOrEqual(56);
+    if (mobile) {
+      const target = await exit.boundingBox();
+      expectTouchTarget(target?.width, `${label} exit width`);
+      expectTouchTarget(target?.height, `${label} exit height`);
+    }
+    await exit.evaluate(button => button.blur());
+    await page.mouse.move(10, 10);
+    await page.screenshot({ path: testInfo.outputPath(`focus-${label.toLowerCase()}.png`) });
+    if (label === "Browser") await page.keyboard.press("Escape");
+    else await exit.click();
+    await expect(focused).toHaveCount(0);
+    await expect(page.locator("html")).not.toHaveAttribute("data-nebula-workbench-focus", "true");
+    await expect(page.getByRole("button", { name: mobile ? "More workbench views" : "Enter focus mode" })).toBeFocused();
+    await expect(page.locator(content)).toBeVisible();
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+});
+
+test("phone shell conversation search has one field across dark themes", async ({ page }, testInfo) => {
+  await openWorkspace(page, "/?view=chat", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  if (mobile) await page.getByRole("button", { name: "Open conversations" }).click();
+  else if (!(await page.getByRole("complementary", { name: "Conversations" }).isVisible())) {
+    await page.getByRole("button", { name: "Show conversations" }).click();
+  }
+  const sidebar = page.getByRole("complementary", { name: "Conversations" });
+  const search = sidebar.getByRole("searchbox", { name: "Search conversations" });
+  for (const theme of ["dark", "zero-dark"] as const) {
+    await setTheme(page, theme);
+    await search.focus();
+    const field = await search.evaluate(element => {
+      const input = getComputedStyle(element);
+      const outer = getComputedStyle(element.closest(".session-list-search")!);
+      return { innerFill: input.backgroundColor, innerBorder: input.borderTopWidth, innerRadius: input.borderTopLeftRadius,
+        innerShadow: input.boxShadow, outerRadius: outer.borderTopLeftRadius, outerShadow: outer.boxShadow };
+    });
+    expect(field.innerFill, theme).toBe("rgba(0, 0, 0, 0)");
+    expect(field.innerBorder, theme).toBe("0px");
+    expect(field.innerRadius, theme).toBe("0px");
+    expect(field.innerShadow, theme).toBe("none");
+    expect(Number.parseFloat(field.outerRadius), theme).toBeGreaterThan(0);
+    expect(field.outerShadow, theme).not.toBe("none");
+    await search.fill("no matching conversation");
+    await expect(sidebar.getByText(/No conversations match/)).toBeVisible();
+    await sidebar.getByRole("button", { name: "Clear conversation search" }).click();
+    await expect(search).toHaveValue("");
+    await page.screenshot({ path: testInfo.outputPath(`conversation-search-${theme}.png`) });
+    await sidebar.locator(".session-list-search").screenshot({ path: testInfo.outputPath(`conversation-search-field-${theme}.png`) });
+  }
 });
 
 test("all three themes snap primary workbench surfaces to the available screen", async ({ page }) => {
