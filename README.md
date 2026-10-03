@@ -6,10 +6,10 @@
 </div>
 
 <p align="center">
-  <img src="docs/images/nebula-3-workbench.png" alt="Nebula 3 Zero Layer workbench with a live contained terminal and operator safety controls" width="100%" />
+  <img src="docs/images/nebula-3-project-overview.png" alt="Nebula 3 project overview in the current dark interface" width="100%" />
 </p>
 
-<p align="center"><sub>The Zero Layer workbench</sub></p>
+<p align="center"><sub>Nebula 3 project overview</sub></p>
 
 <br />
 
