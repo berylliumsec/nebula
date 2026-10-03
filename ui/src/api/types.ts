@@ -115,6 +115,7 @@ export interface EngagementSummary {
   status: "draft" | "active" | "paused" | "complete" | "archived";
   tags: string[];
   workEnabled: boolean;
+  parentEngagementId?: string;
   workspacePath?: string;
   createdAt: string;
   updatedAt: string;

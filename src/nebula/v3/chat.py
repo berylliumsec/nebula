@@ -317,7 +317,7 @@ from .chat_agent_messages import (
     agent_message_components,
     contract_digest_segment as agent_message_digest_segment,
 )
-from .work import WORK_ROUTING_INSTRUCTIONS, WorkService, work_components
+from .work import WORK_AVAILABLE_INSTRUCTIONS, WorkService, work_components
 from .tool_results import (
     MAX_MODEL_ARTIFACT_REFS,
     TOOL_RESULT_SCHEMA,
@@ -341,13 +341,6 @@ if TYPE_CHECKING:
     from .chat_goals import ChatGoalService
     from .chat_schedules import ChatScheduleService
     from .runtime_platform import RuntimePlatform, RuntimeToolComponents
-
-
-_WORK_CHECK_IN_REMINDER = (
-    "\n\nWork check-in is due: use work_list to find your item, then work_check_in "
-    "with what changed, your next step, and any blocker. Create an item first "
-    "if none exists. Continue the task after posting the update."
-)
 
 
 class ChatError(RuntimeError):
@@ -1535,7 +1528,7 @@ def _routing_instructions(names: Collection[str], max_active_subagents: Any) -> 
             else ""
         )
         + (AGENT_MESSAGE_ROUTING_INSTRUCTIONS if "send_agent_message" in names else "")
-        + (WORK_ROUTING_INSTRUCTIONS if "work_check_in" in names else "")
+        + (WORK_AVAILABLE_INSTRUCTIONS if "work_check_in" in names else "")
         + (NOTES_ROUTING_INSTRUCTIONS if NOTES_WRITE_TOOL_NAME in names else "")
         + (
             KNOWLEDGE_SEARCH_ROUTING_INSTRUCTIONS
@@ -5538,7 +5531,7 @@ class ChatService:
             operator_decisions
         )
         if work_enabled:
-            instructions += "\n\n" + WORK_ROUTING_INSTRUCTIONS
+            instructions += "\n\n" + WORK_AVAILABLE_INSTRUCTIONS
         if subagent_child:
             instructions += SUBAGENT_CHILD_INSTRUCTIONS
         if goal is not None:
@@ -6526,10 +6519,7 @@ class ChatService:
         recoveries: list[str] = []
         while True:
             try:
-                request = self._with_current_work_instruction(
-                    prepared,
-                    self._with_current_goal_time_instruction(prepared, request),
-                )
+                request = self._with_current_goal_time_instruction(prepared, request)
                 self._record_provider_request(prepared, request)
                 response = await prepared.provider.complete(request)
                 break
@@ -6569,27 +6559,6 @@ class ChatService:
             return request
         updated = request.model_copy(update={"instructions": instructions})
         return self._fit_turn_goal_request(prepared, updated)
-
-    def _with_current_work_instruction(
-        self, prepared: PreparedChat, request: ModelRequest
-    ) -> ModelRequest:
-        """Tell a long-running provider turn when its Work check-in is due."""
-
-        turn = prepared.turn
-        instructions = (request.instructions or "").replace(_WORK_CHECK_IN_REMINDER, "")
-        if (
-            turn is not None
-            and turn.request_snapshot.get("work_enabled") is True
-            and self.work.update_due(
-                turn.engagement_id,
-                turn.session_id,
-                turn.admitted_at or turn.created_at,
-            )
-        ):
-            instructions += _WORK_CHECK_IN_REMINDER
-        if instructions == (request.instructions or ""):
-            return request
-        return request.model_copy(update={"instructions": instructions})
 
     def _goal_time_wait_due(self, turn: ChatTurn, now: datetime) -> bool:
         """A parked subagent wait crossed a goal warning threshold."""
@@ -7085,10 +7054,7 @@ class ChatService:
         while True:
             output_started = False
             try:
-                request = self._with_current_work_instruction(
-                    prepared,
-                    self._with_current_goal_time_instruction(prepared, request),
-                )
+                request = self._with_current_goal_time_instruction(prepared, request)
                 self._record_provider_request(prepared, request)
                 async for event in prepared.provider.stream(request):
                     if (

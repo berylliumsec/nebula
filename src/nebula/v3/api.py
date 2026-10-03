@@ -187,11 +187,14 @@ from .container_terminal import (
 )
 from .database import Database
 from .work import (
+    WorkAgentActivity,
     WorkCheckIn,
     WorkCreate,
     WorkImportBatch,
     WorkImportResult,
     WorkPatch,
+    WorkProjectBatchResult,
+    WorkProjectBatchUpdate,
     WorkService,
 )
 from .event_history import pause_between_batches, prune_orphaned_event_history
@@ -299,6 +302,7 @@ from .domain import (
     ContextSnapshotStatus,
     DeviceCapabilitySnapshot,
     Engagement,
+    EngagementStatus,
     WorkItem,
     WorkUpdate,
     Entity,
@@ -2251,16 +2255,6 @@ def create_app(
                     # Its scans run off the event loop and read only rows
                     # that can still need recovery; each step fails alone.
                     await provider_chat.recovery_tick()
-                    try:
-                        await harness_runtime.nudge_work_updates()
-                    except Exception as exc:
-                        record_caught_exception(
-                            "work",
-                            "work.nudge_tick_failed",
-                            "A Work check-in pass failed; the next pass retries.",
-                            exc,
-                            stage="schedule",
-                        )
 
             schedule_loop = create_diagnostic_task(
                 _chat_schedule_loop(),
@@ -7381,6 +7375,80 @@ def create_app(
             WorkUpdate, offset=offset, limit=limit, newest_first=True
         )
 
+    @app.get(
+        f"{API_PREFIX}/work/agents",
+        response_model=list[WorkAgentActivity],
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    def active_work_agents() -> list[WorkAgentActivity]:
+        """One response for the overview, independent of project count."""
+
+        active_statuses = [
+            ChatTurnStatus.QUEUED.value,
+            ChatTurnStatus.ROUTING.value,
+            ChatTurnStatus.WAITING_APPROVAL.value,
+            ChatTurnStatus.WAITING_CALLBACK.value,
+            ChatTurnStatus.FINALIZING.value,
+            ChatTurnStatus.INTERRUPTED.value,
+        ]
+        turns = store.find_entities(ChatTurn, {"status": active_statuses}, limit=None)
+        activity: list[WorkAgentActivity] = []
+        for turn in turns:
+            if not chat_service()._turn_is_pending(turn):
+                continue
+            session = store.get(ChatSession, turn.session_id)
+            if session.metadata.get("temporary_assistant") or session.metadata.get(
+                "side_chat"
+            ):
+                continue
+            project = store.get(Engagement, session.engagement_id)
+            if project.status == EngagementStatus.ARCHIVED:
+                continue
+            waiting = not is_subagent_session(session) and (
+                turn.status == ChatTurnStatus.WAITING_APPROVAL
+                or turn.status == ChatTurnStatus.INTERRUPTED
+                and not core_resumes_interrupted_turn(turn)
+            )
+            activity.append(
+                WorkAgentActivity(
+                    session_id=session.id,
+                    engagement_id=session.engagement_id,
+                    title=session.title,
+                    state="waiting" if waiting else "working",
+                    turn_id=turn.id,
+                )
+            )
+        return activity
+
+    @app.get(
+        f"{API_PREFIX}/work/events",
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def work_events() -> StreamingResponse:
+        async def stream() -> AsyncIterator[bytes]:
+            queue = work_service.changes.subscribe()
+            try:
+                yield b"event: ready\ndata: {}\n\n"
+                while True:
+                    try:
+                        kind = await asyncio.wait_for(queue.get(), timeout=25)
+                    except TimeoutError:  # diagnostic-expected: transport heartbeat keeps idle streams open.
+                        yield b": keep-alive\n\n"
+                        continue
+                    yield (
+                        f"event: change\ndata: {json.dumps({'kind': kind})}\n\n"
+                    ).encode("utf-8")
+            finally:
+                work_service.changes.unsubscribe(queue)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
     @app.post(
         f"{API_PREFIX}/work/import",
         response_model=WorkImportResult,
@@ -7401,6 +7469,17 @@ def create_app(
             for project in body.projects
         ]
         return work_service.import_batch(body.model_copy(update={"projects": projects}))
+
+    @app.patch(
+        f"{API_PREFIX}/work/projects",
+        response_model=WorkProjectBatchResult,
+        tags=["work"],
+        dependencies=[Depends(require_auth)],
+    )
+    async def update_work_projects(
+        body: WorkProjectBatchUpdate,
+    ) -> WorkProjectBatchResult:
+        return work_service.update_projects(body)
 
     @app.get(
         f"{API_PREFIX}/engagements/{{engagement_id}}/work",

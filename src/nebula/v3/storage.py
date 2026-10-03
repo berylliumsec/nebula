@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Iterable,
     Iterator,
     Mapping,
@@ -272,6 +273,7 @@ class StoreTransaction:
         self.session = session
         # Deleted records whose event history goes once this unit commits.
         self.deleted_event_owners: list[str] = []
+        self.chat_activity_changed = False
 
     def add(self, entity: Entity) -> Entity:
         row = EntityRow(
@@ -300,6 +302,8 @@ class StoreTransaction:
 
         upsert_search_document(self.session, row)
         self.session.flush()
+        if entity.entity_kind in {"chat_sessions", "chat_turns"}:
+            self.chat_activity_changed = True
         return entity
 
     def add_all(self, entities: Sequence[Entity]) -> Sequence[Entity]:
@@ -381,6 +385,8 @@ class StoreTransaction:
         # applied to it directly and validated once. Parsing the stored entity
         # and dumping it again first yields the same result at twice the cost,
         # which a large record pays on every update.
+        previous_status = row.payload.get("status")
+        previous_title = row.payload.get("title")
         payload = dict(row.payload)
         payload.update(changes)
         payload["id"] = row.id
@@ -418,6 +424,13 @@ class StoreTransaction:
             from .search import upsert_search_document
 
             upsert_search_document(self.session, refreshed)
+        if (
+            model.entity_kind == "chat_turns"
+            and previous_status != payload.get("status")
+            or model.entity_kind == "chat_sessions"
+            and previous_title != payload.get("title")
+        ):
+            self.chat_activity_changed = True
         return updated
 
     def delete(
@@ -447,6 +460,8 @@ class StoreTransaction:
         ):
             self.session.delete(child)
         self.session.flush()
+        if model.entity_kind in {"chat_sessions", "chat_turns"}:
+            self.chat_activity_changed = True
         if model.entity_kind in EVENT_OWNER_ENTITY_KINDS:
             self.deleted_event_owners.append(entity_id)
 
@@ -535,6 +550,10 @@ class NebulaStore:
         )
         # Removes a deleted record's event history off the deleting thread.
         self.event_history = EventHistoryPurger(self.database)
+        self._chat_activity_listeners: list[Callable[[], None]] = []
+
+    def on_chat_activity_change(self, listener: Callable[[], None]) -> None:
+        self._chat_activity_listeners.append(listener)
 
     def _begin_run_write(self, connection: Any, run_id: str) -> None:
         """Serialize sequence assignment for one run on supported databases."""
@@ -559,6 +578,18 @@ class NebulaStore:
         with self.database.session() as session:
             transaction = StoreTransaction(session)
             yield transaction
+        if transaction.chat_activity_changed:
+            for listener in self._chat_activity_listeners:
+                try:
+                    listener()
+                except Exception as exc:
+                    record_caught_exception(
+                        "storage",
+                        "storage.chat_activity_signal_failed",
+                        "A chat activity change could not be signaled.",
+                        exc,
+                        stage="storage",
+                    )
         if transaction.deleted_event_owners:
             self.event_history.submit(transaction.deleted_event_owners)
 

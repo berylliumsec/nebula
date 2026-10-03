@@ -918,7 +918,8 @@ class Engagement(Entity):
     client_name: str | None = None
     owner_id: str | None = None
     tags: list[str] = Field(default_factory=list)
-    work_enabled: bool = False
+    work_enabled: bool = True
+    parent_engagement_id: str | None = None
     workspace_path: str | None = Field(default=None, max_length=4096)
     assistant_defaults: AssistantDefaults = Field(default_factory=AssistantDefaults)
     metadata: dict[str, Any] = Field(default_factory=dict)

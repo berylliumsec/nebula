@@ -7,6 +7,10 @@
 .work-back { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; margin-bottom: 16px; text-decoration: none; }
 .work-back:hover { color: var(--text-strong); }
 .work-head-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.work-live-state { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.work-live-state.live { color: var(--green); }
+.work-live-state.reconnecting { color: var(--orange); }
+.work-live-state.offline { color: var(--red); }
 .work-head-actions .button { min-height: 44px; }
 .work-refresh { width: 44px; min-width: 44px; padding: 0; justify-content: center; }
 .work-setting-note { color: var(--muted); font-size: 12px; margin: -9px 0 18px; }
@@ -41,7 +45,15 @@
 .work-project-search { padding: 12px 18px; border-bottom: 1px solid var(--border-soft); }
 .work-project-search input { box-sizing: border-box; width: min(360px, 100%); min-height: 44px; padding: 10px 12px; color: var(--text-strong); background: var(--surface-raised); border: 1px solid var(--border-soft); border-radius: 9px; font: inherit; }
 .work-project-search input::placeholder { color: var(--muted); }
-.work-project-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.work-project-list { display: grid; grid-template-columns: minmax(0, 1fr); }
+.work-project-row { display: flex; min-width: 0; align-items: stretch; border-bottom: 1px solid var(--border-soft); }
+.work-project-row.is-child { background: color-mix(in srgb, var(--surface-raised) 32%, var(--surface)); }
+.work-project-row > button, .work-project-spacer { flex: 0 0 44px; width: 44px; min-height: 44px; }
+.work-project-row > button { display: grid; place-items: center; border: 0; background: transparent; color: var(--muted); cursor: pointer; }
+.work-project-row > button:hover { color: var(--text-strong); background: var(--surface-hover); }
+.work-project-row > a { flex: 1; border-bottom: 0; }
+.work-parent-link { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; margin: -8px 0 18px; text-decoration: none; }
+.work-parent-link:hover { color: var(--text-strong); }
 .work-project-list a { display: flex; align-items: center; gap: 12px; text-decoration: none; min-width: 0; padding: 16px 18px; border-bottom: 1px solid var(--border-soft); }
 .work-project-list a > span:first-child { flex: 1; min-width: 0; }
 .work-project-list a > span:nth-child(2) { color: var(--muted); font-size: 11px; text-align: right; white-space: nowrap; }
