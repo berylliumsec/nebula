@@ -273,31 +273,54 @@ def test_provider_work_tools_use_chat_scope_and_opt_out(tmp_path):
 def test_provider_work_tools_reach_only_linked_child_project(tmp_path):
     store = NebulaStore(tmp_path / "core.db")
     parent = store.create(Engagement(name="Parent project"))
-    child = store.create(Engagement(name="linked_child", parent_engagement_id=parent.id))
+    child = store.create(
+        Engagement(name="linked_child", parent_engagement_id=parent.id)
+    )
     unrelated = store.create(Engagement(name="Unrelated"))
-    chat = store.create(ChatSession(
-        engagement_id=parent.id, title="Research", model="test-model",
-        provider_profile_id="provider-1",
-    ))
+    chat = store.create(
+        ChatSession(
+            engagement_id=parent.id,
+            title="Research",
+            model="test-model",
+            provider_profile_id="provider-1",
+        )
+    )
     service = WorkService(store)
-    item = service.create(child.id, WorkCreate(title="Research status"), actor_id="import")
+    item = service.create(
+        child.id, WorkCreate(title="Research status"), actor_id="import"
+    )
     other = service.create(unrelated.id, WorkCreate(title="Other"), actor_id="import")
     components = work_components(service, parent.id, tmp_path)
 
     async def call(name: str, arguments: dict):
         return await components.broker.execute(
             ToolInvocation(
-                engagement_id=parent.id, run_id="turn-1", chat_session_id=chat.id,
-                tool_name=name, arguments=arguments, workspace=tmp_path,
-            ), components.scope,
+                engagement_id=parent.id,
+                run_id="turn-1",
+                chat_session_id=chat.id,
+                tool_name=name,
+                arguments=arguments,
+                workspace=tmp_path,
+            ),
+            components.scope,
         )
 
-    assert [row["id"] for row in asyncio.run(call(
-        "work_list", {"project_name": child.name}
-    )).output["items"]] == [item.id]
-    update = asyncio.run(call("work_check_in", {
-        "item_id": item.id, "summary": "Reviewed", "request_id": "review-1",
-    })).output["update"]
+    assert [
+        row["id"]
+        for row in asyncio.run(call("work_list", {"project_name": child.name})).output[
+            "items"
+        ]
+    ] == [item.id]
+    update = asyncio.run(
+        call(
+            "work_check_in",
+            {
+                "item_id": item.id,
+                "summary": "Reviewed",
+                "request_id": "review-1",
+            },
+        )
+    ).output["update"]
     assert update["source_session_id"] == chat.id
     assert update["source_engagement_id"] == parent.id
     with pytest.raises(NotFoundError):

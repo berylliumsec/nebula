@@ -127,10 +127,13 @@ def test_builtin_work_gateway_is_default_on_scoped_and_retains_updates(tmp_path)
 def test_parent_gateway_checks_in_to_linked_project_only(tmp_path):
     async def scenario() -> None:
         store, parent, profile, runtime = _runtime(tmp_path)
-        child = store.create(Engagement(name="linked_child", parent_engagement_id=parent.id))
+        child = store.create(
+            Engagement(name="linked_child", parent_engagement_id=parent.id)
+        )
         unrelated = store.create(Engagement(name="Other project"))
         child_item = runtime.work.create(
-            child.id, WorkCreate(title="Research status", status="in_progress"),
+            child.id,
+            WorkCreate(title="Research status", status="in_progress"),
             actor_id="import",
         )
         other_item = runtime.work.create(
@@ -155,9 +158,11 @@ def test_parent_gateway_checks_in_to_linked_project_only(tmp_path):
         assert [item["id"] for item in listed["structuredContent"]["items"]] == [
             child_item.id
         ]
-        assert (await runtime._gateway_call(
-            session, "work.list", {"project_name": unrelated.name}
-        ))["isError"] is True
+        assert (
+            await runtime._gateway_call(
+                session, "work.list", {"project_name": unrelated.name}
+            )
+        )["isError"] is True
         updated = await runtime._gateway_call(
             session,
             "work.check_in",
@@ -172,13 +177,17 @@ def test_parent_gateway_checks_in_to_linked_project_only(tmp_path):
         check_in = runtime.work.updates(child.id, child_item.id)[0]
         assert check_in.source_session_id == turn.chat_session_id
         assert check_in.source_engagement_id == parent.id
-        assert (await runtime._gateway_call(
-            session, "work.check_in", {"item_id": other_item.id, "summary": "No"}
-        ))["isError"] is True
+        assert (
+            await runtime._gateway_call(
+                session, "work.check_in", {"item_id": other_item.id, "summary": "No"}
+            )
+        )["isError"] is True
         runtime.work.set_enabled(child.id, False)
-        assert (await runtime._gateway_call(
-            session, "work.check_in", {"item_id": child_item.id, "summary": "No"}
-        ))["isError"] is True
+        assert (
+            await runtime._gateway_call(
+                session, "work.check_in", {"item_id": child_item.id, "summary": "No"}
+            )
+        )["isError"] is True
         assert len(runtime.work.updates(child.id, child_item.id)) == 1
         runtime._active.pop(session.id)
 

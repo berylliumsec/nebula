@@ -1,5 +1,5 @@
 {
-  "change_digest": "deaf1016b5b14638ef4cbda2b8e88cf9c220608225e740864b9f1e0fb299f4b6",
+  "change_digest": "b49cc19c50ff7abc6bfb16ffdb8fe1f5b0afa8eae58492ca4fd790d5fb12abba",
   "reviewed_by": "Codex linked-project Work MCP review",
   "reason": "Parent project agents can list and check in to directly linked child project Work through the built-in MCP. The selected Python files cover project scope, opt-out, persistence, actor provenance, and both provider and harness tools. The Work page file covers the cross-project conversation link. The Work import browser journey exercises saved Work in a real Core and production UI at desktop and mobile widths.",
   "exclusions": "No native code changed. Unrelated Python and frontend files and the rest of the browser catalog are excluded. Physical mobile devices are unavailable; browser profiles are emulated. The live production service is verified separately after deployment.",

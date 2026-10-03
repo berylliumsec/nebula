@@ -453,7 +453,9 @@ _GATEWAY_WORK_SCHEMAS: dict[str, tuple[str, dict[str, Any]]] = {
         "List this project's work items, or a linked child project's items by name. Use this before creating duplicates.",
         {
             "type": "object",
-            "properties": {"project_name": {"type": "string", "minLength": 1, "maxLength": 300}},
+            "properties": {
+                "project_name": {"type": "string", "minLength": 1, "maxLength": 300}
+            },
             "additionalProperties": False,
         },
     ),
@@ -13881,7 +13883,11 @@ class HarnessRuntimeService:
                     turn.engagement_id, arguments.get("project_name")
                 )
                 data = WorkCreate.model_validate(
-                    {key: value for key, value in arguments.items() if key != "project_name"}
+                    {
+                        key: value
+                        for key, value in arguments.items()
+                        if key != "project_name"
+                    }
                 )
                 if turn.chat_session_id is None:
                     data = data.model_copy(
