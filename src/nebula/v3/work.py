@@ -575,7 +575,7 @@ class WorkService:
             for project in projects:
                 if project.id == parent_id:
                     raise ConflictError("a project cannot be its own parent")
-                ancestor_id = parent_id
+                ancestor_id: str | None = parent_id
                 seen: set[str] = set()
                 while ancestor_id is not None:
                     if ancestor_id == project.id or ancestor_id in seen:
