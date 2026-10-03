@@ -7230,6 +7230,131 @@ test("oversized harness activity fails compactly without blocking mobile chat", 
   expect(accessibility.violations).toEqual([]);
 });
 
+test("stabilization studio conversation keeps context and thinking readable", async ({ page }, testInfo) => {
+  test.skip(!["desktop", "mobile-chromium-small", "mobile-webkit-small"].includes(testInfo.project.name), "Focused Studio desktop and 320 px mobile checks.");
+  const sessionId = "studio-preview";
+  const turnId = "studio-turn";
+  const startedAt = new Date(Date.now() - 90_000).toISOString();
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/harnesses")) return route.fulfill({ json: [{
+      ...entity, id: "studio-harness", name: "Codex", kind: "codex_app_server",
+      connection_mode: "spawn", transport: "stdio", executable: "codex", auth_mode: "existing_session",
+      enabled: true, default_model: "gpt-6-sol", privacy: { local_only: true, permits_sensitive_data: true },
+      capabilities: { models: ["gpt-6-sol"], checked_at: entity.updated_at, authentication_state: "verified" },
+    }] });
+    if (path.endsWith("/chat-sessions")) return route.fulfill({ json: [{
+      ...entity, id: sessionId, engagement_id: "scratch-project", title: "Review the rollout plan",
+      backend: "harness", harness_profile_id: "studio-harness", harness_session_id: "studio-harness-session",
+      model: "gpt-6-sol", metadata: {},
+    }] });
+    if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) return route.fulfill({ json: [
+      { ...entity, id: "studio-prompt", engagement_id: "scratch-project", session_id: sessionId,
+        sequence: 1, role: "user", content: "Review completed tasks and prepare the next sprint.", citations: [], metadata: {} },
+      { ...entity, id: "studio-reply", engagement_id: "scratch-project", session_id: sessionId,
+        sequence: 2, role: "assistant", content: "The release plan is ready. I am checking the remaining tasks.",
+        citations: [], metadata: { harness_turn_id: turnId } },
+    ] });
+    if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) return route.fulfill({ json: null });
+    if (path.endsWith(`/chat/sessions/${sessionId}/state`)) return route.fulfill({ json: {
+      schema: "nebula.session-state/v1", session_id: sessionId, revision: 1, turn_id: turnId,
+      harness_turn_id: turnId, execution: "completed", busy: false, detail: "Response completed.",
+      connection: "connected", actions: ["check_status"], pending: [], decisions: [],
+    } });
+    if (path.endsWith(`/chat/sessions/${sessionId}/subagents`)) return route.fulfill({ json: { session_id: sessionId, subagents: [
+      { id: "studio-agent-1", name: "Check release notes", task: "Confirm the tagged version and changelog", status: "running",
+        parent_session_id: sessionId, parent_turn_id: turnId, child_session_id: "studio-child-1", step_count: 4,
+        recent_steps: [], approval: null, usage: { input_tokens: 1500, output_tokens: 300, total_tokens: 1800 },
+        started_at: entity.created_at, finished_at: null, elapsed_seconds: 42, result: "", error: null, result_message_id: null },
+      { id: "studio-agent-2", name: "Review task list", task: "Verify completed items", status: "completed",
+        parent_session_id: sessionId, parent_turn_id: turnId, child_session_id: "studio-child-2", step_count: 6,
+        recent_steps: [], approval: null, usage: { input_tokens: 2000, output_tokens: 500, total_tokens: 2500 },
+        started_at: entity.created_at, finished_at: entity.updated_at, elapsed_seconds: 73, result: "Tasks reviewed.", error: null, result_message_id: null },
+    ] } });
+    if (path.endsWith("/harness-sessions/studio-harness-session/activity")) return route.fulfill({ json: {
+      session_id: "studio-harness-session", session_status: "idle", busy: false, live: true,
+      turn_id: turnId, turn_status: "complete", turn_origin: "chat", started_at: startedAt,
+      last_activity_at: new Date().toISOString(), detail: "Harness is ready.",
+      goal: { objective: "Review completed tasks and prepare the next sprint", status: "running",
+        current_step: "Verify the release checklist", child_agents: 2 },
+    } });
+    if (path.endsWith(`/harness-turns/${turnId}/events`)) return route.fulfill({ json: {
+      events: [
+        ...Array.from({ length: 12 }, (_, index) => ({
+          id: `studio-thinking-${index + 1}`, type: "item_upsert", schema_version: "nebula.harness-activity/v2",
+          sequence: index + 1, vendor: "codex_app_server", harness_session_id: "studio-harness-session",
+          harness_turn_id: turnId, item_id: `thinking-${index + 1}`, item_kind: "reasoning", item_status: "completed",
+          title: "Reasoning", payload: { reasoning_summary_state: "available", reasoning_summary_text: `Reviewing checklist item ${index + 1}` },
+          artifact_ids: [],
+        })),
+        { id: "studio-wait", type: "tool_started", schema_version: "nebula.harness-activity/v2", sequence: 13,
+          vendor: "codex_app_server", harness_session_id: "studio-harness-session", harness_turn_id: turnId,
+          item_id: "wait-tool", item_kind: "tool", item_status: "running", title: "chat · MCP nebula/subagent.wait tool started",
+          artifact_ids: [], payload: {} },
+      ], next_sequence: 13,
+    } });
+    if (path.endsWith(`/harness-turns/${turnId}/interactions`)) return route.fulfill({ json: [] });
+    await route.fallback();
+  });
+
+  await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
+  await expect(page.getByText("Review the rollout plan", { exact: true }).first()).toBeVisible();
+  const thinking = page.getByLabel("Harness thinking");
+  await expect(thinking).toContainText("12 updates");
+  if (testInfo.project.name === "desktop") {
+    await expect(page.locator(".chat-studio-rail")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Goal" })).toContainText("Review completed tasks");
+    await expect(page.getByRole("region", { name: "Subagents" }).last()).toContainText("Check release notes");
+  } else await expect(page.locator(".chat-studio-rail")).toBeHidden();
+  await page.screenshot({ path: testInfo.outputPath("studio-conversation.png") });
+  await thinking.locator("summary").click();
+  await expect(thinking).toContainText("Latest 8 of 12");
+  await expect(thinking.getByText("Reviewing checklist item 1", { exact: true })).toHaveCount(0);
+  await expect(thinking.getByText("Reviewing checklist item 12", { exact: true })).toBeVisible();
+  await expect.poll(() => thinking.locator("summary").evaluate(element => {
+    const viewport = element.closest(".chat-scroll")?.getBoundingClientRect();
+    const summary = element.getBoundingClientRect();
+    return Boolean(viewport && summary.top >= viewport.top - 1 && summary.bottom <= viewport.bottom + 1);
+  })).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("studio-thinking.png") });
+  for (const [theme, canvas] of [["zero-dark", "#191b1e"], ["dark", "#1a1c1f"]] as const) {
+    await setTheme(page, theme);
+    const colors = await page.evaluate(() => {
+      const style = getComputedStyle(document.documentElement);
+      return [style.getPropertyValue("--canvas").trim(), style.getPropertyValue("--text").trim()];
+    });
+    expect(colors[0]).toBe(canvas);
+    expect(colors[1]).not.toBe("");
+    await expect.poll(() => page.locator(".chat-composer").evaluate(element => getComputedStyle(element).backgroundColor))
+      .toBe(theme === "zero-dark" ? "rgb(48, 52, 58)" : "rgb(52, 56, 62)");
+    await page.screenshot({ path: testInfo.outputPath(`studio-${theme}.png`) });
+  }
+  await setTheme(page, "zero-dark");
+  if (testInfo.project.name === "desktop") await page.getByRole("button", { name: "Enter focus mode" }).click();
+  else {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Focus mode" }).click();
+  }
+  await expect(page.locator(".sessions-page.chat-focus")).toBeVisible();
+  await expect(page.locator(".chat-studio-rail")).toBeHidden();
+  await expect(page.locator(".app-shell > .side-nav, .app-shell > .mobile-companion-nav")).toBeHidden();
+  await expect(page.locator(".sessions-page.chat-focus > .session-toolbar")).toBeHidden();
+  await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Exit full screen workbench" })).toBeFocused();
+  const focusBounds = await page.locator(".sessions-page.chat-focus").evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, right: innerWidth - rect.right, top: rect.top, bottom: innerHeight - rect.bottom };
+  });
+  expect(Object.values(focusBounds).every(value => Math.abs(value) <= 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("studio-focus.png") });
+  await page.getByRole("button", { name: "Exit full screen workbench" }).click();
+  await expect(page.locator(".sessions-page.chat-focus")).toHaveCount(0);
+  if (testInfo.project.name === "desktop") await expect(page.locator(".chat-studio-rail")).toBeVisible();
+  await expect(page.getByRole("button", { name: testInfo.project.name === "desktop" ? "Enter focus mode" : "More workbench views" })).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  expect((await new AxeBuilder({ page }).include(".chat-studio").analyze()).violations).toEqual([]);
+});
+
 test("activity ledger groups repeated work into a compact operator receipt", async ({ page }, testInfo) => {
   test.skip(!["desktop", "compact", "narrow"].includes(testInfo.project.name) && !testInfo.project.name.startsWith("mobile-"), "Covered by permanent desktop and mobile browser projects.");
   const turnId = "turn-activity-ledger";
