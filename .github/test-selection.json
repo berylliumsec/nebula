@@ -1,26 +1,44 @@
 {
-  "change_digest": "27c4acf0ba808c8017622ff82f2b3bed2a4ec83a4b7fe4846d0ccfe0aa0debcc",
-  "reviewed_by": "Codex focused Nebula interface review",
-  "reason": "The diff changes the conversation search field and the transient focus presentation of Code, Browser, and Files. Fifteen catalogued browser cases cover search interaction and computed styling, focus entry and exit, geometry, keyboard focus, the existing full-screen flow, and a disposable real-Core project. Focus crosses 1440 and 1024 px desktop Chromium plus 320, 390, and 430 px mobile Chromium and WebKit; the other mock journeys use desktop and 320 px mobile profiles.",
-  "exclusions": "No Core API, durable state, provider, native, or command runtime behavior changed. The selected browser journeys cover the visible UI behavior; Python, frontend unit, native, unrelated browser journeys, and full suites are excluded. The disposable real-Core browser check uses the served production bundle. Physical devices are unavailable.",
+  "change_digest": "a5107989817215c2dea894dd12f4e515334bf97247a1e9ffc71eec6ba3a6def9",
+  "reviewed_by": "Codex focused Work hub and Studio integration review",
+  "reason": "The diff adds opt-in Work persistence, MCP and harness check-ins, an authenticated project import API, and a Studio-style responsive hub. Twenty-one Python tests, four component tests, and sixteen production-bundle real-Core browser journeys cover import retries, authorization, pagination, board updates, accessibility, and phone layouts. The frontend diagnostics audit confirms every Work failure handler is classified. Ruff lint and format, the Python diagnostic audit, and mypy also pass.",
+  "exclusions": "No native code changed. Unrelated Python, frontend, and browser journeys and full suites are excluded. Browser profiles are emulated; physical-device validation is separate.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
-    "playwright": 15,
+    "python": 21,
+    "frontend": 4,
+    "playwright": 16,
     "native": 0
   },
-  "python": [],
-  "frontend": [],
+  "python_versions": [
+    "3.12"
+  ],
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_work.py",
+    "tests/v3/test_work_gateway.py",
+    "tests/test_public_commit_guard.py"
+  ],
+  "frontend": [
+    "ui/src/pages/WorkPage.test.tsx"
+  ],
   "playwright": [
-    "entry:workbench-focus-polish/desktop",
-    "entry:workbench-focus-polish/compact",
-    "entry:workbench-focus-polish/mobile-chromium-small",
-    "entry:workbench-focus-polish/mobile-chromium",
-    "entry:workbench-focus-polish/mobile-chromium-wide",
-    "entry:workbench-focus-polish/mobile-webkit-small",
-    "entry:workbench-focus-polish/mobile-webkit",
-    "entry:workbench-focus-polish/mobile-webkit-wide",
-    "entry:workbench-focus-polish/assistant-real-desktop"
+    "entry:work-hub/assistant-real-desktop",
+    "entry:work-hub/assistant-real-compact",
+    "entry:work-hub/assistant-real-chromium-320",
+    "entry:work-hub/assistant-real-chromium-390",
+    "entry:work-hub/assistant-real-chromium-430",
+    "entry:work-hub/assistant-real-webkit-320",
+    "entry:work-hub/assistant-real-webkit-390",
+    "entry:work-hub/assistant-real-webkit-430",
+    "entry:work-import/assistant-real-desktop",
+    "entry:work-import/assistant-real-compact",
+    "entry:work-import/assistant-real-chromium-320",
+    "entry:work-import/assistant-real-chromium-390",
+    "entry:work-import/assistant-real-chromium-430",
+    "entry:work-import/assistant-real-webkit-320",
+    "entry:work-import/assistant-real-webkit-390",
+    "entry:work-import/assistant-real-webkit-430"
   ],
   "native": []
 }
