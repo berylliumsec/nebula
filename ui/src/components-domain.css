@@ -253,6 +253,8 @@
 .provider-dialog header h2 { margin: 3px 0 0; }
 .provider-dialog header small { color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
 .provider-dialog label { display: grid; gap: 6px; color: var(--muted); font-size: var(--type-secondary); font-weight: var(--weight-semibold); }
+.provider-dialog .harness-permission-field,
+.provider-dialog .harness-permission-field select { min-width: 0; max-width: 100%; }
 .provider-dialog input, .provider-dialog select, .provider-dialog textarea { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: var(--surface-raised); font: inherit; }
 .provider-dialog textarea { resize: vertical; }
 .provider-dialog .provider-consent { display: flex; align-items: flex-start; flex-direction: row; gap: 9px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); }

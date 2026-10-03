@@ -2933,6 +2933,7 @@ class HarnessProfile(Entity):
     auth_mode: HarnessAuthMode = HarnessAuthMode.EXISTING_SESSION
     secret_ref: str | None = None
     default_model: str | None = Field(default=None, max_length=500)
+    permission_mode: Literal["managed", "unrestricted"] = "managed"
     enabled: bool = True
     privacy: ProviderPrivacy = Field(default_factory=ProviderPrivacy)
     capabilities: HarnessCapabilities = Field(default_factory=HarnessCapabilities)
@@ -2975,6 +2976,11 @@ class HarnessProfile(Entity):
 
     @model_validator(mode="after")
     def connection_is_supported(self) -> "HarnessProfile":
+        if self.permission_mode == "unrestricted" and self.kind not in {
+            HarnessKind.CODEX_APP_SERVER,
+            HarnessKind.GROK_ACP,
+        }:
+            raise ValueError("unrestricted permission mode requires Codex or Grok")
         if self.home_directory and (
             self.connection_mode != HarnessConnectionMode.SPAWN
             or self.kind not in {HarnessKind.CODEX_APP_SERVER, HarnessKind.GROK_ACP}

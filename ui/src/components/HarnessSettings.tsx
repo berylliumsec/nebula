@@ -55,6 +55,7 @@ export function HarnessSettings() {
   const [homeDirectory, setHomeDirectory] = useState("");
   const [endpoint, setEndpoint] = useState("");
   const [model, setModel] = useState("");
+  const [permissionMode, setPermissionMode] = useState<HarnessProfile["permissionMode"]>("managed");
   const [harnessAuthMode, setHarnessAuthMode] = useState<HarnessProfile["authMode"]>("existing_session");
   const [harnessSecret, setHarnessSecret] = useState("");
   const [harnessSessionCredential, setHarnessSessionCredential] = useState(false);
@@ -197,6 +198,7 @@ export function HarnessSettings() {
     setEndpoint(profile?.endpoint ?? "");
     setHomeDirectory(profile?.homeDirectory ?? "");
     setModel(profile?.defaultModel ?? (nextKind === "grok_acp" ? "grok-build" : ""));
+    setPermissionMode(profile?.permissionMode ?? "managed");
     setHarnessAuthMode(profile?.authMode ?? "existing_session");
     setHarnessSecret("");
     setHarnessSessionCredential(false);
@@ -237,6 +239,7 @@ export function HarnessSettings() {
         auth_mode: harnessAuthMode,
         secret_ref: harnessAuthMode === "existing_session" ? null : secretRef,
         default_model: model.trim() || null,
+        permission_mode: permissionMode,
         enabled: editingHarness?.enabled ?? true,
         privacy: {
           local_only: harnessLocalOnly,
@@ -422,10 +425,10 @@ export function HarnessSettings() {
         <p className="integration-card-summary" role="status">Sign-in: {profile.authenticationState ?? "unverified"} · Session: {profile.sessionState ?? "unverified"} · Model turn: {profile.turnState ?? "unverified"}{profile.lastSuccessfulTurnAt ? ` · Last success ${new Date(profile.lastSuccessfulTurnAt).toLocaleString()}` : ""}{profile.lastTurnFailureReason ? ` · ${profile.lastTurnFailureReason.replaceAll("_", " ")}` : ""}</p>
         {!!profile.exercisedCapabilities?.length && <p className="integration-card-summary">Verified in use: {profile.exercisedCapabilities.map(item => item.replaceAll("_", " ")).join(", ")}.</p>}
         {harnessRecovery(profile) && <p role="alert" className="integration-card-summary">{harnessRecovery(profile)}</p>}
-        <dl className="integration-card-facts"><div><dt>Model</dt><dd>{profile.defaultModel ?? "Selected per session"}</dd></div><div><dt>Auth</dt><dd>{profile.authMode === "existing_session" ? "Existing local sign-in" : "Secret-backed · configured"}</dd></div><div><dt>Privacy</dt><dd>{profile.localOnly ? "Local runtime" : profile.permitsSensitiveData ? profile.autoShareToolResults ? "Cloud project data · tool results auto-shared" : "Cloud project data allowed" : "Text only"}</dd></div><div><dt>Version</dt><dd title={profile.version}>{profile.version ?? "Not checked"}</dd></div></dl>
+        <dl className="integration-card-facts"><div><dt>Model</dt><dd>{profile.defaultModel ?? "Selected per session"}</dd></div><div><dt>Permissions</dt><dd>{profile.permissionMode === "unrestricted" ? "Unrestricted · Host mode only" : "Managed"}</dd></div><div><dt>Auth</dt><dd>{profile.authMode === "existing_session" ? "Existing local sign-in" : "Secret-backed · configured"}</dd></div><div><dt>Privacy</dt><dd>{profile.localOnly ? "Local runtime" : profile.permitsSensitiveData ? profile.autoShareToolResults ? "Cloud project data · tool results auto-shared" : "Cloud project data allowed" : "Text only"}</dd></div><div><dt>Version</dt><dd title={profile.version}>{profile.version ?? "Not checked"}</dd></div></dl>
         <details className="provider-capability-policy">
           <summary>Vendor-native capabilities</summary>
-          <p className="provider-dialog-note"><ShieldAlert size={14} /> Project files and commands use Nebula's pinned automation container at <code>/workspace</code>. The vendor harness has no host workspace or native shell access.</p>
+          <p className="provider-dialog-note"><ShieldAlert size={14} /> Docker-mode projects use the pinned automation container at <code>/workspace</code>. Host-mode projects give enabled native tools the linked project folder.</p>
           <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.webSearch} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { webSearch: event.target.checked })} /><span><strong>Web search</strong><small>Vendor-hosted research, never target scanning.</small></span></label>
           {profile.kind === "codex_app_server" && <><label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.browser} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { browser: event.target.checked })} /><span><strong>Browser</strong><small>Browser-driven research with action approvals.</small></span></label><label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.computerUse} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { computerUse: event.target.checked })} /><span><strong>Computer use</strong><small>Interactive vendor computer-use surface.</small></span></label><label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.imageGeneration} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { imageGeneration: event.target.checked })} /><span><strong>Image generation</strong><small>Vendor-hosted analyst image generation.</small></span></label></>}
           <label className="provider-consent"><input type="checkbox" checked={profile.nativeCapabilities.skills} disabled={busy === profile.id} onChange={(event) => void updateNativeCapabilities(profile, { skills: event.target.checked })} /><span><strong>Installed skills</strong><small>Expose already-installed vendor skills.</small></span></label>
@@ -471,10 +474,12 @@ export function HarnessSettings() {
         </details>}
         <label>Default model<select value={model} disabled={!harnessModelOptions.length} onChange={(event) => setModel(event.target.value)}><option value="">{harnessModelOptions.length ? "Automatic (harness default)" : "Discovered after saving"}</option>{harnessModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
         <p className="provider-dialog-note">{harnessModelOptions.length ? "Choose a model reported by the harness, or use its automatic default." : "Saving runs a harness check and discovers available models and modes."}</p>
+        <label className="harness-permission-field">Harness permissions<select value={permissionMode} onChange={(event) => setPermissionMode(event.target.value as HarnessProfile["permissionMode"])}><option value="managed">Managed approvals</option><option value="unrestricted">Unrestricted host access</option></select></label>
+        <p className="provider-dialog-note">{permissionMode === "unrestricted" ? "Requires Host mode and project authorization Allow all. The vendor agent can access the host filesystem and network without tool approval prompts: Codex uses danger-full-access; Grok uses always-approve with its sandbox off. Docker-mode sessions stay contained. Operating-system and Mercury controls still apply." : "Nebula uses the project's approval policy and the vendor sandbox. Docker-mode sessions keep host tools disabled. New sessions freeze this choice."}</p>
         <label className="provider-consent"><input type="checkbox" checked={harnessLocalOnly} onChange={(event) => setHarnessLocalOnly(event.target.checked)} /><span><strong>Model runtime is local</strong><small>Only enable when prompts and outputs do not leave this machine.</small></span></label>
         <label className="provider-consent"><input type="checkbox" checked={harnessSensitiveData} onChange={(event) => { setHarnessSensitiveData(event.target.checked); if (!event.target.checked) setHarnessAutoShareToolResults(false); }} /><span><strong>Permit project/document data</strong><small>Allow bounded excerpts in knowledge-enabled requests. Local-only items remain blocked.</small></span></label>
         {harnessSensitiveData && !harnessLocalOnly && <label className="provider-consent"><input type="checkbox" checked={harnessAutoShareToolResults} onChange={(event) => setHarnessAutoShareToolResults(event.target.checked)} /><span><strong>Share tool results without asking each turn</strong><small>Standing consent for bounded tool inputs and results. Canonical output stays local and risky calls still require approval.</small></span></label>}
-        <p className="provider-dialog-note">Nebula launches the harness executable directly, but project files and commands are available only through the pinned automation container. Optional web, skills, and subagent capabilities are frozen per session.</p>
+        <p className="provider-dialog-note">Optional web, skills, and subagent capabilities are frozen per session. Project execution mode controls whether native host tools can reach the linked folder.</p>
         {error && <DiagnosticErrorNotice error={error} fallback="The operation could not be completed." compact />}
         <footer><button className="button secondary" type="button" onClick={() => setHarnessDialog(false)}>Cancel</button><button className="button primary" type="submit" disabled={Boolean(busy) || !name.trim()}>{busy ? "Saving and checking…" : "Save harness"}</button></footer>
     </ModalSurface>}

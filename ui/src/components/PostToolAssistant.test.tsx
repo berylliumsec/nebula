@@ -6,6 +6,7 @@ import type { HarnessProfile, PostToolAssistantConfig } from "../api/types";
 import { PostToolAssistant } from "./PostToolAssistant";
 
 const harness: HarnessProfile = {
+  permissionMode: "managed",
   id: "harness-1",
   name: "Codex harness",
   kind: "codex_app_server",

@@ -683,6 +683,19 @@ def _session_execution_mode(session: HarnessSession) -> Literal["docker", "host"
     return "host" if session.metadata.get("execution_mode") == "host" else "docker"
 
 
+def _unrestricted_harness_session(session: HarnessSession) -> bool:
+    """Apply the explicit profile choice only to a frozen Host-mode session."""
+
+    scope = session.metadata.get("scope_snapshot")
+    return (
+        _session_execution_mode(session) == "host"
+        and session.metadata.get("harness_permission_mode") == "unrestricted"
+        and isinstance(scope, dict)
+        and scope.get("bypass_permissions") is True
+        and session.metadata.get("analysis_only") is not True
+    )
+
+
 def _session_native_capabilities(
     session: HarnessSession, profile: HarnessProfile
 ) -> HarnessNativeCapabilities:
@@ -4130,7 +4143,8 @@ class CodexAppServerAdapter(HarnessAdapter):
         )
         approval_policy: Literal["untrusted", "never"] = (
             "never"
-            if request.session.metadata.get("approval_policy") == "never"
+            if _unrestricted_harness_session(request.session)
+            or request.session.metadata.get("approval_policy") == "never"
             else (
                 "untrusted"
                 if managed_gateway or _native_capability_names(native_capabilities)
@@ -4168,7 +4182,9 @@ class CodexAppServerAdapter(HarnessAdapter):
                 gateway_tools=request.gateway_tools,
             )
             sandbox = (
-                "workspace-write"
+                "danger-full-access"
+                if _unrestricted_harness_session(request.session)
+                else "workspace-write"
                 if native_capabilities.workspace_access == HarnessWorkspaceAccess.WRITE
                 else "read-only"
             )
@@ -7193,6 +7209,8 @@ class GrokAcpAdapter(HarnessAdapter):
             else _container_only_native_capabilities(profile.native_capabilities)
         )
         command = [str(executable)]
+        if session is not None and _unrestricted_harness_session(session):
+            command.extend(["--always-approve", "--sandbox", "off"])
         if (
             native_capabilities.workspace_access == HarnessWorkspaceAccess.NONE
             and not native_capabilities.shell
@@ -9107,6 +9125,15 @@ class HarnessRuntimeService:
             else (None, None)
         )
         execution_mode = self._project_execution_mode(engagement_id)
+        if (
+            profile.permission_mode == "unrestricted"
+            and execution_mode == "host"
+            and not scope.bypass_permissions
+        ):
+            raise HarnessConfigurationError(
+                "Unrestricted harness access requires project authorization Allow all. "
+                "Enable it in Project execution policy or choose Managed approvals."
+            )
         native_capabilities = (
             _native_capabilities_for_execution_mode(
                 profile.native_capabilities, execution_mode
@@ -9117,6 +9144,7 @@ class HarnessRuntimeService:
         metadata: dict[str, Any] = {
             "context_management": "runtime_managed",
             "execution_mode": execution_mode,
+            "harness_permission_mode": profile.permission_mode,
             "approval_policy": self._project_approval_policy(engagement_id),
             "native_capabilities": native_capabilities.model_dump(mode="json"),
             "command_runtime_enabled": oci_snapshot is not None,
@@ -9256,6 +9284,20 @@ class HarnessRuntimeService:
         reason: str,
     ) -> HarnessSession:
         """Fork without carrying bindings or command runtime across mode changes."""
+
+        frozen_scope = session.metadata.get("scope_snapshot")
+        if (
+            execution_mode == "host"
+            and session.metadata.get("harness_permission_mode") == "unrestricted"
+            and not (
+                isinstance(frozen_scope, dict)
+                and frozen_scope.get("bypass_permissions") is True
+            )
+        ):
+            raise HarnessConfigurationError(
+                "This session has bounded project authorization. Start a new chat "
+                "after enabling Allow all, or choose Managed approvals."
+            )
 
         replacement = self._fork_session(session, reason=reason)
         metadata = deepcopy(replacement.metadata)
@@ -14729,6 +14771,9 @@ class HarnessRuntimeService:
                         "execution_mode": execution_mode,
                         "approval_policy": self._project_approval_policy(
                             session.engagement_id
+                        ),
+                        "harness_permission_mode": session.metadata.get(
+                            "harness_permission_mode", "managed"
                         ),
                         "native_capabilities": _native_capabilities_for_execution_mode(
                             profile.native_capabilities, execution_mode

@@ -1684,6 +1684,73 @@ def test_host_mode_freezes_native_shell_and_uses_linked_workspace(tmp_path):
     asyncio.run(scenario())
 
 
+def test_unrestricted_harness_requires_host_allow_all_and_freezes_profile_choice(
+    tmp_path,
+):
+    store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+
+    class HostCommands:
+        def __init__(self) -> None:
+            self.store = store
+
+        def project_execution_mode(self, engagement_id: str) -> str:
+            del engagement_id
+            return "host"
+
+        def chat_components(self, *, engagement_id: str):
+            del engagement_id
+            raise AutomationRuntimeUnavailable("command runtime is optional")
+
+    runtime.bind_automation_tool_platform(HostCommands())  # type: ignore[arg-type]
+    profile = store.update(
+        HarnessProfile,
+        profile.id,
+        {"permission_mode": "unrestricted"},
+        expected_revision=profile.revision,
+    )
+    with pytest.raises(
+        HarnessConfigurationError, match="requires project authorization Allow all"
+    ):
+        runtime.create_session(
+            engagement_id=engagement.id, profile_id=profile.id, model=None
+        )
+
+    scope = store.create(
+        ScopePolicy(
+            id=f"scope:{engagement.id}",
+            engagement_id=engagement.id,
+            bypass_permissions=True,
+        )
+    )
+    engagement = store.update(
+        Engagement,
+        engagement.id,
+        {"scope_policy_id": scope.id},
+        expected_revision=engagement.revision,
+    )
+    session = runtime.create_session(
+        engagement_id=engagement.id, profile_id=profile.id, model=None
+    )
+    assert session.metadata["harness_permission_mode"] == "unrestricted"
+    assert session.metadata["execution_mode"] == "host"
+    assert session.metadata["scope_snapshot"]["bypass_permissions"] is True
+
+    store.update(
+        HarnessProfile,
+        profile.id,
+        {"permission_mode": "managed"},
+        expected_revision=profile.revision,
+    )
+    assert (
+        store.get(HarnessSession, session.id).metadata["harness_permission_mode"]
+        == "unrestricted"
+    )
+    next_session = runtime.create_session(
+        engagement_id=engagement.id, profile_id=profile.id, model=None
+    )
+    assert next_session.metadata["harness_permission_mode"] == "managed"
+
+
 def test_existing_codex_session_forks_when_project_changes_to_host_mode(tmp_path):
     async def scenario() -> None:
         store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)

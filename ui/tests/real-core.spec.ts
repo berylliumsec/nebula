@@ -4892,6 +4892,8 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
       const dialog = page.getByRole("dialog");
       await dialog.getByRole("textbox", {name: "Name", exact: true}).fill(`${vendor} Work`);
       await dialog.getByRole("textbox", {name: vendor === "Grok" ? "Absolute Grok executable path" : "Absolute executable path", exact: true}).fill("/bin/true");
+      await dialog.getByRole("combobox", {name: "Harness permissions"}).selectOption("unrestricted");
+      await expect(dialog.getByText(/Requires Host mode and project authorization Allow all/)).toBeVisible();
       await dialog.getByText("Account folder", {exact: true}).click();
       const home = path.join(core.dataDir, vendor);
       await mkdir(home);
@@ -4907,6 +4909,7 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
       await page.screenshot({path: info.outputPath(`${vendor.toLowerCase()}-account-settings.png`)});
       await dialog.getByRole("button", {name: "Save harness"}).click();
       await expect(page.getByRole("heading", {name: `${vendor} Work`, exact: true})).toBeVisible();
+      await expect(page.getByText("Unrestricted · Host mode only").last()).toBeVisible();
       await expect(page.getByRole("dialog")).toHaveCount(0);
       await expect(page.getByText(/Sign-in: verified · Session: unverified · Model turn: unverified/).last()).toBeVisible();
       await page.getByRole("button", {name: "Test turn"}).last().click();
@@ -4914,6 +4917,7 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
       const profiles = await (await core.api.get("harnesses")).json();
       const saved = profiles.find((p: {name: string}) => p.name === `${vendor} Work`);
       expect(saved.home_directory).toBe(home);
+      expect(saved.permission_mode).toBe("unrestricted");
       ids.push(saved.id);
       await page.reload();
       await expect(page.getByText(/Sign-in: verified · Session: verified · Model turn: verified/).last()).toBeVisible();
@@ -4924,6 +4928,7 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
         await expect(editDialog).toBeVisible();
       }).toPass({timeout: 10_000});
       await expect(editDialog.getByLabel("Account home folder", {exact: true})).toHaveValue(home);
+      await expect(editDialog.getByRole("combobox", {name: "Harness permissions"})).toHaveValue("unrestricted");
       await editDialog.getByRole("button", {name: "Close harness dialog"}).click();
     }
     await page.goto(`${core.origin}/?view=chat`);

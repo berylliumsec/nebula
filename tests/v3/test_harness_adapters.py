@@ -403,7 +403,10 @@ def test_grok_process_removes_host_command_and_workspace_tools(monkeypatch, tmp_
     assert isinstance(rpc, _AcpRpc)
 
 
-def test_grok_host_session_preserves_native_tools_and_user_bus(monkeypatch, tmp_path):
+@pytest.mark.parametrize("unrestricted", [False, True])
+def test_grok_host_session_preserves_native_tools_and_user_bus(
+    monkeypatch, tmp_path, unrestricted
+):
     observed: dict[str, Any] = {}
 
     class Process:
@@ -441,6 +444,8 @@ def test_grok_host_session_preserves_native_tools_and_user_bus(monkeypatch, tmp_
         model="grok-test",
         metadata={
             "execution_mode": "host",
+            "harness_permission_mode": "unrestricted" if unrestricted else "managed",
+            "scope_snapshot": {"bypass_permissions": unrestricted},
             "native_capabilities": native.model_dump(mode="json"),
         },
     )
@@ -448,10 +453,67 @@ def test_grok_host_session_preserves_native_tools_and_user_bus(monkeypatch, tmp_
     asyncio.run(GrokAcpAdapter()._connect(profile, tmp_path, session))
 
     assert "--disallowed-tools" not in observed["argv"]
+    assert ("--always-approve" in observed["argv"]) is unrestricted
+    assert ("--sandbox" in observed["argv"]) is unrestricted
+    if unrestricted:
+        assert observed["argv"][observed["argv"].index("--sandbox") + 1] == "off"
     assert observed["kwargs"]["env"]["XDG_RUNTIME_DIR"] == str(runtime)
     assert observed["kwargs"]["env"]["DBUS_SESSION_BUS_ADDRESS"] == (
         f"unix:path={runtime / 'bus'}"
     )
+
+
+def test_codex_unrestricted_host_session_sets_vendor_approval_and_sandbox(tmp_path):
+    async def scenario() -> None:
+        for execution_mode, bypass, expected_sandbox, expected_policy in (
+            ("host", True, "danger-full-access", "never"),
+            ("docker", True, "read-only", "never"),
+            ("host", False, "workspace-write", "untrusted"),
+        ):
+            rpc = FixtureCodexRpc()
+            profile = HarnessProfile(
+                id="codex-permissions",
+                name="Codex permissions",
+                kind=HarnessKind.CODEX_APP_SERVER,
+                executable="/bin/true",
+                permission_mode="unrestricted",
+            )
+            session = HarnessSession(
+                engagement_id="eng-a",
+                harness_profile_id=profile.id,
+                model="gpt-test",
+                metadata={
+                    "execution_mode": execution_mode,
+                    "harness_permission_mode": "unrestricted",
+                    "scope_snapshot": {"bypass_permissions": bypass},
+                    "native_capabilities": HarnessNativeCapabilities(
+                        workspace_access=HarnessWorkspaceAccess.WRITE,
+                        shell=True,
+                    ).model_dump(mode="json"),
+                },
+            )
+
+            async def no_permission(_request):
+                raise AssertionError("No tool call is made during the handshake")
+
+            connection = await FixtureCodexAdapter(rpc).open(
+                AdapterOpenRequest(
+                    profile=profile,
+                    session=session,
+                    workspace=tmp_path,
+                    mcp_profiles=(),
+                    credential_store=CredentialStore(),
+                    permission_handler=no_permission,
+                )
+            )
+            thread = next(
+                params for method, params in rpc.calls if method == "thread/start"
+            )
+            assert thread["sandbox"] == expected_sandbox
+            assert thread["approvalPolicy"] == expected_policy
+            await connection.close()
+
+    asyncio.run(scenario())
 
 
 def test_grok_connection_normalizes_mode_plan_and_streamed_message():
