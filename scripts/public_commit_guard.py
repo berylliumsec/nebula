@@ -14,7 +14,7 @@ from pathlib import Path
 MAX_FILES = 80
 MAX_FILE_BYTES = 1000 * 1024
 MAX_TOTAL_BYTES = 1024 * 1024
-MAX_REVIEW_CHARS = 80 * 1024
+MAX_REVIEW_CHARS = 16 * 1024
 REVIEW_OVERLAP_CHARS = 256
 TIMEOUT_SECONDS = 240
 SCHEMA = {
@@ -168,10 +168,16 @@ def split_review_parts(item: dict, content: str) -> list[dict]:
     start = 0
     while start < len(content):
         end = min(start + MAX_REVIEW_CHARS, len(content))
+        if end < len(content):
+            line_end = content.rfind("\n", start + MAX_REVIEW_CHARS // 2, end)
+            if line_end >= 0:
+                end = line_end + 1
         spans.append((start, end))
         if end == len(content):
             break
-        start = end - REVIEW_OVERLAP_CHARS
+        overlap_start = max(start + 1, end - REVIEW_OVERLAP_CHARS)
+        prior_line = content.rfind("\n", start, overlap_start)
+        start = prior_line + 1 if prior_line >= start else overlap_start
     if spans[0][0] != 0 or spans[-1][1] != len(content) or any(
         left[1] < right[0] for left, right in zip(spans, spans[1:])
     ):
