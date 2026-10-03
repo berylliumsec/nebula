@@ -1,32 +1,29 @@
 {
-  "change_digest": "6579968bf933315152a7fdd46202c06b89d72e85cd6e2a41a1ce65d4bca9b8ed",
-  "reviewed_by": "Codex harness chat single-active-turn incident review",
-  "reason": "A second harness send to one active conversation must return a conflict before it forks a vendor session or saves a second message. The selected Python test covers direct runtime and HTTP admission, durable turn and message counts, pending-turn reads, and recovery after the first turn stops. The selected real-Core browser journey checks that a running harness chat reconnects and reloads across desktop and mobile profiles.",
-  "exclusions": "No UI or native source changed, so no frontend unit or native tests are selected. Unrelated Python files and browser journeys are excluded. Physical mobile devices are unavailable; the selected browser profiles are emulated. The live production Core is left running for active research and is not redeployed in this branch task.",
+  "change_digest": "ca08245f590989181941decbf955ef5c05628e981ecfd16ab36a9e6d482b3a98",
+  "reviewed_by": "Codex Work status presentation review",
+  "reason": "The selected component tests cover current check-in display, live agent updates, imported brief disclosure, and Work item navigation. The selected real-Core import journey verifies the newest saved update becomes current progress after live delivery and reload across the desktop and mobile browser profiles.",
+  "exclusions": "No Core model, route, or persistence logic changed, so Python and native tests are not selected. Unrelated Work and other browser journeys are excluded. The browser profiles emulate mobile devices; no physical device is available.",
   "expected_tests": {
-    "python": 1,
-    "frontend": 0,
-    "playwright": 16,
+    "python": 0,
+    "frontend": 9,
+    "playwright": 8,
     "native": 0
   },
-  "python_versions": [
-    "3.11"
-  ],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_harness_chat_single_active.py"
+  "python": [],
+  "frontend": [
+    "ui/src/pages/WorkPage.test.tsx"
   ],
-  "frontend": [],
   "playwright": [
-    "entry:chat-reconnection/model-desktop",
-    "entry:chat-reconnection/model-compact",
-    "entry:chat-reconnection/model-chromium-320",
-    "entry:chat-reconnection/model-webkit-320",
-    "entry:chat-reconnection/model-chromium-390",
-    "entry:chat-reconnection/model-webkit-390",
-    "entry:chat-reconnection/model-chromium-430",
-    "entry:chat-reconnection/model-webkit-430"
+    "entry:work-import/assistant-real-desktop",
+    "entry:work-import/assistant-real-compact",
+    "entry:work-import/assistant-real-chromium-320",
+    "entry:work-import/assistant-real-chromium-390",
+    "entry:work-import/assistant-real-chromium-430",
+    "entry:work-import/assistant-real-webkit-320",
+    "entry:work-import/assistant-real-webkit-390",
+    "entry:work-import/assistant-real-webkit-430"
   ],
   "native": []
 }

@@ -56,6 +56,7 @@ function openItem() {
 describe("Work operator journey", () => {
   beforeEach(() => {
     saved.enabled = true; saved.agents = []; saved.updates = []; saved.item.status = "in_progress"; saved.item.last_update_at = null;
+    saved.item.source_kind = "chat"; saved.item.description = "Add filters";
     live.onChange = undefined; live.onReady = undefined;
     saved.items = [saved.item]; workspace.engagements = [workspace.engagement];
     vi.clearAllMocks();
@@ -117,6 +118,35 @@ describe("Work operator journey", () => {
     expect(await screen.findByText("External agent update")).toBeVisible();
     expect(screen.getByRole("link", { name: "Open conversation" })).toHaveAttribute("href", "/projects/project-1/workbench?view=chat&session=session-1");
     expect(screen.getByRole("status")).toHaveTextContent("Live");
+  });
+
+  it("shows the newest imported status update above the original brief and earlier check-ins", async () => {
+    const user = userEvent.setup();
+    saved.item.source_kind = "import";
+    saved.item.description = "Initial Recon result";
+    saved.updates = [{
+      id: "first-update", engagement_id: "project-1", item_id: "item-1",
+      summary: "Triage 69 indexed", status: "in_progress", actor_kind: "agent",
+      actor_id: "session-1", source_session_id: "session-1", created_at: "2026-01-01T13:00:00Z",
+    }];
+    const view = openItem();
+    const current = await screen.findByRole("region", { name: "Current progress" });
+    expect(within(current).getByText("Triage 69 indexed")).toBeVisible();
+    expect(screen.getByText("Initial Recon result")).not.toBeVisible();
+
+    saved.updates = [{
+      id: "second-update", engagement_id: "project-1", item_id: "item-1",
+      summary: "Triage 70 indexed", next_step: "Resolve target body", status: "in_progress",
+      actor_kind: "agent", actor_id: "session-1", source_session_id: "session-1",
+      created_at: "2026-01-01T14:00:00Z",
+    }, ...saved.updates];
+    await act(async () => { live.onChange?.("work"); });
+    expect(within(current).getByText("Triage 70 indexed")).toBeVisible();
+    expect(within(current).getByText("Next: Resolve target body")).toBeVisible();
+    expect(within(view.container.querySelector(".work-timeline")!).getByText("Triage 69 indexed")).toBeVisible();
+    expect(screen.getAllByText("Triage 70 indexed")).toHaveLength(1);
+    await user.click(screen.getByText("Original brief"));
+    expect(screen.getByText("Initial Recon result")).toBeVisible();
   });
 
   it("links a child project check-in to its parent conversation", async () => {

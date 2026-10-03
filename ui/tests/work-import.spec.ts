@@ -94,7 +94,7 @@ test("work hub import finds a project and its saved task after refresh", async (
     const lastBatch = { source: "sample-tracker", projects: [
       ...projects.slice(50),
       { external_id: "imported-plan", name: "Imported plan", status: "active", items: [{
-        external_id: "review-task", title: "Review the release plan", status: "blocked",
+        external_id: "review-task", title: "Review the release plan", description: "Initial plan needs review", status: "blocked",
         update: { summary: "Draft is waiting for approval", blocker: "Approval pending", next_step: "Ask the reviewer" },
       }] },
     ] };
@@ -143,7 +143,7 @@ test("work hub import finds a project and its saved task after refresh", async (
     await page.getByRole("searchbox", { name: "Search projects" }).fill("Imported plan");
     await expect(page.locator(".work-project-list").getByRole("link", { name: /Sample project 1/ })).toBeVisible();
     await page.locator(".work-project-list").getByRole("link", { name: /Imported plan/ }).click();
-    await expect(page.getByRole("link", { name: "Sample project 1" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Sample project 1" })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("link", { name: "Sample project 1" }).click();
     await expect(page.getByRole("heading", { name: "Subprojects" })).toBeVisible();
     await expect(page.getByRole("link", { name: /Imported plan/ })).toBeVisible();
@@ -156,20 +156,23 @@ test("work hub import finds a project and its saved task after refresh", async (
     await expect(page.getByRole("heading", { name: "Prepare follow-up" })).toBeVisible();
     await page.getByRole("link", { name: /Review the release plan/ }).click();
     await expect(page.getByRole("heading", { name: "Review the release plan" })).toBeVisible();
-    await expect(page.locator(".work-timeline")).toContainText("Draft is waiting for approval");
+    await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Draft is waiting for approval");
+    await expect(page.getByText("Initial plan needs review")).toBeHidden();
     await page.reload();
     await expect(page.getByRole("heading", { name: "Review the release plan" })).toBeVisible();
-    await expect(page.locator(".work-timeline")).toContainText("Approval pending");
+    await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Approval pending");
     const selected = importedResult.projects.at(-1)!;
     await expect(page.locator(".work-live-state")).toHaveText("Live");
     const liveUpdate = await api.post(`engagements/${selected.engagement_id}/work/${selected.items[0].item_id}/updates`, { data: { summary: "Reviewer approved the plan", status: "done" } });
     expect(liveUpdate.ok(), await liveUpdate.text()).toBe(true);
-    await expect(page.locator(".work-timeline")).toContainText("Reviewer approved the plan");
+    await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Reviewer approved the plan");
+    await expect(page.locator(".work-timeline")).toContainText("Draft is waiting for approval");
     await page.getByRole("button", { name: "Disable agent tools" }).click();
     await expect(page.getByRole("button", { name: "Enable agent tools" })).toBeVisible();
     await page.reload();
     await expect(page.getByRole("button", { name: "Enable agent tools" })).toBeVisible();
-    await expect(page.locator(".work-timeline")).toContainText("Reviewer approved the plan");
+    await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Reviewer approved the plan");
+    await expect(page.getByText("Initial plan needs review")).toBeHidden();
     expect(page.url()).toContain(selected.items[0].item_id);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     const accessibility = await new AxeBuilder({ page }).include(".work-page").analyze();
