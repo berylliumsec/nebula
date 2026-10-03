@@ -185,7 +185,9 @@ class WorkChangeFeed:
         for loop, queue in subscribers:
             try:
                 loop.call_soon_threadsafe(self._enqueue, queue, kind)
-            except RuntimeError:
+            except (
+                RuntimeError
+            ):  # diagnostic-expected: the subscriber event loop has closed.
                 self.unsubscribe(queue)
 
     @staticmethod

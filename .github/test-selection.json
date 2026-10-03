@@ -1,5 +1,5 @@
 {
-  "change_digest": "0ea1f048cce38e27918718f75437123d51520450676e2b9005a8393db14e259b",
+  "change_digest": "ee21734a5dca5a7449d4af6df904a517bffbc9600cd9f07b932e74db9243693b",
   "reviewed_by": "Codex focused Work live dashboard and project hierarchy review",
   "reason": "The diff makes Work tools available by default, advertises them without timed reminders, pushes authenticated Work and chat activity signals, and adds generic parent-child projects with a bounded bulk link API. Twelve Python tests cover defaults, scope, gateway, live feed, import, and hierarchy validation. Eight frontend tests cover grouping and event handling. Eight production-bundle real-Core browser journeys exercise hierarchy, live check-ins, and agent access at desktop and emulated phone widths.",
   "exclusions": "No native code changed. An older broad real-Core test file has an unrelated fixture that the public commit guard could not clear, so the Work journey is covered in the focused import browser test. Unrelated Python, frontend, and browser journeys and full suites are excluded. Browser profiles are emulated; physical-device validation is separate.",

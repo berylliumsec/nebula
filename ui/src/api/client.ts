@@ -5335,7 +5335,7 @@ export class ApiClient {
         }
       }
     } finally {
-      await reader.cancel().catch(() => undefined);
+      await reader.cancel().catch(() => { /* diagnostic-expected: a closed stream needs no further cancellation. */ });
     }
   }
 

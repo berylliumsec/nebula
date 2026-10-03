@@ -7434,7 +7434,7 @@ def create_app(
                 while True:
                     try:
                         kind = await asyncio.wait_for(queue.get(), timeout=25)
-                    except TimeoutError:
+                    except TimeoutError:  # diagnostic-expected: transport heartbeat keeps idle streams open.
                         yield b": keep-alive\n\n"
                         continue
                     yield (
