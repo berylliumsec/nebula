@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+common_dir=$(git rev-parse --git-common-dir)
+exec python3 "$common_dir/hooks/nebula-public-commit-guard.py" --message "$1"
