@@ -115,6 +115,10 @@ test("work hub import finds a project and its saved task after refresh", async (
     await page.getByLabel("Device name").fill("Work import browser");
     await page.getByRole("button", { name: "Pair device" }).click();
     await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await page.route("**/api/v1/work/agents", (route) => route.fulfill({ json: [{
+      session_id: "sample-active-session", engagement_id: parentId,
+      title: "Sample research handoff", state: "working", turn_id: "sample-turn",
+    }] }));
     const mobileMore = page.getByRole("button", { name: "More workbench views" });
     if (await mobileMore.isVisible()) {
       await mobileMore.click();
@@ -124,6 +128,15 @@ test("work hub import finds a project and its saved task after refresh", async (
       if (await sidebar.isVisible()) await sidebar.click();
       await page.getByRole("link", { name: "Work", exact: true }).click();
     }
+    await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
+    await page.getByRole("link", { name: "Open Sample research handoff" }).click();
+    await expect(page).toHaveURL(new RegExp(`/projects/${parentId}/workbench\\?view=chat&session=sample-active-session$`));
+    const desktopChat = page.getByRole("tab", { name: "Analyst chat" });
+    const mobileChat = page.getByRole("button", { name: "Chat", exact: true });
+    await expect(desktopChat.or(mobileChat).first()).toBeVisible({ timeout: 20_000 });
+    if (await desktopChat.isVisible()) await expect(desktopChat).toHaveAttribute("aria-selected", "true");
+    else await expect(mobileChat).toHaveAttribute("aria-current", "page");
+    await page.goBack();
     await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
     await expect(page.getByText("Showing 80 rows. Search to narrow the list.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Show subprojects of Sample project 1" })).toBeVisible();
