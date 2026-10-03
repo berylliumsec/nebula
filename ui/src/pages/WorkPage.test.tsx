@@ -66,6 +66,7 @@ describe("Work operator journey", () => {
     openItem();
     expect(await screen.findByRole("heading", { name: "Build the search page" })).toBeVisible();
     expect(screen.getByText("Search implementation · Working")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Search implementation" })).toHaveAttribute("href", "/projects/project-1/workbench?view=chat&session=session-1");
     const form = screen.getByRole("heading", { name: "Post an update" }).closest("form")!;
     await user.type(within(form).getByRole("textbox", { name: "Progress" }), "Filters render in search results");
     await user.selectOptions(within(form).getByRole("combobox", { name: "Status" }), "review");
@@ -87,7 +88,7 @@ describe("Work operator journey", () => {
     render(<MemoryRouter initialEntries={["/work"]}><Routes><Route path="/work" element={<WorkPage />} /></Routes></MemoryRouter>);
     expect(await screen.findByText("Review documentation")).toBeVisible();
     expect(screen.getByText(/No Work item linked/)).toBeVisible();
-    expect(screen.getByRole("link", { name: "Open Review documentation" })).toHaveAttribute("href", "/projects/project-1/workbench?session=session-2");
+    expect(screen.getByRole("link", { name: "Open Review documentation" })).toHaveAttribute("href", "/projects/project-1/workbench?view=chat&session=session-2");
     expect(workspace.api.request).toHaveBeenCalledWith("work/agents", expect.any(Object));
     expect(workspace.api.listChatSessionActivity).not.toHaveBeenCalled();
   });
@@ -111,9 +112,10 @@ describe("Work operator journey", () => {
   it("shows a posted agent update when Core signals a change", async () => {
     openItem();
     expect(await screen.findByText("No check-ins yet.")).toBeVisible();
-    saved.updates = [{ id: "external-update", engagement_id: "project-1", item_id: "item-1", summary: "External agent update", status: "review", actor_kind: "agent", actor_id: "session-1", created_at: "2026-01-01T14:00:00Z" }];
+    saved.updates = [{ id: "external-update", engagement_id: "project-1", item_id: "item-1", summary: "External agent update", status: "review", actor_kind: "agent", actor_id: "session-1", source_session_id: "session-1", created_at: "2026-01-01T14:00:00Z" }];
     await act(async () => { live.onReady?.(); live.onChange?.("work"); });
     expect(await screen.findByText("External agent update")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Open conversation" })).toHaveAttribute("href", "/projects/project-1/workbench?view=chat&session=session-1");
     expect(screen.getByRole("status")).toHaveTextContent("Live");
   });
 

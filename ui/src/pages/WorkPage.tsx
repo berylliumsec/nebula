@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, CircleAlert, Clock3, 
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { ChatSessionActivity } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
-import { projectSurface } from "../resourceRoutes";
+import { projectSurface, resourcePath } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
 import "./WorkPage.css";
 
@@ -337,7 +337,7 @@ export function WorkPage() {
             <div className="work-panel-head"><h2 id="work-active-title">Agents working now</h2><span>{workingAgents.length}</span></div>
             {workingAgents.length ? <ul className="work-activity-list">{workingAgents.map((agent) => <li key={agent.sessionId}>
               <span className="work-live-dot" aria-hidden="true" /><div><strong>{agent.item?.title ?? agent.title}</strong><small>{projectName(agent.projectId)} · {agent.item ? time(agent.item.last_update_at) : "No Work item linked"}</small></div>
-              <Link aria-label={`Open ${agent.item?.title ?? agent.title}`} to={agent.item ? projectSurface(agent.projectId, "work", agent.item.id) : `${projectSurface(agent.projectId, "workbench")}?session=${encodeURIComponent(agent.sessionId)}`}><ArrowRight size={16} /></Link>
+              <Link aria-label={`Open ${agent.item?.title ?? agent.title}`} to={agent.item ? projectSurface(agent.projectId, "work", agent.item.id) : resourcePath(agent.projectId, "conversation", agent.sessionId)}><ArrowRight size={16} /></Link>
             </li>)}</ul> : <p className="work-empty-inline">No agents are working right now.</p>}
           </section>
           <section className="work-panel" aria-labelledby="work-attention-title">
@@ -382,8 +382,8 @@ export function WorkPage() {
             {selectedItem ? <>
               <h2 id="work-detail-title">{selectedItem.title}</h2><div className="work-detail-meta"><span className={`work-status ${selectedItem.status}`}>{label(selectedItem.status)}</span><span>{selectedItem.priority} priority</span></div>
               {selectedItem.description && <p className="work-description">{selectedItem.description}</p>}
-              <dl className="work-fields"><div><dt>Assigned to</dt><dd>{selectedItem.assignee_session_id ? <Link to={`${projectSurface(projectId, "workbench")}?session=${encodeURIComponent(selectedItem.assignee_session_id)}`}>{assignee(selectedItem)}</Link> : "Unassigned"}</dd></div><div><dt>Last update</dt><dd>{time(selectedItem.last_update_at)}</dd></div></dl>
-              <h3>Check-ins</h3><ol className="work-timeline">{itemUpdates.map((update) => <li key={update.id}><span className="work-timeline-dot" /><div><div className="work-timeline-top"><strong>{update.actor_kind === "agent" ? "Agent" : update.actor_kind === "import" ? "Imported" : "Operator"}</strong><time dateTime={update.created_at}>{time(update.created_at)}</time></div><p>{update.summary}</p>{update.next_step && <small>Next: {update.next_step}</small>}{update.blocker && <small className="work-blocker">Blocked: {update.blocker}</small>}{update.source_session_id && <Link to={`${projectSurface(projectId, "workbench")}?session=${encodeURIComponent(update.source_session_id)}`}>Open conversation <ArrowRight size={13} /></Link>}</div></li>)}{!itemUpdates.length && <li className="work-no-updates">No check-ins yet.</li>}</ol>
+              <dl className="work-fields"><div><dt>Assigned to</dt><dd>{selectedItem.assignee_session_id ? <Link to={resourcePath(projectId, "conversation", selectedItem.assignee_session_id)}>{assignee(selectedItem)}</Link> : "Unassigned"}</dd></div><div><dt>Last update</dt><dd>{time(selectedItem.last_update_at)}</dd></div></dl>
+              <h3>Check-ins</h3><ol className="work-timeline">{itemUpdates.map((update) => <li key={update.id}><span className="work-timeline-dot" /><div><div className="work-timeline-top"><strong>{update.actor_kind === "agent" ? "Agent" : update.actor_kind === "import" ? "Imported" : "Operator"}</strong><time dateTime={update.created_at}>{time(update.created_at)}</time></div><p>{update.summary}</p>{update.next_step && <small>Next: {update.next_step}</small>}{update.blocker && <small className="work-blocker">Blocked: {update.blocker}</small>}{update.source_session_id && <Link to={resourcePath(projectId, "conversation", update.source_session_id)}>Open conversation <ArrowRight size={13} /></Link>}</div></li>)}{!itemUpdates.length && <li className="work-no-updates">No check-ins yet.</li>}</ol>
               <form className="work-checkin-form" onSubmit={(event) => void checkIn(event)}><h3>Post an update</h3><label>Progress<textarea required maxLength={4000} value={summary} onChange={(event) => setSummary(event.target.value)} placeholder="What changed?" /></label><label>Next step<input maxLength={2000} value={nextStep} onChange={(event) => setNextStep(event.target.value)} /></label><label>Blocker<input maxLength={2000} value={blocker} onChange={(event) => setBlocker(event.target.value)} /></label><label>Status<select value={nextStatus} onChange={(event) => setNextStatus(event.target.value as Status)}>{columns.map((column) => <option key={column.id} value={column.id}>{column.label}</option>)}</select></label><button className="button primary" type="submit" disabled={busy || !summary.trim()}>Save update</button></form>
             </> : <div role="alert" className="work-empty-inline">This item is unavailable. <Link to={projectSurface(projectId, "work")}>Return to board</Link></div>}
           </aside>}

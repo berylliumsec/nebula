@@ -27,7 +27,7 @@ export function resourcePath(projectId: string | undefined, kind: ResourceKind, 
     report: "reports", conversation: "workbench",
   };
   const target = surface[kind] ?? "workbench";
-  if (kind === "conversation" && id) return `${projectSurface(projectId, target)}?session=${encodeURIComponent(id)}`;
+  if (kind === "conversation" && id) return `${projectSurface(projectId, target)}?view=chat&session=${encodeURIComponent(id)}`;
   return projectSurface(projectId, target, id);
 }
 
