@@ -1,5 +1,5 @@
 {
-  "change_digest": "e7ca49bf6ac2ef27dd0993545615e7e7b98abd56539abc1acdcf3312013acd1c",
+  "change_digest": "88e6ac249477421781cbbadbdd40ddf0a1cc364df548f6a2071207e9a4aaae13",
   "reviewed_by": "Codex focused Codex public-progress review",
   "reason": "The diff restores the newest public Codex commentary to the active work card, counts commentary separately from private reasoning, and labels absent public summaries accurately. Twenty-six component cases cover compact receipts, current progress and thinking disclosures. A new catalog entry selects three mocked Codex stream cases for the live work card. Twenty-four real-Core cases cover durable reasoning and commentary through refresh and reload in the permanent desktop and mobile profiles.",
   "exclusions": "No Python runtime behavior or native code changed; the Python fixture is exercised by the selected real-Core browser journey. Other chat, provider, and harness suites do not exercise this presentation change. Browser mobile profiles are emulated; no physical device is available.",

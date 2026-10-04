@@ -7872,27 +7872,27 @@ test("stabilization completed harness output keeps one continuous transcript scr
 });
 
 test("completed harness output keeps live commentary in expandable work detail", async ({ page }) => {
-  const sessionId = "grok-commentary-session";
-  const turnId = "grok-commentary-turn";
+  const sessionId = "codex-commentary-session";
+  const turnId = "codex-commentary-turn";
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/harnesses")) {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
         ...entity,
-        id: "harness-grok-commentary",
-        name: "Grok ACP",
-        kind: "grok_acp",
+        id: "harness-codex-commentary",
+        name: "Codex",
+        kind: "codex_app_server",
         connection_mode: "spawn",
         transport: "stdio",
-        executable: "grok",
+        executable: "codex",
         endpoint: null,
         auth_mode: "existing_session",
         secret_ref: null,
-        default_model: "grok-4.6",
+        default_model: "gpt-6-sol",
         enabled: true,
         privacy: { local_only: true, permits_sensitive_data: true },
         native_capabilities: { workspace_access: "write", shell: true, web_search: true, skills: false },
-        capabilities: { models: ["grok-4.6"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "1.0.5", interruption: true },
+        capabilities: { models: ["gpt-6-sol"], checked_at: entity.updated_at, authentication_state: "verified", harness_version: "0.160.0", interruption: true },
       }]) });
       return;
     }
@@ -7907,7 +7907,7 @@ test("completed harness output keeps live commentary in expandable work detail",
         turn_origin: "chat",
         started_at: entity.created_at,
         last_activity_at: entity.updated_at,
-        detail: "Grok is working.",
+        detail: "Codex is working.",
       }) });
       return;
     }
@@ -7920,17 +7920,18 @@ test("completed harness output keeps live commentary in expandable work detail",
       if (!url.endsWith("/chat/completions")) return nativeFetch(input, init);
       const encoder = new TextEncoder();
       const frames = [
-        { type: "started", harness_profile_id: "harness-grok-commentary", harness_session_id: session, harness_turn_id: turn, model: "grok-4.6", session_id: "chat-grok-commentary", turn_id: "chat-turn-grok-commentary" },
-        { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "grok_acp", harness_session_id: session, harness_turn_id: turn, item_id: "commentary", item_kind: "reasoning", item_status: "streaming", title: "Commentary", stream: "commentary", delta: "**I’ve mapped the workspace.** Next I’m validating `parseKeywords` before I make the change.\n\n## Stack layout\n\n```text\ntable[50] == canary\n```", artifact_ids: [], payload: {} },
-        { type: "tool_started", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "grok_acp", harness_session_id: session, harness_turn_id: turn, item_id: "tool-1", item_kind: "tool", item_status: "running", title: "Inspect workspace", artifact_ids: [], payload: {} },
+        { type: "started", harness_profile_id: "harness-codex-commentary", harness_session_id: session, harness_turn_id: turn, model: "gpt-6-sol", session_id: "chat-codex-commentary", turn_id: "chat-turn-codex-commentary" },
+        { type: "output_delta", schema_version: "nebula.harness-activity/v1", sequence: 1, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "commentary", item_kind: "reasoning", item_status: "streaming", title: "Commentary", stream: "commentary", delta: "I checked the adapter. The next step is to verify replay.\n\nThe remaining details are available in activity.", artifact_ids: [], payload: {} },
+        { type: "item_upsert", schema_version: "nebula.harness-activity/v1", sequence: 2, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "private-reasoning", item_kind: "reasoning", item_status: "completed", title: "Reasoning", artifact_ids: [], payload: { reasoning_summary_state: "not_provided" } },
+        { type: "tool_started", schema_version: "nebula.harness-activity/v1", sequence: 3, vendor: "codex_app_server", harness_session_id: session, harness_turn_id: turn, item_id: "tool-1", item_kind: "tool", item_status: "running", title: "Inspect workspace", artifact_ids: [], payload: {} },
         { type: "completed", harness_session_id: session, harness_turn_id: turn, payload: {} },
-        { type: "done", session_id: "chat-grok-commentary", harness_profile_id: "harness-grok-commentary", harness_session_id: session, harness_turn_id: turn, model: "grok-4.6", message: { id: "assistant-grok-commentary", role: "assistant", content: "The workspace validation is complete." }, usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 }, finish_reason: "stop", citations: [] },
+        { type: "done", session_id: "chat-codex-commentary", harness_profile_id: "harness-codex-commentary", harness_session_id: session, harness_turn_id: turn, model: "gpt-6-sol", message: { id: "assistant-codex-commentary", role: "assistant", content: "The workspace validation is complete." }, usage: { input_tokens: 4, output_tokens: 8, total_tokens: 12 }, finish_reason: "stop", citations: [] },
       ];
       const stream = new ReadableStream<Uint8Array>({
         start(controller) {
-          frames.slice(0, 2).forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
+          frames.slice(0, 3).forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
           globalThis.setTimeout(() => {
-            frames.slice(2).forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
+            frames.slice(3).forEach((frame) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`)));
             controller.enqueue(encoder.encode("data: [DONE]\n\n"));
             controller.close();
           }, 30_000);
@@ -7952,19 +7953,20 @@ test("completed harness output keeps live commentary in expandable work detail",
   const ledger = page.getByRole("region", { name: "Work summary" });
   await expect(ledger).toBeVisible();
   await expect(ledger).toContainText("Running");
-  await expect(ledger).toContainText("Work in progress");
+  await expect(ledger.locator(".activity-ledger-progress-preview")).toContainText("I checked the adapter.");
+  await expect(ledger.locator(".activity-ledger-progress-preview")).not.toContainText("remaining details");
+  await expect(ledger.locator(".activity-ledger-footer")).toContainText("1 update");
+  const thinking = page.getByLabel("Harness thinking");
+  await expect(thinking.locator("summary")).toHaveText("Thinking");
+  await thinking.locator("summary").click();
+  await expect(thinking).toContainText("Codex did not provide a public summary for one reasoning episode.");
   await expect(page.getByLabel("Assistant commentary")).toHaveCount(0);
   await ledger.getByRole("button", { name: "Show activity" }).click();
-  await ledger.locator(".activity-ledger-audit summary").filter({ hasText: "I’ve mapped the workspace." }).click();
+  await ledger.locator(".activity-ledger-audit summary").filter({ hasText: "I checked the adapter." }).click();
   const commentary = ledger.getByLabel("Assistant commentary");
-  await expect(commentary).toContainText("I’ve mapped the workspace. Next I’m validating parseKeywords before I make the change.");
+  await expect(commentary).toContainText("I checked the adapter. The next step is to verify replay.");
+  await expect(commentary).toContainText("The remaining details are available in activity.");
   await expect(commentary).toBeVisible();
-  await expect(commentary.locator("strong")).toHaveText("I’ve mapped the workspace.");
-  await expect(commentary.getByRole("heading", { name: "Stack layout" })).toBeVisible();
-  await expect(commentary.locator("code").filter({ hasText: "parseKeywords" })).toBeVisible();
-  await expect(commentary.locator(".assistant-code-block")).toContainText("table[50] == canary");
-  await expect(commentary.getByRole("button", { name: "Copy exact code" })).toBeVisible();
-  await expect(commentary.getByRole("button", { name: /run/i })).toHaveCount(0);
   await expect(page.getByText("Tool started", { exact: true })).toHaveCount(0);
   const commentaryGeometry = await commentary.evaluate((element) => ({
     left: element.getBoundingClientRect().left,
