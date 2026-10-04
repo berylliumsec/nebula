@@ -186,7 +186,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
           <header><strong>Projects</strong><button className="icon-button subtle" type="button" aria-label="Close project switcher" disabled={saving} onClick={() => setOpen(false)}><X size={14} /></button></header>
           {!creating && <div className="engagement-options">
             {(showArchived ? archivedEngagements : engagements).map((item) => <div className="project-switcher-row" key={item.id}>
-              {showArchived ? <span className="project-switcher-name">{item.name}<small>Archived</small></span> : <button type="button" disabled={updating} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { navigate(replaceProjectInPath(location.pathname, item.id) + location.search); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>}
+              {showArchived ? <span className="project-switcher-name">{item.name}<small>Archived</small></span> : <button type="button" disabled={updating} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { const target = /^\/projects\/[^/]+\/work\//.test(location.pathname) ? projectSurface(item.id, "work") : replaceProjectInPath(location.pathname, item.id); navigate(target + location.search); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>}
               <button className="project-switcher-action" type="button" disabled={updating || coreState !== "online"} aria-label={`${showArchived ? "Restore" : "Remove"} project ${item.name}`} title={showArchived ? "Restore project" : "Remove project"} onClick={(event) => void changeArchived(item.id, item.name, !showArchived, event.currentTarget)}>{showArchived ? <RotateCcw size={16} aria-hidden="true" /> : <Archive size={16} aria-hidden="true" />}</button>
               {showArchived && <button className="project-switcher-action" type="button" disabled={updating || coreState !== "online"} aria-label={`Delete project ${item.name}`} title="Delete permanently" onClick={() => void deleteArchived(item.id, item.name)}><Trash2 size={16} aria-hidden="true" /></button>}
             </div>)}
@@ -205,7 +205,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
         {navigationGroups.map((group) => (
           <section className="nav-group" aria-labelledby={`nav-group-${group.id}`} key={group.id}>
             <h2 id={`nav-group-${group.id}`}>{group.label}</h2>
-            {navigationItems.filter((item) => item.group === group.id).map(({ path, label, icon: Icon }) => (
+            {navigationItems.filter((item) => item.group === group.id && item.sidebar !== false).map(({ path, label, icon: Icon }) => (
               <Link
                 key={path}
                 to={canonicalNavigationPath(path, engagement?.id)}

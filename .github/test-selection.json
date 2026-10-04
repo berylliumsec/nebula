@@ -1,21 +1,33 @@
 {
-  "change_digest": "b4dc86af7d30ce04288f64544e2e11875538331efafd5dba582cc5c73daf1710",
-  "reviewed_by": "Codex README Assistant image review, 2026-10-04",
-  "reason": "The diff replaces only the README hero screenshot, alt text, and caption. The 1440x900 image was captured from the current production UI bundle against an isolated Core with an explicitly labeled sample conversation. No executable product behavior changes.",
-  "exclusions": "Zero Python, frontend, Playwright, and native tests apply to this documentation-only image replacement. Full suites and unrelated operator journeys are excluded. The desktop Chromium capture on loopback verifies the depicted UI only; it does not claim mobile, LAN, or physical-device feature validation.",
+  "change_digest": "b5e2934e9e003ba58d9d051482b065f177734c3dfb2491d2e23fde69a3de96a6",
+  "reviewed_by": "Codex for the user-approved Projects and Work merge",
+  "reason": "The diff changes Projects navigation, the project overview's saved Work progress, the Work board route, and Project Snapshot selection. Seven directly affected component files cover navigation, active progress selection, errors, project switching, and check-ins. Eighteen selected browser cases cover the Projects entry point, real Core Work save and reconnect, and imported project discovery across desktop Chromium and 320-430 px Chromium/WebKit.",
+  "exclusions": "No Python or native implementation changed, so their tests are excluded. Unrelated chat, provider, browser, settings, report, mission, and full interface suites are excluded. The shared App route and workbench CSS were reviewed: selected Projects navigation and real-Core Work journeys exercise their affected behavior.",
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
+    "frontend": 68,
     "native": 0,
-    "playwright": 0
+    "playwright": 18
   },
-  "python_versions": [
-    "3.12"
-  ],
-  "python_browser": false,
-  "python_node": false,
   "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/ProjectWorkOverview.test.tsx",
+    "ui/src/components/SideNav.test.tsx",
+    "ui/src/components/TopBar.test.tsx",
+    "ui/src/components/structured-result/ProjectSnapshotPanel.test.tsx",
+    "ui/src/pages/OverviewPage.test.tsx",
+    "ui/src/pages/WorkPage.test.tsx",
+    "ui/src/state/useNavigationChords.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:projects-navigation",
+    "area:work-hub",
+    "entry:work-import/assistant-real-desktop",
+    "entry:work-import/assistant-real-chromium-390",
+    "entry:work-import/assistant-real-webkit-390"
+  ],
+  "python_versions": ["3.12"],
+  "python_browser": false,
+  "python_node": false
 }

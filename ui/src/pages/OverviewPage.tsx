@@ -10,10 +10,12 @@ import type { ExecutionLanguage } from "../api/types";
 import { AssistantMarkdown } from "../components/AssistantMarkdown";
 import { PageHeader } from "../components/PageHeader";
 import { ProjectSummaryCards } from "../components/ProjectSummaryCards";
+import { ProjectWorkOverview } from "../components/ProjectWorkOverview";
 export { formatProjectModelCost } from "../components/ProjectSummaryCards";
 import { NewMissionButton, StopMissionButton } from "../components/MissionControls";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useChrome } from "../state/ChromeContext";
+import { projectRoot } from "../resourceRoutes";
 
 type EventStepState = "complete" | "running" | "waiting" | "failed" | "stopped" | "queued";
 
@@ -31,7 +33,8 @@ function eventStepState(kind: string): EventStepState {
 
 export function OverviewPage() {
   const { setActivityOpen } = useChrome();
-  const { approvals, assets, engagement, events, findings, health, run } = useWorkspace();
+  const { approvals, assets, engagement, engagements, events, findings, health, run } = useWorkspace();
+  const parentProject = engagements?.find((project) => project.id === engagement?.parentEngagementId);
   const validatedFindings = findings.filter((finding) => ["validated", "confirmed"].includes(finding.status));
   const completedTasks = run?.completedTasks ?? 0;
   const totalTasks = run?.totalTasks ?? 0;
@@ -48,8 +51,13 @@ export function OverviewPage() {
         description={run
             ? `${run.title} · ${run.status.replace("_", " ")}`
             : "Project status at a glance."}
-        actions={<NewMissionButton showSetupGuidance={false} />}
+        actions={<>{parentProject && <Link className="button quiet" to={projectRoot(parentProject.id)}>{parentProject.name} <ArrowUpRight size={15} aria-hidden="true" /></Link>}<Link className="button quiet" to="/projects">All projects <ArrowUpRight size={15} aria-hidden="true" /></Link><NewMissionButton showSetupGuidance={false} /></>}
       />
+
+      <nav className="project-overview-mobile-links" aria-label="Project hierarchy">
+        {parentProject && <Link to={projectRoot(parentProject.id)}>{parentProject.name} <ArrowUpRight size={15} aria-hidden="true" /></Link>}
+        <Link to="/projects">All projects <ArrowUpRight size={15} aria-hidden="true" /></Link>
+      </nav>
 
       {approvals.length > 0 && (
         <div className="callout approval-callout" role="status">
@@ -58,6 +66,8 @@ export function OverviewPage() {
           <button className="button primary" type="button" onClick={() => setActivityOpen(true)}>Review</button>
         </div>
       )}
+
+      {engagement?.id && <ProjectWorkOverview projectId={engagement.id} />}
 
       {hasCoverage && <ProjectSummaryCards assets={assets} findings={findings} run={run} />}
 

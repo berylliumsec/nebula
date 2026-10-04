@@ -123,7 +123,7 @@ describe("the floating Project Snapshot", () => {
         : path.endsWith("/work/child-work") ? childItem : []);
     panel({ sessionId: "session-1" });
     const progress = await screen.findByRole("region", { name: "Current progress" });
-    expect(progress).toHaveTextContent(newest.summary);
+    await waitFor(() => expect(progress).toHaveTextContent(newest.summary));
     expect(screen.getByRole("link", { name: "Open work item" })).toHaveAttribute("href", "/projects/child-project/work/child-work");
     expect(screen.getByRole("link", { name: "Open conversation" })).toHaveAttribute("href", "/projects/project-1/workbench?view=chat&session=session-1");
     expect(workApi.request).not.toHaveBeenCalledWith("engagements/project-1/work", expect.anything());
@@ -177,6 +177,8 @@ it("chooses the current conversation's check-in ahead of another active item", (
   const other = { ...workItem, id: "work-2", assignee_session_id: "session-2", source_id: "session-2", last_update_at: "2026-10-04T18:00:00Z" };
   expect(currentSnapshotItem([other, workItem], "session-1")?.id).toBe("work-1");
   expect(currentSnapshotItem([other, workItem])?.id).toBe("work-2");
+  expect(currentSnapshotItem([{ ...other, status: "done" }, workItem])?.id).toBe("work-1");
+  expect(currentSnapshotItem([{ ...workItem, status: "done" }])).toBeUndefined();
 });
 
 describe("the minimized Project Snapshot", () => {

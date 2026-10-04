@@ -331,7 +331,7 @@ test("assistant upgrade OpenRouter policy persists through production LAN reload
 });
 
 test("work hub project board keeps check-ins after refresh and agent access revocation", async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
+  test.setTimeout(120_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   try {
@@ -348,17 +348,22 @@ test("work hub project board keeps check-ins after refresh and agent access revo
     const mobileMore = page.getByRole("button", { name: "More workbench views" });
     if (await mobileMore.isVisible()) {
       await mobileMore.click();
-      await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Work" }).click();
+      await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Projects" }).click();
     } else {
       const sidebar = page.getByRole("button", { name: "Show sidebar" });
       if (await sidebar.isVisible()) await sidebar.click();
-      await page.getByRole("link", { name: "Work", exact: true }).click();
+      await page.getByRole("link", { name: "Projects", exact: true }).click();
     }
-    await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Current progress" })).toBeVisible();
+    await page.getByRole("link", { name: "All projects" }).click();
+    await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
     await page.locator(".work-project-list").getByRole("link", { name: /Documentation portal/ }).click();
-    await expect(page.getByRole("button", { name: "Enable agent tools" })).toBeVisible();
-    await page.getByRole("button", { name: "Enable agent tools" }).click();
-    await expect(page.getByRole("button", { name: "Agent tools on" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Documentation portal", exact: true })).toBeVisible();
+    await page.getByRole("navigation", { name: "Project sections" }).getByRole("button", { name: "Work" }).click();
+    await expect(page.getByRole("heading", { name: "Project work" })).toBeVisible();
+    const enableAgentTools = page.getByRole("button", { name: "Enable agent tools" });
+    if (await enableAgentTools.isVisible()) await enableAgentTools.click();
+    await expect(page.getByRole("button", { name: "Disable agent tools" })).toBeVisible();
     await page.getByRole("button", { name: "New item" }).click();
     const dialog = page.getByRole("dialog", { name: "New work item" });
     await dialog.getByRole("textbox", { name: "Title" }).fill("Build the search page");
@@ -370,14 +375,25 @@ test("work hub project board keeps check-ins after refresh and agent access revo
     await updateForm.getByRole("textbox", { name: "Next step" }).fill("Review copy");
     await updateForm.getByRole("combobox", { name: "Status" }).selectOption("review");
     await updateForm.getByRole("button", { name: "Save update" }).click();
-    await expect(page.locator(".work-timeline")).toContainText("Search layout is ready");
+    await expect(page.locator(".work-current-update")).toContainText("Search layout is ready");
     const itemUrl = page.url();
     await page.reload();
     await expect(page.getByRole("heading", { name: "Build the search page" })).toBeVisible();
-    await expect(page.locator(".work-timeline")).toContainText("Search layout is ready");
-    await page.getByRole("button", { name: "Agent tools on" }).click();
+    await expect(page.locator(".work-current-update")).toContainText("Search layout is ready");
+    await page.getByRole("navigation", { name: "Project sections" }).getByRole("button", { name: "Overview" }).click();
+    await expect(page.getByRole("heading", { name: "Current progress" })).toBeVisible();
+    await expect(page.locator(".project-work-overview")).toContainText("Search layout is ready");
+    await expect(page.locator(".project-work-overview")).toContainText("Review copy");
+    await page.goto(itemUrl);
+    await expect(page.getByRole("heading", { name: "Build the search page" })).toBeVisible();
+    await page.context().setOffline(true);
+    await expect(page.locator(".work-live-state")).toContainText(/Reconnecting|Offline/, { timeout: 20_000 });
+    await page.context().setOffline(false);
+    await expect(page.locator(".work-live-state")).toHaveText("Live", { timeout: 20_000 });
+    await expect(page.locator(".work-current-update")).toContainText("Search layout is ready");
+    await page.getByRole("button", { name: "Disable agent tools" }).click();
     await expect(page.getByRole("button", { name: "Enable agent tools" })).toBeVisible();
-    await expect(page.locator(".work-timeline")).toContainText("Search layout is ready");
+    await expect(page.locator(".work-current-update")).toContainText("Search layout is ready");
     const itemId = new URL(itemUrl).pathname.split("/").at(-1);
     const itemResponse = await api.get(`engagements/${project.id}/work/${itemId}`);
     expect(itemResponse.ok()).toBe(true);

@@ -122,13 +122,14 @@ test("work hub import finds a project and its saved task after refresh", async (
     const mobileMore = page.getByRole("button", { name: "More workbench views" });
     if (await mobileMore.isVisible()) {
       await mobileMore.click();
-      await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Work" }).click();
+      await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Projects" }).click();
     } else {
       const sidebar = page.getByRole("button", { name: "Show sidebar" });
       if (await sidebar.isVisible()) await sidebar.click();
-      await page.getByRole("link", { name: "Work", exact: true }).click();
+      await page.getByRole("link", { name: "Projects", exact: true }).click();
     }
-    await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
+    await page.goto(`${core.origin}/projects`);
+    await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
     await page.getByRole("link", { name: "Open Sample research handoff" }).click();
     await expect(page).toHaveURL(new RegExp(`/projects/${parentId}/workbench\\?view=chat&session=sample-active-session$`));
     const desktopChat = page.getByRole("tab", { name: "Analyst chat" });
@@ -137,7 +138,7 @@ test("work hub import finds a project and its saved task after refresh", async (
     if (await desktopChat.isVisible()) await expect(desktopChat).toHaveAttribute("aria-selected", "true");
     else await expect(mobileChat).toHaveAttribute("aria-current", "page");
     await page.goBack();
-    await expect(page.getByRole("heading", { name: "Work", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
     await expect(page.getByText("Showing 80 rows. Search to narrow the list.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Show subprojects of Sample project 1" })).toBeVisible();
     await page.getByRole("searchbox", { name: "Search projects" }).fill("Imported plan");
@@ -145,6 +146,7 @@ test("work hub import finds a project and its saved task after refresh", async (
     await page.locator(".work-project-list").getByRole("link", { name: /Imported plan/ }).click();
     await expect(page.getByRole("link", { name: "Sample project 1" })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("link", { name: "Sample project 1" }).click();
+    await page.getByRole("navigation", { name: "Project sections" }).getByRole("button", { name: "Work" }).click();
     await expect(page.getByRole("heading", { name: "Subprojects" })).toBeVisible();
     await expect(page.getByRole("link", { name: /Imported plan/ })).toBeVisible();
     await page.getByRole("link", { name: /Imported plan/ }).click();

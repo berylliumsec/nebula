@@ -86,7 +86,7 @@ describe("Work operator journey", () => {
 
   it("shows active conversations even before an agent links a Work item", async () => {
     saved.agents = [{ session_id: "session-2", engagement_id: "project-1", title: "Review documentation", state: "working", turn_id: "turn-2" }];
-    render(<MemoryRouter initialEntries={["/work"]}><Routes><Route path="/work" element={<WorkPage />} /></Routes></MemoryRouter>);
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
     expect(await screen.findByText("Review documentation")).toBeVisible();
     expect(screen.getByText(/No Work item linked/)).toBeVisible();
     expect(screen.getByRole("link", { name: "Open Review documentation" })).toHaveAttribute("href", "/projects/project-1/workbench?view=chat&session=session-2");
@@ -96,7 +96,7 @@ describe("Work operator journey", () => {
 
   it("waits for the operator to refresh instead of polling", async () => {
     const user = userEvent.setup();
-    render(<MemoryRouter initialEntries={["/work"]}><Routes><Route path="/work" element={<WorkPage />} /></Routes></MemoryRouter>);
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
     await screen.findByText("No agents are working right now.");
     const loadedCalls = workspace.api.request.mock.calls.length;
     vi.useFakeTimers();
@@ -169,7 +169,7 @@ describe("Work operator journey", () => {
     workspace.engagements = [workspace.engagement, ...Array.from({ length: 100 }, (_, index) => ({
       id: `project-${index + 2}`, name: `Sample project ${index + 1}`, status: "active", workEnabled: false,
     }))];
-    render(<MemoryRouter initialEntries={["/work"]}><Routes><Route path="/work" element={<WorkPage />} /></Routes></MemoryRouter>);
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
     expect(await screen.findByText("Showing 80 rows. Search to narrow the list.")).toBeVisible();
     expect(workspace.api.request).toHaveBeenCalledWith("work/items?offset=500&limit=500", expect.any(Object));
     expect(screen.queryByRole("link", { name: /Sample project 100/ })).not.toBeInTheDocument();
@@ -180,7 +180,7 @@ describe("Work operator journey", () => {
   it("groups subprojects under their parent and finds them by name", async () => {
     const user = userEvent.setup();
     workspace.engagements = [workspace.engagement, { id: "child-1", name: "Review plan", status: "active", workEnabled: true, parentEngagementId: "project-1" }];
-    render(<MemoryRouter initialEntries={["/work"]}><Routes><Route path="/work" element={<WorkPage />} /></Routes></MemoryRouter>);
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
     expect(await screen.findByText("1 subprojects · Agent tools on")).toBeVisible();
     expect(screen.queryByRole("link", { name: /Review plan/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Show subprojects of Documentation portal" }));

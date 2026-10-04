@@ -3,8 +3,9 @@ import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, CircleAlert, Clock3, 
 import { Link, useNavigate, useParams } from "react-router-dom";
 import type { ChatSessionActivity } from "../api/types";
 import { logCaughtDiagnostic } from "../diagnostics";
-import { projectSurface, resourcePath } from "../resourceRoutes";
+import { projectRoot, projectSurface, resourcePath } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
+import { useOptionalChrome } from "../state/ChromeContext";
 import "./WorkPage.css";
 
 type Status = "backlog" | "ready" | "in_progress" | "blocked" | "review" | "done";
@@ -49,6 +50,7 @@ function WorkUpdateDetails({ update, projectId }: { update: WorkUpdate; projectI
 
 export function WorkPage() {
   const { api, engagement, engagements, coreState, retryResource } = useWorkspace();
+  const chrome = useOptionalChrome();
   const { projectId, itemId } = useParams();
   const navigate = useNavigate();
   const [items, setItems] = useState<WorkItem[]>([]);
@@ -320,16 +322,16 @@ export function WorkPage() {
   return <div className="work-page page">
     <header className="work-head">
       <div>
-        {projectId && <Link className="work-back" to="/work"><ArrowLeft size={14} /> All work</Link>}
-        <p className="work-eyebrow">{projectId ? selectedProject?.name ?? "Project" : "All projects"}</p>
-        <h1>Work</h1>
+        {projectId && <Link className="work-back" to="/projects"><ArrowLeft size={14} /> All projects</Link>}
+        <p className="work-eyebrow">{projectId ? selectedProject?.name ?? "Project" : "Projects"}</p>
+        <h1>{projectId ? "Project work" : "All projects"}</h1>
         <p className="work-lede">{projectId ? "Plan tasks and follow agent check-ins in one place." : "See what agents are doing across your projects."}</p>
       </div>
       <div className="work-head-actions">
         <span className={`work-live-state ${liveState}`} role="status">{liveState === "live" ? "Live" : liveState === "connecting" ? "Connecting…" : liveState === "offline" ? "Offline" : "Reconnecting…"}</span>
         <button className="button quiet work-refresh" type="button" aria-label="Refresh Work" title="Refresh Work" onClick={() => void refresh()}><RefreshCw size={16} /></button>
         {projectId && <button className="button quiet" type="button" disabled={busy || coreState !== "online"} onClick={() => void toggle()}>{enabled ? "Disable agent tools" : "Enable agent tools"}</button>}
-        <button className="button primary" type="button" disabled={!api || coreState !== "online"} onClick={() => setShowCreate(true)}><Plus size={16} /> New item</button>
+        <button className="button primary" type="button" disabled={!api || coreState !== "online" || (!projectId && !activeProjects.length)} onClick={() => setShowCreate(true)}><Plus size={16} /> New item</button>
       </div>
     </header>
     {projectId && <p className="work-setting-note">{enabled ? "Agents can update this project through Nebula's built-in MCP. New updates appear live." : "Agent tools are off. Existing Work records remain visible. Enable them when agents should post updates."}</p>}
@@ -365,11 +367,11 @@ export function WorkPage() {
             const expanded = Boolean(projectQuery.trim()) || expandedProjects.has(project.id);
             return <div className={`work-project-row${depth ? " is-child" : ""}`} key={project.id} style={{ paddingLeft: Math.min(depth, 5) * 22 }}>
               {childCount > 0 ? <button type="button" aria-label={`${expanded ? "Hide" : "Show"} subprojects of ${project.name}`} aria-expanded={expanded} onClick={() => setExpandedProjects((current) => { const next = new Set(current); if (next.has(project.id)) next.delete(project.id); else next.add(project.id); return next; })}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button> : <span className="work-project-spacer" />}
-              <Link to={projectSurface(project.id, "work")}><span><strong>{project.name}</strong><small>{childCount ? `${childCount} subprojects · ` : ""}{project.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><span>{projectItems.active} active · {projectItems.blocked} blocked</span><ArrowRight size={16} /></Link>
+              <Link to={projectRoot(project.id)}><span><strong>{project.name}</strong><small>{childCount ? `${childCount} subprojects · ` : ""}{project.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><span>{projectItems.active} active · {projectItems.blocked} blocked</span><ArrowRight size={16} /></Link>
             </div>;
           })}</div>
           {projectRows.rows.length > visibleProjectLimit && <p className="work-empty-inline">Showing {visibleProjectLimit} rows. Search to narrow the list.</p>}
-          {!projectRows.count && <p className="work-empty-inline">No projects match your search.</p>}
+          {!projectRows.count && <div className="work-empty-inline">{activeProjects.length ? "No projects match your search." : <>No projects yet.{chrome?.openProjectPicker && <> <button className="button quiet" type="button" onClick={chrome.openProjectPicker}>Create a project</button></>}</>}</div>}
         </section>
         <section className="work-panel" aria-labelledby="work-recent-title"><div className="work-panel-head"><h2 id="work-recent-title">Recent check-ins</h2><span>{recent.length}</span></div>
           {recent.slice(0, 12).map((update) => { const item = items.find((candidate) => candidate.id === update.item_id); return <Link className="work-update-preview" key={update.id} to={projectSurface(update.engagement_id, "work", update.item_id)}><span><strong>{item?.title ?? "Work item"}</strong><small>{projectName(update.engagement_id)} · {time(update.created_at)}</small></span><p>{update.summary}</p></Link>; })}
