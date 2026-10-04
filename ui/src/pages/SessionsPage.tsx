@@ -30,7 +30,7 @@ import { ChatAttachments } from "../components/ChatAttachments";
 import { EnvironmentTargetPicker, environmentIdsForTarget, type EnvironmentTarget } from "../components/EnvironmentTargetPicker";
 import { sshApprovalTarget, type SshApprovalTarget } from "../sshTools";
 import { ChatResults } from "../components/ChatResults";
-import { AgentViewPanel, useStructuredResults, useUnseenCount } from "../components/structured-result";
+import { ProjectSnapshotPanel } from "../components/structured-result";
 import { ChatSubagentAttention, ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentEffortField, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
 import { useChatNavigation } from "./useChatNavigation";
 import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionList";
@@ -73,6 +73,7 @@ import {
   History,
   LoaderCircle,
   LayoutGrid,
+  LayoutDashboard,
   ListTodo,
   Maximize2,
   MessageSquare,
@@ -208,7 +209,7 @@ import {
 } from "./chatFollowUpStorage";
 import { chatTranscriptFilename, formatChatTranscript } from "./chatTranscriptExport";
 
-import { followsChatBottom, type ChatScrollGeometry } from "./chatScrollPosition";
+import { currentAgentTurnIndex, followsChatBottom, type ChatScrollGeometry } from "./chatScrollPosition";
 
 const CHAT_TERMINAL_OPEN_KEY = "nebula.chat-terminal.open";
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
@@ -376,8 +377,6 @@ const CHAT_COMPOSER_MAX_HEIGHT = 160;
 // How often a running goal is read back while it works. Core owns its step,
 // usage and revision; the panel only mirrors them.
 const GOAL_REFRESH_MS = 5_000;
-/** An unchanged results list backs off to this while the Agent view is closed. */
-const PUBLISHED_RESULTS_IDLE_POLL_MS = 16_000;
 /** Conversation-list activity reads; an unchanged, idle list backs off to the second. */
 const SESSION_ACTIVITY_POLL_MS = 5_000;
 const SESSION_ACTIVITY_IDLE_POLL_MS = 20_000;
@@ -1218,26 +1217,12 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       ? current : new Set([...current, selected.parentSessionId!]));
   }, [sessionId, sessions]);
   const [conversationOpen, setConversationOpen] = useState(Boolean(requestedSessionId));
-  // The Agent view floats over the conversation.
-  const [agentView, setAgentView] = useState<"closed" | "floating" | "minimized">("closed");
-  // Snapshots the assistant published for this conversation. The badge counts
-  // what arrived while the operator was not looking; it never steals focus.
-  // One poll feeds both the badge and the open Agent view. While the view is
-  // open the operator is watching snapshots arrive, so it keeps its cadence;
-  // otherwise an unchanged list backs off.
-  const publishedResults = useStructuredResults(api, engagement?.id, {
-    chatSessionId: sessionId,
-    live: (view === "chat" || (view === "browser" && agentView === "floating")) && Boolean(sessionId),
-    idlePollMs: agentView === "floating" ? undefined : PUBLISHED_RESULTS_IDLE_POLL_MS,
-    limit: 50,
-  });
-  const agentViewButtonRef = useRef<HTMLButtonElement>(null);
-  const { unseen: publishedUnseen } = useUnseenCount(publishedResults.items, agentView === "floating");
-  // The details drawer no longer holds an Agent view tab; links saved with
-  // it open the floating view instead.
+  const [projectSnapshot, setProjectSnapshot] = useState<"closed" | "floating" | "minimized">("closed");
+  const projectSnapshotButtonRef = useRef<HTMLButtonElement>(null);
+  // Older links to the retired visuals tab land on the project's snapshot.
   useEffect(() => {
     if (requestedDrawer !== "visuals") return;
-    setAgentView("floating");
+    setProjectSnapshot("floating");
     updateSearchParams(next => {next.delete("drawer");}, {replace: true});
   }, [requestedDrawer, updateSearchParams]);
 
@@ -1518,7 +1503,18 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     if (hasOlderHistory && !olderHistoryReadRef.current) void loadOlderHistory(messageId);
   }, [searchParams, loadingHistory, messages.length, hasOlderHistory]);
   const chatFollowBottomRef = useRef(true);
-  const chatScrollJumpRef = useRef<"top" | "bottom" | null>(null);
+  const chatScrollJumpRef = useRef<"turn" | "bottom" | "reading" | null>(null);
+  const chatTurnJumpMessageIdRef = useRef<string | undefined>(undefined);
+  const alignCurrentTurn = () => {
+    const viewport = chatViewportRef.current;
+    const messageId = chatTurnJumpMessageIdRef.current;
+    const row = messageId && document.getElementById(`chat-message-${messageId}`);
+    if (!viewport || !row) return false;
+    const top = row.getBoundingClientRect().top - viewport.getBoundingClientRect().top
+      - parseFloat(getComputedStyle(viewport).paddingTop);
+    if (Math.abs(top) > 2) viewport.scrollTop += top;
+    return true;
+  };
   const chatScrollGeometryRef = useRef<ChatScrollGeometry | undefined>(undefined);
   const chatReadingPositionRef = useRef<{sessionId: string; scrollTop: number; followBottom: boolean}>({sessionId: "", scrollTop: 0, followBottom: true});
   const [hasNewerMessages, setHasNewerMessages] = useState(false);
@@ -1625,6 +1621,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   useLayoutEffect(() => {
     chatScrollGeometryRef.current = undefined;
     chatScrollJumpRef.current = null;
+    chatTurnJumpMessageIdRef.current = undefined;
     const position = restoredScrollRef.current;
     chatFollowBottomRef.current = position?.followBottom ?? true;
     setHasNewerMessages(!chatFollowBottomRef.current);
@@ -4056,6 +4053,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     item.end <= (instance.scrollOffset ?? 0) && instance.scrollDirection !== "backward";
   const transcriptHeight = transcriptVirtualizer.getTotalSize();
   useLayoutEffect(() => {
+    if (chatScrollJumpRef.current === "turn") {
+      alignCurrentTurn();
+      return;
+    }
     if (chatFollowBottomRef.current && chatViewportRef.current) {
       chatViewportRef.current.scrollTop = chatViewportRef.current.scrollHeight;
     }
@@ -5929,12 +5930,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     onScroll={(event) => {
                       const viewport = event.currentTarget;
                       if (!viewport.clientHeight) return;
+                      if (chatScrollJumpRef.current === "turn") alignCurrentTurn();
                       const geometry = {scrollTop: viewport.scrollTop, scrollHeight: viewport.scrollHeight, clientHeight: viewport.clientHeight};
                       const jump = chatScrollJumpRef.current;
                       const distanceFromBottom = geometry.scrollHeight - geometry.scrollTop - geometry.clientHeight;
-                      const atBottom = jump === "top" ? false : jump === "bottom" ? true
+                      const atBottom = jump === "turn" || jump === "reading" ? false : jump === "bottom" ? true
                         : followsChatBottom(chatScrollGeometryRef.current, geometry, chatFollowBottomRef.current);
-                      if ((jump === "top" && geometry.scrollTop <= 2) || (jump === "bottom" && distanceFromBottom <= 2)) {
+                      if (jump === "bottom" && distanceFromBottom <= 2) {
                         chatScrollJumpRef.current = null;
                       }
                       chatScrollGeometryRef.current = geometry;
@@ -5943,20 +5945,28 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                       setHasNewerMessages(!atBottom);
                       setHasOlderMessages(geometry.scrollTop > 24);
                     }}
-                    onWheel={event => {if (event.deltaY < 0) chatFollowBottomRef.current = false;}}
-                    onTouchStart={event => {chatTouchYRef.current = event.touches[0]?.clientY;}}
-                    onTouchMove={event => {const y = event.touches[0]?.clientY; if (y !== undefined && chatTouchYRef.current !== undefined && y > chatTouchYRef.current) chatFollowBottomRef.current = false; chatTouchYRef.current = y;}}
-                    onKeyDown={event => {if (["ArrowUp", "PageUp", "Home"].includes(event.key)) chatFollowBottomRef.current = false;}}
-                    onPointerDown={event => {if (event.target === event.currentTarget) chatFollowBottomRef.current = false;}}
+                    onWheel={event => {if (event.deltaY < 0) {chatScrollJumpRef.current = "reading"; chatFollowBottomRef.current = false;} else if (chatScrollJumpRef.current) chatScrollJumpRef.current = null; chatTurnJumpMessageIdRef.current = undefined;}}
+                    onTouchStart={event => {if (chatScrollJumpRef.current === "turn" || chatScrollJumpRef.current === "bottom") chatScrollJumpRef.current = null; chatTurnJumpMessageIdRef.current = undefined; chatTouchYRef.current = event.touches[0]?.clientY;}}
+                    onTouchMove={event => {const y = event.touches[0]?.clientY; if (y !== undefined && chatTouchYRef.current !== undefined) {if (y > chatTouchYRef.current) {chatScrollJumpRef.current = "reading"; chatFollowBottomRef.current = false;} else if (y < chatTouchYRef.current && chatScrollJumpRef.current === "reading") chatScrollJumpRef.current = null;} chatTouchYRef.current = y;}}
+                    onKeyDown={event => {if (["ArrowUp", "PageUp", "Home"].includes(event.key)) {chatScrollJumpRef.current = "reading"; chatFollowBottomRef.current = false;} else if (["ArrowDown", "PageDown", "End"].includes(event.key)) chatScrollJumpRef.current = null; chatTurnJumpMessageIdRef.current = undefined;}}
+                    onPointerDown={event => {if (event.target === event.currentTarget) {chatScrollJumpRef.current = "reading"; chatTurnJumpMessageIdRef.current = undefined; chatFollowBottomRef.current = false;}}}
                   >
-                {messages.length > 0 && hasOlderMessages && <button className="chat-scroll-jump chat-scroll-to-top" type="button" aria-label="Scroll to earliest message" title="Scroll to earliest message" onClick={() => {
-                  chatScrollJumpRef.current = "top";
+                {messages.length > 0 && hasOlderMessages && <button className="chat-scroll-jump chat-scroll-to-top" type="button" aria-label="Scroll to start of current turn" title="Scroll to start of current turn" onClick={() => {
+                  const turnIndex = currentAgentTurnIndex(visibleMessages);
+                  if (turnIndex < 0) return;
+                  const turnMessageId = visibleMessages[turnIndex].id;
+                  chatScrollJumpRef.current = "turn";
+                  chatTurnJumpMessageIdRef.current = turnMessageId;
                   chatFollowBottomRef.current = false;
                   setHasNewerMessages(true);
-                  setHasOlderMessages(false);
+                  const scrollToTurn = () => {
+                    chatFollowBottomRef.current = false;
+                    return alignCurrentTurn();
+                  };
                   requestAnimationFrame(() => {
-                    if (chatViewportRef.current) chatViewportRef.current.scrollTop = 0;
-                    transcriptVirtualizer.scrollToIndex(0, {align: "start"});
+                    if (scrollToTurn()) return;
+                    transcriptVirtualizer.scrollToIndex(turnIndex + virtualMessageOffset, {align: "start"});
+                    requestAnimationFrame(scrollToTurn);
                   });
                 }}><ChevronDown size={16} aria-hidden="true" /></button>}
                 {loadingHistory && !messages.length ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading conversation…</div> : messages.length ? <div className="chat-virtual-list" style={{height: transcriptVirtualizer.getTotalSize(), position: "relative"}}>{transcriptVirtualizer.getVirtualItems().map((virtualItem) => {
@@ -6008,6 +6018,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                     />}
                     {messages.length > 0 && hasNewerMessages && <button className="chat-scroll-jump chat-scroll-to-bottom" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" onClick={() => {
                       chatScrollJumpRef.current = "bottom";
+                      chatTurnJumpMessageIdRef.current = undefined;
                       chatFollowBottomRef.current = true;
                       setHasNewerMessages(false);
                       requestAnimationFrame(() => {
@@ -6083,7 +6094,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                   {runtimeKind === "harness" && ["grok_acp", "codex_app_server"].includes(selectedHarness?.kind ?? "") && <HarnessCommandHints draft={draft} commands={harnessActivity?.sessionId === harnessSessionId && !harnessActivityError ? harnessActivity.commands : undefined} discoveryPending={selectedHarness?.kind === "grok_acp" && (harnessActivity?.sessionId !== harnessSessionId || !harnessActivity?.commandsDiscovered || Boolean(harnessActivityError))} onSelect={(text) => { updateComposerDraft(text); composerRef.current?.focus(); }} />}
                   {skillToken && <HarnessSkillAutocomplete skills={harnessSkills} token={skillToken} activeIndex={skillMenuIndex} onActiveIndexChange={setSkillMenuIndex} onSelect={selectHarnessSkill} onClose={() => setSkillToken(undefined)} />}
                 </div>
-                <footer>{!embeddedSideChat && <button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls={`assistant-settings-popover${panelIdSuffix}`} title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>}{!embeddedSideChat && api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button><button ref={agentViewButtonRef} className={`button quiet chat-composer-icon${publishedUnseen > 0 ? " needs-attention" : ""}`} type="button" aria-label={publishedUnseen > 0 ? `Agent view, ${publishedUnseen} new` : "Agent view"} title="Visuals the assistant published for this conversation" aria-expanded={agentView === "floating"} disabled={!sessionId} onClick={() => setAgentView(current => current === "floating" ? "closed" : "floating")}><Sparkles size={18} aria-hidden="true" />{publishedUnseen > 0 && <span className="chat-composer-badge">{publishedUnseen > 9 ? "9+" : publishedUnseen}</span>}</button><input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{(sending || authoritativeProviderBusy || (runtimeKind === "provider" && Boolean(interruptedRecovery))) && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
+                <footer>{!embeddedSideChat && <button ref={assistantSettingsButtonRef} className={`button quiet chat-runtime-summary chat-settings-trigger${runtimeReady ? "" : " needs-attention"}`} type="button" aria-label="Assistant settings" aria-expanded={assistantSettingsOpen} aria-controls={`assistant-settings-popover${panelIdSuffix}`} title={runtimeReady ? `${assistantSource}${runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}` : "Choose an assistant runtime"} onClick={() => setAssistantSettingsOpen((open) => !open)}><Settings2 size={15} aria-hidden="true" /><span><strong>{assistantSource}</strong><small> · {runtimeConfiguration || "Choose a model"}</small></span></button>}{!embeddedSideChat && api && runtimeKind === "provider" && <EnvironmentTargetPicker api={api} value={environmentTarget} onChange={setEnvironmentTarget} disabled={composerBusy} />}{sessionId && <button className={`button quiet chat-context-meter status-${activeContextStatus?.status ?? "loading"}`} type="button" aria-label={contextPercent === undefined ? "Open context details" : `Open context details, ${contextPercent} percent of target input used`} title={activeContextStatus?.status === "runtime_managed" ? "Context is managed by the harness runtime" : contextPercent === undefined ? "Read authoritative context status" : `${activeContextStatus?.estimatedInputTokens.toLocaleString()} of ${activeContextStatus?.targetInputTokens.toLocaleString()} target input tokens`} onClick={() => { localStorage.setItem("nebula.session-inspector.open", "true"); setSessionInspectorOpen(true); }}><span aria-hidden="true" style={contextPercent === undefined ? undefined : { "--context-percent": `${contextPercent}%` } as CSSProperties}>{contextPercent === undefined ? <Gauge size={16} aria-hidden="true" /> : contextPercent}</span></button>}<button className="button quiet chat-composer-icon" type="button" aria-label="Results" title="Results" disabled={!sessionId} onClick={() => updateSearchParams(next => {next.set("drawer", "results");})}><Files size={18} aria-hidden="true" /></button><button ref={projectSnapshotButtonRef} className="button quiet chat-composer-icon" type="button" aria-label="Project Snapshot" title="Project Snapshot" aria-expanded={projectSnapshot === "floating"} disabled={!engagement} onClick={() => setProjectSnapshot(current => current === "floating" ? "closed" : "floating")}><LayoutDashboard size={18} aria-hidden="true" /></button><input ref={imageInputRef} className="sr-only" type="file" aria-label="Choose image attachments" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void attachImages(event)} />{api && engagement && <ChatAttachments key={engagement.id} api={api} projectId={engagement.id} onAttach={request => requestChatContext(request, view === "browser" ? "browser" : "chat")} onImages={() => imageInputRef.current?.click()} imagesEnabled={imageInputEnabled && !composerBusy} />}{canSteerCurrentHarness && draft.trim() && <button className="button primary square chat-composer-submit" type="submit" disabled={harnessControlBusy} aria-label="Guide current turn" title="Guide the current turn"><Send size={16} /></button>}{canStopAndSend && draft.trim() && <><button className="button quiet square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button><button className="button primary chat-composer-send-now" type="button" aria-label="Stop and send" title="Stop the current turn and send this message next" onClick={() => void stopAndSend()}><Send size={15} /><span className="chat-composer-send-now-label">Stop and send</span></button></>}{(queueMode || canSteerCurrentHarness) && !canStopAndSend && draft.trim() && <button className="button primary square chat-composer-submit" type="button" onClick={() => void submit(undefined, undefined, {})} aria-label="Queue follow-up message" title="Send next after the active response"><ListTodo size={16} /></button>}{(sending || authoritativeProviderBusy || (runtimeKind === "provider" && Boolean(interruptedRecovery))) && <button className="button secondary square chat-composer-submit" type="button" aria-label="Stop response" disabled={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false} title={runtimeKind === "harness" && selectedHarness?.capabilities?.interruption === false ? "This harness does not advertise turn interruption" : undefined} onClick={() => void stopCurrentResponse()}><Square size={15} /></button>}{sessionId && draft.trim() && !composerBusy && <button type="button" className="button quiet square chat-composer-submit" aria-label="Queue for later" title="Queue for later" disabled={coreQueue.busy} onClick={() => void submit(undefined, undefined, {paused: true})}><ListTodo size={18} aria-hidden="true" /></button>}{!composerBusy && <button className="button primary square chat-composer-submit" type="submit" onPointerDown={(event) => { if (view === "browser") event.preventDefault(); }} disabled={!canSend} aria-label="Send message"><Send size={16} /></button>}</footer>
               </form>
               {showHarnessProgress && visibleHarnessProgress && <div className={`chat-harness-progress phase-${visibleHarnessProgress.phase}`} role="status" aria-live="polite"><span className={`status-dot ${visibleHarnessProgress.phase === "failed" || visibleHarnessProgress.phase === "status_unavailable" ? "unavailable" : "pending"}`} /><div><strong>{harnessPhaseLabel(visibleHarnessProgress.phase)}</strong><small>{visibleHarnessProgress.detail}</small>{visibleHarnessProgress.sessionId && <code title={visibleHarnessProgress.sessionId}>Session {visibleHarnessProgress.sessionId.slice(0, 8)}{visibleHarnessProgress.previousSessionId ? visibleHarnessProgress.phase === "command_runtime_session_created" ? " · current command runtime" : " · independent parallel session" : ""}</code>}</div>{canSteerCurrentHarness && <button className="button quiet harness-steer-button" type="button" disabled={harnessControlBusy} onClick={() => composerRef.current?.focus()}><Plus size={13} aria-hidden="true" /> Add guidance</button>}</div>}
             </div>
@@ -6350,16 +6361,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           {view === "chat" && sideChatId && <>{sideChatSplit.resizeHandle}<MemoizedSideChat key={`side-chat:${sideChatId}`} embeddedSideChat sideChatParentTitle={sessions.find(item => item.id === sessionId)?.title} onCloseSideChat={sideChatActions.close} onShowConversations={sideChatActions.showConversations} sideChatConversationListOpen={mobileListOpen} onSideChatUnavailable={sideChatActions.unavailable} sideChatClosing={sideChatBusy} sideChatCloseError={sideChatError} /></>}
         </section>
 
-        {(view === "chat" || view === "browser") && agentView !== "closed" && api && engagement && sessionId && <AgentViewPanel
-          api={api}
+        {(view === "chat" || view === "browser") && projectSnapshot !== "closed" && engagement && <ProjectSnapshotPanel
+          key={engagement.id}
           projectId={engagement.id}
-          sessionId={sessionId}
-          minimized={agentView === "minimized"}
-          unseen={publishedUnseen}
-          results={publishedResults}
-          onMinimize={() => setAgentView("minimized")}
-          onRestore={() => setAgentView("floating")}
-          onClose={() => { setAgentView("closed"); requestAnimationFrame(() => agentViewButtonRef.current?.focus()); }}
+          minimized={projectSnapshot === "minimized"}
+          onMinimize={() => setProjectSnapshot("minimized")}
+          onRestore={() => setProjectSnapshot("floating")}
+          onClose={() => { setProjectSnapshot("closed"); requestAnimationFrame(() => projectSnapshotButtonRef.current?.focus()); }}
         />}
         {(view === "chat" || view === "browser") && sessionInspectorOpen && <ChatWorkspaceDrawer overlay={view === "browser"} minPrimaryWidth={420 + (conversationPanelWidth ?? 0)} onWidthChange={setSessionInspectorWidth} tab={drawerTab} onTab={tab => updateSearchParams(next => {next.set("drawer", tab);})} onClose={() => setSessionInspectorOpen(false)}>
           {drawerTab === "subagents" ? api && sessionId ? <ChatSubagentPane

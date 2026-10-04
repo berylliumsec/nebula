@@ -8,28 +8,18 @@ No schema is registered anywhere. The explorer derives every view from the
 runtime shape of the value it was given, so a producer can add fields, change
 its output or invent a new result type without a Nebula release.
 
-Operators read results in **Project → Results**, and the snapshots of a
-conversation beside it in the assistant's **Agent view** drawer.
+Operators read published results in **Project → Results**. The chat's
+**Project Snapshot** shows the project's Core-owned dashboard summary instead.
+It does not read published results or require a model to publish snapshots.
 
 ## Publishing
 
-### From a goal, as it works
+Results can still be published through the project API by an external agent,
+integration or operator. Existing published results and goal series remain
+readable in Project → Results. Goal turns no longer receive `dashboard.publish`
+or instructions to update a separate view.
 
-Publishing belongs to **goal mode**: a goal is the conversation that runs long
-enough for an operator to lose sight of it. `dashboard.publish` is offered to a
-turn dispatched under a **running** goal and to nothing else.
-
-A running goal is also asked, in its instructions, to show where the work
-stands whenever its series has been quiet for more than ten minutes — and
-immediately on the first turn, so there is something to watch from the start. A
-goal that is already publishing is left alone. The ask names what a snapshot
-should depict: what was examined, decided or changed, the values, code or
-relationships behind it, and what is next.
-
-Core owns the series. Every snapshot of one goal joins that goal's own stream
-in order, labelled with its objective, whatever `stream` the model passes.
-
-The tool takes:
+The publish request takes:
 
 | Argument | Required | Meaning |
 | --- | --- | --- |
@@ -37,13 +27,9 @@ The tool takes:
 | `result` | yes | Any JSON value: object, array, string, number, boolean or null. |
 | `summary` | no | One line describing what was published. |
 | `producer` | no | Label for what produced it. |
-| `stream` | no | Ignored inside a goal: the goal owns its own series. |
+| `stream` | no | Optional key for a series of related results. |
 | `labels` | no | Up to 12 short tags. |
 | `hints` | no | Optional presentation hints (below). |
-
-The tool returns the new result's id, its shape statistics and the path the
-operator reads it at. It deliberately does not echo the payload back into the
-conversation.
 
 ### Over the API
 
@@ -54,10 +40,9 @@ GET    /api/v1/projects/{project_id}/structured-results/{result_id}
 DELETE /api/v1/projects/{project_id}/structured-results/{result_id}
 ```
 
-The API is not restricted to goal mode: it is how an external agent or an
-integration publishes, and it accepts its own `stream` and `stream_label`.
-`POST` takes the same fields as the tool plus `origin` and the conversation
-identifiers, and answers `{"result": …, "retention_removed": […]}`. The list
+The API accepts `stream`, `stream_label`, `origin`, and optional conversation
+identifiers in addition to the fields above. `POST` answers
+`{"result": …, "retention_removed": […]}`. The list
 answers bounded summaries — title, producer, shape statistics and a short
 preview — so a busy project's list stays light; the payload arrives when a
 result is opened.

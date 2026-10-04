@@ -69,9 +69,9 @@ describe("ActivityLedger", () => {
     const ledger = screen.getByRole("region", { name: "Work summary" });
     expect(within(ledger).getByText("Saving verified findings.")).toBeVisible();
     expect(within(ledger).getByRole("list", { name: "Work phases" })).toBeVisible();
-    expect(within(ledger).queryByText(/newest first/)).toBeNull();
+    expect(within(ledger).queryByText(/latest below/)).toBeNull();
     await user.click(within(ledger).getByRole("button", { name: "Show activity" }));
-    expect(within(ledger).getByText(/newest first/)).toBeVisible();
+    expect(within(ledger).getByText(/latest below/)).toBeVisible();
     expect(within(ledger).getByRole("button", { name: "Hide activity" })).toHaveAttribute("aria-expanded", "true");
   });
 
@@ -88,7 +88,7 @@ describe("ActivityLedger", () => {
     const { rerender } = render(<ActivityLedger model={model()} />);
     await user.click(screen.getByRole("button", { name: "Show activity" }));
     rerender(<ActivityLedger model={model({ status: "complete", currentAction: undefined })} />);
-    expect(screen.getByText(/newest first/)).toBeVisible();
+    expect(screen.getByText(/latest below/)).toBeVisible();
     expect(screen.getByRole("button", { name: "Hide activity" })).toHaveAttribute("aria-expanded", "true");
   });
 
@@ -129,7 +129,7 @@ describe("ActivityLedger", () => {
     const attention = screen.getByLabelText("Activity requiring attention");
     expect(within(attention).getByText("Verify TLS boundary")).toBeVisible();
     expect(within(attention).getByText("The verification command exited with status 1.", { selector: "small" })).toBeVisible();
-    expect(screen.queryByText("Newest first")).toBeNull();
+    expect(screen.queryByText("latest below")).toBeNull();
   });
 });
 
@@ -232,14 +232,16 @@ it("shows the current tool and expands each running call independently", async (
   await user.click(within(ledger).getByRole("button", { name: "Show activity" }));
   const rows = ledger.querySelectorAll(".activity-ledger-audit li details");
   expect(rows).toHaveLength(2);
-  await user.click(within(rows[0] as HTMLElement).getByText("Command on host B"));
-  expect(rows[0]).toHaveAttribute("open");
-  expect(rows[1]).not.toHaveAttribute("open");
-  expect(within(rows[0] as HTMLElement).getByText("ssh-b input")).toBeVisible();
-  await user.click(within(rows[1] as HTMLElement).getByText("Command on host A"));
-  expect(rows[0]).toHaveAttribute("open");
+  expect(within(rows[0] as HTMLElement).getByText("Command on host A")).toBeVisible();
+  expect(within(rows[1] as HTMLElement).getByText("Command on host B")).toBeVisible();
+  await user.click(within(rows[1] as HTMLElement).getByText("Command on host B"));
   expect(rows[1]).toHaveAttribute("open");
-  await user.click(within(rows[0] as HTMLElement).getByText("Command on host B"));
   expect(rows[0]).not.toHaveAttribute("open");
+  expect(within(rows[1] as HTMLElement).getByText("ssh-b input")).toBeVisible();
+  await user.click(within(rows[0] as HTMLElement).getByText("Command on host A"));
+  expect(rows[0]).toHaveAttribute("open");
   expect(rows[1]).toHaveAttribute("open");
+  await user.click(within(rows[1] as HTMLElement).getByText("Command on host B"));
+  expect(rows[1]).not.toHaveAttribute("open");
+  expect(rows[0]).toHaveAttribute("open");
 });

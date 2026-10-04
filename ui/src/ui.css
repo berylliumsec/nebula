@@ -57,7 +57,7 @@
   border: 0;
   border-radius: 0;
 }
-.sessions-page.chat-focus .session-layout.chat > :is(.session-list, .session-inspector, .agent-view-panel, .agent-view-launcher) { display: none !important; }
+.sessions-page.chat-focus .session-layout.chat > :is(.session-list, .session-inspector, .project-snapshot-panel, .project-snapshot-launcher) { display: none !important; }
 .sessions-page.chat-focus .session-workspace,
 .sessions-page.chat-focus .session-workspace:is(.side-chat-open, .chat-terminal-open) {
   display: flex !important;

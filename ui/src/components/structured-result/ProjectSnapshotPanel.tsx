@@ -1,12 +1,11 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
-import { ExternalLink, GripHorizontal, Minimize2, MoveDiagonal2, Sparkles, X } from "lucide-react";
+import { ExternalLink, GripHorizontal, LayoutDashboard, Minimize2, MoveDiagonal2, X } from "lucide-react";
 import { Link } from "react-router-dom";
-import type { ApiClient } from "../../api/client";
-import { projectSurface } from "../../resourceRoutes";
+import { projectRoot } from "../../resourceRoutes";
+import { ProjectSummaryCards } from "../ProjectSummaryCards";
+import { useWorkspace } from "../../state/WorkspaceContext";
 import { IconAction } from "../IconAction";
-import { AgentViewBody, agentViewStatus, useAgentViewStream } from "./AgentViewBody";
-import type { StructuredResultList } from "./useStructuredResults";
 import {
   arrowDirection,
   clampPoint,
@@ -17,9 +16,9 @@ import {
   STEP,
   writeLauncher,
   writeRect,
-  type AgentViewPoint,
-  type AgentViewRect,
-} from "./agentViewGeometry";
+  type ProjectSnapshotPoint,
+  type ProjectSnapshotRect,
+} from "./projectSnapshotGeometry";
 
 /** Below this width the view is a sheet: there is no room to float beside. */
 const SHEET_QUERY = "(max-width: 760px)";
@@ -67,56 +66,41 @@ function pageClearance() {
   };
 }
 
-type Gesture = { kind: "move" | "resize"; pointerX: number; pointerY: number; start: AgentViewRect };
+type Gesture = { kind: "move" | "resize"; pointerX: number; pointerY: number; start: ProjectSnapshotRect };
 
-export interface AgentViewPanelProps {
-  api: ApiClient;
+export interface ProjectSnapshotPanelProps {
   projectId: string;
-  sessionId: string;
   minimized: boolean;
-  /** Snapshots published since the operator last looked, for the launcher. */
-  unseen: number;
-  /** The page's own poll of this conversation's results, shared instead of repeated. */
-  results?: StructuredResultList;
   onMinimize: () => void;
   onRestore: () => void;
   onClose: () => void;
 }
 
-/**
- * The Agent view floating over the conversation: moved by its grip, sized by
- * its corner, and remembered on this device. It is not modal, so the
- * transcript and composer stay usable underneath. Minimized, it becomes a
- * launcher that keeps counting new snapshots. On a phone it is a sheet.
- */
-export function AgentViewPanel(props: AgentViewPanelProps) {
-  const { minimized } = props;
-  // The snapshot the operator stopped on outlives minimizing.
-  const pin = useState<string>();
-  const [rect, setRect] = useState<AgentViewRect>(() => readRect(currentViewport(), pageClearance()));
-  const [launcher, setLauncher] = useState<AgentViewPoint | undefined>(() => readLauncher());
+/** The project dashboard summary beside the conversation, using Workspace's Core state. */
+export function ProjectSnapshotPanel(props: ProjectSnapshotPanelProps) {
+  const [rect, setRect] = useState<ProjectSnapshotRect>(() => readRect(currentViewport(), pageClearance()));
+  const [launcher, setLauncher] = useState<ProjectSnapshotPoint | undefined>(() => readLauncher());
   const sheet = useSheet();
 
-  return createPortal(minimized
-    ? <AgentViewLauncher unseen={props.unseen} position={launcher} onMove={setLauncher} onRestore={props.onRestore} />
-    : <FloatingAgentView {...props} pin={pin} rect={rect} onRect={setRect} sheet={sheet} />,
+  return createPortal(props.minimized
+    ? <ProjectSnapshotLauncher position={launcher} onMove={setLauncher} onRestore={props.onRestore} />
+    : <FloatingProjectSnapshot {...props} rect={rect} onRect={setRect} sheet={sheet} />,
   document.body);
 }
 
-function FloatingAgentView({
-  api, projectId, sessionId, results, onMinimize, onClose, pin, rect, onRect, sheet,
-}: AgentViewPanelProps & {
-  pin: readonly [string | undefined, (id: string | undefined) => void];
-  rect: AgentViewRect;
-  onRect: (rect: AgentViewRect) => void;
+function FloatingProjectSnapshot({
+  projectId, onMinimize, onClose, rect, onRect, sheet,
+}: ProjectSnapshotPanelProps & {
+  rect: ProjectSnapshotRect;
+  onRect: (rect: ProjectSnapshotRect) => void;
   sheet: boolean;
 }) {
   const titleId = useId();
   const panel = useRef<HTMLElement>(null);
   const gesture = useRef<Gesture | undefined>(undefined);
-  const stream = useAgentViewStream(api, projectId, sessionId, pin, results);
+  const { engagement, assets, findings, run, approvals } = useWorkspace();
 
-  const place = (next: AgentViewRect, persist: boolean) => {
+  const place = (next: ProjectSnapshotRect, persist: boolean) => {
     const fitted = clampRect(next, currentViewport());
     onRect(fitted);
     if (persist) writeRect(fitted);
@@ -164,7 +148,7 @@ function FloatingAgentView({
 
   return <section
     ref={panel}
-    className={`agent-view-panel${sheet ? " sheet" : ""}`}
+    className={`project-snapshot-panel${sheet ? " sheet" : ""}`}
     role="dialog"
     aria-labelledby={titleId}
     tabIndex={-1}
@@ -177,35 +161,36 @@ function FloatingAgentView({
       }
     }}
   >
-    <div className="agent-view-header">
+    <div className="project-snapshot-header">
       {!sheet && <button
         type="button"
-        className="icon-button subtle agent-view-handle"
-        aria-label="Move Agent view"
+        className="icon-button subtle project-snapshot-handle"
+        aria-label="Move Project Snapshot"
         title="Drag to move · arrow keys to reposition"
         {...gestureHandlers("move")}
       ><GripHorizontal size={18} aria-hidden="true" /></button>}
-      <div className="agent-view-title">
-        <h2 id={titleId}><Sparkles size={14} aria-hidden="true" /> Agent view</h2>
-        <small role="status">{agentViewStatus(stream)}</small>
+      <div className="project-snapshot-title">
+        <h2 id={titleId}><LayoutDashboard size={14} aria-hidden="true" /> Project Snapshot</h2>
+        <small role="status">{engagement?.name ?? "Project status"}</small>
       </div>
-      <IconAction icon={Minimize2} label="Minimize Agent view" title="Minimize and keep following" onClick={onMinimize} />
-      <IconAction icon={X} label="Close Agent view" onClick={onClose} />
+      <IconAction icon={Minimize2} label="Minimize Project Snapshot" title="Minimize Project Snapshot" onClick={onMinimize} />
+      <IconAction icon={X} label="Close Project Snapshot" onClick={onClose} />
     </div>
 
-    <div className="agent-view-scroll">
-      <AgentViewBody stream={stream} />
+    <div className="project-snapshot-scroll">
+      <ProjectSummaryCards assets={assets} findings={findings} run={run} />
+      {run?.totalTasks ? <div className="project-snapshot-progress"><span>Mission progress</span><strong>{run.completedTasks} of {run.totalTasks} tasks</strong><progress value={run.completedTasks} max={run.totalTasks} /></div> : null}
+      {approvals.length > 0 && <p className="project-snapshot-attention">{approvals.length} approval{approvals.length === 1 ? "" : "s"} waiting for review</p>}
     </div>
 
-    <div className="agent-view-footer">
-      <Link className="button quiet" to={projectSurface(projectId, "results", stream.current)}>
-        <ExternalLink size={14} aria-hidden="true" /> Open in Results
+    <div className="project-snapshot-footer">
+      <Link className="button quiet" to={projectRoot(projectId)}>
+        <ExternalLink size={14} aria-hidden="true" /> Open dashboard
       </Link>
-      <span>{stream.position ? `Snapshot ${stream.position} of ${stream.items.length}${stream.pinned ? "" : " · newest"}` : ""}</span>
       {!sheet && <button
         type="button"
-        className="icon-button subtle agent-view-resize"
-        aria-label="Resize Agent view"
+        className="icon-button subtle project-snapshot-resize"
+        aria-label="Resize Project Snapshot"
         title="Drag to resize · arrow keys to change the size"
         {...gestureHandlers("resize")}
       ><MoveDiagonal2 size={16} aria-hidden="true" /></button>}
@@ -213,18 +198,17 @@ function FloatingAgentView({
   </section>;
 }
 
-function AgentViewLauncher({ unseen, position, onMove, onRestore }: {
-  unseen: number;
-  position?: AgentViewPoint;
-  onMove: (point: AgentViewPoint) => void;
+function ProjectSnapshotLauncher({ position, onMove, onRestore }: {
+  position?: ProjectSnapshotPoint;
+  onMove: (point: ProjectSnapshotPoint) => void;
   onRestore: () => void;
 }) {
   const shell = useRef<HTMLDivElement>(null);
   const show = useRef<HTMLButtonElement>(null);
   const drag = useRef<{ pointerX: number; pointerY: number; left: number; top: number } | undefined>(undefined);
-  const status = unseen > 0 ? `${unseen} new ${unseen === 1 ? "snapshot" : "snapshots"}` : "Following newest";
+  const status = "Project status at a glance";
 
-  const place = (point: AgentViewPoint, persist: boolean) => {
+  const place = (point: ProjectSnapshotPoint, persist: boolean) => {
     const box = shell.current?.getBoundingClientRect();
     const fitted = clampPoint(point, { width: box?.width ?? 300, height: box?.height ?? 56 }, currentViewport());
     onMove(fitted);
@@ -241,13 +225,13 @@ function AgentViewLauncher({ unseen, position, onMove, onRestore }: {
 
   return <div
     ref={shell}
-    className="agent-view-launcher"
+    className="project-snapshot-launcher"
     style={position ? { left: position.x, top: position.y, right: "auto", bottom: "auto" } : undefined}
   >
     <button
       type="button"
-      className="icon-button subtle agent-view-handle"
-      aria-label="Move minimized Agent view"
+      className="icon-button subtle project-snapshot-handle"
+      aria-label="Move minimized Project Snapshot"
       title="Drag to move · arrow keys to reposition"
       onPointerDown={(event) => {
         if (event.button !== 0) return;
@@ -270,9 +254,9 @@ function AgentViewLauncher({ unseen, position, onMove, onRestore }: {
         place({ x: start.x + direction[0] * STEP, y: start.y + direction[1] * STEP }, true);
       }}
     ><GripHorizontal size={18} aria-hidden="true" /></button>
-    <button ref={show} type="button" className="agent-view-launcher-show" aria-label={`Show Agent view, ${status}`} onClick={onRestore}>
+    <button ref={show} type="button" className="project-snapshot-launcher-show" aria-label={`Show Project Snapshot, ${status}`} onClick={onRestore}>
       <span>
-        <strong><Sparkles size={13} aria-hidden="true" /> Agent view</strong>
+        <strong><LayoutDashboard size={13} aria-hidden="true" /> Project Snapshot</strong>
         <small role="status">{status}</small>
       </span>
       <em>Show</em>

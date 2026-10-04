@@ -23,7 +23,6 @@ from .domain import (
     Approval,
     AutomationApprovalPolicy,
     AutomationProjectPolicy,
-    ChatGoal,
     ChatMessage,
     Engagement,
     McpServerProfile,
@@ -52,7 +51,6 @@ from .sandbox import (
     SandboxError,
 )
 from .storage import NebulaStore
-from .structured_results import PublishResultTool
 from .tool_results import ToolOutputService
 from .tools import (
     StoreToolEvidenceRecorder,
@@ -153,42 +151,6 @@ class OperatorRuntimeResolution:
     runtime_digest: str
     runner: ContainerSandboxRunner
     workspace: Path
-
-
-def dashboard_components(
-    store: NebulaStore,
-    artifact_store: ArtifactStore,
-    scope: ScopePolicy,
-    workspace: Path,
-    goal: ChatGoal,
-) -> RuntimeToolComponents:
-    """Publishing to the result dashboard, for one running goal.
-
-    Showing the operator where the work stands belongs to goal mode: a goal is
-    the only conversation that runs long enough to lose sight of. The
-    components are built from the caller's already-resolved scope and
-    workspace, so combining them can never disagree with the runtime they join,
-    and they carry no runtime digest of their own: a turn's recorded digest
-    must keep meaning the command runtime it was recorded from.
-    """
-
-    registry = ToolRegistry()
-    registry.register(PublishResultTool(store, goal))
-    broker = ToolBroker(
-        registry=registry,
-        policy_engine=PolicyEngine(),
-        runner=AnalysisOnlyRunner(),
-        ledger=StoreToolLedger(store),
-        workspace_resolver=lambda _engagement_id: workspace,
-        evidence_recorder=StoreToolEvidenceRecorder(store, artifact_store),
-    )
-    return RuntimeToolComponents(
-        broker=broker,
-        scope=scope,
-        workspace=workspace,
-        specs={spec.name: spec for spec in registry.specs()},
-        runtime_digest="",
-    )
 
 
 def conversation_search_components(

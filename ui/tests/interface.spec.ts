@@ -3686,7 +3686,7 @@ test("VPN settings keep upload and project routing calm at every width", async (
   expect(accessibility.violations).toEqual([]);
 });
 
-test("assistant upgrade scrolls between earliest and latest messages without overriding reader intent", async ({ page }, testInfo) => {
+test("assistant upgrade scrolls between current turn and latest message without overriding reader intent", async ({ page }, testInfo) => {
   test.skip(!["desktop", "compact", "mobile-chromium-small", "mobile-chromium-ledger-390", "mobile-chromium-wide", "mobile-webkit-small", "mobile-webkit", "mobile-webkit-wide"].includes(testInfo.project.name), "Covered by the desktop and mobile scroll projects.");
   const provider = {
     ...entity,
@@ -3761,7 +3761,7 @@ test("assistant upgrade scrolls between earliest and latest messages without ove
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   const composer = page.getByPlaceholder("Ask about this project…");
   await expect(composer).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Scroll to earliest message" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Scroll to start of current turn" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Scroll to latest message" })).toHaveCount(0);
   await composer.fill("Stream a long response for scroll testing.");
   await page.getByRole("button", { name: "Send message" }).click();
@@ -3783,12 +3783,13 @@ test("assistant upgrade scrolls between earliest and latest messages without ove
   }
   const distanceFromBottom = () => chatScroll.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight);
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
-  const scrollToEarliest = page.getByRole("button", { name: "Scroll to earliest message" });
-  await expect(scrollToEarliest).toBeEnabled();
-  expect((await scrollToEarliest.boundingBox())?.height).toBeGreaterThanOrEqual(44);
-  await scrollToEarliest.click();
-  await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBe(0);
-  await expect(scrollToEarliest).toHaveCount(0);
+  const scrollToTurn = page.getByRole("button", { name: "Scroll to start of current turn" });
+  await expect(scrollToTurn).toBeEnabled();
+  expect((await scrollToTurn.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await scrollToTurn.click();
+  await expect.poll(() => chatScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(24);
+  await expect.poll(() => page.locator(".chat-message.assistant").last().evaluate((element) =>
+    Math.abs(element.getBoundingClientRect().top - document.querySelector(".chat-scroll")!.getBoundingClientRect().top))).toBeLessThan(40);
   await expect(page.getByRole("button", { name: "Scroll to latest message" })).toBeEnabled();
   await chatScroll.evaluate((element) => element.dispatchEvent(new WheelEvent("wheel", { deltaY: -500, bubbles: true })));
   await page.waitForTimeout(50);
@@ -3803,7 +3804,13 @@ test("assistant upgrade scrolls between earliest and latest messages without ove
 
   await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0, { timeout: 10_000 });
   await expect.poll(distanceFromBottom).toBeLessThanOrEqual(2);
+  await expect.poll(async () => {
+    const before = await chatScroll.evaluate((element) => element.scrollTop);
+    await page.waitForTimeout(120);
+    return Math.abs((await chatScroll.evaluate((element) => element.scrollTop)) - before);
+  }).toBeLessThanOrEqual(2);
 
+  await chatScroll.evaluate((element) => element.dispatchEvent(new WheelEvent("wheel", { deltaY: -500, bubbles: true })));
   if (testInfo.project.name.startsWith("mobile-webkit")) {
     await chatScroll.evaluate((element) => { element.scrollTop -= 500; });
   } else {
@@ -3813,6 +3820,7 @@ test("assistant upgrade scrolls between earliest and latest messages without ove
   const readerPosition = await chatScroll.evaluate((element) => element.scrollTop);
   await page.waitForTimeout(300);
   expect(await chatScroll.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(readerPosition + 2);
+
 });
 
 test("assistant follow-up queue delegates ordered provider messages to Core", async ({ page }, testInfo) => {
@@ -7461,10 +7469,19 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
   expect(geometry.footerPaddingInline).toBeGreaterThanOrEqual(12);
   const accessibility = await new AxeBuilder({ page }).include(".activity-ledger").analyze();
   expect(accessibility.violations).toEqual([]);
+  const chatScrollBefore = await page.locator(".chat-scroll").evaluate(element => element.scrollTop);
   await showActivity.click();
   await expect(ledger.getByText(/36 actions/).first()).toBeVisible();
   await expect(ledger).not.toContainText("item upsert");
   await expect(ledger.locator(".activity-ledger-audit > ol > li")).toHaveCount(36);
+  const audit = ledger.locator(".activity-ledger-audit");
+  await expect.poll(async () => audit.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(2);
+  const auditGeometry = await audit.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight }));
+  expect(auditGeometry.top).toBeGreaterThan(0);
+  expect(auditGeometry.height).toBeLessThanOrEqual(440);
+  expect(await page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBeGreaterThanOrEqual(chatScrollBefore - 2);
+  expect(await audit.locator("ol > li").first().innerText()).toContain("Saved bounded record 1.");
+  expect(await audit.locator("ol > li").last().innerText()).toContain("Saved bounded record 36.");
   await expect(ledger.locator(".activity-ledger-audit")).toHaveCSS("padding-left", "12px");
   await expect(ledger.locator(".activity-ledger-audit")).toHaveCSS("padding-right", "12px");
   expect(activityLoads).toBe(1);
@@ -7926,7 +7943,7 @@ test("completed harness output keeps live commentary in expandable work detail",
   const ledger = page.getByRole("region", { name: "Work summary" });
   await expect(ledger).toBeVisible();
   await expect(ledger).toContainText("Running");
-  await expect(ledger).toContainText("1 update");
+  await expect(ledger).toContainText("Work in progress");
   await expect(page.getByLabel("Assistant commentary")).toHaveCount(0);
   await ledger.getByRole("button", { name: "Show activity" }).click();
   await ledger.locator(".activity-ledger-audit summary").filter({ hasText: "I’ve mapped the workspace." }).click();
@@ -11582,7 +11599,7 @@ test("stabilization Results opens one detail inspector and returns focus when it
   await expect(page.getByRole("tab", { name: "Raw" })).toBeFocused();
 });
 
-test("stabilization Results shows the assistant's snapshots beside the conversation", async ({ page }) => {
+test("stabilization legacy visuals link opens Project Snapshot", async ({ page }) => {
   await installPublishedResults(page);
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -11594,27 +11611,15 @@ test("stabilization Results shows the assistant's snapshots beside the conversat
       await route.fulfill({ json: null });
     } else await route.fallback();
   });
-  // A link saved when the Agent view was a details tab opens it floating over
-  // the conversation instead; the details drawer stays closed.
   await page.goto("/?view=chat&session=results-chat&drawer=visuals");
 
-  const panel = page.getByRole("dialog", { name: "Agent view" });
-  await expect(panel.getByRole("heading", { name: "Agent view" })).toBeVisible();
+  const panel = page.getByRole("dialog", { name: "Project Snapshot" });
+  await expect(panel.getByRole("region", { name: "Project summary" })).toBeVisible();
   await expect(page).not.toHaveURL(/drawer=/);
   await expect(page.getByRole("button", { name: "Close details" })).toHaveCount(0);
-  await expect(panel.getByRole("button", { name: /2\. Mapped the call graph/ })).toBeVisible();
-
-  // The newest snapshot opens by itself, explored by the same dashboard.
-  await expect(panel.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
-  await expect(panel.getByRole("button", { name: /^callers/ })).toBeVisible();
-
-  // An earlier step stays open once it is chosen, and code reads as a block.
-  await panel.getByRole("button", { name: /1\. Read the handler/ }).click();
-  await expect(panel.locator(".structured-block-language")).toHaveText("python");
-  await expect(panel.getByText("def login(request):")).toBeVisible();
-
-  // The conversation is never the only way in.
-  await expect(panel.getByRole("link", { name: /Open in Results/ })).toHaveAttribute("href", "/projects/scratch-project/results/snapshot-1");
+  await expect(panel.getByRole("link", { name: "Open dashboard" })).toHaveAttribute("href", "/projects/scratch-project");
+  await expect(panel.getByText("Nothing published yet")).toHaveCount(0);
+  await expect(panel.getByRole("tab", { name: "Overview" })).toHaveCount(0);
 });
 
 test("stabilization goal mode keeps the panel and its actions on Core's revision", async ({ page }) => {
@@ -12275,11 +12280,7 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
   expect(accessibility.violations).toEqual([]);
 });
 
-test("stabilization the result explorer stays readable in the narrowest Agent view", async ({ page }) => {
-  // The Agent view can shrink far below the window, so a viewport media query
-  // never matches it. A name column with a fixed floor left the value nothing
-  // to wrap in and its text rendered one character per line.
-  await installPublishedResults(page);
+test("stabilization Project Snapshot keeps dashboard totals readable at its minimum width", async ({ page }) => {
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith("/chat-sessions")) {
@@ -12291,42 +12292,19 @@ test("stabilization the result explorer stays readable in the narrowest Agent vi
     } else await route.fallback();
   });
   await page.goto("/?view=chat&session=results-chat");
-  await page.getByRole("button", { name: /^Agent view/ }).click();
-  const panel = page.getByRole("dialog", { name: "Agent view" });
-  await expect(panel).toBeVisible();
-  // Shrink it to its minimum width; a phone shows a sheet that is already narrow.
-  const resize = panel.getByRole("button", { name: "Resize Agent view" });
+  await page.getByRole("button", { name: "Project Snapshot", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "Project Snapshot" });
+  const resize = panel.getByRole("button", { name: "Resize Project Snapshot" });
   if (await resize.count()) {
     await resize.focus();
     for (let step = 0; step < 8; step += 1) await page.keyboard.press("ArrowLeft");
     expect(Math.round((await panel.boundingBox())?.width ?? 0)).toBe(360);
   }
-  await panel.getByRole("button", { name: /Verdict snapshot/ }).click();
-
-  // Every value keeps a usable measure: one character per line means zero.
-  const values = panel.locator(".structured-property .structured-value");
-  await expect(values.first()).toBeVisible();
-  for (const box of await values.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width))) {
-    expect(box).toBeGreaterThan(80);
-  }
-
-  // The long prose wraps as words, so its row stays close to the text height.
-  const rationale = panel.locator(".structured-property", { hasText: "rationale" }).first();
-  const height = (await rationale.boundingBox())?.height ?? 0;
-  expect(height).toBeLessThan(160);
-
-  // The tree and the inspector share the same column and hold their measure.
-  await panel.getByRole("tab", { name: "Tree" }).click();
-  const treeValue = panel.locator(".structured-tree-value").first();
-  expect((await treeValue.boundingBox())?.width ?? 0).toBeGreaterThan(24);
-
-  await panel.getByRole("tab", { name: "Overview" }).click();
-  await panel.getByRole("button", { name: /^Inspect / }).first().click();
-  const path = panel.locator(".structured-inspector code").first();
-  expect((await path.boundingBox())?.width ?? 0).toBeGreaterThan(24);
-
-  const accessibility = await new AxeBuilder({ page }).include(".agent-view-panel").analyze();
-  expect(accessibility.violations).toEqual([]);
+  const metrics = panel.getByRole("region", { name: "Project summary" });
+  await expect(metrics).toContainText("Assets");
+  await expect(metrics).toContainText("Findings");
+  expect(await metrics.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  expect((await new AxeBuilder({ page }).include(".project-snapshot-panel").analyze()).violations).toEqual([]);
 });
 
 test("stabilization conversation details lead with working context and stop repeating settings", async ({ page }) => {
@@ -12607,7 +12585,7 @@ test("working context panel explains a partial summary and shows the assistant's
   await expectWorkingContextUsable(page, drawer, phone);
 });
 
-test("stabilization the Agent view floats over the conversation, minimizes and has no dock", async ({ page }, testInfo) => {
+test("stabilization Project Snapshot floats over chat and minimizes", async ({ page }, testInfo) => {
   await installReasoningProvider(page);
   await installPublishedResults(page);
   await page.route("**/api/v1/**", async route => {
@@ -12623,63 +12601,51 @@ test("stabilization the Agent view floats over the conversation, minimizes and h
   await page.goto("/?view=chat&session=results-chat");
   const phone = (page.viewportSize()?.width ?? 1440) <= 760;
 
-  // The composer's Agent view button opens it over the conversation.
-  const opener = page.getByRole("button", { name: /^Agent view/ });
+  const opener = page.getByRole("button", { name: "Project Snapshot", exact: true });
   await opener.click();
-  const view = page.getByRole("dialog", { name: "Agent view" });
+  const view = page.getByRole("dialog", { name: "Project Snapshot" });
   await expect(view).toBeVisible();
   await expect(view).toBeFocused();
   await expect(opener).toHaveAttribute("aria-expanded", "true");
-  await expect(view.getByText("Following newest · 3 snapshots")).toBeVisible();
-  await expect(view.getByRole("button", { name: /2\. Mapped the call graph/ })).toBeVisible();
-  await expect(view.getByRole("link", { name: /Open in Results/ })).toHaveAttribute("href", "/projects/scratch-project/results/snapshot-2");
+  await expect(view.getByRole("region", { name: "Project summary" })).toBeVisible();
+  await expect(view.getByRole("link", { name: "Open dashboard" })).toHaveAttribute("href", "/projects/scratch-project");
+  await expect(view).not.toContainText("Following newest");
 
-  // It is not modal: the operator keeps writing underneath it.
   const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
   await composer.fill("Keep going on the handler");
   await expect(composer).toHaveValue("Keep going on the handler");
-
-  const accessibility = await new AxeBuilder({ page }).include(".agent-view-panel").analyze();
-  expect(accessibility.violations).toEqual([]);
+  expect((await new AxeBuilder({ page }).include(".project-snapshot-panel").analyze()).violations).toEqual([]);
 
   if (phone) {
-    // A phone has no room to float beside the conversation: it is a sheet.
     await expect(view).toHaveClass(/sheet/);
-    await view.getByRole("button", { name: "Minimize Agent view" }).click();
-    await expect(page.getByRole("button", { name: /^Show Agent view/ })).toBeFocused();
-    await page.getByRole("button", { name: /^Show Agent view/ }).click();
+    await view.getByRole("button", { name: "Minimize Project Snapshot" }).click();
+    await expect(page.getByRole("button", { name: /^Show Project Snapshot/ })).toBeFocused();
+    await page.getByRole("button", { name: /^Show Project Snapshot/ }).click();
     await expect(view).toBeVisible();
-    await view.getByRole("button", { name: "Close Agent view" }).click();
+    await view.getByRole("button", { name: "Close Project Snapshot" }).click();
     await expect(view).toBeHidden();
     await expect(opener).toBeFocused();
     return;
   }
   testInfo.annotations.push({ type: "layout", description: "floating" });
-
-  // It moves from the keyboard as well as by its grip.
   const before = await view.boundingBox();
-  await view.getByRole("button", { name: "Move Agent view" }).focus();
+  await view.getByRole("button", { name: "Move Project Snapshot" }).focus();
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("ArrowLeft");
   const moved = await view.boundingBox();
   expect(Math.round((before?.x ?? 0) - (moved?.x ?? 0))).toBe(48);
 
-  // Minimized, it waits as a launcher and comes back exactly where it was.
   await page.keyboard.press("Escape");
   await expect(view).toBeHidden();
-  const show = page.getByRole("button", { name: /^Show Agent view/ });
+  const show = page.getByRole("button", { name: /^Show Project Snapshot/ });
   await expect(show).toBeFocused();
   await show.click();
   await expect(view).toBeVisible();
   expect(Math.round((await view.boundingBox())?.x ?? 0)).toBe(Math.round(moved?.x ?? 0));
-
-  // It lives over the conversation only: nothing moves it into the details,
-  // whose tabs no longer include an Agent view.
-  await expect(view.getByRole("button", { name: "Dock in conversation details" })).toHaveCount(0);
   await page.getByRole("button", { name: "Show session details" }).click();
   await expect(page.getByRole("navigation", { name: "Conversation detail views" }).getByRole("button")).toHaveText(["Context", "Results", "Subagents"]);
   await page.getByRole("button", { name: "Close details" }).click();
-  await view.getByRole("button", { name: "Close Agent view" }).click();
+  await view.getByRole("button", { name: "Close Project Snapshot" }).click();
   await expect(view).toBeHidden();
   await expect(opener).toBeFocused();
 });

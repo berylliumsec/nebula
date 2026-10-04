@@ -458,7 +458,8 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .activity-ledger-footer > button:hover { color: var(--text-strong); }
 .activity-ledger-footer > button:focus-visible { border-radius: var(--radius-control); outline: 2px solid var(--blue); outline-offset: 2px; }
 .activity-ledger-footer > button[aria-expanded="true"] svg { transform: rotate(180deg); }
-.activity-ledger-audit { min-width: 0; padding: 12px 12px 4px; border-top: 1px solid var(--border-soft); }
+.activity-ledger-audit { min-width: 0; max-height: min(55vh, 440px); padding: 12px 12px 4px; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid var(--border-soft); }
+.activity-ledger-audit:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .activity-ledger-audit > header { display: flex; align-items: baseline; justify-content: space-between; padding: 0 0 9px; }
 .activity-ledger-audit > header strong { font-size: 12px; }
 .activity-ledger-audit > header small { color: var(--muted); }
