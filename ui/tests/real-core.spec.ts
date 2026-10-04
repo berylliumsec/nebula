@@ -3239,13 +3239,13 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     await page.getByRole("button", {name: "Pair device"}).click();
     await expect(coreReady(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}`);
-    await expect(page.locator(".session-workspace > .chat-panel .chat-message.operator")).toContainText("Original research question");
+    await expect(page.locator(".session-workspace > .chat-studio > .chat-panel .chat-message.operator")).toContainText("Original research question");
     await page.getByRole("button", {name: "Open side chat", exact: true}).click();
     const side = page.getByRole("region", {name: "Side chat"});
     await expect(side).toBeVisible();
-    const parentPanel = page.locator(".session-workspace.side-chat-open > .chat-panel");
+    const parentPanel = page.locator(".session-workspace.side-chat-open > .chat-studio > .chat-panel");
     await expect(parentPanel).toBeVisible();
-    const widths = await page.locator(".session-workspace.side-chat-open > .chat-panel, .side-chat-pane").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
+    const widths = await page.locator(".session-workspace.side-chat-open > .chat-studio, .side-chat-pane").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
     expect(widths).toHaveLength(2);
     expect(Math.abs(widths[0] - widths[1])).toBeLessThanOrEqual(2);
     await expect(side.getByRole("button", {name: "Inherited history · 2 messages"})).toBeVisible();
@@ -3258,7 +3258,7 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     await side.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Independent follow-up");
     await side.getByRole("button", {name: "Send message", exact: true}).click();
     await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up", {timeout: 30_000});
-    await expect(page.locator(".session-workspace > .chat-panel")).not.toContainText("Independent follow-up");
+    await expect(page.locator(".session-workspace > .chat-studio > .chat-panel")).not.toContainText("Independent follow-up");
     const sessions = await (await api.get("chat-sessions")).json() as Array<{id: string; parent_session_id?: string; metadata?: Record<string, unknown>}>;
     expect(sessions.find(item => item.id === sideId)).toBeUndefined();
     const savedSide = await (await api.get(`chat-sessions/${sideId}`)).json() as {parent_session_id: string; metadata: Record<string, unknown>};
@@ -3279,7 +3279,7 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     await otherConversation.click();
     await expect(page).toHaveURL(new RegExp(`session=${other.session_id}`));
     await expect(page).not.toHaveURL(/sideChat=/);
-    await expect(page.locator(".session-workspace > .chat-panel .chat-message.operator")).toContainText("Other research question");
+    await expect(page.locator(".session-workspace > .chat-studio > .chat-panel .chat-message.operator")).toContainText("Other research question");
     await expect(side).toHaveCount(0);
     expect((await api.get(`chat-sessions/${sideId}`)).ok()).toBe(true);
     const retained = await (await api.get(`chat/sessions/${parent.session_id}/side-chats`)).json() as Array<{id: string}>;
@@ -3289,7 +3289,7 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     await expect(page).toHaveURL(new RegExp(`session=${other.session_id}`));
     await expect(page).not.toHaveURL(/sideChat=/);
     const parentConversation = page.locator(`.session-select[data-session-id="${parent.session_id}"]`);
-    await page.locator(".session-workspace > .chat-panel").waitFor();
+    await page.locator(".session-workspace > .chat-studio > .chat-panel").waitFor();
     if ((page.viewportSize()?.width ?? 1440) <= 760) await page.getByRole("button", {name: "Open conversations"}).click();
     else if (await page.getByRole("button", {name: "Show conversations"}).isVisible()) await page.getByRole("button", {name: "Show conversations"}).click();
     await parentConversation.waitFor({state: "visible"});
@@ -3297,7 +3297,7 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     await expect(side).toBeVisible({timeout: 20_000});
     await expect(page).toHaveURL(new RegExp(`session=${parent.session_id}.*sideChat=${sideId}`));
     await expect(side.locator(".chat-message.operator")).toContainText("Independent follow-up");
-    await expect(page.locator(".session-workspace > .chat-panel")).not.toContainText("Independent follow-up");
+    await expect(page.locator(".session-workspace > .chat-studio > .chat-panel")).not.toContainText("Independent follow-up");
     await page.reload();
     await expect(side).toBeVisible({timeout: 20_000});
     await expect(page).toHaveURL(new RegExp(`session=${parent.session_id}.*sideChat=${sideId}`));
