@@ -1,31 +1,30 @@
 {
-  "change_digest": "88e6ac249477421781cbbadbdd40ddf0a1cc364df548f6a2071207e9a4aaae13",
-  "reviewed_by": "Codex focused Codex public-progress review",
-  "reason": "The diff restores the newest public Codex commentary to the active work card, counts commentary separately from private reasoning, and labels absent public summaries accurately. Twenty-six component cases cover compact receipts, current progress and thinking disclosures. A new catalog entry selects three mocked Codex stream cases for the live work card. Twenty-four real-Core cases cover durable reasoning and commentary through refresh and reload in the permanent desktop and mobile profiles.",
-  "exclusions": "No Python runtime behavior or native code changed; the Python fixture is exercised by the selected real-Core browser journey. Other chat, provider, and harness suites do not exercise this presentation change. Browser mobile profiles are emulated; no physical device is available.",
+  "change_digest": "a328347c9f367ad8184fcbe4157acc8d3354e204635f82d189dfd844f0d39f9e",
+  "reviewed_by": "Codex focused chat toolbar review",
+  "reason": "The diff removes the redundant Add guidance focus button and keeps main and embedded side-chat composer controls in the same ordered row, with send controls visible at narrow widths. Eight mocked side-chat profiles check toolbar order and geometry through side-chat open, conversation switching, resize, and reload. Three mocked active-guidance profiles check that guidance still submits without the shortcut. Two real-Core profiles retain the durable side-chat create, reply, reload, and close journey.",
+  "exclusions": "No Python or native behavior changes, and no deterministic state transformation needs a unit test. Unrelated assistant, terminal, provider, and whole-suite tests are excluded. Browser mobile profiles are emulated; no physical device is available. No origin-sensitive browser API changed, so the selected production-origin browser journey is sufficient.",
   "expected_tests": {
     "python": 0,
-    "frontend": 26,
+    "frontend": 0,
     "native": 0,
-    "playwright": 27
+    "playwright": 13
   },
   "python": [],
-  "frontend": [
-    "ui/src/components/ActivityLedger.test.tsx",
-    "ui/src/components/HarnessThinking.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:codex-public-progress/desktop",
-    "entry:codex-public-progress/mobile-chromium-small",
-    "entry:codex-public-progress/mobile-webkit",
-    "entry:thinking-retention/model-desktop",
-    "entry:thinking-retention/model-compact",
-    "entry:thinking-retention/model-chromium-320",
-    "entry:thinking-retention/model-chromium-390",
-    "entry:thinking-retention/model-chromium-430",
-    "entry:thinking-retention/model-webkit-320",
-    "entry:thinking-retention/model-webkit-390",
-    "entry:thinking-retention/model-webkit-430"
+    "entry:chat-guidance-toolbar/desktop",
+    "entry:chat-guidance-toolbar/mobile-chromium-small",
+    "entry:chat-guidance-toolbar/mobile-webkit",
+    "entry:side-chat/desktop",
+    "entry:side-chat/compact",
+    "entry:side-chat/mobile-chromium-small",
+    "entry:side-chat/mobile-chromium-ledger-390",
+    "entry:side-chat/mobile-chromium-wide",
+    "entry:side-chat/mobile-webkit-small",
+    "entry:side-chat/mobile-webkit",
+    "entry:side-chat/mobile-webkit-wide",
+    "entry:side-chat/assistant-real-desktop",
+    "entry:side-chat/assistant-real-compact"
   ]
 }

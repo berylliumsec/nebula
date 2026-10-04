@@ -157,6 +157,11 @@
       {"area":"side-chat","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade side chat inherits Core history and replies independently after reload","runtime":"real-core","shard":"1/1"},
       {"area":"side-chat","project":"assistant-real-compact","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade side chat inherits Core history and replies independently after reload","runtime":"real-core","shard":"1/1"}
     ],
+    "chat-guidance-toolbar": [
+      {"area":"chat-guidance-toolbar","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant live guidance steers an active Codex turn with advertised steering capabilities","runtime":"mock","shard":"1/1"},
+      {"area":"chat-guidance-toolbar","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"assistant live guidance steers an active Codex turn with advertised steering capabilities","runtime":"mock","shard":"1/1"},
+      {"area":"chat-guidance-toolbar","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant live guidance steers an active Codex turn with advertised steering capabilities","runtime":"mock","shard":"1/1"}
+    ],
     "side-chat-active": [
       {"area":"side-chat-active","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade side chat opens during a running Core turn with its saved question","runtime":"real-core","shard":"1/1"},
       {"area":"side-chat-active","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade side chat opens during a running Core turn with its saved question","runtime":"real-core","shard":"1/1"},

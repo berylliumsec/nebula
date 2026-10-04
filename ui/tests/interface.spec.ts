@@ -4107,6 +4107,7 @@ test("assistant live guidance steers an active Codex turn with advertised steeri
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(page.getByText("Working on the original request.")).toBeVisible();
   await expect(composer).toHaveAttribute("placeholder", "Add guidance while the harness works…");
+  await expect(page.getByRole("button", { name: "Add guidance" })).toHaveCount(0);
   await composer.fill("Prioritize the parser first.");
   await composer.press("Enter");
   await expect.poll(() => guidance).toBe("Prioritize the parser first.");
@@ -4926,6 +4927,13 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
 
   await openWorkspace(page, `/?view=chat&session=${parent.id}`, "Workbench");
   await expect.poll(() => parentMessageLoads).toBeGreaterThan(0);
+  const toolbarOrder = async (selector: string) => page.locator(`${selector} .chat-composer-toolbar`).evaluate(toolbar =>
+    Array.from(toolbar.querySelectorAll<HTMLButtonElement>(".chat-composer-tools > button, .chat-composer-turn-actions > button"))
+      .map(button => button.getAttribute("aria-label") ?? "")
+      .filter(label => label.startsWith("Open context details") || ["Results", "Project Snapshot", "Attach files", "Send message"].includes(label))
+      .map(label => label.startsWith("Open context details") ? "Open context details" : label));
+  const expectedToolbarOrder = ["Open context details", "Results", "Project Snapshot", "Attach files", "Send message"];
+  await expect.poll(() => toolbarOrder(".session-workspace > .chat-studio > .chat-panel")).toEqual(expectedToolbarOrder);
   const parentLoadsBeforeFork = parentMessageLoads;
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   if (mobile) {
@@ -4947,6 +4955,29 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   await expect(page).toHaveURL(new RegExp(`session=${parent.id}.*sideChat=${side.id}`));
   const sidePane = page.getByRole("region", { name: "Side chat" });
   await expect(sidePane).toBeVisible();
+  await expect.poll(() => toolbarOrder("#workbench-side-chat")).toEqual(expectedToolbarOrder);
+  const sideToolbar = sidePane.locator(".chat-composer-toolbar");
+  const toolbarGeometry = async () => sideToolbar.evaluate(toolbar => {
+    const toolbarBox = toolbar.getBoundingClientRect();
+    const buttons = Array.from(toolbar.querySelectorAll<HTMLButtonElement>(".chat-composer-tools > button, .chat-composer-turn-actions > button"))
+      .filter(button => ["Results", "Project Snapshot", "Attach files", "Send message"].includes(button.getAttribute("aria-label") ?? "") || button.getAttribute("aria-label")?.startsWith("Open context details"))
+      .map(button => ({ label: button.getAttribute("aria-label"), box: button.getBoundingClientRect() }));
+    return { toolbar: { left: toolbarBox.left, right: toolbarBox.right }, buttons: buttons.map(({ label, box }) => ({ label, left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height })) };
+  });
+  const assertSideToolbarGeometry = async () => {
+    const geometry = await toolbarGeometry();
+    expect(geometry.buttons).toHaveLength(expectedToolbarOrder.length);
+    for (const [index, button] of geometry.buttons.entries()) {
+      expect(button.height).toBeGreaterThanOrEqual(44);
+      expect(button.left).toBeGreaterThanOrEqual(geometry.toolbar.left - 1);
+      expect(button.right).toBeLessThanOrEqual(geometry.toolbar.right + 1);
+      if (index) {
+        expect(button.left).toBeGreaterThanOrEqual(geometry.buttons[index - 1].right);
+        expect(Math.abs(button.top - geometry.buttons[0].top)).toBeLessThanOrEqual(1);
+      }
+    }
+  };
+  await assertSideToolbarGeometry();
   await expect(page.locator(`.session-select[data-session-id="${side.id}"]`)).toHaveCount(0);
   await expect(sidePane.getByRole("button", { name: "Inherited history · 2 messages" })).toBeVisible();
   await expect(sidePane.locator(".chat-message")).toHaveCount(0);
@@ -4980,7 +5011,7 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
     expect(discardAttempts).toBe(0);
   }
   const parentConversation = page.locator(`.session-select[data-session-id="${parent.id}"]`);
-  await page.locator(".session-workspace > .chat-panel").waitFor();
+  await page.locator(".session-workspace > .chat-studio > .chat-panel").waitFor();
   if (mobile) await page.getByRole("button", { name: "Open conversations" }).click();
   else if (!(await parentConversation.isVisible())) await page.getByRole("button", { name: "Show conversations" }).click();
   await parentConversation.waitFor({state: "visible"});
@@ -4989,12 +5020,14 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
   await expect(page).toHaveURL(new RegExp(`session=${parent.id}.*sideChat=${side.id}`));
   await expect(sidePane).toBeVisible();
   await expect(sideDraft).toHaveValue("Keep this side chat open");
+  await expect.poll(() => toolbarOrder("#workbench-side-chat")).toEqual(expectedToolbarOrder);
+  await assertSideToolbarGeometry();
   if ((page.viewportSize()?.width ?? 1440) > 760) {
     const resize = page.getByRole("separator", { name: "Resize side chat" });
     await expect(resize).toBeVisible();
-    await expect(page.locator(".session-workspace.side-chat-open > .chat-panel")).toBeVisible();
+    await expect(page.locator(".session-workspace.side-chat-open > .chat-studio > .chat-panel")).toBeVisible();
     if ((page.viewportSize()?.width ?? 1440) <= 1100) await expect(page.locator(".session-list")).toBeHidden();
-    const widths = async () => page.locator(".session-workspace.side-chat-open > .chat-panel, .side-chat-pane").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
+    const widths = async () => page.locator(".session-workspace.side-chat-open > .chat-studio, .side-chat-pane").evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().width)));
     const initial = await widths();
     expect(Math.abs(initial[0] - initial[1])).toBeLessThanOrEqual(2);
     await resize.focus();

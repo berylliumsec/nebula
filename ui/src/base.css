@@ -518,7 +518,6 @@ kbd { display: inline-flex; min-width: 20px; min-height: 19px; align-items: cent
 .chat-harness-progress strong { flex: 0 0 auto; color: var(--text-strong); font-size: 11px; }
 .chat-harness-progress small { min-width: 0; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .chat-harness-progress code { flex: 0 1 auto; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.chat-harness-progress > .harness-steer-button { min-width: max-content; min-height: 20px; align-self: center; padding-inline: 6px; font-size: 11px; white-space: nowrap; }
 .chat-harness-progress.phase-parallel_session_created { border-color: color-mix(in srgb, var(--blue) 42%, var(--border)); background: color-mix(in srgb, var(--blue-muted) 45%, var(--surface-muted)); }
 .chat-harness-progress.phase-waiting_approval { border-color: color-mix(in srgb, var(--yellow) 42%, var(--border)); }
 .chat-harness-progress.phase-failed, .chat-harness-progress.phase-status_unavailable { border-color: color-mix(in srgb, var(--red) 38%, var(--border)); background: var(--red-muted); }

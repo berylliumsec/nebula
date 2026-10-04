@@ -131,7 +131,6 @@ kbd,
 .chat-harness-progress strong,
 .chat-harness-progress small,
 .chat-harness-progress code,
-.chat-harness-progress > .harness-steer-button,
 .data-table th,
 .table-footer,
 .event-list small { font-size: var(--type-meta); line-height: var(--leading-ui); }
