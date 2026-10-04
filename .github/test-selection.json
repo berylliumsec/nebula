@@ -1,26 +1,21 @@
 {
-  "change_digest": "d29f93497b02ba686d5489fa58c54e457bde953ee27b8c044dffc0a9efbf009c",
-  "reviewed_by": "Codex focused Thinking and Project Snapshot review",
-  "reason": "The diff keeps completed Codex reasoning episodes visible without public summaries and makes Project Snapshot lead with the latest durable Work check-in linked to the current conversation, including a child Work project. One API case checks the indexed cross-project conversation filter. Twenty-one component cases cover Thinking transitions, Work selection, loading, live refresh, retry, links, and panel geometry. Eighteen browser cases cover Project Snapshot layout and its legacy opening link plus a real-Core child-project Work check-in, live update, reload, and saved Thinking across desktop Chromium, emulated Android Chromium at 390 px, and emulated iPhone WebKit at 390 px.",
-  "exclusions": "The selected Python API case is the only backend behavior changed; no unrelated Work or native tests are needed. The shared SessionsPage and stylesheet changes are limited to Project Snapshot; selected Project Snapshot and thinking journeys cover them without unrelated assistant or results tests. Mobile browser profiles are emulated; no physical device is available.",
+  "change_digest": "b4dc86af7d30ce04288f64544e2e11875538331efafd5dba582cc5c73daf1710",
+  "reviewed_by": "Codex README Assistant image review, 2026-10-04",
+  "reason": "The diff replaces only the README hero screenshot, alt text, and caption. The 1440x900 image was captured from the current production UI bundle against an isolated Core with an explicitly labeled sample conversation. No executable product behavior changes.",
+  "exclusions": "Zero Python, frontend, Playwright, and native tests apply to this documentation-only image replacement. Full suites and unrelated operator journeys are excluded. The desktop Chromium capture on loopback verifies the depicted UI only; it does not claim mobile, LAN, or physical-device feature validation.",
   "expected_tests": {
-    "python": 1,
-    "frontend": 21,
+    "python": 0,
+    "frontend": 0,
     "native": 0,
-    "playwright": 18
+    "playwright": 0
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
-  "python": ["tests/v3/test_work_snapshot_api.py"],
-  "frontend": ["ui/src/components/HarnessThinking.test.tsx", "ui/src/components/structured-result/ProjectSnapshotPanel.test.tsx"],
+  "python": [],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:thinking-retention/model-desktop",
-    "entry:thinking-retention/model-chromium-390",
-    "entry:thinking-retention/model-webkit-390",
-    "entry:project-snapshot/desktop",
-    "entry:project-snapshot/mobile-chromium-ledger-390",
-    "entry:project-snapshot/mobile-webkit"
-  ]
+  "playwright": []
 }
