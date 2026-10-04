@@ -714,6 +714,18 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
   const activityLedger = activityLedgerBase && message.elapsedMs !== undefined
     ? { ...activityLedgerBase, durationMs: message.elapsedMs }
     : activityLedgerBase;
+  // Codex's public commentary is distinct from its private reasoning items.
+  // Keep the latest operator-readable update visible while the turn runs.
+  let latestHarnessCommentary: string | undefined;
+  for (let index = messageActivityItems.length - 1; index >= 0; index--) {
+    const commentary = messageActivityItems[index].streams.commentary?.trim();
+    if (commentary) {
+      // A single commentary item can contain prose followed by a code fence.
+      // Preview its opening prose; the full item remains in activity.
+      latestHarnessCommentary = latestProgressPreview(commentary.split(/\r?\n\s*\r?\n/)[0] || commentary);
+      break;
+    }
+  }
   return (
   <article
     className={`chat-message ${message.role === "user" ? "operator" : agentMessage ? "agent-message" : "assistant"}${editing ? " editing" : ""}${pendingReplacement ? " pending-replacement" : ""}`}
@@ -769,6 +781,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       {historicalState === "failed" && historicalError && <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Saved work details could not be loaded; the answer remains available." compact /><button className="button quiet" type="button" onClick={() => void actions.loadHistoricalHarnessActivity(message)}>Retry work details</button></div>}
       {message.role === "assistant" && activityLedger && <ActivityLedger
         compact
+        latestUpdate={latestHarnessCommentary}
         progress={progressContent ? {
           headline: message.state === "streaming" ? waitingLabel ?? activityLedger.currentAction ?? "Working on your request" : undefined,
           latest: message.state === "streaming" ? latestProgressPreview(progressContent) : undefined,

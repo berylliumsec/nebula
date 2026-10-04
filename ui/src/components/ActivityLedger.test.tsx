@@ -167,7 +167,7 @@ it("keeps saved thinking discoverable even when a completed turn used no tools",
   expect(screen.getByText("Saved thinking episode")).toBeVisible();
 });
 
-it("keeps commentary-only completed work behind one disclosure", async () => {
+it("counts public commentary separately and keeps its full text behind one disclosure", async () => {
   const commentary = { streams: { commentary: "The full saved update." } } as unknown as HarnessActivityItem;
   render(<ActivityLedger
     compact
@@ -181,13 +181,35 @@ it("keeps commentary-only completed work behind one disclosure", async () => {
   />);
   const ledger = screen.getByRole("region", { name: "Work summary" });
   expect(ledger).toHaveTextContent("Completed");
-  expect(ledger).not.toHaveTextContent("1 update");
+  expect(ledger).toHaveTextContent("1 update");
   expect(ledger).not.toHaveTextContent("thinking episode");
   expect(within(ledger).queryByText("The full saved update.")).toBeNull();
   await userEvent.click(within(ledger).getByRole("button", { name: "Show activity" }));
   expect(ledger).toHaveTextContent("1 update");
   await userEvent.click(within(ledger).getByText("Review sources"));
   expect(within(ledger).getByText("The full saved update.")).toBeVisible();
+});
+
+it("shows the latest public Codex update while private reasoning has no summary", async () => {
+  const commentary = { streams: { commentary: "Checked the adapter and found the missing summary." } } as unknown as HarnessActivityItem;
+  const privateReasoning = { streams: {}, payload: { reasoning_summary_state: "not_provided" } } as unknown as HarnessActivityItem;
+  const base = model().entries[0];
+  const live = model({
+    currentAction: "Waiting for delegated agents",
+    actionCount: 0,
+    entries: [
+      { ...base, id: "reasoning", kind: "reasoning", status: "complete", countsAsAction: false, sourceItem: privateReasoning },
+      { ...base, id: "commentary", kind: "reasoning", status: "active", countsAsAction: false, sourceItem: commentary },
+    ],
+  });
+  const { rerender } = render(<ActivityLedger compact model={live} latestUpdate="Checked the adapter and found the missing summary." />);
+  const ledger = screen.getByRole("region", { name: "Work summary" });
+  expect(within(ledger).getByText("Checked the adapter and found the missing summary.")).toBeVisible();
+  expect(ledger).toHaveTextContent("1 update");
+  expect(ledger).not.toHaveTextContent("2 updates");
+  rerender(<ActivityLedger compact model={{ ...live, status: "complete" }} latestUpdate="Checked the adapter and found the missing summary." />);
+  expect(within(ledger).queryByText("Checked the adapter and found the missing summary.")).toBeNull();
+  expect(ledger).toHaveTextContent("1 update");
 });
 
 it("shows one compact running state without the raw activity step count", () => {

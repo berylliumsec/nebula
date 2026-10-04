@@ -48,7 +48,7 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
       const thinking = page.getByLabel("Harness thinking");
       await expect(thinking).toBeVisible();
       await thinking.locator("summary").click();
-      await expect(thinking.getByText("No thinking summary was provided for one completed update.")).toBeVisible();
+      await expect(thinking.getByText(`${vendor === "codex_app_server" ? "Codex" : "The harness"} did not provide a public summary for one reasoning episode.`)).toBeVisible();
       const historical = rows.filter({has: page.getByText("Historical saved text…[truncated]", {exact: true})});
       await historical.locator(".activity-ledger-entry-content > details > summary").click();
       await expect(historical.getByText("This saved thinking text was shortened. The omitted text is unavailable.", {exact: true})).toBeVisible();
@@ -88,12 +88,16 @@ test("codex_app_server thinking episodes remain visible without public summaries
 
   const openThinking = async () => {
     await expect(page.getByText("Saved answer with no public thinking summary.")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Work summary" })).toContainText("1 update");
     await page.getByRole("button", { name: "Show activity", exact: true }).click();
     const thinking = page.getByLabel("Harness thinking");
     await expect(thinking.locator("summary")).toBeVisible();
     await expect(thinking.locator("summary")).toHaveText("Thinking");
     await thinking.locator("summary").click();
-    await expect(thinking.getByText("No thinking summary was provided for one completed update.")).toBeVisible();
+    await expect(thinking.getByText("Codex did not provide a public summary for one reasoning episode.")).toBeVisible();
+    const commentary = page.getByRole("region", { name: "Work summary" }).locator(".activity-ledger-entry-content details", { hasText: "Checked the public result while Codex kept reasoning private." });
+    await commentary.locator(":scope > summary").click();
+    await expect(commentary).toContainText("Checked the public result while Codex kept reasoning private.");
   };
 
   await page.goto("/projects/thinking-project/workbench?view=chat&session=codex-no-summary-chat");
