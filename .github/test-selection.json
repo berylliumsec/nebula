@@ -1,5 +1,5 @@
 {
-  "change_digest": "ba013c70c3a864b44b1bdcdc2afc0482bd01a24b9a9e5c0e8484b345dd5cdba3",
+  "change_digest": "88eb6678eae9ea013c1789ef44fd4aa3db69b3fc7b50e2e4e82dc0fbfe8e2ec9",
   "reviewed_by": "Codex focused activity and Project Snapshot review",
   "reason": "The diff changes activity ordering/scrolling and the current-turn jump, replaces the chat Agent view with Core-owned project dashboard totals, and removes goal snapshot prompt/tool injection. Eighteen structured-results Python cases verify API and goal tool boundaries; 33 component cases cover the ledger, dashboard cards and floating snapshot; 38 catalogued browser cases exercise those visible journeys across desktop Chromium and emulated Android Chromium/iPhone WebKit widths.",
   "exclusions": "No native code changed. Unrelated chat, results explorer, and backend suites are excluded after review of the shared chat route and Playwright catalog. The selected Python file covers the removed model injection plus durable Results API. Mobile browser profiles are emulated; no physical device is available.",
