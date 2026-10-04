@@ -43,6 +43,8 @@ describe("ActivityLedger", () => {
       details: <><p>First update from the provider.</p><p>Recording the decision and dispatching work.</p></>,
     }} />);
     const ledger = screen.getByRole("region", { name: "Work summary" });
+    expect(within(ledger).getByText("Current run")).toBeVisible();
+    expect(within(ledger).getByText("Waiting")).toBeVisible();
     expect(within(ledger).getByText("Waiting for delegated work")).toBeVisible();
     expect(within(ledger).getByText("Recording the decision and dispatching work.")).toBeVisible();
     expect(within(ledger).queryByText("First update from the provider.")).toBeNull();
@@ -215,8 +217,9 @@ it("shows the latest public Codex update while private reasoning has no summary"
 it("shows one compact running state without the raw activity step count", () => {
   render(<ActivityLedger compact model={model({ durationMs: 74_000 })} />);
   const ledger = screen.getByRole("region", { name: "Work summary" });
-  expect(within(ledger).getByText("Running", { selector: ".activity-ledger-compact-header strong" })).toBeVisible();
-  expect(within(ledger).getByText("1m 14s")).toBeVisible();
+  expect(within(ledger).getByText("Current run", { selector: ".activity-ledger-compact-header strong" })).toBeVisible();
+  expect(ledger.querySelector(".activity-ledger-compact-state")).toHaveTextContent("Running");
+  expect(ledger.querySelector(".activity-ledger-compact-duration")).toHaveTextContent("1m 14s");
   expect(within(ledger).getByText("Saving verified findings.")).toBeVisible();
   expect(ledger).toHaveTextContent("Work in progress · 2 actions");
   expect(ledger).not.toHaveTextContent("activity step");

@@ -11,7 +11,7 @@ describe("ThinkingDisclosure", () => {
     expect(disclosure).toBeInTheDocument();
     expect(disclosure).not.toHaveAttribute("open");
     expect(screen.queryByText("Private chain of thought.")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByText("Thinking"));
+    await userEvent.click(disclosure.querySelector("summary")!);
     expect(disclosure).toHaveAttribute("open");
     expect(screen.getByText("Private chain of thought.")).toBeVisible();
   });
@@ -32,7 +32,7 @@ describe("ThinkingDisclosure", () => {
     }]} />);
 
     expect(screen.queryByText("Deferred harness summary.")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByText("Thinking"));
+    await userEvent.click(screen.getByLabelText("Harness thinking").querySelector("summary")!);
     expect(screen.getByText("Deferred harness summary.")).toBeVisible();
   });
 
@@ -56,13 +56,14 @@ describe("ThinkingDisclosure", () => {
 
     rerender(<HarnessThinking items={[{ ...episode, status: "completed", sequence: 2, payload: { reasoning_summary_state: "not_provided" } }]} />);
     expect(thinking).toBeInTheDocument();
-    expect(screen.getByText("Thinking")).toBeVisible();
+    expect(thinking.querySelector("summary")).toHaveTextContent("Thinking · 1 update");
+    expect(thinking.querySelector("summary")).toHaveTextContent("No public summaries for completed updates");
     await userEvent.click(thinking.querySelector("summary")!);
     expect(screen.getByText("Codex did not provide a public summary for one reasoning episode.")).toBeVisible();
     expect(thinking.querySelector(".harness-thinking-list")).toBeNull();
   });
 
-  it("does not call missing private reasoning episodes readable updates", async () => {
+  it("counts reasoning episodes while stating that their public summaries are missing", async () => {
     const items: HarnessActivityItem[] = Array.from({ length: 349 }, (_, index) => ({
       assistantId: "assistant-1",
       key: `reasoning-${index}`,
@@ -78,8 +79,8 @@ describe("ThinkingDisclosure", () => {
     }));
     render(<HarnessThinking items={items} />);
     const thinking = screen.getByLabelText("Harness thinking");
-    expect(thinking.querySelector("summary")).toHaveTextContent("Thinking");
-    expect(thinking.querySelector("summary")).not.toHaveTextContent("updates");
+    expect(thinking.querySelector("summary")).toHaveTextContent("Thinking · 349 updates");
+    expect(thinking.querySelector("summary")).toHaveTextContent("No public summaries for completed updates");
     await userEvent.click(thinking.querySelector("summary")!);
     expect(screen.getByText("Codex did not provide public summaries for 349 reasoning episodes.")).toBeVisible();
   });
@@ -138,7 +139,7 @@ describe("ThinkingDisclosure", () => {
     }));
     render(<HarnessThinking items={items} />);
 
-    await userEvent.click(screen.getByText("Thinking"));
+    await userEvent.click(screen.getByLabelText("Harness thinking").querySelector("summary")!);
     expect(screen.getByText("Latest 8 of 12")).toBeVisible();
     expect(screen.queryByText("Checking step 1")).not.toBeInTheDocument();
     expect(screen.getByText("Checking step 12")).toBeVisible();

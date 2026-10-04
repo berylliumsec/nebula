@@ -49,16 +49,28 @@ it("counts streamed goal text incrementally with the same estimate as encoding i
 it("collapses goal controls while keeping the objective and progress visible", () => {
   render(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={{ ...draft, status: "running" }} onChange={vi.fn()} /></DialogProvider>);
   const collapse = screen.getByRole("button", { name: "Collapse goal controls" });
-  expect(screen.getByText("Inspect safely")).toBeVisible();
+  expect(document.querySelector(".chat-goal-heading strong")).toHaveTextContent("Inspect safely");
   expect(screen.getByText("step 0")).toBeVisible();
   expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
   expect(within(screen.getByRole("group", { name: "Set goal outcome" })).getByRole("button", { name: "Complete" })).toHaveClass("quiet");
   fireEvent.click(collapse);
   expect(screen.getByRole("button", { name: "Expand goal controls" })).toHaveAttribute("aria-expanded", "false");
-  expect(screen.getByText("Inspect safely")).toBeVisible();
+  expect(document.querySelector(".chat-goal-heading strong")).toHaveTextContent("Inspect safely");
   expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Expand goal controls" }));
   expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
+});
+
+it("reveals the full saved goal and evidence gates from the session rail", async () => {
+  const goal = { ...draft, status: "running" as const, objective: "Investigate a long indexed-store memory-safety hypothesis", completionCriteria: ["Prove the writer reaches the store", "Verify the buffer capacity"], plan: ["Bind the writer", "Check the store"] };
+  const view = render(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={goal} onChange={vi.fn()} /></DialogProvider>);
+  const details = screen.getByText("Objective and completion criteria").closest("details")!;
+  expect(details).not.toHaveAttribute("open");
+  view.rerender(<DialogProvider><ProviderGoalPanel api={{} as ApiClient} sessionId="session" goal={goal} showFullGoal onChange={vi.fn()} /></DialogProvider>);
+  await waitFor(() => expect(details).toHaveAttribute("open"));
+  expect(within(details).getByText(goal.objective)).toBeVisible();
+  expect(within(details).getByText("Prove the writer reaches the store")).toBeVisible();
+  expect(within(details).getByText("Check the store")).toBeVisible();
 });
 
 it("creates a durable draft from explicit objective and criteria", async () => {
