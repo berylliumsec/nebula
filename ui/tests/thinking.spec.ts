@@ -45,6 +45,10 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
       await expect(absent).toHaveCount(1);
       await absent.locator(".activity-ledger-entry-content > details > summary").click();
       await expect(absent.getByText("No thinking summary was provided by the harness.", {exact: true})).toBeVisible();
+      const thinking = page.getByLabel("Harness thinking");
+      await expect(thinking).toBeVisible();
+      await thinking.locator("summary").click();
+      await expect(thinking.getByText("No thinking summary was provided for one completed update.")).toBeVisible();
       const historical = rows.filter({has: page.getByText("Historical saved text…[truncated]", {exact: true})});
       await historical.locator(".activity-ledger-entry-content > details > summary").click();
       await expect(historical.getByText("This saved thinking text was shortened. The omitted text is unavailable.", {exact: true})).toBeVisible();
@@ -73,6 +77,47 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
     await openThinking();
   });
 }
+
+test("codex_app_server thinking episodes remain visible without public summaries after reload", async ({ page, request }, info) => {
+  const origin = `http://127.0.0.1:${new URL(String(info.project.use.baseURL)).port}`;
+  const pairing = await (await request.post(`${origin}/api/v1/auth/pairings`, { headers: { Authorization: "Bearer model-test-token" }, data: { name: "No-summary thinking test" } })).json();
+  await page.goto(`/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+  await page.getByLabel("Device name").fill("No-summary thinking test");
+  await page.getByRole("button", { name: "Pair device", exact: true }).click();
+  await expect(page.locator(".pairing-gate")).toHaveCount(0, { timeout: 20_000 });
+
+  const openThinking = async () => {
+    await expect(page.getByText("Saved answer with no public thinking summary.")).toBeVisible();
+    await page.getByRole("button", { name: "Show activity", exact: true }).click();
+    const thinking = page.getByLabel("Harness thinking");
+    await expect(thinking.locator("summary")).toBeVisible();
+    await expect(thinking.locator("summary")).toHaveText("Thinking");
+    await thinking.locator("summary").click();
+    await expect(thinking.getByText("No thinking summary was provided for one completed update.")).toBeVisible();
+  };
+
+  await page.goto("/projects/thinking-project/workbench?view=chat&session=codex-no-summary-chat");
+  await openThinking();
+  const [item] = await (await request.get(`${origin}/api/v1/engagements/thinking-child-project/work`, { headers: { Authorization: "Bearer model-test-token" } })).json();
+  const [currentUpdate] = await (await request.get(`${origin}/api/v1/engagements/thinking-child-project/work/${item.id}/updates`, { headers: { Authorization: "Bearer model-test-token" } })).json();
+  await page.getByRole("button", { name: "Project Snapshot", exact: true }).click();
+  const progress = page.getByRole("region", { name: "Current progress" });
+  await expect(progress).toContainText(currentUpdate.summary);
+  await expect(progress).toContainText(`Next: ${currentUpdate.next_step}`);
+  await expect(progress.getByRole("link", { name: "Open work item" })).toHaveAttribute("href", `/projects/thinking-child-project/work/${item.id}`);
+  await expect(progress.getByRole("link", { name: "Open conversation" })).toHaveAttribute("href", "/projects/thinking-project/workbench?view=chat&session=codex-no-summary-chat");
+  const newSummary = `The next task is now saved in Work (${info.project.name}).`;
+  const saved = await request.post(`${origin}/api/v1/engagements/thinking-child-project/work/${item.id}/updates`, {
+    headers: { Authorization: "Bearer model-test-token" },
+    data: { summary: newSummary, next_step: "Verify the remaining join.", status: "review" },
+  });
+  expect(saved.ok()).toBe(true);
+  await expect(progress).toContainText(newSummary);
+  await page.reload();
+  await openThinking();
+  await page.getByRole("button", { name: "Project Snapshot", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Current progress" })).toContainText(newSummary);
+});
 
 
 test("expanded review queue can scroll to its last action without clipping", async ({page, request}, info) => {

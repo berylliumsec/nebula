@@ -17,6 +17,7 @@ from nebula.v3.domain import (
     ChatMessage,
     ChatQueue,
 )
+from nebula.v3.work import WorkCheckIn, WorkCreate, WorkService
 
 with tempfile.TemporaryDirectory(prefix="nebula-thinking-") as directory:
     root = Path(directory)
@@ -202,6 +203,94 @@ with tempfile.TemporaryDirectory(prefix="nebula-thinking-") as directory:
                 "reasoning_summary_state": "available",
             },
         )
+
+    # Codex can finish every reasoning episode without exposing a public
+    # summary. Keep this separate from the mixed-summary fixture above.
+    no_summary_chat = store.create(
+        ChatSession(
+            id="codex-no-summary-chat",
+            engagement_id=project.id,
+            title="Codex no-summary thinking",
+            backend="harness",
+            harness_profile_id="codex_app_server",
+            harness_session_id="codex_app_server-session",
+            model="fixture",
+        )
+    )
+    no_summary_turn = store.create(
+        HarnessTurn(
+            id="codex-no-summary-turn",
+            engagement_id=project.id,
+            harness_session_id="codex_app_server-session",
+            origin="chat",
+            chat_session_id=no_summary_chat.id,
+            chat_turn_id="codex-no-summary-chat-turn",
+            status="complete",
+            prompt="Synthetic fixture",
+            response="Saved answer with no public thinking summary.",
+        )
+    )
+    store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=no_summary_chat.id,
+            sequence=1,
+            role="assistant",
+            content=no_summary_turn.response,
+            metadata={"harness_turn_id": no_summary_turn.id},
+        )
+    )
+    for status, state in [("running", "pending"), ("completed", "not_provided")]:
+        store.append_operation_event(
+            no_summary_turn.id,
+            "harness_turn",
+            project.id,
+            "harness.item_upsert",
+            {
+                "type": "item_upsert",
+                "vendor": "codex_app_server",
+                "harness_turn_id": no_summary_turn.id,
+                "item_id": "reasoning-without-summary",
+                "item_kind": "reasoning",
+                "item_status": status,
+                "title": "Reasoning",
+                "artifact_ids": [],
+                "payload": {"reasoning_summary_state": state},
+            },
+        )
+
+    # The agent's Work check-in can live in a child project while its chat
+    # remains in the parent, as in real project dashboard usage.
+    work_project = store.create(
+        Engagement(
+            id="thinking-child-project",
+            name="Child work project",
+            parent_engagement_id=project.id,
+        )
+    )
+    work = WorkService(store)
+    work_item = work.create(
+        work_project.id,
+        WorkCreate(
+            title="Project progress task",
+            status="in_progress",
+            source_kind="import",
+        ),
+        actor_id="fixture",
+    )
+    work.check_in(
+        work_project.id,
+        work_item.id,
+        WorkCheckIn(
+            summary="Stage: review. The current task is complete and the next step is ready.",
+            next_step="Review the next task and confirm the result.",
+            status="in_progress",
+        ),
+        actor_kind="agent",
+        actor_id=no_summary_chat.id,
+        source_session_id=no_summary_chat.id,
+        allow_parent_source_session=True,
+    )
 
     # Legacy cancellation has events and a user message, but no final assistant row.
     stopped = store.create(

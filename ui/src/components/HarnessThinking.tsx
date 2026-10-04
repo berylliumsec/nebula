@@ -41,7 +41,11 @@ export function ThinkingDisclosure({
 }
 
 export function HarnessThinking({ items }: { items: HarnessActivityItem[] }) {
-  const thoughts = items.filter((item) => reasoningSummaryText(item) || reasoningSummaryState(item) === "pending");
+  // Codex can report a reasoning episode without a public summary. Its
+  // completed state still belongs in the transcript after the pending flash.
+  const thoughts = items.filter((item) => reasoningSummaryState(item) !== undefined);
+  const readable = thoughts.filter((item) => reasoningSummaryText(item) || reasoningSummaryState(item) === "pending");
+  const withoutSummary = thoughts.length - readable.length;
   const [expanded, setExpanded] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const disclosureRef = useRef<HTMLDetailsElement>(null);
@@ -59,19 +63,22 @@ export function HarnessThinking({ items }: { items: HarnessActivityItem[] }) {
   }, [expanded]);
   if (!thoughts.length) return null;
   const active = thoughts.some((item) => ["running", "streaming", "pending"].includes(item.status ?? ""));
-  const visible = showAll ? thoughts : thoughts.slice(-8);
+  const visible = showAll ? readable : readable.slice(-8);
   return <details ref={disclosureRef} className="harness-thinking" aria-label="Harness thinking" onToggle={(event) => {
     setExpanded(event.currentTarget.open);
     if (!event.currentTarget.open) setShowAll(false);
   }}>
     <summary>{active ? "Thinking…" : "Thinking"}<span>{thoughts.length > 1 ? `${thoughts.length} updates` : ""}</span></summary>
     {expanded && <div className="harness-thinking-body">
-      {thoughts.length > 8 && !showAll && <p className="harness-thinking-count">Latest 8 of {thoughts.length}</p>}
-      <ol className="harness-thinking-list" aria-label="Thinking summaries">
+      {withoutSummary > 0 && <p className="harness-reasoning-note">{withoutSummary === 1
+        ? "No thinking summary was provided for one completed update."
+        : `No thinking summaries were provided for ${withoutSummary} completed updates.`}</p>}
+      {readable.length > 8 && !showAll && <p className="harness-thinking-count">Latest 8 of {readable.length}{withoutSummary ? " summaries" : ""}</p>}
+      {visible.length > 0 && <ol className="harness-thinking-list" aria-label="Thinking summaries">
         {visible.map((item) => <li key={item.key}><HarnessMarkdown content={reasoningSummaryText(item) || "Waiting for a summary from the harness…"} /></li>)}
-      </ol>
-      {thoughts.length > 8 && <button className="harness-thinking-more" type="button" onClick={() => setShowAll((value) => !value)}>
-        {showAll ? "Show latest 8" : `Show all ${thoughts.length}`}
+      </ol>}
+      {readable.length > 8 && <button className="harness-thinking-more" type="button" onClick={() => setShowAll((value) => !value)}>
+        {showAll ? "Show latest 8" : `Show all ${readable.length}`}
       </button>}
     </div>}
   </details>;

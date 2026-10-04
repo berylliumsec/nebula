@@ -36,6 +36,32 @@ describe("ThinkingDisclosure", () => {
     expect(screen.getByText("Deferred harness summary.")).toBeVisible();
   });
 
+  it("keeps Thinking after Codex completes an episode without a public summary", async () => {
+    const episode: HarnessActivityItem = {
+      assistantId: "assistant-1",
+      key: "reasoning-1",
+      type: "item_upsert",
+      kind: "reasoning",
+      vendor: "codex_app_server",
+      status: "running",
+      title: "Reasoning",
+      sequence: 1,
+      streams: {},
+      payload: { reasoning_summary_state: "pending" },
+      artifactIds: [],
+    };
+    const { rerender } = render(<HarnessThinking items={[episode]} />);
+    const thinking = screen.getByLabelText("Harness thinking");
+    expect(thinking).toHaveTextContent("Thinking…");
+
+    rerender(<HarnessThinking items={[{ ...episode, status: "completed", sequence: 2, payload: { reasoning_summary_state: "not_provided" } }]} />);
+    expect(thinking).toBeInTheDocument();
+    expect(screen.getByText("Thinking")).toBeVisible();
+    await userEvent.click(thinking.querySelector("summary")!);
+    expect(screen.getByText("No thinking summary was provided for one completed update.")).toBeVisible();
+    expect(thinking.querySelector(".harness-thinking-list")).toBeNull();
+  });
+
   it("does not render when the model returned no thoughts", () => {
     const { container } = render(<ThinkingDisclosure text="" />);
     expect(container).toBeEmptyDOMElement();
