@@ -4,6 +4,16 @@ export interface ChatScrollGeometry {
   clientHeight: number;
 }
 
+/** The active response starts at the latest assistant message, after older turns. */
+export function currentAgentTurnIndex(messages: ReadonlyArray<{role: string}>): number {
+  if (!messages.length) return -1;
+  if (messages[messages.length - 1].role === "user") return messages.length - 1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index].role === "assistant") return index;
+  }
+  return messages.length - 1;
+}
+
 /** Layout changes must not cancel the operator's intent to follow the transcript. */
 export function followsChatBottom(previous: ChatScrollGeometry | undefined, current: ChatScrollGeometry, following: boolean): boolean {
   if (current.scrollHeight - current.scrollTop - current.clientHeight <= 4) return true;

@@ -1,5 +1,5 @@
 import {expect, it} from "vitest";
-import {followsChatBottom} from "./chatScrollPosition";
+import {currentAgentTurnIndex, followsChatBottom} from "./chatScrollPosition";
 const bottom = {scrollTop: 600, scrollHeight: 1000, clientHeight: 400};
 it("keeps following when the final message grows after initial scrolling", () => {
   expect(followsChatBottom(bottom, {...bottom, scrollHeight: 1400}, true)).toBe(true);
@@ -23,4 +23,10 @@ it("keeps following when a status strip shrinks the viewport while a row is adde
   const before = {scrollTop: 3741, scrollHeight: 4151, clientHeight: 410};
   expect(followsChatBottom(before, {scrollTop: 3715, scrollHeight: 4329, clientHeight: 319}, true)).toBe(true);
   expect(followsChatBottom(before, {scrollTop: 3715, scrollHeight: 4329, clientHeight: 319}, false)).toBe(false);
+});
+it("jumps to the latest assistant response after older chat turns", () => {
+  expect(currentAgentTurnIndex([
+    {role: "user"}, {role: "assistant"}, {role: "user"}, {role: "assistant"},
+  ])).toBe(3);
+  expect(currentAgentTurnIndex([{role: "user"}, {role: "assistant"}, {role: "user"}])).toBe(2);
 });
