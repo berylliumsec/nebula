@@ -1589,7 +1589,8 @@ _STOP_WORDS = {
     "with",
 }
 
-_CHAT_BASE_INSTRUCTIONS = (
+_CHAT_ORIGIN_INSTRUCTION = "Nebula provider session. "
+_CHAT_BASE_INSTRUCTIONS = _CHAT_ORIGIN_INSTRUCTION + (
     "Answer the operator's request. Cite provided references with [source_id:chunk_id]."
 )
 
@@ -1618,11 +1619,14 @@ correctly. """
     + _CHAT_BASE_INSTRUCTIONS
 )
 
-_CHAT_FINAL_ANSWER_RECOVERY_INSTRUCTIONS = """Your previous response was not a
+_CHAT_FINAL_ANSWER_RECOVERY_INSTRUCTIONS = (
+    _CHAT_ORIGIN_INSTRUCTION
+    + """Your previous response was not a
 complete operator-facing answer. Return a concise natural-language answer using
 only the supplied messages and tool results. Tools are unavailable during this
 final synthesis. If a needed result is unavailable, say exactly what is missing
 instead of emitting a tool call, control frame, or protocol markup."""
+)
 
 _OUTPUT_LIMIT_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens"})
 
