@@ -1,6 +1,6 @@
 import { HarnessReasoningDetails } from "./HarnessReasoningDetails";
 import { ChevronDown } from "lucide-react";
-import { useId, useState, type ReactNode } from "react";
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   activityLedgerStatusLabel,
   type ActivityLedgerEntry,
@@ -81,7 +81,14 @@ export function ActivityLedger({
   };
 }) {
   const [expanded, setExpanded] = useState(false);
+  const auditRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
   const auditId = useId();
+  useLayoutEffect(() => {
+    if (expanded && followLatestRef.current && auditRef.current) {
+      auditRef.current.scrollTop = auditRef.current.scrollHeight;
+    }
+  }, [expanded, model.entries.length]);
   const active = model.status === "active" || model.status === "queued" || model.status === "attention";
   const attentionEntries = model.entries.filter((entry) => entry.status === "attention" || (!compact && entry.status === "failed"));
   const receipt = receiptParts(model);
@@ -152,6 +159,7 @@ export function ActivityLedger({
           aria-controls={auditId}
           onClick={() => setExpanded((value) => {
             const next = !value;
+            if (next) followLatestRef.current = true;
             onExpandedChange?.(next);
             return next;
           })}
@@ -161,11 +169,15 @@ export function ActivityLedger({
         </button>
       </footer>
 
-      {expanded && <div className="activity-ledger-audit" id={auditId}>
-        <header><strong>{progress ? "Work" : "Activity"}</strong>{model.entries.length > 0 && <small>{receipt.join(" · ")} · newest first</small>}</header>
+      {expanded && <div className="activity-ledger-audit" id={auditId} ref={auditRef} tabIndex={0}
+        onScroll={(event) => {
+          const element = event.currentTarget;
+          followLatestRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+        }}>
+        <header><strong>{progress ? "Work" : "Activity"}</strong>{model.entries.length > 0 && <small>{receipt.join(" · ")} · latest below</small>}</header>
         {progress && <div className="activity-ledger-progress-details">{progress.details}</div>}
         {model.entries.length > 0 ? <ol>
-          {model.entries.map((entry) => {
+          {[...model.entries].reverse().map((entry) => {
             const details = renderEntryDetails?.(entry);
             const actions = renderEntryActions?.(entry);
             const hasDetails = Boolean(details || entry.summary || entry.outputs.length || Object.keys(entry.payload).length || entry.usageLabel || actions);
