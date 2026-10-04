@@ -6364,6 +6364,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         {(view === "chat" || view === "browser") && projectSnapshot !== "closed" && engagement && <ProjectSnapshotPanel
           key={engagement.id}
           projectId={engagement.id}
+          sessionId={sessionId}
           minimized={projectSnapshot === "minimized"}
           onMinimize={() => setProjectSnapshot("minimized")}
           onRestore={() => setProjectSnapshot("floating")}

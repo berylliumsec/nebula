@@ -98,8 +98,25 @@ test("codex_app_server thinking episodes remain visible without public summaries
 
   await page.goto("/projects/thinking-project/workbench?view=chat&session=codex-no-summary-chat");
   await openThinking();
+  const [item] = await (await request.get(`${origin}/api/v1/engagements/thinking-child-project/work`, { headers: { Authorization: "Bearer model-test-token" } })).json();
+  const [currentUpdate] = await (await request.get(`${origin}/api/v1/engagements/thinking-child-project/work/${item.id}/updates`, { headers: { Authorization: "Bearer model-test-token" } })).json();
+  await page.getByRole("button", { name: "Project Snapshot", exact: true }).click();
+  const progress = page.getByRole("region", { name: "Current progress" });
+  await expect(progress).toContainText(currentUpdate.summary);
+  await expect(progress).toContainText(`Next: ${currentUpdate.next_step}`);
+  await expect(progress.getByRole("link", { name: "Open work item" })).toHaveAttribute("href", `/projects/thinking-child-project/work/${item.id}`);
+  await expect(progress.getByRole("link", { name: "Open conversation" })).toHaveAttribute("href", "/projects/thinking-project/workbench?view=chat&session=codex-no-summary-chat");
+  const newSummary = `The next task is now saved in Work (${info.project.name}).`;
+  const saved = await request.post(`${origin}/api/v1/engagements/thinking-child-project/work/${item.id}/updates`, {
+    headers: { Authorization: "Bearer model-test-token" },
+    data: { summary: newSummary, next_step: "Verify the remaining join.", status: "review" },
+  });
+  expect(saved.ok()).toBe(true);
+  await expect(progress).toContainText(newSummary);
   await page.reload();
   await openThinking();
+  await page.getByRole("button", { name: "Project Snapshot", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Current progress" })).toContainText(newSummary);
 });
 
 

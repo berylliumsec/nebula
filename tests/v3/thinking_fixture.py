@@ -17,6 +17,7 @@ from nebula.v3.domain import (
     ChatMessage,
     ChatQueue,
 )
+from nebula.v3.work import WorkCheckIn, WorkCreate, WorkService
 
 with tempfile.TemporaryDirectory(prefix="nebula-thinking-") as directory:
     root = Path(directory)
@@ -257,6 +258,35 @@ with tempfile.TemporaryDirectory(prefix="nebula-thinking-") as directory:
                 "payload": {"reasoning_summary_state": state},
             },
         )
+
+    # The agent's Work check-in can live in a child project while its chat
+    # remains in the parent, as in real project dashboard usage.
+    work_project = store.create(
+        Engagement(id="thinking-child-project", name="Child work project", parent_engagement_id=project.id)
+    )
+    work = WorkService(store)
+    work_item = work.create(
+        work_project.id,
+        WorkCreate(
+            title="Project progress task",
+            status="in_progress",
+            source_kind="import",
+        ),
+        actor_id="fixture",
+    )
+    work.check_in(
+        work_project.id,
+        work_item.id,
+        WorkCheckIn(
+            summary="Stage: review. The current task is complete and the next step is ready.",
+            next_step="Review the next task and confirm the result.",
+            status="in_progress",
+        ),
+        actor_kind="agent",
+        actor_id=no_summary_chat.id,
+        source_session_id=no_summary_chat.id,
+        allow_parent_source_session=True,
+    )
 
     # Legacy cancellation has events and a user message, but no final assistant row.
     stopped = store.create(

@@ -1,23 +1,26 @@
 {
-  "change_digest": "b69702ec375c1420456dab91fd6f04decca4f0a842e9468a025e0c93920d6ad1",
-  "reviewed_by": "Codex focused Thinking retention review",
-  "reason": "The diff keeps completed Codex reasoning episodes visible when the harness reports no public summary. Eight component cases cover the pending-to-completed transition, disclosure, loading and bounded summaries. Nine catalogued real-Core browser cases replay durable Grok and Codex activity through the chat UI and reload, including a turn with only no-summary episodes, on desktop Chromium, emulated Android Chromium at 390 px, and emulated iPhone WebKit at 390 px.",
-  "exclusions": "No production Python or native code changed. The Python fixture is executed by the selected real-Core browser cases, so a separate Python test is unnecessary. The broad assistant and studio-conversation impact areas are covered by the narrower thinking-retention journey; unrelated assistant and studio tests are excluded. Mobile browser profiles are emulated; no physical device is available.",
+  "change_digest": "377cdb38fd6b04ad344ec572d3466239ae37631913e1d6950359c0fbaeb24200",
+  "reviewed_by": "Codex focused Thinking and Project Snapshot review",
+  "reason": "The diff keeps completed Codex reasoning episodes visible without public summaries and makes Project Snapshot lead with the latest durable Work check-in linked to the current conversation, including a child Work project. One API case checks the indexed cross-project conversation filter. Twenty-one component cases cover Thinking transitions, Work selection, loading, live refresh, retry, links, and panel geometry. Fifteen browser cases cover Project Snapshot layout and a real-Core child-project Work check-in, live update, reload, and saved Thinking across desktop Chromium, emulated Android Chromium at 390 px, and emulated iPhone WebKit at 390 px.",
+  "exclusions": "The selected Python API case is the only backend behavior changed; no unrelated Work or native tests are needed. The shared SessionsPage and stylesheet changes are limited to Project Snapshot; selected Project Snapshot and thinking journeys cover them without unrelated assistant or results tests. Mobile browser profiles are emulated; no physical device is available.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 8,
+    "python": 1,
+    "frontend": 21,
     "native": 0,
-    "playwright": 9
+    "playwright": 15
   },
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": ["ui/src/components/HarnessThinking.test.tsx"],
+  "python": ["tests/v3/test_work_snapshot_api.py"],
+  "frontend": ["ui/src/components/HarnessThinking.test.tsx", "ui/src/components/structured-result/ProjectSnapshotPanel.test.tsx"],
   "native": [],
   "playwright": [
     "entry:thinking-retention/model-desktop",
     "entry:thinking-retention/model-chromium-390",
-    "entry:thinking-retention/model-webkit-390"
+    "entry:thinking-retention/model-webkit-390",
+    "entry:project-snapshot/desktop",
+    "entry:project-snapshot/mobile-chromium-ledger-390",
+    "entry:project-snapshot/mobile-webkit"
   ]
 }

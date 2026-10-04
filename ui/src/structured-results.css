@@ -195,6 +195,19 @@
 .project-snapshot-title h2 svg { color: var(--blue); }
 .project-snapshot-title small { overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .project-snapshot-scroll { display: grid; align-content: start; gap: 10px; min-height: 0; padding: 12px 14px; overflow: auto; overscroll-behavior: contain; }
+.project-snapshot-work { display: grid; gap: 9px; min-width: 0; padding-bottom: 14px; border-bottom: 1px solid var(--border-soft); }
+.project-snapshot-work-heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 10px; }
+.project-snapshot-work-heading strong { color: var(--text-strong); font-size: 14px; }
+.project-snapshot-work-heading time { color: var(--muted); font-size: 11px; }
+.project-snapshot-work-item { display: grid; gap: 2px; min-width: 0; }
+.project-snapshot-work-item strong { overflow-wrap: anywhere; font-size: 12px; }
+.project-snapshot-work-item small { color: var(--muted); font-size: 11px; }
+.project-snapshot-work p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.55; }
+.project-snapshot-work > small { color: var(--muted); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-snapshot-work > small.project-snapshot-blocker { color: var(--orange); }
+.project-snapshot-work-links { display: flex; flex-wrap: wrap; gap: 2px 14px; }
+.project-snapshot-work-links a { display: inline-flex; align-items: center; min-height: 44px; color: var(--blue); font-size: 12px; text-decoration: none; }
+.project-snapshot-work-state { color: var(--muted); font-size: 12px; }
 .project-snapshot-scroll .metric-grid { grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); margin: 0; }
 .project-snapshot-scroll .metric-card { min-height: 78px; border-right: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); }
 .project-snapshot-scroll .metric-card > div span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

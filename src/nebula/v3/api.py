@@ -7370,7 +7370,18 @@ def create_app(
     async def recent_work_updates(
         offset: int = Query(default=0, ge=0),
         limit: int = Query(default=100, ge=1, le=500),
+        source_session_id: str | None = Query(
+            default=None, min_length=1, max_length=200
+        ),
     ) -> list[WorkUpdate]:
+        if source_session_id is not None:
+            return store.find_entities(
+                WorkUpdate,
+                {"source_session_id": source_session_id},
+                offset=offset,
+                limit=limit,
+                newest_first=True,
+            )
         return store.list_entities(
             WorkUpdate, offset=offset, limit=limit, newest_first=True
         )

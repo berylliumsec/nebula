@@ -1,8 +1,8 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { createPortal } from "react-dom";
 import { ExternalLink, GripHorizontal, LayoutDashboard, Minimize2, MoveDiagonal2, X } from "lucide-react";
 import { Link } from "react-router-dom";
-import { projectRoot } from "../../resourceRoutes";
+import { projectRoot, projectSurface, resourcePath } from "../../resourceRoutes";
 import { ProjectSummaryCards } from "../ProjectSummaryCards";
 import { useWorkspace } from "../../state/WorkspaceContext";
 import { IconAction } from "../IconAction";
@@ -68,8 +68,48 @@ function pageClearance() {
 
 type Gesture = { kind: "move" | "resize"; pointerX: number; pointerY: number; start: ProjectSnapshotRect };
 
+type SnapshotWorkItem = {
+  id: string;
+  engagement_id: string;
+  title: string;
+  status: string;
+  priority: string;
+  assignee_session_id: string | null;
+  source_kind: string;
+  source_id: string | null;
+  last_update_at: string | null;
+};
+type SnapshotWorkUpdate = {
+  id: string;
+  engagement_id: string;
+  item_id: string;
+  summary: string;
+  next_step: string | null;
+  blocker: string | null;
+  created_at: string;
+  source_session_id: string | null;
+  source_engagement_id: string | null;
+};
+type CurrentWork = { item: SnapshotWorkItem; update: SnapshotWorkUpdate };
+
+function workStatusLabel(status: string): string {
+  const words = status.replaceAll("_", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Prefer the active conversation's saved work; otherwise show the newest active check-in. */
+export function currentSnapshotItem(items: SnapshotWorkItem[], sessionId?: string): SnapshotWorkItem | undefined {
+  const updated = items.filter((item) => item.last_update_at);
+  const assigned = sessionId ? updated.filter((item) => item.assignee_session_id === sessionId
+    || (item.source_kind === "chat" && item.source_id === sessionId)) : [];
+  const active = updated.filter((item) => item.status !== "done");
+  return [...(assigned.length ? assigned : active.length ? active : updated)]
+    .sort((left, right) => Date.parse(right.last_update_at!) - Date.parse(left.last_update_at!))[0];
+}
+
 export interface ProjectSnapshotPanelProps {
   projectId: string;
+  sessionId?: string;
   minimized: boolean;
   onMinimize: () => void;
   onRestore: () => void;
@@ -89,7 +129,7 @@ export function ProjectSnapshotPanel(props: ProjectSnapshotPanelProps) {
 }
 
 function FloatingProjectSnapshot({
-  projectId, onMinimize, onClose, rect, onRect, sheet,
+  projectId, sessionId, onMinimize, onClose, rect, onRect, sheet,
 }: ProjectSnapshotPanelProps & {
   rect: ProjectSnapshotRect;
   onRect: (rect: ProjectSnapshotRect) => void;
@@ -98,7 +138,56 @@ function FloatingProjectSnapshot({
   const titleId = useId();
   const panel = useRef<HTMLElement>(null);
   const gesture = useRef<Gesture | undefined>(undefined);
-  const { engagement, assets, findings, run, approvals } = useWorkspace();
+  const { api, engagement, assets, findings, run, approvals } = useWorkspace();
+  const [currentWork, setCurrentWork] = useState<CurrentWork | null>(null);
+  const [workLoading, setWorkLoading] = useState(true);
+  const [workError, setWorkError] = useState<string>();
+  const workReadSequence = useRef(0);
+  const loadWork = useCallback(async (signal?: AbortSignal) => {
+    const sequence = ++workReadSequence.current;
+    if (!api) { setWorkError("Core is unavailable."); setWorkLoading(false); return; }
+    try {
+      const linked = sessionId ? await api.request<SnapshotWorkUpdate[]>(`work/updates?source_session_id=${encodeURIComponent(sessionId)}&limit=1`, { signal }) : [];
+      let item: SnapshotWorkItem | undefined;
+      let workProjectId = projectId;
+      if (linked[0]) {
+        workProjectId = linked[0].engagement_id;
+        item = await api.request<SnapshotWorkItem>(`engagements/${encodeURIComponent(workProjectId)}/work/${encodeURIComponent(linked[0].item_id)}`, { signal });
+      } else {
+        const items = await api.request<SnapshotWorkItem[]>(`engagements/${encodeURIComponent(projectId)}/work`, { signal });
+        item = currentSnapshotItem(items, sessionId);
+      }
+      const updates = item ? await api.request<SnapshotWorkUpdate[]>(`engagements/${encodeURIComponent(workProjectId)}/work/${encodeURIComponent(item.id)}/updates`, { signal }) : [];
+      if (signal?.aborted || sequence !== workReadSequence.current) return;
+      setCurrentWork(item && updates[0] ? { item, update: updates[0] } : null);
+      setWorkError(undefined);
+    } catch (error) {
+      if (signal?.aborted || sequence !== workReadSequence.current) return;
+      setWorkError(error instanceof Error ? error.message : "Work progress could not be loaded.");
+    } finally {
+      if (!signal?.aborted && sequence === workReadSequence.current) setWorkLoading(false);
+    }
+  }, [api, projectId, sessionId]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setWorkLoading(true);
+    void loadWork(controller.signal);
+    if (!api) return () => controller.abort();
+    const follow = async () => {
+      while (!controller.signal.aborted) {
+        try {
+          await api.watchWorkChanges(() => void loadWork(controller.signal), () => void loadWork(controller.signal), controller.signal);
+        } catch { /* The saved summary remains readable while the event stream reconnects. */ }
+        if (controller.signal.aborted) break;
+        await new Promise<void>((resolve) => {
+          const timeout = window.setTimeout(resolve, 1_000);
+          controller.signal.addEventListener("abort", () => { window.clearTimeout(timeout); resolve(); }, { once: true });
+        });
+      }
+    };
+    void follow();
+    return () => { workReadSequence.current += 1; controller.abort(); };
+  }, [api, loadWork]);
 
   const place = (next: ProjectSnapshotRect, persist: boolean) => {
     const fitted = clampRect(next, currentViewport());
@@ -178,6 +267,17 @@ function FloatingProjectSnapshot({
     </div>
 
     <div className="project-snapshot-scroll">
+      <section className="project-snapshot-work" aria-label="Current progress">
+        <div className="project-snapshot-work-heading"><strong>Current progress</strong>{currentWork && <time dateTime={currentWork.update.created_at}>{new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(currentWork.update.created_at))}</time>}</div>
+        {currentWork ? <>
+          <div className="project-snapshot-work-item"><strong>{currentWork.item.title}</strong><small>{workStatusLabel(currentWork.item.status)} · {currentWork.item.priority} priority</small></div>
+          <p>{currentWork.update.summary}</p>
+          {currentWork.update.next_step && <small>Next: {currentWork.update.next_step}</small>}
+          {currentWork.update.blocker && <small className="project-snapshot-blocker">Blocked: {currentWork.update.blocker}</small>}
+          <div className="project-snapshot-work-links"><Link to={projectSurface(currentWork.item.engagement_id, "work", currentWork.item.id)}>Open work item</Link>{(sessionId ?? currentWork.update.source_session_id) && <Link to={resourcePath(sessionId ? projectId : currentWork.update.source_engagement_id ?? projectId, "conversation", (sessionId ?? currentWork.update.source_session_id)!)}>Open conversation</Link>}</div>
+        </> : workError ? <div role="alert" className="project-snapshot-work-state">Could not load Work progress. <button type="button" className="button quiet" onClick={() => { setWorkLoading(true); void loadWork(); }}>Retry</button></div>
+          : <p className="project-snapshot-work-state">{workLoading ? "Loading Work progress…" : "No Work check-in has been saved for this project."}</p>}
+      </section>
       <ProjectSummaryCards assets={assets} findings={findings} run={run} />
       {run?.totalTasks ? <div className="project-snapshot-progress"><span>Mission progress</span><strong>{run.completedTasks} of {run.totalTasks} tasks</strong><progress value={run.completedTasks} max={run.totalTasks} /></div> : null}
       {approvals.length > 0 && <p className="project-snapshot-attention">{approvals.length} approval{approvals.length === 1 ? "" : "s"} waiting for review</p>}
