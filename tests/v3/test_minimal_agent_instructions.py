@@ -3,6 +3,7 @@ from __future__ import annotations
 from nebula.v3.application_model.workflow import BROWSER_MODEL_WORKFLOW
 from nebula.v3.chat import (
     _CHAT_BASE_INSTRUCTIONS,
+    _CHAT_FINAL_ANSWER_RECOVERY_INSTRUCTIONS,
     _CHAT_INSTRUCTIONS,
     _CHAT_TOOL_INSTRUCTIONS,
     _CHAT_TOOL_RESULT_INSTRUCTIONS,
@@ -46,6 +47,10 @@ def test_harness_instructions_only_route_nebula_workspace_and_tools() -> None:
 
 
 def test_chat_instructions_only_define_turn_protocol() -> None:
+    assert _CHAT_BASE_INSTRUCTIONS.startswith("Nebula provider session.")
+    assert _CHAT_FINAL_ANSWER_RECOVERY_INSTRUCTIONS.startswith(
+        "Nebula provider session."
+    )
     instructions = "\n".join(
         (
             _CHAT_BASE_INSTRUCTIONS,

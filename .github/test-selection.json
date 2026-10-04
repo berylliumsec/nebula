@@ -1,28 +1,19 @@
 {
-  "change_digest": "520bdb8d8a7e546895ab48ecc969f1254c595e883beb6b604506828efcf08e6f",
-  "reviewed_by": "Codex conversation hierarchy review",
-  "reason": "The diff changes the compact goal rail, goal disclosure, active work placement, and thinking summary. Three focused component files cover disclosure and state behavior. Studio and activity-ledger browser entries exercise the affected transcript at desktop and 320 px mobile Chromium and WebKit. The real-Core goal entry checks the saved goal, full criteria disclosure, reload, and stop/resume on a production LAN origin. Shared ui.css was reviewed for its goal-only additions; no other selectors changed there.",
-  "exclusions": "No Python or native behavior changed. Unrelated assistant, provider, terminal, results, and full suites are excluded. Browser mobile profiles are emulated; no physical device is available. The changed interface does not introduce a new origin-sensitive API; the selected real-Core LAN journey covers the existing goal path.",
+  "change_digest": "755571ddb5e442a4fbf40624613674fe9f5208bfbeb0a6b035ec620b432351b6",
+  "reviewed_by": "Codex provider origin marker review",
+  "reason": "The diff adds a Core supplied Nebula origin marker to native provider instructions, including final answer recovery. The instruction contract tests check the marker on each route, and the selected chat test checks the prepared provider request.",
+  "exclusions": "No UI, browser, native, or origin-sensitive API behavior changes. Frontend, Playwright, native, and unrelated Python suites are excluded. Live Core build and health are verified during deployment; this selection covers the provider instruction payload.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 46,
+    "python": 6,
+    "frontend": 0,
     "native": 0,
-    "playwright": 13
+    "playwright": 0
   },
-  "python": [],
-  "frontend": [
-    "ui/src/components/ActivityLedger.test.tsx",
-    "ui/src/components/HarnessThinking.test.tsx",
-    "ui/src/components/ProviderGoalPanel.test.tsx"
+  "python": [
+    "tests/v3/test_minimal_agent_instructions.py",
+    "tests/v3/test_chat.py::test_tool_enabled_turn_instructions_never_claim_the_turn_has_no_tools"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:studio-conversation/desktop",
-    "entry:studio-conversation/mobile-chromium-small",
-    "entry:studio-conversation/mobile-webkit-small",
-    "entry:activity-ledger/desktop",
-    "entry:activity-ledger/mobile-chromium-small",
-    "entry:activity-ledger/mobile-webkit",
-    "entry:provider-goal-lifecycle-core/assistant-real-desktop"
-  ]
+  "playwright": []
 }

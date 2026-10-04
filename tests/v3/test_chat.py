@@ -1231,6 +1231,7 @@ def test_tool_enabled_turn_instructions_never_claim_the_turn_has_no_tools(
     assert prepared.tools_enabled is True
     instructions = prepared.model_request.instructions or ""
     assert instructions.startswith(chat_module._CHAT_BASE_INSTRUCTIONS)
+    assert instructions.startswith("Nebula provider session.")
     assert "No tools are available" not in instructions
 
 
