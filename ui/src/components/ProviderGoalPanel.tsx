@@ -75,19 +75,22 @@ export interface ProviderGoalDraft {
   childBudget?: number;
 }
 
-export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstimate, settingsBusy = false, onCreate, onChange, onWorkDispatched }: {
+export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstimate, settingsBusy = false, showFullGoal = false, onCreate, onChange, onWorkDispatched }: {
   api: ApiClient;
   sessionId?: string;
   goal?: ChatGoal;
   skills?: HarnessSkillSummary[];
   liveTokenEstimate?: number;
   settingsBusy?: boolean;
+  showFullGoal?: boolean;
   onCreate?(draft: ProviderGoalDraft): Promise<ChatGoal>;
   onChange(goal: ChatGoal): void;
   onWorkDispatched?(): Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(true);
+  const [objectiveOpen, setObjectiveOpen] = useState(false);
+  useEffect(() => { if (showFullGoal) setObjectiveOpen(true); }, [showFullGoal]);
   const [objective, setObjective] = useState("");
   const [criteria, setCriteria] = useState("");
   const [plan, setPlan] = useState("");
@@ -339,6 +342,13 @@ export function ProviderGoalPanel({ api, sessionId, goal, skills, liveTokenEstim
     <header><button className="chat-goal-toggle" type="button" aria-expanded={detailsOpen} aria-controls="chat-goal-details" aria-label={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} title={`${detailsOpen ? "Collapse" : "Expand"} goal controls`} onClick={() => setDetailsOpen(value => !value)}><ChevronDown size={17} aria-hidden="true" /></button><span className="chat-goal-heading"><Flag size={15} aria-hidden="true" /><strong title={goal.objective}>{goal.objective}</strong></span><small><span className={`chat-goal-status ${goal.status}`}>{goal.status.replaceAll("_", " ")}</span><span className="chat-goal-step">step {goal.currentStep}{goal.stepBudget ? `/${goal.stepBudget}` : ""}</span><span title={liveTokens > 0 ? "Estimated while this turn streams; Core replaces it with exact provider usage when the turn settles." : undefined}>{tokenLabel}</span><span>{Math.floor(activeSeconds(goal, tick))}s active</span>{goal.timeBudgetSeconds !== undefined && <span>{Math.max(0, Math.ceil((goal.timeBudgetSeconds - activeSeconds(goal, tick)) / 60))}m left</span>}{goal.childBudget !== undefined && <span>{goal.childrenStarted}/{goal.childBudget} children</span>}<span>{goal.skillSnapshots.length} skills</span></small></header>
     {goal.blockedReason && <p role="status">{goal.blockedReason}</p>}
     <div id="chat-goal-details" hidden={!detailsOpen} className="chat-goal-details">
+    <details className="chat-goal-objective" open={objectiveOpen} onToggle={event => setObjectiveOpen(event.currentTarget.open)}>
+      <summary>Objective and completion criteria</summary>
+      <div><p>{goal.objective}</p><strong>Completion criteria</strong>
+        <ul>{goal.completionCriteria.map((item, index) => <li key={index}>{item}</li>)}</ul>
+        {goal.plan.length > 0 && <><strong>Plan</strong><ol>{goal.plan.map((item, index) => <li key={index}>{item}</li>)}</ol></>}
+      </div>
+    </details>
     {!terminal && <div className="chat-goal-actions">
       {goal.status === "draft" && <button className="button primary" type="button" disabled={busy || settingsBusy} onClick={() => void act("start")}><CirclePlay size={14} /> Start</button>}
       {goal.status === "running" && <><button className="button secondary chat-goal-pause" type="button" disabled={busy || settingsBusy} onClick={() => void act("pause")}><CirclePause size={14} /> Pause</button><div className="chat-goal-outcomes" role="group" aria-label="Set goal outcome"><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("block")}>Block</button><button className="button quiet" type="button" disabled={busy || settingsBusy} onClick={() => setTransition("complete")}><Check size={14} aria-hidden="true" /> Complete</button></div></>}

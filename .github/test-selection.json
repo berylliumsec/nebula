@@ -1,30 +1,28 @@
 {
-  "change_digest": "a328347c9f367ad8184fcbe4157acc8d3354e204635f82d189dfd844f0d39f9e",
-  "reviewed_by": "Codex focused chat toolbar review",
-  "reason": "The diff removes the redundant Add guidance focus button and keeps main and embedded side-chat composer controls in the same ordered row, with send controls visible at narrow widths. Eight mocked side-chat profiles check toolbar order and geometry through side-chat open, conversation switching, resize, and reload. Three mocked active-guidance profiles check that guidance still submits without the shortcut. Two real-Core profiles retain the durable side-chat create, reply, reload, and close journey.",
-  "exclusions": "No Python or native behavior changes, and no deterministic state transformation needs a unit test. Unrelated assistant, terminal, provider, and whole-suite tests are excluded. Browser mobile profiles are emulated; no physical device is available. No origin-sensitive browser API changed, so the selected production-origin browser journey is sufficient.",
+  "change_digest": "520bdb8d8a7e546895ab48ecc969f1254c595e883beb6b604506828efcf08e6f",
+  "reviewed_by": "Codex conversation hierarchy review",
+  "reason": "The diff changes the compact goal rail, goal disclosure, active work placement, and thinking summary. Three focused component files cover disclosure and state behavior. Studio and activity-ledger browser entries exercise the affected transcript at desktop and 320 px mobile Chromium and WebKit. The real-Core goal entry checks the saved goal, full criteria disclosure, reload, and stop/resume on a production LAN origin. Shared ui.css was reviewed for its goal-only additions; no other selectors changed there.",
+  "exclusions": "No Python or native behavior changed. Unrelated assistant, provider, terminal, results, and full suites are excluded. Browser mobile profiles are emulated; no physical device is available. The changed interface does not introduce a new origin-sensitive API; the selected real-Core LAN journey covers the existing goal path.",
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
+    "frontend": 46,
     "native": 0,
     "playwright": 13
   },
   "python": [],
-  "frontend": [],
+  "frontend": [
+    "ui/src/components/ActivityLedger.test.tsx",
+    "ui/src/components/HarnessThinking.test.tsx",
+    "ui/src/components/ProviderGoalPanel.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "entry:chat-guidance-toolbar/desktop",
-    "entry:chat-guidance-toolbar/mobile-chromium-small",
-    "entry:chat-guidance-toolbar/mobile-webkit",
-    "entry:side-chat/desktop",
-    "entry:side-chat/compact",
-    "entry:side-chat/mobile-chromium-small",
-    "entry:side-chat/mobile-chromium-ledger-390",
-    "entry:side-chat/mobile-chromium-wide",
-    "entry:side-chat/mobile-webkit-small",
-    "entry:side-chat/mobile-webkit",
-    "entry:side-chat/mobile-webkit-wide",
-    "entry:side-chat/assistant-real-desktop",
-    "entry:side-chat/assistant-real-compact"
+    "entry:studio-conversation/desktop",
+    "entry:studio-conversation/mobile-chromium-small",
+    "entry:studio-conversation/mobile-webkit-small",
+    "entry:activity-ledger/desktop",
+    "entry:activity-ledger/mobile-chromium-small",
+    "entry:activity-ledger/mobile-webkit",
+    "entry:provider-goal-lifecycle-core/assistant-real-desktop"
   ]
 }

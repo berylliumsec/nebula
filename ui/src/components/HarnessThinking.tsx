@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { logCaughtDiagnostic } from "../diagnostics";
 import { reasoningSummaryState, reasoningSummaryText, type HarnessActivityItem } from "../pages/harnessActivity";
 import { HarnessMarkdown } from "./HarnessMarkdown";
@@ -45,7 +46,6 @@ export function HarnessThinking({ items }: { items: HarnessActivityItem[] }) {
   // completed state still belongs in the transcript after the pending flash.
   const thoughts = items.filter((item) => reasoningSummaryState(item) !== undefined);
   const readable = thoughts.filter((item) => reasoningSummaryText(item) || reasoningSummaryState(item) === "pending");
-  const summaryCount = thoughts.filter((item) => Boolean(reasoningSummaryText(item))).length;
   const withoutSummary = thoughts.length - readable.length;
   const missingSummarySource = thoughts.filter((item) => reasoningSummaryState(item) === "not_provided")
     .every((item) => item.vendor === "codex_app_server") ? "Codex" : "The harness";
@@ -71,7 +71,16 @@ export function HarnessThinking({ items }: { items: HarnessActivityItem[] }) {
     setExpanded(event.currentTarget.open);
     if (!event.currentTarget.open) setShowAll(false);
   }}>
-    <summary>{active ? "Thinking…" : "Thinking"}<span>{summaryCount > 1 ? `${summaryCount} summaries` : ""}</span></summary>
+    <summary>
+      <ChevronRight className="harness-thinking-chevron" size={15} aria-hidden="true" />
+      <span className="harness-thinking-summary-copy">
+        <span>{active ? "Thinking…" : "Thinking"} · {thoughts.length} update{thoughts.length === 1 ? "" : "s"}</span>
+        {withoutSummary > 0 && <small>{withoutSummary === thoughts.length
+          ? "No public summaries for completed updates"
+          : `${withoutSummary} update${withoutSummary === 1 ? "" : "s"} without a public summary`}</small>}
+      </span>
+      <small className="harness-thinking-action">{expanded ? "Hide details" : "View details"}</small>
+    </summary>
     {expanded && <div className="harness-thinking-body">
       {withoutSummary > 0 && <p className="harness-reasoning-note">{withoutSummary === 1
         ? `${missingSummarySource} did not provide a public summary for one reasoning episode.`

@@ -113,8 +113,10 @@ export function ActivityLedger({
       </header>}
       {compact && active && <div className="activity-ledger-compact-header">
         <span className={`activity-ledger-state ${statusClass(model.status)}`} aria-hidden="true" />
-        <strong>{progress?.statusLabel ?? activityLedgerStatusLabel(model.status)}</strong>
-        {progress?.elapsed ?? (model.durationMs ? <span className="activity-ledger-compact-duration">{durationLabel(model.durationMs)}</span> : null)}
+        <strong>{model.status === "queued" ? "Queued work" : model.status === "attention" ? "Action required" : "Current run"}</strong>
+        <span className="activity-ledger-compact-state">{progress?.statusLabel ?? activityLedgerStatusLabel(model.status)}
+          {progress?.elapsed ?? (model.durationMs ? <span className="activity-ledger-compact-duration"> · {durationLabel(model.durationMs)}</span> : null)}
+        </span>
       </div>}
 
       {!compact && (active ? <div className="activity-ledger-live">

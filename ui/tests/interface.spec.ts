@@ -7284,6 +7284,7 @@ test("stabilization studio conversation keeps context and thinking readable", as
   test.skip(!["desktop", "mobile-chromium-small", "mobile-webkit-small"].includes(testInfo.project.name), "Focused Studio desktop and 320 px mobile checks.");
   const sessionId = "studio-preview";
   const turnId = "studio-turn";
+  const objective = "Review completed tasks and prepare the next sprint with evidence from the release checklist, the tagged build, the open findings, and every outstanding handoff before deciding what can ship.";
   const startedAt = new Date(Date.now() - 90_000).toISOString();
   await page.route("**/api/v1/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -7325,7 +7326,7 @@ test("stabilization studio conversation keeps context and thinking readable", as
       session_id: "studio-harness-session", session_status: "idle", busy: false, live: true,
       turn_id: turnId, turn_status: "complete", turn_origin: "chat", started_at: startedAt,
       last_activity_at: new Date().toISOString(), detail: "Harness is ready.",
-      goal: { objective: "Review completed tasks and prepare the next sprint", status: "running",
+      goal: { objective, status: "running",
         current_step: "Verify the release checklist", child_agents: 2 },
     } });
     if (path.endsWith(`/harness-turns/${turnId}/events`)) return route.fulfill({ json: {
@@ -7353,7 +7354,17 @@ test("stabilization studio conversation keeps context and thinking readable", as
   await expect(thinking).toContainText("12 updates");
   if (testInfo.project.name === "desktop") {
     await expect(page.locator(".chat-studio-rail")).toBeVisible();
-    await expect(page.getByRole("region", { name: "Goal" })).toContainText("Review completed tasks");
+    const goalCard = page.getByRole("region", { name: "Goal" });
+    await expect(goalCard).toContainText("Review completed tasks");
+    expect(await goalCard.locator(".chat-studio-goal-summary").evaluate(element => ({
+      clamp: getComputedStyle(element).webkitLineClamp,
+      height: element.getBoundingClientRect().height,
+    }))).toEqual({ clamp: "2", height: expect.any(Number) });
+    expect(await goalCard.locator(".chat-studio-goal-summary").evaluate(element => element.getBoundingClientRect().height)).toBeLessThan(40);
+    await goalCard.locator("summary", { hasText: "View full goal" }).click();
+    await expect(goalCard.locator(".chat-studio-goal-details p").first()).toHaveText(objective);
+    await expect(goalCard).toContainText("Current step: Verify the release checklist");
+    await goalCard.locator("summary", { hasText: "View full goal" }).click();
     await expect(page.getByRole("region", { name: "Subagents" }).last()).toContainText("Check release notes");
   } else await expect(page.locator(".chat-studio-rail")).toBeHidden();
   await page.screenshot({ path: testInfo.outputPath("studio-conversation.png") });
@@ -7904,7 +7915,7 @@ test("stabilization completed harness output keeps one continuous transcript scr
   }
 });
 
-test("completed harness output keeps live commentary in expandable work detail", async ({ page }) => {
+test("completed harness output keeps live commentary in expandable work detail", async ({ page }, testInfo) => {
   const sessionId = "codex-commentary-session";
   const turnId = "codex-commentary-turn";
   await page.route("**/api/v1/**", async (route) => {
@@ -7985,12 +7996,17 @@ test("completed harness output keeps live commentary in expandable work detail",
 
   const ledger = page.getByRole("region", { name: "Work summary" });
   await expect(ledger).toBeVisible();
+  await expect(ledger).toContainText("Current run");
+  await ledger.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: testInfo.outputPath("current-run-hierarchy.png") });
   await expect(ledger).toContainText("Running");
   await expect(ledger.locator(".activity-ledger-progress-preview")).toContainText("I checked the adapter.");
   await expect(ledger.locator(".activity-ledger-progress-preview")).not.toContainText("remaining details");
   await expect(ledger.locator(".activity-ledger-footer")).toContainText("1 update");
   const thinking = page.getByLabel("Harness thinking");
-  await expect(thinking.locator("summary")).toHaveText("Thinking");
+  await expect(thinking.locator("summary")).toContainText("Thinking · 1 update");
+  await expect(thinking.locator("summary")).toContainText("No public summaries for completed updates");
+  expect(await ledger.evaluate(element => element.compareDocumentPosition(document.querySelector("[aria-label='Harness thinking']")!) & Node.DOCUMENT_POSITION_FOLLOWING)).toBeTruthy();
   await thinking.locator("summary").click();
   await expect(thinking).toContainText("Codex did not provide a public summary for one reasoning episode.");
   await expect(page.getByLabel("Assistant commentary")).toHaveCount(0);
