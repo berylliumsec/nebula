@@ -1195,6 +1195,11 @@
       {"area":"activity-ledger","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"activity ledger groups repeated work|completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"},
       {"area":"activity-ledger","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"activity ledger groups repeated work|completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"}
     ],
+    "codex-public-progress": [
+      {"area":"codex-public-progress","project":"desktop","test_match":"tests/interface.spec.ts","grep":"completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"},
+      {"area":"codex-public-progress","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"},
+      {"area":"codex-public-progress","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"completed harness output keeps live commentary in expandable work detail","runtime":"mock","shard":"1/1"}
+    ],
     "studio-conversation": [
       {"area":"studio-conversation","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization studio conversation keeps context and thinking readable","runtime":"mock","shard":"1/1"},
       {"area":"studio-conversation","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"stabilization studio conversation keeps context and thinking readable","runtime":"mock","shard":"1/1"},

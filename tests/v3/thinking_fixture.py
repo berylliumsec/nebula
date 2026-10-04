@@ -258,6 +258,25 @@ with tempfile.TemporaryDirectory(prefix="nebula-thinking-") as directory:
                 "payload": {"reasoning_summary_state": state},
             },
         )
+    store.append_operation_event(
+        no_summary_turn.id,
+        "harness_turn",
+        project.id,
+        "harness.output_delta",
+        {
+            "type": "output_delta",
+            "vendor": "codex_app_server",
+            "harness_turn_id": no_summary_turn.id,
+            "item_id": "public-commentary",
+            "item_kind": "reasoning",
+            "item_status": "completed",
+            "title": "Commentary",
+            "stream": "commentary",
+            "delta": "Checked the public result while Codex kept reasoning private.",
+            "artifact_ids": [],
+            "payload": {},
+        },
+    )
 
     # The agent's Work check-in can live in a child project while its chat
     # remains in the parent, as in real project dashboard usage.

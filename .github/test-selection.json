@@ -1,33 +1,31 @@
 {
-  "change_digest": "b5e2934e9e003ba58d9d051482b065f177734c3dfb2491d2e23fde69a3de96a6",
-  "reviewed_by": "Codex for the user-approved Projects and Work merge",
-  "reason": "The diff changes Projects navigation, the project overview's saved Work progress, the Work board route, and Project Snapshot selection. Seven directly affected component files cover navigation, active progress selection, errors, project switching, and check-ins. Eighteen selected browser cases cover the Projects entry point, real Core Work save and reconnect, and imported project discovery across desktop Chromium and 320-430 px Chromium/WebKit.",
-  "exclusions": "No Python or native implementation changed, so their tests are excluded. Unrelated chat, provider, browser, settings, report, mission, and full interface suites are excluded. The shared App route and workbench CSS were reviewed: selected Projects navigation and real-Core Work journeys exercise their affected behavior.",
+  "change_digest": "e7ca49bf6ac2ef27dd0993545615e7e7b98abd56539abc1acdcf3312013acd1c",
+  "reviewed_by": "Codex focused Codex public-progress review",
+  "reason": "The diff restores the newest public Codex commentary to the active work card, counts commentary separately from private reasoning, and labels absent public summaries accurately. Twenty-six component cases cover compact receipts, current progress and thinking disclosures. A new catalog entry selects three mocked Codex stream cases for the live work card. Twenty-four real-Core cases cover durable reasoning and commentary through refresh and reload in the permanent desktop and mobile profiles.",
+  "exclusions": "No Python runtime behavior or native code changed; the Python fixture is exercised by the selected real-Core browser journey. Other chat, provider, and harness suites do not exercise this presentation change. Browser mobile profiles are emulated; no physical device is available.",
   "expected_tests": {
     "python": 0,
-    "frontend": 68,
+    "frontend": 26,
     "native": 0,
-    "playwright": 18
+    "playwright": 27
   },
   "python": [],
   "frontend": [
-    "ui/src/components/ProjectWorkOverview.test.tsx",
-    "ui/src/components/SideNav.test.tsx",
-    "ui/src/components/TopBar.test.tsx",
-    "ui/src/components/structured-result/ProjectSnapshotPanel.test.tsx",
-    "ui/src/pages/OverviewPage.test.tsx",
-    "ui/src/pages/WorkPage.test.tsx",
-    "ui/src/state/useNavigationChords.test.tsx"
+    "ui/src/components/ActivityLedger.test.tsx",
+    "ui/src/components/HarnessThinking.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:projects-navigation",
-    "area:work-hub",
-    "entry:work-import/assistant-real-desktop",
-    "entry:work-import/assistant-real-chromium-390",
-    "entry:work-import/assistant-real-webkit-390"
-  ],
-  "python_versions": ["3.12"],
-  "python_browser": false,
-  "python_node": false
+    "entry:codex-public-progress/desktop",
+    "entry:codex-public-progress/mobile-chromium-small",
+    "entry:codex-public-progress/mobile-webkit",
+    "entry:thinking-retention/model-desktop",
+    "entry:thinking-retention/model-compact",
+    "entry:thinking-retention/model-chromium-320",
+    "entry:thinking-retention/model-chromium-390",
+    "entry:thinking-retention/model-chromium-430",
+    "entry:thinking-retention/model-webkit-320",
+    "entry:thinking-retention/model-webkit-390",
+    "entry:thinking-retention/model-webkit-430"
+  ]
 }
