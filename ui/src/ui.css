@@ -170,9 +170,12 @@
 .chat-composer > .chat-composer-input { flex: 0 1 auto; min-height: 44px; overflow-y: auto; }
 .chat-composer-input > textarea { display: block; }
 .chat-composer > footer { flex: 0 0 auto; }
-.chat-composer footer { flex-wrap: wrap; }
-.chat-composer footer > button { flex-shrink: 0; }
-.chat-composer footer > .chat-composer-submit { min-width: 44px; min-height: 44px; }
+.chat-composer footer.chat-composer-toolbar { min-width: 0; flex-wrap: nowrap; }
+.chat-composer-tools, .chat-composer-turn-actions { display: flex; min-width: 0; align-items: center; gap: inherit; }
+.chat-composer-tools { flex: 1 1 auto; overflow-x: auto; scrollbar-width: thin; }
+.chat-composer-turn-actions { flex: 0 0 auto; }
+.chat-composer-toolbar :is(.chat-composer-tools, .chat-composer-turn-actions) > button { flex-shrink: 0; }
+.chat-composer-turn-actions > .chat-composer-submit { min-width: 44px; min-height: 44px; }
 .assistant-search { min-height: 45px; max-height: none; }
 .assistant-search input[type="search"] { max-width: 100%; min-width: 0; }
 .assistant-search label:first-child { min-width: 0; }
