@@ -20,11 +20,15 @@ describe("navigation chords", () => {
     expect(navigate).toHaveBeenLastCalledWith("/findings");
     await user.keyboard("g,");
     expect(navigate).toHaveBeenLastCalledWith("/settings");
+    await user.keyboard("gp");
+    expect(navigate).toHaveBeenLastCalledWith("/project");
+    await user.keyboard("gw");
+    expect(navigate).toHaveBeenLastCalledWith("/project/work");
     await user.keyboard("gz");
-    expect(navigate).toHaveBeenCalledTimes(2);
+    expect(navigate).toHaveBeenCalledTimes(4);
 
     await user.click(view.getByRole("textbox", { name: "Notes" }));
     await user.keyboard("go");
-    expect(navigate).toHaveBeenCalledTimes(2);
+    expect(navigate).toHaveBeenCalledTimes(4);
   });
 });

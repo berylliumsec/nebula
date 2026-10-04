@@ -58,13 +58,16 @@ describe("SideNav current page", () => {
     ["/projects/project-1/findings/finding-7", "Findings"],
     ["/projects/project-1/reports", "Reports"],
     ["/projects/project-1/reports/report-2", "Reports"],
-    ["/projects/project-1", "Project"],
-    ["/projects/project-1/assets", "Project"],
-    ["/projects/project-1/assets/asset-3", "Project"],
-    ["/projects/project-1/evidence", "Project"],
-    ["/projects/project-1/evidence/evidence-4", "Project"],
-    ["/projects/project-1/sources", "Project"],
-    ["/projects/project-1/sources/source-5", "Project"],
+    ["/projects", "Projects"],
+    ["/projects/project-1", "Projects"],
+    ["/projects/project-1/work", "Projects"],
+    ["/projects/project-1/work/item-7", "Projects"],
+    ["/projects/project-1/assets", "Projects"],
+    ["/projects/project-1/assets/asset-3", "Projects"],
+    ["/projects/project-1/evidence", "Projects"],
+    ["/projects/project-1/evidence/evidence-4", "Projects"],
+    ["/projects/project-1/sources", "Projects"],
+    ["/projects/project-1/sources/source-5", "Projects"],
     ["/library", "Library"],
     ["/library/doc-1", "Library"],
     ["/settings", "Settings"],
@@ -77,12 +80,13 @@ describe("SideNav current page", () => {
 
   it("keeps section links pointed at the section root from a detail page", async () => {
     const navigation = renderSideNav("/projects/project-1/findings/finding-7");
+    expect(within(navigation).queryByRole("link", { name: /^Work$/ })).not.toBeInTheDocument();
     const findings = within(navigation).getByRole("link", { name: "Findings" });
     expect(findings).toHaveAttribute("href", "/projects/project-1/findings");
 
-    await userEvent.click(within(navigation).getByRole("link", { name: "Project" }));
+    await userEvent.click(within(navigation).getByRole("link", { name: "Projects" }));
     expect(screen.getByRole("status", { name: "Current path" })).toHaveTextContent(/^\/projects\/project-1$/);
-    expectOnlyCurrent(navigation, "Project");
+    expectOnlyCurrent(navigation, "Projects");
 
     await userEvent.click(findings);
     expect(screen.getByRole("status", { name: "Current path" })).toHaveTextContent(/^\/projects\/project-1\/findings$/);
@@ -93,8 +97,8 @@ describe("SideNav current page", () => {
     workspace.engagement = undefined;
     workspace.engagements = [];
     const navigation = renderSideNav(route);
-    expectOnlyCurrent(navigation, "Project");
-    expect(within(navigation).getByRole("link", { name: "Project" })).toHaveAttribute("href", "/project");
+    expectOnlyCurrent(navigation, "Projects");
+    expect(within(navigation).getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/projects");
   });
 });
 

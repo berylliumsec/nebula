@@ -2159,18 +2159,27 @@ test("universal search reaches shared skills and focuses that section", async ({
   await expect(search).toBeFocused();
 });
 
-test("primary navigation exposes only the five task destinations", async ({ page }) => {
+test("stabilization Projects is the sole Work navigation destination", async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
   if ((page.viewportSize()?.width ?? 1440) <= 760) {
-    await page.getByRole("button", { name: "Show sidebar" }).click();
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    const app = page.getByRole("dialog", { name: "More" }).getByRole("navigation", { name: "App" });
+    await expect(app.getByRole("button", { name: "Projects" })).toBeVisible();
+    await expect(app.getByRole("button", { name: "Work", exact: true })).toHaveCount(0);
+    await app.getByRole("button", { name: "Projects" }).click();
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/projects/scratch-project");
+  } else {
+    const navigation = page.getByRole("complementary", { name: "Primary navigation" });
+    for (const label of ["Workbench", "Findings", "Reports", "Projects", "Settings"]) {
+      await expect(navigation.getByRole("link", { name: label, exact: true })).toBeVisible();
+    }
+    for (const stale of ["Sessions", "Missions", "Assets", "Evidence", "Knowledge", "Work"]) {
+      await expect(navigation.getByRole("link", { name: stale, exact: true })).toHaveCount(0);
+    }
   }
-  const navigation = page.getByRole("complementary", { name: "Primary navigation" });
-  for (const label of ["Workbench", "Findings", "Reports", "Project", "Settings"]) {
-    await expect(navigation.getByRole("link", { name: label, exact: true })).toBeVisible();
-  }
-  for (const stale of ["Sessions", "Missions", "Assets", "Evidence", "Knowledge"]) {
-    await expect(navigation.getByRole("link", { name: stale, exact: true })).toHaveCount(0);
-  }
+  await page.goto("/work");
+  await expect.poll(() => new URL(page.url()).pathname).toBe("/projects");
+  await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
 });
 
 test("Missions explains missing runtime setup and provides a working next action", async ({ page }) => {
@@ -2624,11 +2633,11 @@ test("phone shell and critical workspace navigation mark the section that owns d
     await followNavigation("Reports");
     await expectCurrentSection("/projects/scratch-project/reports/report-current", "Reports");
 
-    await followNavigation("Project");
-    await expectCurrentSection("/projects/scratch-project", "Project");
+    await followNavigation("Projects");
+    await expectCurrentSection("/projects/scratch-project", "Projects");
     for (const [tab, surface] of [["Assets", "assets"], ["Evidence", "evidence"], ["Sources", "sources"]] as const) {
       await page.getByRole("navigation", { name: "Project sections" }).getByRole("button", { name: tab, exact: true }).click();
-      await expectCurrentSection(`/projects/scratch-project/${surface}`, "Project");
+      await expectCurrentSection(`/projects/scratch-project/${surface}`, "Projects");
     }
   }
 });
@@ -8921,7 +8930,7 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
     }
   } else {
     await expect(page.getByRole("complementary", { name: "Primary navigation" })).toHaveCount(1);
-    for (const label of ["Workbench", "Findings", "Reports", "Project", "Settings"]) {
+    for (const label of ["Workbench", "Findings", "Reports", "Projects", "Settings"]) {
       await expect(page.getByRole("complementary", { name: "Primary navigation" }).getByRole("link", { name: label, exact: true })).toBeVisible();
     }
   }
