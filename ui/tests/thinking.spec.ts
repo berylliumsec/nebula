@@ -45,6 +45,10 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
       await expect(absent).toHaveCount(1);
       await absent.locator(".activity-ledger-entry-content > details > summary").click();
       await expect(absent.getByText("No thinking summary was provided by the harness.", {exact: true})).toBeVisible();
+      const thinking = page.getByLabel("Harness thinking");
+      await expect(thinking).toBeVisible();
+      await thinking.locator("summary").click();
+      await expect(thinking.getByText("No thinking summary was provided for one completed update.")).toBeVisible();
       const historical = rows.filter({has: page.getByText("Historical saved text…[truncated]", {exact: true})});
       await historical.locator(".activity-ledger-entry-content > details > summary").click();
       await expect(historical.getByText("This saved thinking text was shortened. The omitted text is unavailable.", {exact: true})).toBeVisible();
@@ -73,6 +77,30 @@ for (const vendor of ["grok_acp", "codex_app_server"]) {
     await openThinking();
   });
 }
+
+test("codex_app_server thinking episodes remain visible without public summaries after reload", async ({ page, request }, info) => {
+  const origin = `http://127.0.0.1:${new URL(String(info.project.use.baseURL)).port}`;
+  const pairing = await (await request.post(`${origin}/api/v1/auth/pairings`, { headers: { Authorization: "Bearer model-test-token" }, data: { name: "No-summary thinking test" } })).json();
+  await page.goto(`/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+  await page.getByLabel("Device name").fill("No-summary thinking test");
+  await page.getByRole("button", { name: "Pair device", exact: true }).click();
+  await expect(page.locator(".pairing-gate")).toHaveCount(0, { timeout: 20_000 });
+
+  const openThinking = async () => {
+    await expect(page.getByText("Saved answer with no public thinking summary.")).toBeVisible();
+    await page.getByRole("button", { name: "Show activity", exact: true }).click();
+    const thinking = page.getByLabel("Harness thinking");
+    await expect(thinking.locator("summary")).toBeVisible();
+    await expect(thinking.locator("summary")).toHaveText("Thinking");
+    await thinking.locator("summary").click();
+    await expect(thinking.getByText("No thinking summary was provided for one completed update.")).toBeVisible();
+  };
+
+  await page.goto("/projects/thinking-project/workbench?view=chat&session=codex-no-summary-chat");
+  await openThinking();
+  await page.reload();
+  await openThinking();
+});
 
 
 test("expanded review queue can scroll to its last action without clipping", async ({page, request}, info) => {

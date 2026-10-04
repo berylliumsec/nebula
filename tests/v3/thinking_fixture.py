@@ -203,6 +203,61 @@ with tempfile.TemporaryDirectory(prefix="nebula-thinking-") as directory:
             },
         )
 
+    # Codex can finish every reasoning episode without exposing a public
+    # summary. Keep this separate from the mixed-summary fixture above.
+    no_summary_chat = store.create(
+        ChatSession(
+            id="codex-no-summary-chat",
+            engagement_id=project.id,
+            title="Codex no-summary thinking",
+            backend="harness",
+            harness_profile_id="codex_app_server",
+            harness_session_id="codex_app_server-session",
+            model="fixture",
+        )
+    )
+    no_summary_turn = store.create(
+        HarnessTurn(
+            id="codex-no-summary-turn",
+            engagement_id=project.id,
+            harness_session_id="codex_app_server-session",
+            origin="chat",
+            chat_session_id=no_summary_chat.id,
+            chat_turn_id="codex-no-summary-chat-turn",
+            status="complete",
+            prompt="Synthetic fixture",
+            response="Saved answer with no public thinking summary.",
+        )
+    )
+    store.create(
+        ChatMessage(
+            engagement_id=project.id,
+            session_id=no_summary_chat.id,
+            sequence=1,
+            role="assistant",
+            content=no_summary_turn.response,
+            metadata={"harness_turn_id": no_summary_turn.id},
+        )
+    )
+    for status, state in [("running", "pending"), ("completed", "not_provided")]:
+        store.append_operation_event(
+            no_summary_turn.id,
+            "harness_turn",
+            project.id,
+            "harness.item_upsert",
+            {
+                "type": "item_upsert",
+                "vendor": "codex_app_server",
+                "harness_turn_id": no_summary_turn.id,
+                "item_id": "reasoning-without-summary",
+                "item_kind": "reasoning",
+                "item_status": status,
+                "title": "Reasoning",
+                "artifact_ids": [],
+                "payload": {"reasoning_summary_state": state},
+            },
+        )
+
     # Legacy cancellation has events and a user message, but no final assistant row.
     stopped = store.create(
         HarnessTurn(

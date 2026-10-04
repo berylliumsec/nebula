@@ -1,48 +1,23 @@
 {
-  "change_digest": "88eb6678eae9ea013c1789ef44fd4aa3db69b3fc7b50e2e4e82dc0fbfe8e2ec9",
-  "reviewed_by": "Codex focused activity and Project Snapshot review",
-  "reason": "The diff changes activity ordering/scrolling and the current-turn jump, replaces the chat Agent view with Core-owned project dashboard totals, and removes goal snapshot prompt/tool injection. Eighteen structured-results Python cases verify API and goal tool boundaries; 33 component cases cover the ledger, dashboard cards and floating snapshot; 38 catalogued browser cases exercise those visible journeys across desktop Chromium and emulated Android Chromium/iPhone WebKit widths.",
-  "exclusions": "No native code changed. Unrelated chat, results explorer, and backend suites are excluded after review of the shared chat route and Playwright catalog. The selected Python file covers the removed model injection plus durable Results API. Mobile browser profiles are emulated; no physical device is available.",
+  "change_digest": "b69702ec375c1420456dab91fd6f04decca4f0a842e9468a025e0c93920d6ad1",
+  "reviewed_by": "Codex focused Thinking retention review",
+  "reason": "The diff keeps completed Codex reasoning episodes visible when the harness reports no public summary. Eight component cases cover the pending-to-completed transition, disclosure, loading and bounded summaries. Nine catalogued real-Core browser cases replay durable Grok and Codex activity through the chat UI and reload, including a turn with only no-summary episodes, on desktop Chromium, emulated Android Chromium at 390 px, and emulated iPhone WebKit at 390 px.",
+  "exclusions": "No production Python or native code changed. The Python fixture is executed by the selected real-Core browser cases, so a separate Python test is unnecessary. The broad assistant and studio-conversation impact areas are covered by the narrower thinking-retention journey; unrelated assistant and studio tests are excluded. Mobile browser profiles are emulated; no physical device is available.",
   "expected_tests": {
-    "python": 18,
-    "frontend": 33,
+    "python": 0,
+    "frontend": 8,
     "native": 0,
-    "playwright": 38
+    "playwright": 9
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": [
-    "tests/v3/test_structured_results.py"
-  ],
-  "frontend": [
-    "ui/src/components/ActivityLedger.test.tsx",
-    "ui/src/components/structured-result/ProjectSnapshotPanel.test.tsx",
-    "ui/src/pages/OverviewPage.test.tsx",
-    "ui/src/pages/chatScrollPosition.test.ts"
-  ],
+  "python": [],
+  "frontend": ["ui/src/components/HarnessThinking.test.tsx"],
   "native": [],
   "playwright": [
-    "entry:activity-ledger/desktop",
-    "entry:activity-ledger/mobile-chromium-small",
-    "entry:activity-ledger/mobile-webkit",
-    "entry:project-snapshot/desktop",
-    "entry:project-snapshot/compact",
-    "entry:project-snapshot/mobile-chromium-small",
-    "entry:project-snapshot/mobile-chromium-ledger-390",
-    "entry:project-snapshot/mobile-chromium-wide",
-    "entry:project-snapshot/mobile-webkit-small",
-    "entry:project-snapshot/mobile-webkit",
-    "entry:project-snapshot/mobile-webkit-wide",
-    "entry:chat-scroll-navigation/desktop",
-    "entry:chat-scroll-navigation/compact",
-    "entry:chat-scroll-navigation/mobile-chromium-small",
-    "entry:chat-scroll-navigation/mobile-chromium-ledger-390",
-    "entry:chat-scroll-navigation/mobile-chromium-wide",
-    "entry:chat-scroll-navigation/mobile-webkit-small",
-    "entry:chat-scroll-navigation/mobile-webkit",
-    "entry:chat-scroll-navigation/mobile-webkit-wide"
+    "entry:thinking-retention/model-desktop",
+    "entry:thinking-retention/model-chromium-390",
+    "entry:thinking-retention/model-webkit-390"
   ]
 }
