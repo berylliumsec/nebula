@@ -10,7 +10,6 @@ import {
   FolderKanban,
   FolderOpen,
   Globe2,
-  ListTodo,
   Maximize2,
   NotebookPen,
   Search,
@@ -75,11 +74,10 @@ export function MobileMorePanel({ view, onSelectView, onFocusMode, onClose }: {
     {engagement && <nav className="mobile-more-group" aria-label="Project pages">
       <Row icon={<Bug size={19} />} label="Findings" onClick={() => go(projectSurface(engagement.id, "findings"))} />
       <Row icon={<FileText size={19} />} label="Reports" onClick={() => go(projectSurface(engagement.id, "reports"))} />
-      <Row icon={<FolderKanban size={19} />} label="Project overview" onClick={() => go(projectRoot(engagement.id))} />
       <Row icon={<BookMarked size={19} />} label="Library" onClick={() => go("/library")} />
     </nav>}
     <nav className="mobile-more-group" aria-label="App">
-      <Row icon={<ListTodo size={19} />} label="Work" onClick={() => go("/work")} />
+      <Row icon={<FolderKanban size={19} />} label="Projects" onClick={() => go(engagement ? projectRoot(engagement.id) : "/projects")} />
       <Row icon={<Settings size={19} />} label="Settings" onClick={() => go("/settings")} />
       <Row icon={<Maximize2 size={19} />} label="Focus mode" onClick={() => { onClose(); onFocusMode(); }} />
     </nav>

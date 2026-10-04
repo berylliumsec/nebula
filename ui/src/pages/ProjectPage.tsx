@@ -1,4 +1,4 @@
-import { BookOpen, FileSearch, LayoutDashboard, Network, Sparkles } from "lucide-react";
+import { BookOpen, FileSearch, LayoutDashboard, ListTodo, Network, Sparkles } from "lucide-react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { projectRoot, projectSurface } from "../resourceRoutes";
 import { AssetsPage } from "./AssetsPage";
@@ -6,11 +6,13 @@ import { EvidencePage } from "./EvidencePage";
 import { KnowledgePage } from "./KnowledgePage";
 import { OverviewPage } from "./OverviewPage";
 import { ResultsPage } from "./ResultsPage";
+import { WorkPage } from "./WorkPage";
 
-type ProjectView = "overview" | "assets" | "evidence" | "sources" | "results";
+type ProjectView = "overview" | "work" | "assets" | "evidence" | "sources" | "results";
 
 const projectViews = [
   { id: "overview" as const, label: "Overview", icon: LayoutDashboard },
+  { id: "work" as const, label: "Work", icon: ListTodo },
   { id: "assets" as const, label: "Assets", icon: Network },
   { id: "evidence" as const, label: "Evidence", icon: FileSearch },
   { id: "sources" as const, label: "Sources", icon: BookOpen },
@@ -57,6 +59,7 @@ export function ProjectPage({ canonicalView }: { canonicalView?: ProjectView }) 
         ))}
       </nav>
       {view === "overview" ? <OverviewPage /> : null}
+      {view === "work" ? <WorkPage /> : null}
       {view === "assets" ? <AssetsPage /> : null}
       {view === "evidence" ? <EvidencePage /> : null}
       {view === "sources" ? <KnowledgePage /> : null}

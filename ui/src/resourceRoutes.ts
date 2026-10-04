@@ -32,7 +32,10 @@ export function resourcePath(projectId: string | undefined, kind: ResourceKind, 
 }
 
 export function canonicalNavigationPath(legacyPath: string, projectId?: string): string {
-  if (legacyPath === "/settings" || legacyPath === "/library" || legacyPath === "/work") return legacyPath;
+  if (legacyPath === "/settings" || legacyPath === "/library") return legacyPath;
+  if (legacyPath === "/work") return "/projects";
+  if (legacyPath === "/project/work") return projectId ? projectSurface(projectId, "work") : "/projects";
+  if (legacyPath === "/project" && !projectId) return "/projects";
   if (!projectId) return legacyPath;
   if (legacyPath === "/") return projectSurface(projectId, "workbench");
   if (legacyPath === "/findings") return projectSurface(projectId, "findings");

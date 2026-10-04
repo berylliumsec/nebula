@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ExternalLink, GripHorizontal, LayoutDashboard, Minimize2, MoveDiagonal2, X } from "lucide-react";
 import { Link } from "react-router-dom";
 import { projectRoot, projectSurface, resourcePath } from "../../resourceRoutes";
+import { currentProjectWorkItem, type ProjectWorkItem, type ProjectWorkUpdate } from "../../projectWorkProgress";
 import { ProjectSummaryCards } from "../ProjectSummaryCards";
 import { useWorkspace } from "../../state/WorkspaceContext";
 import { IconAction } from "../IconAction";
@@ -68,28 +69,8 @@ function pageClearance() {
 
 type Gesture = { kind: "move" | "resize"; pointerX: number; pointerY: number; start: ProjectSnapshotRect };
 
-type SnapshotWorkItem = {
-  id: string;
-  engagement_id: string;
-  title: string;
-  status: string;
-  priority: string;
-  assignee_session_id: string | null;
-  source_kind: string;
-  source_id: string | null;
-  last_update_at: string | null;
-};
-type SnapshotWorkUpdate = {
-  id: string;
-  engagement_id: string;
-  item_id: string;
-  summary: string;
-  next_step: string | null;
-  blocker: string | null;
-  created_at: string;
-  source_session_id: string | null;
-  source_engagement_id: string | null;
-};
+type SnapshotWorkItem = ProjectWorkItem;
+type SnapshotWorkUpdate = ProjectWorkUpdate;
 type CurrentWork = { item: SnapshotWorkItem; update: SnapshotWorkUpdate };
 
 function workStatusLabel(status: string): string {
@@ -99,12 +80,7 @@ function workStatusLabel(status: string): string {
 
 /** Prefer the active conversation's saved work; otherwise show the newest active check-in. */
 export function currentSnapshotItem(items: SnapshotWorkItem[], sessionId?: string): SnapshotWorkItem | undefined {
-  const updated = items.filter((item) => item.last_update_at);
-  const assigned = sessionId ? updated.filter((item) => item.assignee_session_id === sessionId
-    || (item.source_kind === "chat" && item.source_id === sessionId)) : [];
-  const active = updated.filter((item) => item.status !== "done");
-  return [...(assigned.length ? assigned : active.length ? active : updated)]
-    .sort((left, right) => Date.parse(right.last_update_at!) - Date.parse(left.last_update_at!))[0];
+  return currentProjectWorkItem(items, sessionId);
 }
 
 export interface ProjectSnapshotPanelProps {

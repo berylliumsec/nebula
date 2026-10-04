@@ -53,6 +53,7 @@ function LegacyProjectRedirect({ surface, legacyView }: { surface?: ProjectSurfa
     return <Navigate to={`${location.pathname}?${legacyParams.toString()}`} replace />;
   }
   if (!engagement && (workspaceState === "starting" || workspaceState === "bootstrapping")) return <div className="route-loading" role="status">Opening project…</div>;
+  if (!engagement && (surface === "project" || surface === "work")) return <Navigate to="/projects" replace />;
   if (!engagement && coreState === "online") return <section className="page"><div className="standard-empty-state"><h1>Choose a project</h1><p>Create a project or restore an archived one to start working.</p><button type="button" className="button primary" onClick={openProjectPicker}>Choose project</button></div></section>;
   if (!engagement) {
     if (surface === "findings") return route(<FindingsPage />);
@@ -61,6 +62,7 @@ function LegacyProjectRedirect({ surface, legacyView }: { surface?: ProjectSurfa
       const view = surface === "project" ? undefined : surface;
       return route(<ProjectPage canonicalView={view ?? "overview"} />);
     }
+    if (surface === "work") return <Navigate to="/projects" replace />;
     return route(<SessionsPage />);
   }
   const params = new URLSearchParams(location.search);
@@ -110,7 +112,7 @@ export function App() {
     <Route path="projects/:projectId" element={<CanonicalProjectBoundary />}>
       <Route index element={route(<ProjectPage canonicalView="overview" />)} />
       <Route path="workbench" element={route(<WorkbenchRoute />)} />
-      <Route path="work/:itemId?" element={route(<WorkPage />)} />
+      <Route path="work/:itemId?" element={route(<ProjectPage canonicalView="work" />)} />
       <Route path="assets/:resourceId?" element={route(<ProjectPage canonicalView="assets" />)} />
       <Route path="evidence/:resourceId?" element={route(<ProjectPage canonicalView="evidence" />)} />
       <Route path="sources/:resourceId?" element={route(<ProjectPage canonicalView="sources" />)} />
@@ -120,12 +122,14 @@ export function App() {
       <Route path="reports/:resourceId?" element={route(<ReportsPage />)} />
     </Route>
     <Route path="library/:resourceId?" element={route(<LibraryPage />)} />
-    <Route path="work" element={route(<WorkPage />)} />
+    <Route path="projects" element={route(<WorkPage />)} />
+    <Route path="work" element={<Navigate to="/projects" replace />} />
     <Route path="settings" element={route(<SettingsPage />)} />
     <Route index element={<LegacyProjectRedirect surface="workbench" />} />
     <Route path="findings" element={<LegacyProjectRedirect surface="findings" />} />
     <Route path="reports" element={<LegacyProjectRedirect surface="reports" />} />
     <Route path="project" element={<LegacyProjectRedirect surface="project" />} />
+    <Route path="project/work" element={<LegacyProjectRedirect surface="work" />} />
     <Route path="sessions" element={<LegacyWorkbenchRedirect view="chat" />} />
     <Route path="agents" element={<LegacyWorkbenchRedirect view="missions" />} />
     <Route path="missions" element={<LegacyWorkbenchRedirect view="missions" />} />

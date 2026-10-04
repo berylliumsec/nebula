@@ -19,6 +19,7 @@ export interface NavigationItem {
   icon: LucideIcon;
   shortcut: string;
   group: "workspace" | "settings";
+  sidebar?: boolean;
 }
 
 export const navigationItems: NavigationItem[] = [
@@ -34,14 +35,15 @@ export const navigationItems: NavigationItem[] = [
     group: "workspace",
   },
   {
-    commandId: "navigate.work",
-    path: "/work",
-    label: "Work",
-    aliases: ["Board", "Tasks", "Progress", "Agents"],
-    description: "Project work, agent activity, and check-ins",
+    commandId: "navigate.project_work",
+    path: "/project/work",
+    label: "Project work",
+    aliases: ["Work", "Board", "Tasks", "Progress", "Agents"],
+    description: "Open the selected project's Work board",
     icon: ListTodo,
     shortcut: "G W",
     group: "workspace",
+    sidebar: false,
   },
   {
     commandId: "navigate.findings",
@@ -66,10 +68,10 @@ export const navigationItems: NavigationItem[] = [
   {
     commandId: "navigate.project",
     path: "/project",
-    label: "Project",
+    label: "Projects",
     legacyLabel: "Engagement",
-    aliases: ["Overview", "Assets", "Evidence", "Knowledge", "Sources", "Results", "Engagement"],
-    description: "Project overview, assets, evidence, sources, and published results",
+    aliases: ["Overview", "Work", "Assets", "Evidence", "Knowledge", "Sources", "Results", "Engagement"],
+    description: "Project progress, work, assets, evidence, and results",
     icon: FolderKanban,
     shortcut: "G P",
     group: "workspace",
@@ -99,7 +101,7 @@ export const navigationItems: NavigationItem[] = [
 // Canonical project surfaces and the navigation item that owns each one.
 const projectSurfaceItemPaths: Record<string, string> = {
   workbench: "/",
-  work: "/work",
+  work: "/project",
   findings: "/findings",
   reports: "/reports",
   assets: "/project",
@@ -113,6 +115,8 @@ const legacySurfaceItemPaths: Record<string, string> = {
   assets: "/project",
   evidence: "/project",
   knowledge: "/project",
+  projects: "/project",
+  work: "/project",
 };
 
 /**
