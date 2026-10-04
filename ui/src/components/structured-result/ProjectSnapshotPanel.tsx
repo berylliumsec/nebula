@@ -162,6 +162,7 @@ function FloatingProjectSnapshot({
       setCurrentWork(item && updates[0] ? { item, update: updates[0] } : null);
       setWorkError(undefined);
     } catch (error) {
+      // diagnostic-expected: the panel shows a retry action while Core remains unavailable.
       if (signal?.aborted || sequence !== workReadSequence.current) return;
       setWorkError(error instanceof Error ? error.message : "Work progress could not be loaded.");
     } finally {
@@ -177,7 +178,7 @@ function FloatingProjectSnapshot({
       while (!controller.signal.aborted) {
         try {
           await api.watchWorkChanges(() => void loadWork(controller.signal), () => void loadWork(controller.signal), controller.signal);
-        } catch { /* The saved summary remains readable while the event stream reconnects. */ }
+        } catch { /* diagnostic-expected: keep the saved summary readable while the event stream reconnects. */ }
         if (controller.signal.aborted) break;
         await new Promise<void>((resolve) => {
           const timeout = window.setTimeout(resolve, 1_000);

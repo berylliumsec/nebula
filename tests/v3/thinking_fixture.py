@@ -262,7 +262,11 @@ with tempfile.TemporaryDirectory(prefix="nebula-thinking-") as directory:
     # The agent's Work check-in can live in a child project while its chat
     # remains in the parent, as in real project dashboard usage.
     work_project = store.create(
-        Engagement(id="thinking-child-project", name="Child work project", parent_engagement_id=project.id)
+        Engagement(
+            id="thinking-child-project",
+            name="Child work project",
+            parent_engagement_id=project.id,
+        )
     )
     work = WorkService(store)
     work_item = work.create(
