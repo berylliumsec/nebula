@@ -6,10 +6,10 @@
 </div>
 
 <p align="center">
-  <img src="docs/images/nebula-3-project-overview.png" alt="Nebula 3 project overview in the current dark interface" width="100%" />
+  <img src="docs/images/nebula-3-assistant.png" alt="Nebula 3 Assistant view with a sample authorized assessment planning conversation" width="100%" />
 </p>
 
-<p align="center"><sub>Nebula 3 project overview</sub></p>
+<p align="center"><sub>Nebula 3 Assistant with a sample assessment conversation</sub></p>
 
 <br />
 
