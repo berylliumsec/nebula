@@ -22,7 +22,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .domain import (
     ChatGoal,
-    ChatGoalStatus,
     Engagement,
     RiskClass,
     StructuredResult,
@@ -53,8 +52,6 @@ MAX_HINT_BYTES = 200_000
 MAX_RESULTS_PER_PROJECT = 500
 PREVIEW_FIELDS = 6
 PREVIEW_VALUE_CHARS = 120
-# How long a running goal may go without showing the operator where it is.
-SNAPSHOT_INTERVAL_SECONDS = 600
 STREAM_LABEL_CHARS = 200
 
 
@@ -431,92 +428,6 @@ def _owned(store: NebulaStore, project_id: str, result_id: str) -> StructuredRes
     return result
 
 
-# -- goal snapshots ---------------------------------------------------------
-
-
-def latest_snapshot(
-    store: NebulaStore, engagement_id: str, stream: str
-) -> StructuredResult | None:
-    """The most recent result published under one stream, or None."""
-
-    published = [
-        item for item in _all_results(store, engagement_id) if item.stream == stream
-    ]
-    if not published:
-        return None
-    return max(published, key=lambda item: (item.sequence, item.created_at))
-
-
-def snapshot_overdue(
-    store: NebulaStore,
-    engagement_id: str,
-    stream: str,
-    *,
-    now: datetime | None = None,
-    interval_seconds: int = SNAPSHOT_INTERVAL_SECONDS,
-) -> tuple[bool, float | None]:
-    """Whether a stream has gone longer than the interval without a snapshot.
-
-    Returns the decision and the seconds since the last one, so a caller can
-    tell an operator (or a model) how long it has actually been. A stream with
-    nothing published is always overdue: the first snapshot is what gives the
-    operator something to watch.
-    """
-
-    latest = latest_snapshot(store, engagement_id, stream)
-    if latest is None:
-        return True, None
-    elapsed = ((now or utc_now()) - latest.created_at).total_seconds()
-    return elapsed >= interval_seconds, elapsed
-
-
-def goal_snapshot_instruction(
-    store: NebulaStore,
-    goal: ChatGoal,
-    *,
-    now: datetime | None = None,
-    interval_seconds: int = SNAPSHOT_INTERVAL_SECONDS,
-) -> str:
-    """Ask a running goal's model to show the operator where the work stands.
-
-    The ask is added only when the goal's series has gone quiet for longer than
-    the interval, so a goal that is already publishing is left alone. It never
-    asks for anything to be repeated or summarised away: the snapshot is data
-    the model already has in front of it.
-    """
-
-    if goal.status != ChatGoalStatus.RUNNING:
-        return ""
-    overdue, elapsed = snapshot_overdue(
-        store,
-        goal.engagement_id,
-        goal.id,
-        now=now,
-        interval_seconds=interval_seconds,
-    )
-    if not overdue:
-        return ""
-    minutes = max(1, interval_seconds // 60)
-    since = (
-        "Nothing has been published for this goal yet"
-        if elapsed is None
-        else f"The last snapshot was {int(elapsed // 60)} minutes ago"
-    )
-    return (
-        "\n\nShow the operator where this work stands. "
-        f"{since}, and they see your progress only through the result "
-        f"dashboard, which is asked for every {minutes} minutes.\n"
-        f"Call {DASHBOARD_PUBLISH_TOOL_NAME} once, now, with a short title and "
-        "a result that depicts the current state of the work: what you have "
-        "examined, decided or changed, the values, code or relationships "
-        "behind it, and what is next. Send whatever shape that data already "
-        "has — an object, a list of rows, a code snippet with its language, "
-        "nodes and edges. Report only what you actually have; an empty or "
-        "uncertain state is worth publishing as exactly that. Then continue "
-        "the goal in the same turn."
-    )
-
-
 # -- tool ------------------------------------------------------------------
 
 PUBLISH_INPUT: dict[str, Any] = {
@@ -578,9 +489,7 @@ def dashboard_publish_spec() -> ToolSpec:
         name=DASHBOARD_PUBLISH_TOOL_NAME,
         version="1",
         description=(
-            "Show the operator where this goal's work stands. Publishing sends "
-            "a structured result to the project's result dashboard, which they "
-            "read beside the conversation and in Project > Results as a "
+            "Publish a structured result to Project > Results as a "
             "summary, table, relationship graph, tree and raw JSON.\n\n"
             "Send whatever shape the data already has: no schema is registered "
             "and none is required, so objects, arrays, code snippets, "
@@ -588,11 +497,8 @@ def dashboard_publish_spec() -> ToolSpec:
             "value is stored unchanged and stays the authority. Multi-line "
             "text renders as a readable block, and a sibling 'language' field "
             "labels a code snippet.\n\n"
-            "Publish at each significant turn — what was just examined, "
-            "decided or changed, and what is next — and whenever a result is "
-            "large enough that pasting it into the conversation would bury it. "
-            "Snapshots of this goal are collected into one ordered series "
-            "automatically, so the operator can follow the work as it happens."
+            "Use this for a result the operator explicitly wants to save. "
+            "The project dashboard summary reads Core state directly."
         ),
         input_schema=PUBLISH_INPUT,
         output_schema={"type": "object", "additionalProperties": True},
@@ -717,15 +623,11 @@ __all__ = [
     "StructuredResultPublish",
     "StructuredResultRejected",
     "StructuredResultSummary",
-    "SNAPSHOT_INTERVAL_SECONDS",
     "dashboard_publish_spec",
-    "goal_snapshot_instruction",
     "inspect_payload",
-    "latest_snapshot",
     "payload_preview",
     "publish_result",
     "structured_results_router",
-    "snapshot_overdue",
     "summarize",
     "validate_hints",
 ]

@@ -1,5 +1,4 @@
 import asyncio
-from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -7,35 +6,26 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
-from nebula.v3.artifacts import ArtifactStore
 from nebula.v3.domain import (
     ChatGoal,
     ChatGoalStatus,
     ChatSession,
-    ChatTurn,
     Engagement,
-    ScopePolicy,
     StructuredResult,
-    ToolCallOrigin,
 )
-from nebula.v3.runtime_platform import dashboard_components
 from nebula.v3.storage import NebulaStore, NotFoundError
 from nebula.v3.structured_results import (
     DASHBOARD_PUBLISH_TOOL_NAME,
     MAX_RESULTS_PER_PROJECT,
     MAX_RESULT_BYTES,
     MAX_RESULT_DEPTH,
-    SNAPSHOT_INTERVAL_SECONDS,
     PublishResultTool,
     StructuredResultPublish,
     StructuredResultRejected,
     dashboard_publish_spec,
-    goal_snapshot_instruction,
     inspect_payload,
-    latest_snapshot,
     payload_preview,
     publish_result,
-    snapshot_overdue,
     structured_results_router,
     validate_hints,
 )
@@ -281,53 +271,6 @@ def test_publish_tool_stores_the_payload_and_points_the_operator_at_it(tmp_path)
     assert "hosts" not in str(result.output)
 
 
-def test_goal_dashboard_broker_records_publish_execution_as_immutable_evidence(
-    tmp_path,
-):
-    store, _ = fixture(tmp_path)
-    goal = running_goal(store)
-    scope = store.create(ScopePolicy(id="scope", engagement_id="project"))
-    store.create(
-        ChatTurn(
-            id="run",
-            engagement_id="project",
-            session_id="session",
-            goal_id=goal.id,
-            provider_profile_id="provider",
-            model="model-a",
-            tools_enabled=True,
-        )
-    )
-    components = dashboard_components(
-        store,
-        ArtifactStore(tmp_path / "artifacts"),
-        scope,
-        tmp_path,
-        goal,
-    )
-    invocation = ToolInvocation(
-        engagement_id="project",
-        run_id="run",
-        origin=ToolCallOrigin.CHAT,
-        chat_session_id="session",
-        chat_turn_id="run",
-        tool_name=DASHBOARD_PUBLISH_TOOL_NAME,
-        workspace=tmp_path,
-        arguments={"title": "Inventory", "result": {"hosts": 1}},
-    )
-
-    result = asyncio.run(components.broker.execute(invocation, scope))
-
-    assert result.exit_code == 0
-    assert result.receipt is not None
-    # Publishing runs no process, so only its parsed output is an artifact:
-    # no empty stdout and stderr placeholders.
-    assert [item.kind for item in result.receipt.artifacts] == ["parsed"]
-    assert result.receipt.parser.artifact_id == result.receipt.artifacts[0].artifact_id
-    assert len(result.evidence_ids) == 1
-    assert store.count(StructuredResult, engagement_id="project") == 1
-
-
 def test_publish_tool_reports_a_refusal_instead_of_raising(tmp_path):
     store, _ = fixture(tmp_path)
     tool = PublishResultTool(store)
@@ -479,52 +422,7 @@ def test_an_unbound_tool_still_honours_the_stream_a_producer_chose(tmp_path):
     assert store.get(StructuredResult, output["result_id"]).stream_label == ""
 
 
-def test_a_running_goal_is_asked_for_a_snapshot_only_once_per_interval(tmp_path):
-    store, _ = fixture(tmp_path)
-    goal = running_goal(store)
-
-    # Nothing published yet: the first goal turn is asked immediately.
-    opening = goal_snapshot_instruction(store, goal)
-    assert DASHBOARD_PUBLISH_TOOL_NAME in opening
-    assert "Nothing has been published for this goal yet" in opening
-    assert "every 10 minutes" in opening
-
-    snapshot(store, goal)
-    published = store.get(
-        StructuredResult, latest_snapshot(store, "project", goal.id).id
-    )
-
-    # Inside the interval the model is left alone to work.
-    soon = published.created_at + timedelta(seconds=SNAPSHOT_INTERVAL_SECONDS - 1)
-    assert goal_snapshot_instruction(store, goal, now=soon) == ""
-
-    later = published.created_at + timedelta(seconds=SNAPSHOT_INTERVAL_SECONDS + 60)
-    due = goal_snapshot_instruction(store, goal, now=later)
-    assert DASHBOARD_PUBLISH_TOOL_NAME in due
-    assert "11 minutes ago" in due
-
-    overdue, elapsed = snapshot_overdue(store, "project", goal.id, now=later)
-    assert (
-        overdue is True and elapsed is not None and elapsed > SNAPSHOT_INTERVAL_SECONDS
-    )
-
-
-def test_only_a_running_goal_is_asked_at_all(tmp_path):
-    store, _ = fixture(tmp_path)
-    goal = running_goal(store)
-    for status in [
-        ChatGoalStatus.PAUSED,
-        ChatGoalStatus.BLOCKED,
-        ChatGoalStatus.COMPLETED,
-        ChatGoalStatus.CANCELLED,
-        ChatGoalStatus.DRAFT,
-    ]:
-        stopped = goal.model_copy(update={"status": status, "blocked_reason": "held"})
-        assert goal_snapshot_instruction(store, stopped) == ""
-    assert goal_snapshot_instruction(store, goal) != ""
-
-
-def test_publishing_is_offered_to_a_goal_turn_and_to_nothing_else(
+def test_goal_turns_no_longer_require_a_model_published_dashboard(
     tmp_path, monkeypatch
 ):
     import nebula.v3.chat as chat_module
@@ -577,7 +475,6 @@ def test_publishing_is_offered_to_a_goal_turn_and_to_nothing_else(
     monkeypatch.setattr(chat_module, "provider_from_profile", lambda _: provider)
     service = ChatService(
         store,
-        artifact_store=ArtifactStore(tmp_path / "artifacts"),
         workspace_resolver=lambda _: workspace,
     )
 
@@ -596,18 +493,18 @@ def test_publishing_is_offered_to_a_goal_turn_and_to_nothing_else(
         )
 
     inside = prepare(goal_id=goal.id)
-    assert set(inside.tool_components.specs) == {
+    assert {
         "skill.read_resource",
-        DASHBOARD_PUBLISH_TOOL_NAME,
         "notes.write",
-    }
-    # The goal turn is also told to show the operator where the work stands.
-    assert DASHBOARD_PUBLISH_TOOL_NAME in (inside.model_request.instructions or "")
+    } <= set(inside.tool_components.specs)
+    assert DASHBOARD_PUBLISH_TOOL_NAME not in inside.tool_components.specs
+    assert DASHBOARD_PUBLISH_TOOL_NAME not in (inside.model_request.instructions or "")
 
-    # A conversation with the same runtime but no goal is not offered it.
+    # A conversation with the same runtime but no goal has the same tool set.
     outside = prepare(session_id="session-plain")
-    assert set(outside.tool_components.specs) == {
+    assert {
         "skill.read_resource",
         "notes.write",
-    }
+    } <= set(outside.tool_components.specs)
+    assert DASHBOARD_PUBLISH_TOOL_NAME not in outside.tool_components.specs
     assert DASHBOARD_PUBLISH_TOOL_NAME not in (outside.model_request.instructions or "")
