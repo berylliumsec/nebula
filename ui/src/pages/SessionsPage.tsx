@@ -726,6 +726,42 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       break;
     }
   }
+  const activityNode = message.role === "assistant" && activityLedger ? <ActivityLedger
+        compact
+        latestUpdate={latestHarnessCommentary}
+        progress={progressContent ? {
+          headline: message.state === "streaming" ? waitingLabel ?? activityLedger.currentAction ?? "Working on your request" : undefined,
+          latest: message.state === "streaming" ? latestProgressPreview(progressContent) : undefined,
+          statusLabel: message.state === "streaming" && waitingLabel ? "Waiting" : undefined,
+          elapsed: message.state === "streaming" ? <LiveTurnElapsed startedAt={message.createdAt} /> : undefined,
+          receipt: message.reasoning ? "Updates and thinking saved" : "Updates saved",
+          details: <>
+            <section className="activity-ledger-progress-text" aria-label="Progress updates">
+              <h4>Progress updates</h4>
+              <AssistantMarkdown content={progressContent} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} workspacePath={shared.workspacePath} onOpenFile={actions.openLinkedFile} onOpenWebLink={actions.openLinkedWebPage} />
+            </section>
+            {message.reasoning && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming"} />}
+          </>,
+        } : undefined}
+        historyPending={Boolean(historicalTurnId && historicalState !== "loaded" && !messageActivityItems.length && !messageToolCards.length)}
+        model={activityLedger}
+        onExpandedChange={historicalTurnId ? (expanded) => {
+          if (expanded) void actions.loadHistoricalHarnessActivity(message);
+        } : undefined}
+        emptyState={historicalState === "loading"
+          ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading saved work…</div>
+          : undefined}
+        renderEntryDetails={(entry) => <AssistantLedgerEntryDetails entry={entry} />}
+        renderEntryActions={(entry) => {
+          const item = entry.sourceItem;
+          const card = entry.sourceTool;
+          return <>
+            {item?.kind === "subagent" && item.status === "running" && shared.subagentControl && <button className="button quiet" type="button" disabled={shared.harnessControlBusy} onClick={() => void actions.stopSubagent(item)}>Stop subagent</button>}
+            {item?.type === "checkpoint" && shared.checkpointRewind && <button className="button quiet" type="button" disabled={shared.harnessControlBusy || (item.sessionId === shared.harnessSessionId && shared.harnessBusy)} title={item.sessionId === shared.harnessSessionId && shared.harnessBusy ? "Checkpoint rewind is available while the session is idle" : undefined} onClick={() => void actions.rewindCheckpoint(item)}>Rewind files here</button>}
+            {card && card.status !== "running" && <button className="button quiet" type="button" onClick={() => void actions.openArtifacts(card)}><Search size={13} /> Artifacts</button>}
+          </>;
+        }}
+      /> : null;
   return (
   <article
     className={`chat-message ${message.role === "user" ? "operator" : agentMessage ? "agent-message" : "assistant"}${editing ? " editing" : ""}${pendingReplacement ? " pending-replacement" : ""}`}
@@ -739,6 +775,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
     <div className="chat-message-body">
       <header>{message.role === "assistant" && <><strong>{shared.assistantSource}</strong>{shared.runtimeConfiguration && <span>{shared.runtimeConfiguration}</span>}</>}{agentMessage && <><strong>Message from {agentMessageSender}</strong><span>main agent</span></>}<span className="chat-message-time">{timeLabel(message.createdAt)}</span></header>
       {message.role === "assistant" && message.toolSuggestions && <ToolSuggestionChip summary={message.toolSuggestions} />}
+      {message.state === "streaming" || message.state === "waiting_approval" ? activityNode : null}
       {message.role === "assistant" && !progressContent && <HarnessThinking items={messageActivityItems} />}
       {message.role === "assistant" && !progressContent && <ThinkingDisclosure
         text={message.reasoning}
@@ -779,42 +816,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
       {message.role === "assistant" && message.state === "complete" && !message.content && message.reasoning && <small className="muted" role="status">The model spent this turn thinking and returned no answer. Its thinking is above.</small>}
       {shared.api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={shared.api!} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
       {historicalState === "failed" && historicalError && <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Saved work details could not be loaded; the answer remains available." compact /><button className="button quiet" type="button" onClick={() => void actions.loadHistoricalHarnessActivity(message)}>Retry work details</button></div>}
-      {message.role === "assistant" && activityLedger && <ActivityLedger
-        compact
-        latestUpdate={latestHarnessCommentary}
-        progress={progressContent ? {
-          headline: message.state === "streaming" ? waitingLabel ?? activityLedger.currentAction ?? "Working on your request" : undefined,
-          latest: message.state === "streaming" ? latestProgressPreview(progressContent) : undefined,
-          statusLabel: message.state === "streaming" && waitingLabel ? "Waiting" : undefined,
-          elapsed: message.state === "streaming" ? <LiveTurnElapsed startedAt={message.createdAt} /> : undefined,
-          receipt: message.reasoning ? "Updates and thinking saved" : "Updates saved",
-          details: <>
-            <section className="activity-ledger-progress-text" aria-label="Progress updates">
-              <h4>Progress updates</h4>
-              <AssistantMarkdown content={progressContent} messageId={message.id} durable={message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} workspacePath={shared.workspacePath} onOpenFile={actions.openLinkedFile} onOpenWebLink={actions.openLinkedWebPage} />
-            </section>
-            {message.reasoning && <ThinkingDisclosure text={message.reasoning} streaming={message.state === "streaming"} />}
-          </>,
-        } : undefined}
-        historyPending={Boolean(historicalTurnId && historicalState !== "loaded" && !messageActivityItems.length && !messageToolCards.length)}
-        model={activityLedger}
-        onExpandedChange={historicalTurnId ? (expanded) => {
-          if (expanded) void actions.loadHistoricalHarnessActivity(message);
-        } : undefined}
-        emptyState={historicalState === "loading"
-          ? <div className="chat-thinking"><LoaderCircle className="spin" size={14} /> Loading saved work…</div>
-          : undefined}
-        renderEntryDetails={(entry) => <AssistantLedgerEntryDetails entry={entry} />}
-        renderEntryActions={(entry) => {
-          const item = entry.sourceItem;
-          const card = entry.sourceTool;
-          return <>
-            {item?.kind === "subagent" && item.status === "running" && shared.subagentControl && <button className="button quiet" type="button" disabled={shared.harnessControlBusy} onClick={() => void actions.stopSubagent(item)}>Stop subagent</button>}
-            {item?.type === "checkpoint" && shared.checkpointRewind && <button className="button quiet" type="button" disabled={shared.harnessControlBusy || (item.sessionId === shared.harnessSessionId && shared.harnessBusy)} title={item.sessionId === shared.harnessSessionId && shared.harnessBusy ? "Checkpoint rewind is available while the session is idle" : undefined} onClick={() => void actions.rewindCheckpoint(item)}>Rewind files here</button>}
-            {card && card.status !== "running" && <button className="button quiet" type="button" onClick={() => void actions.openArtifacts(card)}><Search size={13} /> Artifacts</button>}
-          </>;
-        }}
-      />}
+      {message.state !== "streaming" && message.state !== "waiting_approval" ? activityNode : null}
       {interactions.map((interaction) => <div className="chat-approval-card harness-interaction" ref={focusPendingAction} tabIndex={-1} role="region" aria-label="Input required" key={interaction.id}>
         <strong>{interaction.prompt}</strong>
         {interaction.kind === "user_input" ? interaction.questions.map((question, index) => {
@@ -6076,7 +6078,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               </div>
               <form className="chat-composer" onSubmit={(event) => void submit(event)} onDragOver={(event) => { if ([...event.dataTransfer.items].some((item) => item.kind === "file" && item.type.startsWith("image/"))) event.preventDefault(); }} onDrop={dropComposerImages}>
               <div className="chat-composer-context" role="region" aria-label="Composer context and activity" tabIndex={0}>
-              {runtimeKind === "provider" && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <div id="chat-studio-goal-editor" className="chat-studio-goal-editor"><ProviderGoalPanel api={api} sessionId={sessionId || undefined} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} settingsBusy={assistantSettingsBusy} onCreate={createGoalConversation} onChange={setProviderGoal} onWorkDispatched={async () => { if (sessionId) await selectSession(sessionId, false); }} /></div>}</>}
+              {runtimeKind === "provider" && api && <>{providerGoalLoading && <p className="provider-dialog-note" role="status">Loading goal…</p>}{providerGoalError && <p className="provider-dialog-note error" role="alert">{providerGoalError}</p>}{!providerGoalLoading && <div id="chat-studio-goal-editor" className="chat-studio-goal-editor"><ProviderGoalPanel api={api} sessionId={sessionId || undefined} goal={providerGoal} skills={harnessSkills} liveTokenEstimate={liveGoalTokenEstimate} settingsBusy={assistantSettingsBusy} showFullGoal={studioRailAvailable && studioGoalOpen} onCreate={createGoalConversation} onChange={setProviderGoal} onWorkDispatched={async () => { if (sessionId) await selectSession(sessionId, false); }} /></div>}</>}
               {sessionId && !pendingSubagentApproval && <ChatSubagentRail
                 subagents={subagentState.subagents}
                 open={sessionInspectorOpen && drawerTab === "subagents"}
@@ -6360,7 +6362,6 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
                 goal={runtimeKind === "provider" ? providerGoal : undefined}
                 harnessGoal={runtimeKind === "harness" ? harnessActivity?.goal : undefined}
                 subagents={subagentState.subagents}
-                activity={runtimeKind === "harness" ? harnessActivity : undefined}
                 pendingRequests={pendingHarnessRequests}
                 sessionId={sessionId}
                 goalEditorOpen={studioGoalOpen}

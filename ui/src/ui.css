@@ -324,6 +324,13 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 .chat-goal-status.running { color: var(--text-strong); }
 .chat-goal-details { display: grid; gap: 8px; }
 .chat-goal-details[hidden] { display: none; }
+.chat-goal-objective { min-width: 0; border-top: 1px solid var(--border-soft); }
+.chat-goal-objective > summary { min-height: 36px; align-content: center; color: var(--muted-strong); font-size: var(--type-secondary); cursor: pointer; }
+.chat-goal-objective > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chat-goal-objective > div { display: grid; gap: 8px; padding: 2px 8px 10px; color: var(--text); font-size: var(--type-secondary); line-height: var(--leading-ui); overflow-wrap: anywhere; }
+.chat-goal-objective :is(p, ul, ol) { margin: 0; }
+.chat-goal-objective :is(ul, ol) { padding-left: 20px; }
+.chat-goal-objective strong { color: var(--text-strong); }
 .chat-goal-form { display: grid; gap: 8px; }
 .chat-goal-form label { display: grid; gap: 4px; }
 .chat-goal-form fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 4px; min-width: 0; }
@@ -342,7 +349,7 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 .chat-goal-outcomes .button, .chat-goal-utilities .button { color: var(--text-muted); }
 .chat-goal-outcomes .button:hover:not(:disabled), .chat-goal-utilities .button:hover:not(:disabled) { color: var(--text-strong); }
 @media (max-width: 1100px) { .chat-goal-panel:not(.empty) > header { flex-wrap: wrap; } .chat-goal-panel > header small { width: 100%; padding-left: 42px; flex-wrap: wrap; white-space: normal; } }
-@media (max-width: 430px) { .chat-goal-limits { grid-template-columns: 1fr; } .chat-goal-actions { justify-content: flex-start; gap: 8px; } .chat-goal-actions .button { min-height: 44px; } .chat-goal-outcomes { border: 0; padding-right: 0; } .chat-goal-utilities { width: 100%; } .chat-goal-toggle { width: 44px; height: 44px; } .chat-goal-panel > header small { padding-left: 54px; } }
+@media (max-width: 430px) { .chat-goal-limits { grid-template-columns: 1fr; } .chat-goal-actions { justify-content: flex-start; gap: 8px; } .chat-goal-actions .button, .chat-goal-objective > summary { min-height: 44px; } .chat-goal-outcomes { border: 0; padding-right: 0; } .chat-goal-utilities { width: 100%; } .chat-goal-toggle { width: 44px; height: 44px; } .chat-goal-panel > header small { padding-left: 54px; } }
 
 /* A goal is optional: without one, the panel is a compact chip, not a full row. */
 .chat-goal-panel.empty:not(:has(.chat-goal-form)) { display: flex; padding: 0; border: 0; background: transparent; }
