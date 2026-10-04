@@ -1,5 +1,5 @@
 {
-  "change_digest": "0fbc1b78c3eaf74da8a11bfbe1bd875d067a1eccc35e410cc24437fbf1992fc3",
+  "change_digest": "b5e2934e9e003ba58d9d051482b065f177734c3dfb2491d2e23fde69a3de96a6",
   "reviewed_by": "Codex for the user-approved Projects and Work merge",
   "reason": "The diff changes Projects navigation, the project overview's saved Work progress, the Work board route, and Project Snapshot selection. Seven directly affected component files cover navigation, active progress selection, errors, project switching, and check-ins. Eighteen selected browser cases cover the Projects entry point, real Core Work save and reconnect, and imported project discovery across desktop Chromium and 320-430 px Chromium/WebKit.",
   "exclusions": "No Python or native implementation changed, so their tests are excluded. Unrelated chat, provider, browser, settings, report, mission, and full interface suites are excluded. The shared App route and workbench CSS were reviewed: selected Projects navigation and real-Core Work journeys exercise their affected behavior.",

@@ -52,6 +52,7 @@ export function ProjectWorkOverview({ projectId }: { projectId: string }) {
       const result = await readProgress(api, projectId, signal);
       if (!signal?.aborted && version === requestVersion.current) setState({ ...result, loading: false });
     } catch (error) {
+      // diagnostic-expected: the read failure is shown with a Retry action in this panel.
       if (!signal?.aborted && version === requestVersion.current) setState((previous) => ({ ...previous, loading: false, error: error instanceof Error ? error.message : "Core could not complete the read." }));
     }
   }, [api, projectId]);
@@ -65,7 +66,7 @@ export function ProjectWorkOverview({ projectId }: { projectId: string }) {
       while (!controller.signal.aborted) {
         try {
           await api.watchWorkChanges(() => void refresh(controller.signal), () => void refresh(controller.signal), controller.signal);
-        } catch { /* The saved progress remains visible while the stream reconnects. */ }
+        } catch { /* diagnostic-expected: retain saved progress while the Work stream reconnects. */ }
         if (controller.signal.aborted) break;
         await new Promise<void>((resolve) => {
           const timeout = window.setTimeout(resolve, 1_000);
