@@ -62,6 +62,7 @@ export function ActivityLedger({
   compact = false,
   historyPending = false,
   progress,
+  latestUpdate,
 }: {
   model: ActivityLedgerViewModel;
   renderEntryDetails?: (entry: ActivityLedgerEntry) => ReactNode;
@@ -70,6 +71,8 @@ export function ActivityLedger({
   emptyState?: ReactNode;
   compact?: boolean;
   historyPending?: boolean;
+  /** Most recent public harness commentary; the complete event remains in activity. */
+  latestUpdate?: string;
   /** The provider's visible prose while it calls tools, retained as work history. */
   progress?: {
     headline?: string;
@@ -92,7 +95,9 @@ export function ActivityLedger({
   const active = model.status === "active" || model.status === "queued" || model.status === "attention";
   const attentionEntries = model.entries.filter((entry) => entry.status === "attention" || (!compact && entry.status === "failed"));
   const receipt = receiptParts(model);
+  const commentaryCount = model.entries.filter((entry) => Boolean(entry.sourceItem?.streams.commentary?.trim())).length;
   const compactReceipt = [
+    !progress && commentaryCount ? `${commentaryCount} update${commentaryCount === 1 ? "" : "s"}` : "",
     model.actionCount ? `${model.actionCount} action${model.actionCount === 1 ? "" : "s"}` : "",
     model.attentionCount ? `${model.attentionCount} warning${model.attentionCount === 1 ? "" : "s"}` : "",
     model.artifactCount ? `${model.artifactCount} artifact${model.artifactCount === 1 ? "" : "s"}` : "",
@@ -127,7 +132,7 @@ export function ActivityLedger({
       </p>)}
 
       {compact && active && (progress?.headline || model.currentAction) && <p className="activity-ledger-current activity-ledger-compact-current" aria-live="polite"><small>Now</small><span>{progress?.headline ?? model.currentAction}</span></p>}
-      {compact && active && progress?.latest && <p className="activity-ledger-progress-preview" aria-live="polite"><small>Latest update</small><span>{progress.latest}</span></p>}
+      {compact && active && (progress?.latest || latestUpdate) && <p className="activity-ledger-progress-preview" aria-live="polite"><small>Latest update</small><span>{progress?.latest || latestUpdate}</span></p>}
 
       {attentionEntries.length > 0 && <div className="activity-ledger-attention" aria-label="Activity requiring attention">
         {attentionEntries.map((entry) => entry.status === "failed" ? <details className="activity-ledger-failure status-failed" key={`attention:${entry.id}`}>

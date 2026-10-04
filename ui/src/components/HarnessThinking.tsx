@@ -45,7 +45,10 @@ export function HarnessThinking({ items }: { items: HarnessActivityItem[] }) {
   // completed state still belongs in the transcript after the pending flash.
   const thoughts = items.filter((item) => reasoningSummaryState(item) !== undefined);
   const readable = thoughts.filter((item) => reasoningSummaryText(item) || reasoningSummaryState(item) === "pending");
+  const summaryCount = thoughts.filter((item) => Boolean(reasoningSummaryText(item))).length;
   const withoutSummary = thoughts.length - readable.length;
+  const missingSummarySource = thoughts.filter((item) => reasoningSummaryState(item) === "not_provided")
+    .every((item) => item.vendor === "codex_app_server") ? "Codex" : "The harness";
   const [expanded, setExpanded] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const disclosureRef = useRef<HTMLDetailsElement>(null);
@@ -68,11 +71,11 @@ export function HarnessThinking({ items }: { items: HarnessActivityItem[] }) {
     setExpanded(event.currentTarget.open);
     if (!event.currentTarget.open) setShowAll(false);
   }}>
-    <summary>{active ? "Thinking…" : "Thinking"}<span>{thoughts.length > 1 ? `${thoughts.length} updates` : ""}</span></summary>
+    <summary>{active ? "Thinking…" : "Thinking"}<span>{summaryCount > 1 ? `${summaryCount} summaries` : ""}</span></summary>
     {expanded && <div className="harness-thinking-body">
       {withoutSummary > 0 && <p className="harness-reasoning-note">{withoutSummary === 1
-        ? "No thinking summary was provided for one completed update."
-        : `No thinking summaries were provided for ${withoutSummary} completed updates.`}</p>}
+        ? `${missingSummarySource} did not provide a public summary for one reasoning episode.`
+        : `${missingSummarySource} did not provide public summaries for ${withoutSummary} reasoning episodes.`}</p>}
       {readable.length > 8 && !showAll && <p className="harness-thinking-count">Latest 8 of {readable.length}{withoutSummary ? " summaries" : ""}</p>}
       {visible.length > 0 && <ol className="harness-thinking-list" aria-label="Thinking summaries">
         {visible.map((item) => <li key={item.key}><HarnessMarkdown content={reasoningSummaryText(item) || "Waiting for a summary from the harness…"} /></li>)}
