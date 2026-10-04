@@ -178,27 +178,3 @@ export function groupStreams(items: StructuredResultSummary[]): ResultStream[] {
     latest: grouped[0],
   }));
 }
-
-/**
- * How many results arrived since the operator last looked, so a toggle can say
- * so without pulling attention mid-turn.
- */
-export function useUnseenCount(items: StructuredResultSummary[], open: boolean): { unseen: number; acknowledge: () => void } {
-  const seen = useRef<Set<string>>(new Set());
-  const [unseen, setUnseen] = useState(0);
-  const acknowledge = useCallback(() => {
-    for (const item of items) seen.current.add(item.id);
-    setUnseen(0);
-  }, [items]);
-
-  useEffect(() => {
-    if (open) {
-      for (const item of items) seen.current.add(item.id);
-      setUnseen(0);
-      return;
-    }
-    setUnseen(items.filter((item) => !seen.current.has(item.id)).length);
-  }, [items, open]);
-
-  return useMemo(() => ({ unseen, acknowledge }), [acknowledge, unseen]);
-}

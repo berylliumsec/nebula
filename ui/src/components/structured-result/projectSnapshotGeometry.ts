@@ -1,30 +1,30 @@
 /**
- * Where the floating Agent view sits and how large it is. It is a per-device
+ * Where the floating Project Snapshot sits and how large it is. It is a per-device
  * convenience, so storage that is missing, full or blocked costs nothing
  * more than starting from the defaults.
  */
 
-export interface AgentViewRect {
+export interface ProjectSnapshotRect {
   x: number;
   y: number;
   width: number;
   height: number;
 }
 
-export interface AgentViewPoint {
+export interface ProjectSnapshotPoint {
   x: number;
   y: number;
 }
 
-export interface AgentViewViewport {
+export interface ProjectSnapshotViewport {
   left: number;
   top: number;
   width: number;
   height: number;
 }
 
-const GEOMETRY_KEY = "nebula.agent-view.geometry";
-const LAUNCHER_KEY = "nebula.agent-view.launcher";
+const GEOMETRY_KEY = "nebula.project-snapshot.geometry";
+const LAUNCHER_KEY = "nebula.project-snapshot.launcher";
 
 /** Gap kept between a floating surface and the edge of the window. */
 export const EDGE = 12;
@@ -65,7 +65,7 @@ function finite(...values: unknown[]): boolean {
 }
 
 /** The viewport a floating surface has to stay inside, zoom included. */
-export function currentViewport(): AgentViewViewport {
+export function currentViewport(): ProjectSnapshotViewport {
   const visual = window.visualViewport;
   return {
     left: visual?.offsetLeft ?? 0,
@@ -79,7 +79,7 @@ export function currentViewport(): AgentViewViewport {
  * Fit a rectangle inside the viewport: never smaller than the minimum, never
  * larger than the window, and always with its move handle on screen.
  */
-export function clampRect(rect: AgentViewRect, viewport: AgentViewViewport): AgentViewRect {
+export function clampRect(rect: ProjectSnapshotRect, viewport: ProjectSnapshotViewport): ProjectSnapshotRect {
   const maxWidth = Math.max(MIN_WIDTH, viewport.width - EDGE * 2);
   const maxHeight = Math.max(MIN_HEIGHT, viewport.height - EDGE * 2);
   const width = Math.min(Math.max(rect.width, MIN_WIDTH), maxWidth);
@@ -90,7 +90,7 @@ export function clampRect(rect: AgentViewRect, viewport: AgentViewViewport): Age
 }
 
 /** A small surface, such as the minimized launcher, kept fully on screen. */
-export function clampPoint(point: AgentViewPoint, size: { width: number; height: number }, viewport: AgentViewViewport): AgentViewPoint {
+export function clampPoint(point: ProjectSnapshotPoint, size: { width: number; height: number }, viewport: ProjectSnapshotViewport): ProjectSnapshotPoint {
   return {
     x: Math.max(viewport.left + EDGE, Math.min(point.x, viewport.left + viewport.width - size.width - EDGE)),
     y: Math.max(viewport.top + EDGE, Math.min(point.y, viewport.top + viewport.height - size.height - EDGE)),
@@ -98,7 +98,7 @@ export function clampPoint(point: AgentViewPoint, size: { width: number; height:
 }
 
 /** What a first placement should keep clear: the page's toolbar and composer. */
-export interface AgentViewClearance {
+export interface ProjectSnapshotClearance {
   /** The bottom of whatever the panel should open below. */
   below?: number;
   /** The top of whatever the panel should open above. */
@@ -110,7 +110,7 @@ export interface AgentViewClearance {
  * under the conversation's toolbar and clear of the composer where there is
  * room for both.
  */
-export function defaultRect(viewport: AgentViewViewport, clearance: AgentViewClearance = {}): AgentViewRect {
+export function defaultRect(viewport: ProjectSnapshotViewport, clearance: ProjectSnapshotClearance = {}): ProjectSnapshotRect {
   const y = Math.max(viewport.top + 96, (clearance.below ?? 0) + EDGE);
   const room = clearance.above === undefined ? DEFAULT_HEIGHT : clearance.above - y - EDGE;
   return clampRect({
@@ -122,22 +122,22 @@ export function defaultRect(viewport: AgentViewViewport, clearance: AgentViewCle
 }
 
 /** Where the operator last left the panel, or the first placement. */
-export function readRect(viewport: AgentViewViewport, clearance: AgentViewClearance = {}): AgentViewRect {
-  const saved = read(GEOMETRY_KEY) as Partial<AgentViewRect> | undefined;
+export function readRect(viewport: ProjectSnapshotViewport, clearance: ProjectSnapshotClearance = {}): ProjectSnapshotRect {
+  const saved = read(GEOMETRY_KEY) as Partial<ProjectSnapshotRect> | undefined;
   if (!saved || !finite(saved.x, saved.y, saved.width, saved.height)) return defaultRect(viewport, clearance);
-  return clampRect(saved as AgentViewRect, viewport);
+  return clampRect(saved as ProjectSnapshotRect, viewport);
 }
 
-export function writeRect(rect: AgentViewRect) {
+export function writeRect(rect: ProjectSnapshotRect) {
   write(GEOMETRY_KEY, rect);
 }
 
-export function readLauncher(): AgentViewPoint | undefined {
-  const saved = read(LAUNCHER_KEY) as Partial<AgentViewPoint> | undefined;
-  return saved && finite(saved.x, saved.y) ? saved as AgentViewPoint : undefined;
+export function readLauncher(): ProjectSnapshotPoint | undefined {
+  const saved = read(LAUNCHER_KEY) as Partial<ProjectSnapshotPoint> | undefined;
+  return saved && finite(saved.x, saved.y) ? saved as ProjectSnapshotPoint : undefined;
 }
 
-export function writeLauncher(point: AgentViewPoint) {
+export function writeLauncher(point: ProjectSnapshotPoint) {
   write(LAUNCHER_KEY, point);
 }
 

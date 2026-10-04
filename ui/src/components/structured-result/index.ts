@@ -24,8 +24,7 @@ export {
 } from "./normalize";
 export { renderRaw, type RawDocument } from "./rawText";
 export { structuralReferences, type StructuralReference } from "./references";
-export { AgentViewPanel } from "./AgentViewPanel";
-export { AgentViewBody, agentViewStatus, useAgentViewStream, type AgentViewStream } from "./AgentViewBody";
+export { ProjectSnapshotPanel } from "./ProjectSnapshotPanel";
 export { InspectorPanel } from "./InspectorPanel";
 export { PropertyGrid } from "./PropertyGrid";
 export { ResultTimeline, shapeLabel, whenLabel } from "./ResultTimeline";
@@ -44,7 +43,6 @@ export {
   groupStreams,
   useStructuredResult,
   useStructuredResults,
-  useUnseenCount,
   type ResultStream,
   type StructuredResultDetail,
   type StructuredResultList,

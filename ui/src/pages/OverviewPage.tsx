@@ -1,18 +1,16 @@
 import {
   ArrowUpRight,
-  Bot,
   CheckCircle2,
   CircleAlert,
   Clock3,
-  DollarSign,
-  FileCheck2,
   ShieldCheck,
-  Target,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { ExecutionLanguage } from "../api/types";
 import { AssistantMarkdown } from "../components/AssistantMarkdown";
 import { PageHeader } from "../components/PageHeader";
+import { ProjectSummaryCards } from "../components/ProjectSummaryCards";
+export { formatProjectModelCost } from "../components/ProjectSummaryCards";
 import { NewMissionButton, StopMissionButton } from "../components/MissionControls";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useChrome } from "../state/ChromeContext";
@@ -20,13 +18,6 @@ import { useChrome } from "../state/ChromeContext";
 type EventStepState = "complete" | "running" | "waiting" | "failed" | "stopped" | "queued";
 
 const noRunnableLanguages = new Set<ExecutionLanguage>();
-
-export function formatProjectModelCost(cost: number | undefined): string {
-  if (cost === undefined) return "—";
-  const precision = cost > 0 && cost < 0.0001 ? 6 : cost > 0 && cost < 0.01 ? 4 : 2;
-  const scale = 10 ** precision;
-  return `$${(Math.round(cost * scale) / scale).toFixed(precision)}`;
-}
 
 function eventStepState(kind: string): EventStepState {
   if (kind.includes("failed") || kind.includes("blocked")) return "failed";
@@ -42,8 +33,6 @@ export function OverviewPage() {
   const { setActivityOpen } = useChrome();
   const { approvals, assets, engagement, events, findings, health, run } = useWorkspace();
   const validatedFindings = findings.filter((finding) => ["validated", "confirmed"].includes(finding.status));
-  const criticalFindings = findings.filter((finding) => finding.severity === "critical").length;
-  const highFindings = findings.filter((finding) => finding.severity === "high").length;
   const completedTasks = run?.completedTasks ?? 0;
   const totalTasks = run?.totalTasks ?? 0;
   const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
@@ -70,24 +59,7 @@ export function OverviewPage() {
         </div>
       )}
 
-      {hasCoverage && <section className="metric-grid" aria-label="Project summary">
-        <article className="metric-card accent-blue">
-          <span className="metric-icon"><Target size={19} /></span>
-          <div><small>Assets</small><strong>{assets.length}</strong><span>In this project</span></div>
-        </article>
-        <article className="metric-card accent-violet">
-          <span className="metric-icon"><Bot size={19} /></span>
-          <div><small>Mission</small><strong>{missionStatus ?? "—"}</strong><span title={missionTitle ?? "No active run"}>{missionTitle ?? "No active run"}</span></div>
-        </article>
-        <article className="metric-card accent-red">
-          <span className="metric-icon"><FileCheck2 size={19} /></span>
-          <div><small>Findings</small><strong>{validatedFindings.length}</strong><span>{findings.length} total · {criticalFindings + highFindings} priority</span></div>
-        </article>
-        <article className="metric-card accent-green">
-          <span className="metric-icon"><DollarSign size={19} /></span>
-          <div><small>Model cost</small><strong>{formatProjectModelCost(run?.spentUsd)}</strong><span>Recorded for this mission</span></div>
-        </article>
-      </section>}
+      {hasCoverage && <ProjectSummaryCards assets={assets} findings={findings} run={run} />}
 
       <div className="overview-grid">
         <section className={`panel mission-panel${events.length === 0 ? " is-empty" : ""}`}>
