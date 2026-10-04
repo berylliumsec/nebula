@@ -1,13 +1,13 @@
 {
   "change_digest": "377cdb38fd6b04ad344ec572d3466239ae37631913e1d6950359c0fbaeb24200",
   "reviewed_by": "Codex focused Thinking and Project Snapshot review",
-  "reason": "The diff keeps completed Codex reasoning episodes visible without public summaries and makes Project Snapshot lead with the latest durable Work check-in linked to the current conversation, including a child Work project. One API case checks the indexed cross-project conversation filter. Twenty-one component cases cover Thinking transitions, Work selection, loading, live refresh, retry, links, and panel geometry. Fifteen browser cases cover Project Snapshot layout and a real-Core child-project Work check-in, live update, reload, and saved Thinking across desktop Chromium, emulated Android Chromium at 390 px, and emulated iPhone WebKit at 390 px.",
+  "reason": "The diff keeps completed Codex reasoning episodes visible without public summaries and makes Project Snapshot lead with the latest durable Work check-in linked to the current conversation, including a child Work project. One API case checks the indexed cross-project conversation filter. Twenty-one component cases cover Thinking transitions, Work selection, loading, live refresh, retry, links, and panel geometry. Eighteen browser cases cover Project Snapshot layout and its legacy opening link plus a real-Core child-project Work check-in, live update, reload, and saved Thinking across desktop Chromium, emulated Android Chromium at 390 px, and emulated iPhone WebKit at 390 px.",
   "exclusions": "The selected Python API case is the only backend behavior changed; no unrelated Work or native tests are needed. The shared SessionsPage and stylesheet changes are limited to Project Snapshot; selected Project Snapshot and thinking journeys cover them without unrelated assistant or results tests. Mobile browser profiles are emulated; no physical device is available.",
   "expected_tests": {
     "python": 1,
     "frontend": 21,
     "native": 0,
-    "playwright": 15
+    "playwright": 18
   },
   "python_versions": ["3.12"],
   "python_browser": false,
