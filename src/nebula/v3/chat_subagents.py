@@ -88,6 +88,7 @@ from .domain import (
 )
 from .providers import REASONING_EFFORTS, ReasoningEffort
 from .runtime_platform import RuntimeToolComponents
+from .skill_catalog import SkillSelection, discover_skills, native_skill_roots
 from .storage import ConflictError, NotFoundError, StoreTransaction
 from .tool_results import MAX_EXCERPT_BYTES, model_result_bytes
 from .tools import (
@@ -154,6 +155,7 @@ _LEGACY_SUBAGENT_DIGEST = re.compile(r"subagents-[0-9a-f]{16}")
 SUBAGENT_TOOL_NAMES = frozenset(
     {
         "start_subagent",
+        "list_subagent_capabilities",
         "wait_subagents",
         "list_subagents",
         "message_subagent",
@@ -162,13 +164,115 @@ SUBAGENT_TOOL_NAMES = frozenset(
 )
 SUBAGENT_CHILD_TOOL_NAMES = frozenset({"message_parent", "read_parent_messages"})
 
+
+def subagent_capabilities_schema() -> dict[str, Any]:
+    """Optional child-only choices; omitted fields keep the current inheritance."""
+
+    return {
+        "type": ["object", "null"],
+        "properties": {
+            "tool_names": {
+                "type": "array",
+                "maxItems": 128,
+                "uniqueItems": True,
+                "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                "description": "Exact tools the child may use, besides parent messaging. Empty means no other tools.",
+            },
+            "mcp_server_ids": {
+                "type": "array",
+                "maxItems": 64,
+                "uniqueItems": True,
+                "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                "description": "Subset of this turn's selected MCP servers. Empty means none.",
+            },
+            "skills": {
+                "type": "array",
+                "maxItems": 8,
+                "uniqueItems": True,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "minLength": 1, "maxLength": 200},
+                        "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    },
+                    "required": ["name", "path"],
+                    "additionalProperties": False,
+                },
+                "description": "Exact project or installed skill catalog entries to give the child.",
+            },
+        },
+        "additionalProperties": False,
+    }
+
+
+def _capability_selection(
+    value: dict[str, Any] | None, inherited_mcp_ids: list[str]
+) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - {
+        "tool_names",
+        "mcp_server_ids",
+        "skills",
+    }:
+        raise refused_before_execution(
+            InvalidToolArguments("invalid subagent capabilities")
+        )
+    selected: dict[str, Any] = {}
+    for key, limit in (("tool_names", 128), ("mcp_server_ids", 64)):
+        if key not in value:
+            continue
+        items = value[key]
+        if (
+            not isinstance(items, list)
+            or len(items) > limit
+            or any(
+                not isinstance(item, str) or not item or len(item) > 200
+                for item in items
+            )
+            or len(set(items)) != len(items)
+        ):
+            raise refused_before_execution(
+                InvalidToolArguments(f"invalid {key} selection")
+            )
+        selected[key] = items
+    if "mcp_server_ids" in selected:
+        unavailable = set(selected["mcp_server_ids"]) - set(inherited_mcp_ids)
+        if unavailable:
+            raise refused_before_execution(
+                InvalidToolArguments(
+                    "MCP servers were not selected for this parent turn: "
+                    + ", ".join(sorted(unavailable))
+                )
+            )
+    if "skills" in value:
+        raw = value["skills"]
+        if not isinstance(raw, list) or len(raw) > 8:
+            raise refused_before_execution(
+                InvalidToolArguments("invalid skills selection")
+            )
+        try:
+            skills = [SkillSelection.model_validate(item).model_dump() for item in raw]
+        except ValueError as exc:
+            raise refused_before_execution(InvalidToolArguments(str(exc))) from exc
+        if len({item["path"] for item in skills}) != len(skills):
+            raise refused_before_execution(
+                InvalidToolArguments("duplicate subagent skill")
+            )
+        selected["skills"] = skills
+    return selected or None
+
+
 SUBAGENT_ROUTING_INSTRUCTIONS = """
 Subagents: start_subagent delegates one independent, multi-step task to a child
-assistant with the same model and tools; it returns immediately and runs in
+assistant with the same model and, by default, the same tools; it returns immediately and runs in
 parallel. Give it a complete, self-contained task. Do not delegate single
 lookups. Choose reasoning_effort on start_subagent for each task; if omitted,
 the child provider uses its model default. An operator effort setting overrides
-your choice when present.
+your choice when present. Call list_subagent_capabilities to discover exact tool
+names, selected MCP server IDs and skill paths. Pass capabilities on a start to
+narrow tools or MCP servers and assign skills for that child. Omitted fields
+inherit; an empty list grants none in that field.
 Call wait_subagents when you need their reports before answering;
 subagents that finish after your answer report back in the conversation.
 message_subagent sends a subagent new instructions or answers its question; a
@@ -260,7 +364,11 @@ def harness_subagent_instructions(
     return (
         "Provider subagents: subagent.start hands one independent, multi-step task "
         f"to a child assistant on the Nebula provider model {model} with this "
-        "project's command runtime and MCP servers. It returns immediately and "
+        "project's command runtime and MCP servers by default. Call "
+        "subagent.capabilities to discover exact tool names, selected MCP server "
+        "IDs and skill paths. Pass capabilities to subagent.start to narrow the "
+        "child's tools or MCP servers and assign skills; omitted fields inherit, "
+        "and an empty list grants none in that field. It returns immediately and "
         "runs in parallel"
         + (f"; at most {limit} run at once" if limit is not None else "")
         + ". Children "
@@ -1079,6 +1187,7 @@ class SubagentService:
             "provider_profile_id": provider_profile_id,
             "model": model,
             "reasoning_effort": record.reasoning_effort,
+            "capabilities": record.parent_request.get("capabilities"),
             "child_session_id": record.child_session_id,
             "child_turn_id": record.child_turn_id,
             "rounds": record.rounds,
@@ -1099,6 +1208,60 @@ class SubagentService:
                 else record.error
             ),
             "result_message_id": record.result_message_id,
+        }
+
+    def available_capabilities(self, parent_turn_id: str) -> dict[str, Any]:
+        """Names a supervisor can use without guessing project IDs or paths."""
+
+        turn = self.store.get(ChatTurn, parent_turn_id)
+        session = self.store.get(ChatSession, turn.session_id)
+        if is_subagent_session(session):
+            raise refused_before_execution(
+                InvalidToolArguments("subagents cannot assign capabilities to children")
+            )
+        snapshot = resolve_request_snapshot(
+            self.store, turn.request_snapshot, session_id=turn.session_id
+        )
+        model_request = snapshot.get("model_request") or {}
+        model_tools = model_request.get("tools") or []
+        command_snapshot = snapshot.get("command_runtime_snapshot") or {}
+        names = set(snapshot.get("available_tool_names") or [])
+        names.update(
+            {
+                str(item.get("name"))
+                for item in model_tools
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            }
+        )
+        names.update(
+            item
+            for item in command_snapshot.get("tool_names", [])
+            if isinstance(item, str)
+        )
+        catalog = snapshot.get("tool_catalog") or {}
+        names.update(
+            item for item in catalog.get("deferred", []) if isinstance(item, str)
+        )
+        names -= SUBAGENT_TOOL_NAMES | {"finish_response", "tool_catalog.call"}
+        mcp_profiles = snapshot.get("mcp_snapshot") or []
+        from .chat import ChatConfigurationError
+
+        try:
+            workspace = self.chat.workspace_resolver(session.engagement_id)
+        except (ChatConfigurationError, OSError):
+            skills = []
+        else:
+            skills = discover_skills(
+                native_skill_roots(workspace, self.chat.managed_skill_root)
+            )
+        return {
+            "tool_names": sorted(names),
+            "mcp_servers": [
+                {"id": item["id"], "name": item.get("name", item["id"])}
+                for item in mcp_profiles
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            ],
+            "skills": [{"name": item.name, "path": item.path} for item in skills],
         }
 
     def _header(self, record: ChatSubagent) -> dict[str, Any]:
@@ -1535,6 +1698,7 @@ class SubagentService:
         name: str | None,
         context: str | None,
         reasoning_effort: str | None = None,
+        capabilities: dict[str, Any] | None = None,
     ) -> ChatSubagent:
         from .chat import ChatCompletionRequest, ChatRequestMessage
 
@@ -1575,6 +1739,9 @@ class SubagentService:
         mcp_server_ids = [
             item for item in snapshot.get("mcp_server_ids", []) if isinstance(item, str)
         ]
+        selection = _capability_selection(capabilities, mcp_server_ids)
+        if selection is not None and "mcp_server_ids" in selection:
+            mcp_server_ids = selection["mcp_server_ids"]
         if parent_turn.backend == ChatBackend.HARNESS:
             setting = snapshot.get("provider_subagent")
             if not isinstance(setting, dict):
@@ -1614,6 +1781,7 @@ class SubagentService:
             "mcp_server_ids": mcp_server_ids,
             "allow_subagents": allow_subagents,
             "max_active_subagents": limit if allow_subagents else None,
+            **({"capabilities": selection} if selection is not None else {}),
         }
         subagent_id = str(uuid4())
         child_session = ChatSession(
@@ -1669,6 +1837,11 @@ class SubagentService:
                     include_knowledge=False,
                     tools_enabled=tools_enabled,
                     mcp_server_ids=mcp_server_ids,
+                    skill_selections=(selection or {}).get("skills", []),
+                    allowed_tool_names=(selection or {}).get("tool_names"),
+                    allow_mcp_catalog=(
+                        selection is None or "mcp_server_ids" not in selection
+                    ),
                     ssh_environment_ids=self._ssh_environment_ids(record, parent_turn),
                     # A provider parent only reached tool routing after its own
                     # cloud-transfer confirmation (or with a local provider). A
@@ -1919,6 +2092,7 @@ class SubagentService:
             model = model or child.model
             provider_id = provider_id or child.provider_profile_id
         flags = record.parent_request
+        selection = flags.get("capabilities") or {}
         # The round runs for the parent turn that sent the message, or, when
         # Core starts it after a report, for the turn the child already has.
         driving_turn = self._parent_turn(record, parent_turn_id)
@@ -1942,6 +2116,9 @@ class SubagentService:
                 include_knowledge=False,
                 tools_enabled=bool(flags.get("tools_enabled")),
                 mcp_server_ids=list(flags.get("mcp_server_ids") or []),
+                skill_selections=selection.get("skills", []),
+                allowed_tool_names=selection.get("tool_names"),
+                allow_mcp_catalog="mcp_server_ids" not in selection,
                 ssh_environment_ids=self._ssh_environment_ids(record, driving_turn),
                 allow_cloud_tool_results=True,
                 reasoning_effort=_known_effort(record.reasoning_effort),
@@ -4190,9 +4367,18 @@ class SubagentBroker:
                 reasoning_effort=arguments.get("reasoning_effort")
                 if isinstance(arguments.get("reasoning_effort"), str)
                 else None,
+                capabilities=arguments.get("capabilities"),
             )
             return ToolExecutionResult(
                 output=self.service.start_output(record, harness=False)
+            )
+        if name == "list_subagent_capabilities":
+            if not invocation.chat_turn_id:
+                raise refused_before_execution(
+                    InvalidToolArguments("a parent turn is required")
+                )
+            return ToolExecutionResult(
+                output=self.service.available_capabilities(invocation.chat_turn_id)
             )
         if name == "list_subagents":
             return ToolExecutionResult(output=self.service.list_output(session_id))
@@ -4235,7 +4421,13 @@ class SubagentBroker:
         )
 
 
-def _spec(name: str, description: str, properties: dict[str, Any]) -> ToolSpec:
+def _spec(
+    name: str,
+    description: str,
+    properties: dict[str, Any],
+    *,
+    optional: frozenset[str] = frozenset(),
+) -> ToolSpec:
     return ToolSpec(
         name=name,
         display_name="Collect delegated reports" if name == "wait_subagents" else None,
@@ -4243,7 +4435,7 @@ def _spec(name: str, description: str, properties: dict[str, Any]) -> ToolSpec:
         input_schema={
             "type": "object",
             "properties": properties,
-            "required": sorted(properties),
+            "required": sorted(set(properties) - optional),
             "additionalProperties": False,
         },
         output_schema={"type": "object", "additionalProperties": True},
@@ -4254,6 +4446,11 @@ def _spec(name: str, description: str, properties: dict[str, Any]) -> ToolSpec:
 
 def subagent_specs() -> dict[str, ToolSpec]:
     specs = [
+        _spec(
+            "list_subagent_capabilities",
+            "List tool names, selected MCP servers and available project or installed skills that a child may be assigned.",
+            {},
+        ),
         _spec(
             "start_subagent",
             "Delegate one independent multi-step task to a parallel subagent that "
@@ -4278,7 +4475,9 @@ def subagent_specs() -> dict[str, ToolSpec]:
                     "enum": [*REASONING_EFFORTS, None],
                     "description": SUBAGENT_EFFORT_DESCRIPTION,
                 },
+                "capabilities": subagent_capabilities_schema(),
             },
+            optional=frozenset({"capabilities"}),
         ),
         _spec(
             "wait_subagents",

@@ -53,6 +53,7 @@ from .sandbox import (
 from .storage import NebulaStore
 from .tool_results import ToolOutputService
 from .tools import (
+    InvalidToolArguments,
     StoreToolEvidenceRecorder,
     StoreToolLedger,
     ToolBroker,
@@ -126,6 +127,51 @@ class RuntimeToolComponents:
     workspace: Path
     specs: Mapping[str, ToolSpec]
     runtime_digest: str = ""
+
+
+class _AllowedToolBroker:
+    def __init__(self, broker: ToolExecutionBroker, names: frozenset[str]) -> None:
+        self.broker = broker
+        self.names = names
+
+    async def execute(
+        self,
+        invocation: ToolInvocation,
+        scope: ScopePolicy,
+        *,
+        approval: Approval | None = None,
+    ) -> ToolExecutionResult:
+        if invocation.tool_name not in self.names:
+            raise InvalidToolArguments(
+                f"capability {invocation.tool_name!r} was not assigned to this subagent"
+            )
+        return await self.broker.execute(invocation, scope, approval=approval)
+
+
+def restrict_tool_components(
+    components: RuntimeToolComponents,
+    names: list[str],
+    *,
+    required: frozenset[str] = frozenset(),
+) -> RuntimeToolComponents:
+    """Expose only assigned tools and enforce the same bound at execution."""
+
+    selected = frozenset(names) | required
+    missing = selected - components.specs.keys()
+    if missing:
+        raise InvalidToolArguments(
+            "subagent tools are unavailable in this project: "
+            + ", ".join(sorted(missing))
+        )
+    return RuntimeToolComponents(
+        broker=_AllowedToolBroker(components.broker, selected),
+        scope=components.scope,
+        workspace=components.workspace,
+        specs={
+            name: spec for name, spec in components.specs.items() if name in selected
+        },
+        runtime_digest=components.runtime_digest,
+    )
 
 
 @dataclass(frozen=True)
