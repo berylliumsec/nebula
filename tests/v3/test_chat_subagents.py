@@ -12,6 +12,7 @@ from nebula.v3.chat import (
     ChatToolResultConsentRequired,
 )
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
+from nebula.v3.chat_subagents import _capability_selection, subagent_specs
 from nebula.v3.chat_turn_ledger import turn_history
 from nebula.v3.domain import (
     Approval,
@@ -400,22 +401,139 @@ def test_subagent_tools_require_opt_in(tmp_path: Path) -> None:
         provider = RoutedProvider([_response(text="plain")], [])
         store, project, _, chat = _setup(tmp_path, provider)
         prepared = await chat.prepare_async(_request(project, content="Hello"))
-        assert prepared.tools_enabled is False
+        assert "start_subagent" not in (
+            prepared.tool_components.specs if prepared.tool_components else {}
+        )
         opted_in = await chat.prepare_async(
             _request(project, content="Hello", allow_subagents=True)
         )
         assert opted_in.tools_enabled is True
-        assert set(opted_in.tool_components.specs) == {
+        assert {
             "start_subagent",
+            "list_subagent_capabilities",
             "wait_subagents",
             "list_subagents",
             "message_subagent",
             "stop_subagent",
             # Every turn with tools can also keep working notes.
             "notes.write",
-        }
+        } <= set(opted_in.tool_components.specs)
         assert opted_in.turn.request_snapshot["allow_subagents"] is True
         await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_supervisor_assigns_named_tools_and_a_skill_to_one_child(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        skill_path = tmp_path / ".agents" / "skills" / "route-review" / "SKILL.md"
+        skill_path.parent.mkdir(parents=True)
+        skill_path.write_text("Route review instruction marker.\n")
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Review routes",
+                    name="Routes",
+                    context=None,
+                    reasoning_effort=None,
+                    capabilities={
+                        "tool_names": ["notes.write"],
+                        "mcp_server_ids": [],
+                        "skills": [{"name": "route-review", "path": str(skill_path)}],
+                    },
+                ),
+                _finish("p2"),
+                _response(text="Delegated."),
+            ],
+            child=[_response(text="Reviewed.")],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        chat.workspace_resolver = lambda _: tmp_path
+        prepared = await chat.prepare_async(
+            _request(project, content="Delegate route review", allow_subagents=True)
+        )
+        available = chat.subagents.available_capabilities(prepared.turn.id)
+        assert "notes.write" in available["tool_names"]
+        assert available["mcp_servers"] == []
+        assert {"name": "route-review", "path": str(skill_path)} in available["skills"]
+        await _drain(chat, chat.start_provider_turn(prepared))
+        await _until(lambda: bool(provider.child_requests))
+        child_request = provider.child_requests[0]
+        names = {tool.name for tool in child_request.tools or []}
+        assert "notes.write" in names
+        assert {"message_parent", "read_parent_messages"} <= names
+        assert "start_subagent" not in names
+        assert "Route review instruction marker." in child_request.instructions
+        (record,) = store.list_entities(ChatSubagent)
+        child_turn = store.get(ChatTurn, record.child_turn_id)
+        assert child_turn.request_snapshot["allowed_tool_names"] == ["notes.write"]
+        assert child_turn.request_snapshot["mcp_catalog_snapshot"] == []
+        assert record.parent_request["capabilities"]["skills"][0]["path"] == str(
+            skill_path
+        )
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_capability_selection_refuses_unselected_mcp_and_keeps_launch_optional() -> (
+    None
+):
+    from nebula.v3.tools import InvalidToolArguments
+
+    schema = subagent_specs()["start_subagent"].input_schema
+    assert "capabilities" not in schema["required"]
+    assert _capability_selection(None, ["selected"]) is None
+    assert _capability_selection({"mcp_server_ids": []}, ["selected"]) == {
+        "mcp_server_ids": []
+    }
+    with pytest.raises(InvalidToolArguments, match="not selected"):
+        _capability_selection({"mcp_server_ids": ["other"]}, ["selected"])
+
+
+def test_assigned_tool_names_are_enforced_by_the_execution_broker(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    from nebula.v3.domain import ScopePolicy
+    from nebula.v3.runtime_platform import (
+        RuntimeToolComponents,
+        restrict_tool_components,
+    )
+    from nebula.v3.tools import InvalidToolArguments
+
+    class Broker:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def execute(self, invocation, scope, *, approval=None):
+            self.calls.append(invocation.tool_name)
+            return invocation.tool_name
+
+    async def scenario() -> None:
+        broker = Broker()
+        scope = ScopePolicy(engagement_id="project")
+        components = RuntimeToolComponents(
+            broker=broker,
+            scope=scope,
+            workspace=tmp_path,
+            specs={"allowed": object(), "blocked": object()},
+        )
+        narrowed = restrict_tool_components(components, ["allowed"])
+        assert set(narrowed.specs) == {"allowed"}
+        with pytest.raises(InvalidToolArguments, match="not assigned"):
+            await narrowed.broker.execute(SimpleNamespace(tool_name="blocked"), scope)
+        assert broker.calls == []
+        assert (
+            await narrowed.broker.execute(SimpleNamespace(tool_name="allowed"), scope)
+            == "allowed"
+        )
+        assert broker.calls == ["allowed"]
 
     asyncio.run(scenario())
 
@@ -1826,6 +1944,7 @@ def test_message_to_a_finished_subagent_starts_another_round(tmp_path: Path) -> 
                     task="Check the certificates.",
                     name="Certs",
                     context=None,
+                    capabilities={"tool_names": ["notes.write"], "mcp_server_ids": []},
                 ),
                 _call("p2", "wait_subagents", subagent_ids=None, mode=None),
                 _finish("p3"),
@@ -1882,6 +2001,12 @@ def test_message_to_a_finished_subagent_starts_another_round(tmp_path: Path) -> 
         report = _result(_entries(store, second, "wait_subagents")[0])["subagents"][0]
         assert report["report"] == "Backups are encrypted."
         assert report["round"] == 2
+        assert len(provider.child_requests) >= 2
+        assert all(
+            "notes.write" in {tool.name for tool in request.tools or []}
+            and "start_subagent" not in {tool.name for tool in request.tools or []}
+            for request in provider.child_requests
+        )
 
         record = store.get(ChatSubagent, record.id)
         assert record.rounds == 2

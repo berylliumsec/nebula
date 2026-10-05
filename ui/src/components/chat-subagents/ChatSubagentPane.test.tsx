@@ -61,6 +61,25 @@ describe("the subagents an operator can see and act on", () => {
     expect(screen.getByText(/cannot start their own subagents/)).toBeInTheDocument();
   });
 
+  it("shows the capability choices made by a child's supervisor", async () => {
+    const user = userEvent.setup();
+    const assigned = subagent({
+      capabilities: {
+        toolNames: ["notes.write"],
+        mcpServerIds: [],
+        skills: [{ name: "route-review", path: "/project/.agents/skills/route-review/SKILL.md" }],
+      },
+    });
+    const { rerender } = render(<ChatSubagentPane {...paneProps} subagents={[assigned]} />);
+    await user.click(screen.getByRole("button", { name: /Map documented API routes/ }));
+    expect(screen.getByText("Assigned capabilities")).toBeInTheDocument();
+    expect(screen.getByText("Tools: notes.write")).toBeInTheDocument();
+    expect(screen.getByText("MCP servers: none")).toBeInTheDocument();
+    expect(screen.getByText("Skills: route-review")).toBeInTheDocument();
+    rerender(<ChatSubagentPane {...paneProps} subagents={[assigned]} compact />);
+    expect(screen.getByText("Assigned capabilities")).toBeInTheDocument();
+  });
+
   it("opens a child that needs a decision and records the operator's answer", async () => {
     const user = userEvent.setup();
     decideApproval.mockResolvedValue({});
@@ -182,7 +201,7 @@ describe("the subagents an operator can see and act on", () => {
     />);
     expect(screen.getByText(/1 of 2 running · limit 2 · deepseek\/deepseek-v3.2 · 6.2k tokens/)).toBeInTheDocument();
     // Where the tool outputs go is stated, not implied.
-    expect(screen.getByText(/run on OpenRouter · deepseek\/deepseek-v3.2 .* Their tool outputs go to OpenRouter/)).toBeInTheDocument();
+    expect(screen.getByText(/run on OpenRouter · deepseek\/deepseek-v3.2 .* Tool outputs go to OpenRouter/)).toBeInTheDocument();
   });
 
   it("explains harness delegation before anything has been delegated", () => {

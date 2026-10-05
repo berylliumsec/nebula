@@ -3550,6 +3550,12 @@ export interface ChatSubagentView {
   /** The provider model the child runs on. */
   providerProfileId?: Identifier;
   model?: string;
+  /** Choices the supervising agent made for this child. Missing means inherited defaults. */
+  capabilities?: {
+    toolNames?: string[];
+    mcpServerIds?: string[];
+    skills?: { name: string; path: string }[];
+  };
   stepCount: number;
   /** The last few tool steps Core kept for the operator, newest last. */
   recentSteps: ChatSubagentStep[];

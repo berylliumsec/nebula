@@ -86,6 +86,7 @@ from .runtime_platform import (
     conversation_search_components,
     knowledge_search_components,
     notes_components,
+    restrict_tool_components,
 )
 from .tool_activity import lookup_identifiers, step_brief, tool_activity_block
 from .working_notes import (
@@ -593,6 +594,11 @@ class ChatCompletionRequest(NebulaModel):
     session_id: str | None = Field(default=None, max_length=200)
     goal_id: str | None = Field(default=None, max_length=200)
     skill: dict[str, str] | None = None
+    # Internal child-turn selections. The public single-skill selection stays
+    # available to ordinary chats; a supervisor may assign several to a child.
+    skill_selections: list[dict[str, str]] = Field(default_factory=list, max_length=8)
+    allowed_tool_names: list[str] | None = Field(default=None, max_length=128)
+    allow_mcp_catalog: bool = True
     messages: list[ChatRequestMessage] = Field(min_length=1, max_length=200)
     context_attachments: list[ChatContextAttachment] = Field(
         default_factory=list, max_length=20
@@ -5375,25 +5381,37 @@ class ChatService:
                 else []
             )
         ]
-        if request.skill is not None:
+        requested_skills = [
+            *([request.skill] if request.skill is not None else []),
+            *request.skill_selections,
+        ]
+        if requested_skills:
             if engagement_id is None:
                 raise ChatConfigurationError(
                     "skill selection requires a project conversation"
                 )
             try:
                 workspace = self.workspace_resolver(engagement_id)
-                selected_snapshot = snapshot_skill(
-                    SkillSelection.model_validate(request.skill),
-                    discover_skills(
-                        native_skill_roots(workspace, self.managed_skill_root)
-                    ),
+                available_skills = discover_skills(
+                    native_skill_roots(workspace, self.managed_skill_root)
                 )
+                selected_snapshots = [
+                    snapshot_skill(
+                        SkillSelection.model_validate(item), available_skills
+                    )
+                    for item in requested_skills
+                ]
             except (NativeHookError, OSError, ValueError) as exc:
                 raise ChatConfigurationError(str(exc)) from exc
             if goal is not None:
                 existing_paths = {item.path for item in skill_snapshots}
-                if selected_snapshot.path not in existing_paths:
-                    skill_snapshots.append(selected_snapshot)
+                additions = [
+                    item
+                    for item in selected_snapshots
+                    if item.path not in existing_paths
+                ]
+                if additions:
+                    skill_snapshots.extend(additions)
                     # Each usage charge rewrites the goal, so the attached
                     # instructions are stored beside it rather than in it.
                     skill_entries, skill_parts = split_skill_snapshots(
@@ -5410,7 +5428,9 @@ class ChatService:
                             expected_revision=goal.revision,
                         )
             else:
-                skill_snapshots = [selected_snapshot]
+                skill_snapshots = list(
+                    {item.path: item for item in selected_snapshots}.values()
+                )
 
         hook_snapshots = []
         if request.hook_ids:
@@ -5689,7 +5709,7 @@ class ChatService:
             # one.
             catalog_profiles = (
                 self._mcp_catalog(engagement_id, mcp_profiles)
-                if self.tool_platform is not None
+                if self.tool_platform is not None and request.allow_mcp_catalog
                 else ()
             )
             turn_id = str(uuid4())
@@ -5887,6 +5907,24 @@ class ChatService:
                 raise ChatConfigurationError(
                     "no command, automation, MCP, or browser runtime capabilities were selected"
                 )
+            if request.allowed_tool_names is not None:
+                try:
+                    tool_components = restrict_tool_components(
+                        tool_components,
+                        request.allowed_tool_names,
+                        required=(
+                            frozenset({"message_parent", "read_parent_messages"})
+                            if subagent_child
+                            else frozenset()
+                        )
+                        | (
+                            frozenset({"skill.read_resource"})
+                            if skill_resources_selected
+                            else frozenset()
+                        ),
+                    )
+                except InvalidToolArguments as exc:
+                    raise ChatConfigurationError(str(exc)) from exc
             tool_suggestions: dict[str, Any] | None = None
             tool_catalog: dict[str, Any] | None = None
             deferred_specs = (
@@ -6263,6 +6301,8 @@ class ChatService:
                         item.model_dump(mode="json") for item in ssh_environments
                     ],
                     "include_oci_tools": request.tools_enabled,
+                    "available_tool_names": sorted(tool_components.specs),
+                    "allowed_tool_names": request.allowed_tool_names,
                     "browser_session_id": browser_session_id,
                     "application_model_context": model_context,
                     "allow_subagents": subagents_enabled,
@@ -12208,6 +12248,23 @@ class ChatService:
                 )
             if components is None:
                 raise ChatConfigurationError("no runtime capabilities were selected")
+            allowed_names = turn.request_snapshot.get("allowed_tool_names")
+            if isinstance(allowed_names, list):
+                components = restrict_tool_components(
+                    components,
+                    allowed_names,
+                    required=(
+                        frozenset({"message_parent", "read_parent_messages"})
+                        if turn.request_snapshot.get("subagent_child")
+                        else frozenset()
+                    )
+                    | (
+                        frozenset({"skill.read_resource"})
+                        if skill_snapshots
+                        and any(item.resources for item in skill_snapshots)
+                        else frozenset()
+                    ),
+                )
             deferred = catalog_snapshot(turn.request_snapshot).get("deferred")
             if deferred:
                 # Rebuilt from the snapshot; nothing is re-ranked on resume.

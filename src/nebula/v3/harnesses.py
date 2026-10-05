@@ -84,6 +84,7 @@ from .chat_subagents import (
     SUBAGENT_EFFORT_DESCRIPTION,
     SubagentService,
     harness_subagent_instructions,
+    subagent_capabilities_schema,
     subagent_limit,
 )
 from .chat_agent_messages import AgentMessageService
@@ -410,6 +411,7 @@ _GATEWAY_KNOWLEDGE_SCHEMAS: dict[str, dict[str, Any]] = {
 # Provider subagents: a harness chat delegates to the provider model the
 # operator picked for it. Offered only while that chat has them turned on.
 _GATEWAY_SUBAGENT_NAMES = (
+    "subagent.capabilities",
     "subagent.start",
     "subagent.wait",
     "subagent.list",
@@ -586,6 +588,10 @@ def _gateway_subagent_tools(
 ) -> dict[str, tuple[str, dict[str, Any]]]:
     wait_default, wait_max = _subagent_wait_limits(kind)
     return {
+        "subagent.capabilities": (
+            "List exact tool names, selected MCP servers and available skills a provider subagent may be assigned.",
+            {"type": "object", "properties": {}, "additionalProperties": False},
+        ),
         "subagent.start": (
             "Delegate one independent, multi-step task to a parallel subagent on the "
             "Nebula provider model chosen for this conversation. It uses this "
@@ -617,6 +623,7 @@ def _gateway_subagent_tools(
                         "enum": list(REASONING_EFFORTS),
                         "description": SUBAGENT_EFFORT_DESCRIPTION,
                     },
+                    "capabilities": subagent_capabilities_schema(),
                 },
                 "required": ["task"],
                 "additionalProperties": False,
@@ -13669,7 +13676,9 @@ class HarnessRuntimeService:
                         "Correct the arguments and retry."
                     )
                 )
-            if name == "subagent.start":
+            if name == "subagent.capabilities":
+                result = service.available_capabilities(turn.chat_turn_id)
+            elif name == "subagent.start":
                 invocation = ToolInvocation(
                     id=call.id,
                     engagement_id=turn.engagement_id,
@@ -13695,8 +13704,9 @@ class HarnessRuntimeService:
                     name=arguments.get("name"),
                     context=arguments.get("context"),
                     reasoning_effort=arguments.get("reasoning_effort"),
+                    capabilities=arguments.get("capabilities"),
                 )
-                result: dict[str, Any] = service.start_output(record, harness=True)
+                result = service.start_output(record, harness=True)
             elif name == "subagent.wait":
                 raw_ids = arguments.get("subagent_ids")
                 active_turn_id = turn.id

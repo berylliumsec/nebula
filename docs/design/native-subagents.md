@@ -19,7 +19,8 @@ Static mockups; names, steps and token counts are illustrative.
 
 - Opt-in per request with `allow_subagents` (default off). When set on a
   project provider chat, the tool loop advertises `start_subagent`,
-  `wait_subagents`, `list_subagents`, `message_subagent` and `stop_subagent`.
+  `list_subagent_capabilities`, `wait_subagents`, `list_subagents`,
+  `message_subagent` and `stop_subagent`.
   Subagent turns never receive them (depth 1).
 - `start_subagent` creates a child `ChatSession` (`parent_session_id`,
   `metadata.subagent_id`) and a `ChatSubagent` record, then runs the child as an
@@ -36,6 +37,17 @@ Static mockups; names, steps and token counts are illustrative.
   Retried steps reuse the same child (idempotency key), and the result
   carries its current status, so a retry after it finished does not read as
   running.
+- A supervisor may call `list_subagent_capabilities` (harness:
+  `subagent.capabilities`) to see the exact tool names, selected MCP server IDs,
+  and available skill names and paths. Both start tools accept optional
+  `capabilities: {tool_names, mcp_server_ids, skills}`. Omitted tool or MCP
+  fields keep the parent's defaults; an explicit empty list gives the child
+  none of that field. MCP IDs must be a subset selected on the parent turn.
+  Skill entries use the exact `{name, path}` returned by discovery. Core
+  snapshots their instructions for each child turn. A named tool allowlist is
+  enforced both in the model catalog and at execution; parent messaging and
+  selected skill resource reading remain available. Child rounds started by
+  `message_subagent` keep the assignment. The subagent pane shows the choices.
 - `wait_subagents` (mode `all` or `any`) pauses the parent turn in
   `waiting_callback` and frees its provider slot. When the wait is satisfied,
   Core resumes it through the provider queue; the turn keeps
@@ -208,7 +220,7 @@ in the same file (`108:2`): H1 settings popover `108:3`, H2 desktop pane
   Local-only projects refuse cloud providers as usual. Turning the option on
   is the operator's consent to send the children's tool results to that
   provider, so children run with `allow_cloud_tool_results`.
-- The harness gets five Nebula gateway tools: `subagent.start`,
+- The harness gets six Nebula gateway tools: `subagent.capabilities`, `subagent.start`,
   `subagent.wait`, `subagent.list`, `subagent.message` and `subagent.stop`,
   plus a developer
   instruction naming the model. The vendor catalog is fixed per connection,

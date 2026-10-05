@@ -11966,6 +11966,11 @@ const delegated = [
     result: "",
     error: null,
     result_message_id: null,
+    capabilities: {
+      tool_names: ["notes.write"],
+      mcp_server_ids: [],
+      skills: [{ name: "route-review", path: "/project/.agents/skills/route-review/SKILL.md" }],
+    },
   },
   {
     id: "sub-2",
@@ -12074,6 +12079,11 @@ reloadTest("stabilization an operator allows delegation and acts on a waiting su
   const pane = page.getByRole("region", { name: "Subagents" }).last();
   await expect(pane).toContainText("3 of 3 running · limit 3");
   await expect(pane).toContainText("Map documented API routes");
+  await pane.getByRole("button", { name: /Map documented API routes/ }).click();
+  await expect(pane).toContainText("Assigned capabilities");
+  await expect(pane).toContainText("Tools: notes.write");
+  await expect(pane).toContainText("MCP servers: none");
+  await expect(pane).toContainText("Skills: route-review");
   await expect(pane).toContainText("Recovering");
   await expect(pane).toContainText("Core restarted while the child effect outcome was unknown.");
 
@@ -12319,7 +12329,7 @@ reloadTest("stabilization a harness chat delegates to a chosen provider model", 
   await request.getByRole("button", { name: "Review request" }).click();
   const pane = page.getByRole("region", { name: "Subagents" }).last();
   await expect(pane).toContainText("3 running · no limit · deepseek/deepseek-v3.2");
-  await expect(pane).toContainText("Their tool outputs go to Local subagents");
+  await expect(pane).toContainText("Tool outputs go to Local subagents");
 
   const composer = page.locator(".chat-composer textarea").first();
   await composer.fill("Split the auth review.");

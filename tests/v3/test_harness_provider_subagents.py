@@ -62,6 +62,7 @@ from nebula.v3.storage import NebulaStore
 
 CHILD_MARKER = "You are a subagent."
 SUBAGENT_TOOLS = {
+    "subagent.capabilities",
     "subagent.start",
     "subagent.wait",
     "subagent.list",
@@ -338,7 +339,9 @@ def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path):
         )
         await runtime.start_chat_turn(turn.id)
 
-        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE
+        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE, (
+            store.get(HarnessTurn, turn.id).error
+        )
         assert seen["started"]["model"] == "model-a"
         report = seen["waited"]["subagents"][0]
         assert report["report"] == "Found 3 route files."
@@ -387,6 +390,49 @@ def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path):
         view = chat.subagents.view(store.get(ChatSubagent, record.id))
         assert view["model"] == "model-a"
         assert view["parent_backend"] == "harness"
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        child = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        child.answers = ["Done."]
+
+        async def script(connection: ScriptedConnection, prompt: str) -> str:
+            del prompt
+            available = _payload(await connection.call("subagent.capabilities"))
+            assert "notes.write" not in available["tool_names"]
+            assert available["mcp_servers"] == []
+            _payload(
+                await connection.call(
+                    "subagent.start",
+                    task="Check one thing",
+                    capabilities={
+                        "tool_names": [],
+                        "mcp_server_ids": [],
+                    },
+                )
+            )
+            _payload(await connection.call("subagent.wait"))
+            return "Done."
+
+        adapter.script = script
+        _, _, turn = _prepare(runtime, project, harness, "Delegate a check")
+        await runtime.start_chat_turn(turn.id)
+        assert store.get(HarnessTurn, turn.id).status == HarnessTurnStatus.COMPLETE, (
+            store.get(HarnessTurn, turn.id).error
+        )
+        names = {tool.name for tool in child.requests[0].tools or []}
+        assert "notes.write" not in names
+        assert {"message_parent", "read_parent_messages"} <= names
+        (record,) = store.list_entities(ChatSubagent)
+        assert record.parent_request["capabilities"] == {
+            "tool_names": [],
+            "mcp_server_ids": [],
+        }
         await chat.shutdown()
 
     asyncio.run(scenario())
