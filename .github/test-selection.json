@@ -23,14 +23,14 @@
   "frontend": ["ui/src/components/chat-subagents/ChatSubagentPane.test.tsx"],
   "native": [],
   "playwright": [
-    "chat-subagents/desktop",
-    "chat-subagents/compact",
-    "chat-subagents/mobile-chromium-small",
-    "chat-subagents/mobile-chromium",
-    "chat-subagents/mobile-chromium-wide",
-    "chat-subagents/mobile-webkit-small",
-    "chat-subagents/mobile-webkit",
-    "chat-subagents/mobile-webkit-wide",
-    "chat-subagents-core/real-core"
+    "entry:chat-subagents/desktop",
+    "entry:chat-subagents/compact",
+    "entry:chat-subagents/mobile-chromium-small",
+    "entry:chat-subagents/mobile-chromium",
+    "entry:chat-subagents/mobile-chromium-wide",
+    "entry:chat-subagents/mobile-webkit-small",
+    "entry:chat-subagents/mobile-webkit",
+    "entry:chat-subagents/mobile-webkit-wide",
+    "entry:chat-subagents-core/real-core"
   ]
 }
