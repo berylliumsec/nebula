@@ -1,19 +1,36 @@
 {
-  "change_digest": "755571ddb5e442a4fbf40624613674fe9f5208bfbeb0a6b035ec620b432351b6",
-  "reviewed_by": "Codex provider origin marker review",
-  "reason": "The diff adds a Core supplied Nebula origin marker to native provider instructions, including final answer recovery. The instruction contract tests check the marker on each route, and the selected chat test checks the prepared provider request.",
-  "exclusions": "No UI, browser, native, or origin-sensitive API behavior changes. Frontend, Playwright, native, and unrelated Python suites are excluded. Live Core build and health are verified during deployment; this selection covers the provider instruction payload.",
+  "change_digest": "11396eba1326949afaf9389b28f4182735f3d8c56e6af68677a796897f9a89ed",
+  "reviewed_by": "Codex focused subagent capability selection review",
+  "reason": "The diff adds optional per-child tool, MCP, and skill assignments for provider and harness supervisors, persists them across child rounds, exposes a capability catalog, and displays assigned choices in the subagent pane. Selected tests cover launch, refusal, execution enforcement, round continuation, harness gateway, component detail, responsive browser behavior, and existing real-Core subagent lifecycle.",
+  "exclusions": "No native app implementation or native tests changed. Unrelated Python, frontend, and Playwright areas are excluded. Physical-device and deployed-LAN acceptance are separate release gates, not claims made by this test selection.",
   "expected_tests": {
-    "python": 6,
-    "frontend": 0,
+    "python": 9,
+    "frontend": 14,
     "native": 0,
-    "playwright": 0
+    "playwright": 18
   },
   "python": [
-    "tests/v3/test_minimal_agent_instructions.py",
-    "tests/v3/test_chat.py::test_tool_enabled_turn_instructions_never_claim_the_turn_has_no_tools"
+    "tests/v3/test_chat_subagents.py::test_subagent_tools_require_opt_in",
+    "tests/v3/test_chat_subagents.py::test_supervisor_assigns_named_tools_and_a_skill_to_one_child",
+    "tests/v3/test_chat_subagents.py::test_capability_selection_refuses_unselected_mcp_and_keeps_launch_optional",
+    "tests/v3/test_chat_subagents.py::test_assigned_tool_names_are_enforced_by_the_execution_broker",
+    "tests/v3/test_chat_subagents.py::test_wait_resumes_parent_with_report_and_posts_result",
+    "tests/v3/test_chat_subagents.py::test_message_to_a_finished_subagent_starts_another_round",
+    "tests/v3/test_harness_provider_subagents.py::test_harness_delegates_to_provider_model_and_waits_for_report",
+    "tests/v3/test_harness_provider_subagents.py::test_harness_supervisor_can_narrow_one_child_capability_set",
+    "tests/v3/test_harness_provider_subagents.py::test_subagent_tools_follow_the_chat_setting"
   ],
-  "frontend": [],
+  "frontend": ["ui/src/components/chat-subagents/ChatSubagentPane.test.tsx"],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "chat-subagents/desktop",
+    "chat-subagents/compact",
+    "chat-subagents/mobile-chromium-small",
+    "chat-subagents/mobile-chromium",
+    "chat-subagents/mobile-chromium-wide",
+    "chat-subagents/mobile-webkit-small",
+    "chat-subagents/mobile-webkit",
+    "chat-subagents/mobile-webkit-wide",
+    "chat-subagents-core/real-core"
+  ]
 }
