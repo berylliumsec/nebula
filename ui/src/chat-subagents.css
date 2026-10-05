@@ -59,6 +59,7 @@
 .chat-subagent-steps code { font-family: var(--font-mono); font-size: 11px; }
 .chat-subagent-steps small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-subagent-task, .chat-subagent-result { margin: 0; color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
+.chat-subagent-capabilities { display: grid; gap: 2px; margin: 0; color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
 
 .chat-subagent-approval { display: grid; gap: 6px; }
 .chat-subagent-approval p { margin: 0; font-size: 11px; overflow-wrap: anywhere; }

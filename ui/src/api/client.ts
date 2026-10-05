@@ -4119,6 +4119,11 @@ interface WireChatSubagent {
   child_turn_id?: string | null;
   provider_profile_id?: string | null;
   model?: string | null;
+  capabilities?: {
+    tool_names?: string[];
+    mcp_server_ids?: string[];
+    skills?: { name: string; path: string }[];
+  } | null;
   step_count?: number;
   recent_steps?: { tool?: string; detail?: string; status?: string }[];
   approval?: { id: string; status?: string; tool?: string; detail?: string; risk_class?: string | null; rationale?: string | null } | null;
@@ -4152,6 +4157,11 @@ function mapChatSubagent(value: WireChatSubagent): ChatSubagentView {
     childTurnId: value.child_turn_id ?? undefined,
     providerProfileId: value.provider_profile_id ?? undefined,
     model: value.model ?? undefined,
+    capabilities: value.capabilities ? {
+      toolNames: value.capabilities.tool_names,
+      mcpServerIds: value.capabilities.mcp_server_ids,
+      skills: value.capabilities.skills,
+    } : undefined,
     stepCount: value.step_count ?? 0,
     recentSteps: (value.recent_steps ?? []).map((step) => ({
       tool: step.tool ?? "",

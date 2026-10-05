@@ -166,6 +166,12 @@ export function ChatSubagentPane({
             </ol>}
 
             {!compact && subagent.task && <p className="chat-subagent-task">{subagent.task}</p>}
+            {subagent.capabilities && <p className="chat-subagent-capabilities">
+              <strong>Assigned capabilities</strong>
+              {subagent.capabilities.toolNames && <span>Tools: {subagent.capabilities.toolNames.join(", ") || "none"}</span>}
+              {subagent.capabilities.mcpServerIds && <span>MCP servers: {subagent.capabilities.mcpServerIds.join(", ") || "none"}</span>}
+              {subagent.capabilities.skills && <span>Skills: {subagent.capabilities.skills.map((skill) => skill.name).join(", ") || "none"}</span>}
+            </p>}
             {subagent.error && <p className="chat-subagent-error" role="alert">{subagent.error}</p>}
             {finished && subagent.result && <p className="chat-subagent-result">{subagent.result}</p>}
 
@@ -188,8 +194,8 @@ export function ChatSubagentPane({
 
     <p className="chat-subagent-note">
       {harnessDelegation
-        ? `Subagents run on ${delegateTarget || "the chosen provider model"} with this project's tools and approval policy. Their tool outputs go to ${harnessDelegation.providerName ?? "that provider"}. They cannot start their own subagents.`
-        : "Subagents use this conversation's model, tools and approval policy. They cannot start their own subagents."}
+        ? `Subagents run on ${delegateTarget || "the chosen provider model"} with this project's approval policy. Their supervisor can narrow tools and assign skills. Tool outputs go to ${harnessDelegation.providerName ?? "that provider"}. They cannot start their own subagents.`
+        : "Subagents use this conversation's model and approval policy. Their supervisor can narrow tools and assign skills. They cannot start their own subagents."}
     </p>
   </section>;
 }

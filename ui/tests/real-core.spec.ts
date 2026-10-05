@@ -4819,6 +4819,7 @@ reliabilityTest("stabilization real Core repairs and completes a stranded restar
       "child_session = ChatSession(id=child_session_id, engagement_id=project_id, title='Subagent · Restart investigator', provider_profile_id=provider_id, model='security-model', parent_session_id=parent_session_id, metadata={'subagent_id': subagent_id})",
       "child_turn = ChatTurn(id=child_turn_id, engagement_id=project_id, session_id=child_session_id, provider_profile_id=provider_id, model='security-model', status=ChatTurnStatus.INTERRUPTED, error='Core restarted before this response completed. Core will resume it automatically.', request_snapshot={'subagent_child': True, 'model_request': ModelRequest(model='security-model', messages=[{'role': 'user', 'content': 'Finish the recovered child report.'}], stream=False).model_dump(mode='json'), 'context_usage': {}, 'recovery': {'required': True, 'cause': 'core_restart', 'unknown_tool_call_ids': [], 'unknown_hook_execution_ids': [], 'interrupted_at': now.isoformat()}})",
       "record = ChatSubagent(id=subagent_id, engagement_id=project_id, parent_session_id=parent_session_id, parent_turn_id=parent_turn_id, child_session_id=child_session_id, child_turn_id=child_turn_id, provider_profile_id=provider_id, model='security-model', name='Restart investigator', task='Finish after Core restart.', status=ChatSubagentStatus.INTERRUPTED, finished_at=now, error='Core shut down while this subagent was running.', result_message_id=false_message_id, reported_at=now)",
+      "record = record.model_copy(update={'parent_request': {'capabilities': {'tool_names': [], 'mcp_server_ids': [], 'skills': []}}})",
       "false_message = ChatMessage(id=false_message_id, engagement_id=project_id, session_id=parent_session_id, sequence=sequence, role=ChatRole.ASSISTANT, content='Subagent interrupted: Restart investigator\\n\\nError: Core shut down while this subagent was running.', provider_profile_id=provider_id, model='security-model', metadata={'kind': 'subagent_result', 'subagent_id': subagent_id, 'subagent_name': 'Restart investigator', 'child_session_id': child_session_id, 'subagent_status': 'interrupted', 'subagent_round': 1})",
       "with store.transaction() as transaction:",
       "    transaction.add(parent_turn)",
@@ -4842,6 +4843,8 @@ reliabilityTest("stabilization real Core repairs and completes a stranded restar
     }, {timeout: 20_000}).toMatchObject({status: "completed", result: "Recovered child report."});
     // The subagent rail polls conditionally: an unchanged list answers 304 with no body.
     const listed = await core.api.get(`chat/sessions/${parent.session_id}/subagents`);
+    const listedPayload = await listed.json() as {subagents: Array<{capabilities?: {tool_names?: string[]; mcp_server_ids?: string[]; skills?: unknown[]}}>};
+    expect(listedPayload.subagents[0].capabilities).toEqual({tool_names: [], mcp_server_ids: [], skills: []});
     const etag = listed.headers()["etag"];
     expect(etag).toMatch(/^"subagents-[0-9a-f]{32}"$/);
     const unchanged = await core.api.get(`chat/sessions/${parent.session_id}/subagents`, {headers: {"If-None-Match": etag}});
