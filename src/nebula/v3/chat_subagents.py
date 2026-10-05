@@ -1248,7 +1248,10 @@ class SubagentService:
 
         try:
             workspace = self.chat.workspace_resolver(session.engagement_id)
-        except (ChatConfigurationError, OSError):  # diagnostic-expected: a missing project workspace leaves skill discovery empty while other capabilities remain available
+        except (
+            ChatConfigurationError,
+            OSError,
+        ):  # diagnostic-expected: a missing project workspace leaves skill discovery empty while other capabilities remain available
             skills = []
         else:
             skills = discover_skills(
