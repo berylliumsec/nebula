@@ -5392,11 +5392,13 @@ class ChatService:
                 )
             try:
                 workspace = self.workspace_resolver(engagement_id)
-                catalog = discover_skills(
+                available_skills = discover_skills(
                     native_skill_roots(workspace, self.managed_skill_root)
                 )
                 selected_snapshots = [
-                    snapshot_skill(SkillSelection.model_validate(item), catalog)
+                    snapshot_skill(
+                        SkillSelection.model_validate(item), available_skills
+                    )
                     for item in requested_skills
                 ]
             except (NativeHookError, OSError, ValueError) as exc:
