@@ -1,12 +1,12 @@
 {
-  "change_digest": "c7eaefe9e692917c65e03aafd81cb1fced16fe8a7250addc0486160bdf6e0806",
-  "reviewed_by": "Codex beta.1 release review on current main",
-  "reason": "The branch routes public installation to the signed APT page, synchronizes the beta version, and suppresses deployment records for three protected release jobs. The selected tests cover the site link, build identity, version contracts, supported Linux distribution, and workflow protection.",
-  "exclusions": "No application UI, Core behavior, updater logic, or native code changes belong to this branch diff. Frontend, native, and app Playwright suites are excluded. The static public page receives a separate browser check; release preparation compiles and smoke-tests the package. Full suites are excluded.",
+  "change_digest": "ab2c0bf3cdf551708b53cb1293fcc2f909d9960c903813c3540571096c49506f",
+  "reviewed_by": "Codex beta.2 release review on current main",
+  "reason": "The diff preserves progress boundaries in synthesized late-join completion events, adds a provider/harness reconnect regression, and refreshes four real-Core acceptance tests for current goal and side-chat behavior. Focused unit and real-Core browser checks cover transcript splitting, stored-state replay, production LAN behavior, and the affected desktop and 390px mobile profiles.",
+  "exclusions": "No Rust behavior changes belong to this diff. Unrelated Playwright journeys, unrelated Python/frontend tests, and all full suites are excluded. Physical-device tests are not available here. Release preparation retains its separate focused package and updater checks.",
   "expected_tests": {
-    "python": 7,
-    "frontend": 0,
-    "playwright": 0,
+    "python": 5,
+    "frontend": 4,
+    "playwright": 12,
     "native": 0
   },
   "python_versions": [
@@ -15,14 +15,24 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_install_routing.py",
-    "tests/v3/test_version.py",
-    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
-    "tests/v3/test_packaging.py::test_protected_release_distribution_is_linux_x86_64_only",
-    "tests/v3/test_packaging.py::test_protected_release_jobs_do_not_create_deployment_records",
-    "tests/v3/test_packaging.py::test_version_cli_supports_release_check_contract"
+    "tests/v3/test_chat_reconnection.py"
   ],
-  "frontend": [],
-  "playwright": [],
+  "frontend": [
+    "ui/src/pages/chatProgressContent.test.ts"
+  ],
+  "playwright": [
+    "entry:conversation-progress/assistant-real-desktop",
+    "entry:conversation-progress/assistant-real-chromium-390",
+    "entry:conversation-progress/assistant-real-webkit-390",
+    "entry:provider-goal-lifecycle-core/assistant-real-desktop",
+    "entry:provider-goal-lifecycle-core/assistant-real-chromium-390",
+    "entry:provider-goal-lifecycle-core/assistant-real-webkit-390",
+    "entry:provider-goal-skills-core/assistant-real-desktop",
+    "entry:provider-goal-skills-core/assistant-real-chromium-390",
+    "entry:provider-goal-skills-core/assistant-real-webkit-390",
+    "entry:side-chat-active/assistant-real-desktop",
+    "entry:side-chat-active/assistant-real-chromium-390",
+    "entry:side-chat-active/assistant-real-webkit-390"
+  ],
   "native": []
 }
