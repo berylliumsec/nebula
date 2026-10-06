@@ -7,7 +7,7 @@ import { DialogProvider } from "./DialogSystem";
 import { SideNav } from "./SideNav";
 
 const { project, workspace } = vi.hoisted(() => {
-  const project = { id: "project-1", name: "Scratch Project", status: "active" };
+  const project: { id: string; name: string; status: string; clientName?: string } = { id: "project-1", name: "Scratch Project", status: "active" };
   return {
     project,
     workspace: {
@@ -17,7 +17,7 @@ const { project, workspace } = vi.hoisted(() => {
       activeOperator: undefined,
       engagement: project as typeof project | undefined,
       engagements: [project],
-      archivedEngagements: [],
+      archivedEngagements: [] as typeof project[],
       setEngagementArchived: vi.fn(),
       deleteArchivedEngagement: vi.fn(),
     },
@@ -29,6 +29,7 @@ afterEach(() => {
   cleanup();
   workspace.engagement = project;
   workspace.engagements = [project];
+  workspace.archivedEngagements = [];
 });
 
 function CurrentPath() {
@@ -121,6 +122,35 @@ describe("SideNav project switcher", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Project switcher" })).not.toBeInTheDocument());
     expect(trigger).toHaveFocus();
     expect(trigger).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("filters active and archived projects by name or client and resets the query when reopened", async () => {
+    workspace.engagements = [project, { id: "project-2", name: "Alpha Project", status: "active", clientName: "Example Org" }];
+    workspace.archivedEngagements = [{ id: "project-3", name: "Past Review", status: "archived", clientName: "Orion" }];
+    const user = userEvent.setup();
+    render(<MemoryRouter initialEntries={["/projects/project-1/workbench"]}><DialogProvider><SwitcherHarness /></DialogProvider></MemoryRouter>);
+    const trigger = screen.getByRole("button", { name: "Switch project" });
+    await user.click(trigger);
+    const switcher = screen.getByRole("dialog", { name: "Project switcher" });
+    const search = within(switcher).getByRole("textbox", { name: "Search projects" });
+    expect(search).toHaveFocus();
+
+    await user.type(search, "aLpHa");
+    expect(within(switcher).getByText("Alpha Project")).toBeVisible();
+    expect(within(switcher).queryByText("Scratch Project")).not.toBeInTheDocument();
+    await user.click(within(switcher).getByRole("button", { name: "Clear project search" }));
+    expect(search).toHaveValue("");
+    expect(search).toHaveFocus();
+    await user.type(search, "orion");
+    expect(within(switcher).getByText("No matching projects.")).toBeVisible();
+    await user.click(within(switcher).getByRole("button", { name: "Archived projects (1)" }));
+    expect(within(switcher).getByText("Past Review")).toBeVisible();
+    await user.clear(search);
+    await user.type(search, "missing");
+    expect(within(switcher).getByText("No matching archived projects.")).toBeVisible();
+    await user.keyboard("{Escape}");
+    await user.click(trigger);
+    expect(within(screen.getByRole("dialog", { name: "Project switcher" })).getByRole("textbox", { name: "Search projects" })).toHaveValue("");
   });
 });
 

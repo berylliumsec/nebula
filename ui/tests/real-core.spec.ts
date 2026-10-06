@@ -3874,6 +3874,45 @@ test("assistant upgrade deployed local service retains operator workflow", async
   } finally {await api.dispose();}
 });
 
+test("project switcher search selects a Core project after production LAN reload", async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    const create = await api.post("engagements", { data: { name: "Alpha Project" } });
+    expect(create.ok(), await create.text()).toBe(true);
+    const target = await create.json() as { id: string };
+    const pairingApi = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+    const pairingResponse = await pairingApi.post("auth/pairings", { data: { name: "Project search browser" } });
+    expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+    const pairing = await pairingResponse.json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Project search browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/settings`);
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Switch project" }).click();
+    const switcher = page.getByRole("dialog", { name: "Project switcher" });
+    const search = switcher.getByRole("textbox", { name: "Search projects" });
+    await search.fill("alpha");
+    const projectRow = switcher.locator(".project-switcher-row > button:first-child").filter({ hasText: "Alpha Project" });
+    await expect(projectRow).toBeVisible();
+    await projectRow.click();
+    await expect(page).toHaveURL(`${core.origin}/projects/${target.id}`);
+    await page.reload();
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Switch project" }).click();
+    await expect(switcher.getByRole("textbox", { name: "Search projects" })).toHaveValue("");
+    await expect(switcher.getByText("Alpha Project")).toBeVisible();
+    await testInfo.attach("project-search-production-lan", { body: JSON.stringify({ origin: core.origin, build: "ui/dist production", project: testInfo.project.name, viewport: page.viewportSize(), targetId: target.id }), contentType: "application/json" });
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
 test("project removal archives, retries, restores and clears the last selection on production LAN", async ({ page }, testInfo) => {
   // Hosted WebKit spends 2–4s on many successful clicks in this full lifecycle;
   // traces reached the final restored state at 90s before the last assertions.

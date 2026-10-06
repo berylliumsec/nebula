@@ -1,3 +1,10 @@
+.engagement-search { display: flex; align-items: center; gap: 6px; margin: 8px 8px 2px; padding-left: 12px; border: 1px solid var(--border); border-radius: var(--radius-control); color: var(--muted); background: var(--surface); }
+.engagement-search:focus-within { outline: 2px solid var(--blue); outline-offset: 1px; }
+.engagement-search input { flex: 1; min-width: 0; min-height: 44px; padding: 0; border: 0; outline: 0; color: var(--text); background: transparent; font-size: 16px; }
+.engagement-search input::placeholder { color: var(--muted); }
+.engagement-search button { display: grid; flex: 0 0 44px; height: 44px; place-items: center; border: 0; border-radius: var(--radius-control); color: var(--muted); background: transparent; cursor: pointer; }
+.engagement-search button:hover { color: var(--text); background: var(--surface-hover); }
+.engagement-search button:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .project-switcher-row { display: flex; align-items: center; min-width: 0; }
 .project-switcher-row > button { display: flex; min-width: 0; min-height: 44px; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: var(--radius-control); color: var(--text); background: transparent; text-align: left; cursor: pointer; }
 .project-switcher-row > button:first-child { flex: 1; justify-content: space-between; }

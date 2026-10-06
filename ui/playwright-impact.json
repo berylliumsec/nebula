@@ -31,6 +31,7 @@
     {"name": "icon-pack", "patterns": ["ui/src/icons/**", "scripts/import_icon_pack.mjs", "ui/package.json", "ui/package-lock.json", "ui/tsconfig.app.json", "ui/vite.config.ts"], "areas": ["icon-pack"]},
     {"name": "settings-catalog", "patterns": ["ui/src/settingsCatalog.ts"], "areas": ["settings-search", "critical-workspaces"]},
     {"name": "project-lifecycle", "patterns": ["ui/src/components/Project*", "ui/src/components/Workspace*", "ui/src/components/HostFolder*", "ui/src/pages/Projects*", "src/nebula/v3/project*.py", "src/nebula/v3/workspace*.py"], "areas": ["project-lifecycle"]},
+    {"name": "project-switcher-search", "patterns": ["ui/src/components/SideNav*", "ui/src/components/ProjectSwitcher*"], "areas": ["project-switcher-search"]},
     {"name": "work-hub", "patterns": ["src/nebula/v3/work.py", "ui/src/pages/WorkPage*", "docs/design/work.md"], "areas": ["work-hub", "work-import"]},
     {"name": "mission-restart-recovery", "patterns": ["ui/src/pages/AgentsPage.tsx", "ui/src/components-workbench.css", "src/nebula/v3/missions.py"], "areas": ["mission-restart-recovery"]},
     {"name": "core-connection-resilience", "patterns": ["ui/src/App.tsx", "ui/src/state/useCoreConnectionMonitor.ts", "ui/src/api/client.ts", "ui/src/components/AppShell.tsx"], "areas": ["core-connection-resilience"]},
@@ -1262,6 +1263,17 @@
       {"area":"project-lifecycle","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
       {"area":"project-lifecycle","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
       {"area":"project-lifecycle","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"real Core persists a project folder chosen through the host browser","runtime":"real-core","shard":"1/1"}
+    ],
+    "project-switcher-search": [
+      {"area":"project-switcher-search","project":"desktop","test_match":"tests/interface.spec.ts","grep":"phone shell project switcher search finds active and archived projects","runtime":"mock","shard":"1/1"},
+      {"area":"project-switcher-search","project":"compact","test_match":"tests/interface.spec.ts","grep":"phone shell project switcher search finds active and archived projects","runtime":"mock","shard":"1/1"},
+      {"area":"project-switcher-search","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"phone shell project switcher search finds active and archived projects","runtime":"mock","shard":"1/1"},
+      {"area":"project-switcher-search","project":"mobile-chromium","test_match":"tests/interface.spec.ts","grep":"phone shell project switcher search finds active and archived projects","runtime":"mock","shard":"1/1"},
+      {"area":"project-switcher-search","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"phone shell project switcher search finds active and archived projects","runtime":"mock","shard":"1/1"},
+      {"area":"project-switcher-search","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"phone shell project switcher search finds active and archived projects","runtime":"mock","shard":"1/1"},
+      {"area":"project-switcher-search","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"phone shell project switcher search finds active and archived projects","runtime":"mock","shard":"1/1"},
+      {"area":"project-switcher-search","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"phone shell project switcher search finds active and archived projects","runtime":"mock","shard":"1/1"},
+      {"area":"project-switcher-search","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"project switcher search selects a Core project after production LAN reload","runtime":"real-core","shard":"1/1"}
     ],
     "terminal-assistant": [
       {"area":"terminal-assistant","project":"desktop","test_match":"tests/interface.spec.ts","grep":"Terminal opens Assistant beside the live shell|Assistant opens the live terminal beside the chat","runtime":"mock","shard":"1/1"},
