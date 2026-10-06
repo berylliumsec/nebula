@@ -64,6 +64,7 @@ from .chat_snapshot_parts import resolve_request_snapshot
 from .environments import enabled_snapshot_ssh_ids
 from .domain import (
     CHAT_SUBAGENT_TERMINAL_STATUSES,
+    AgentRun,
     Approval,
     ChatBackend,
     ChatGoal,
@@ -83,6 +84,7 @@ from .domain import (
     Engagement,
     ProviderProfile,
     RiskClass,
+    RunStatus,
     ScopePolicy,
     utc_now,
 )
@@ -2085,6 +2087,7 @@ class SubagentService:
         that refusal tells the model to wait and retry.
         """
 
+        siblings = list(siblings)
         goal: ChatGoal | None = None
         goal_id = parent_turn.goal_id if parent_turn is not None else None
         if parent_turn is not None and goal_id is None:
@@ -2118,6 +2121,34 @@ class SubagentService:
                 maximum=limit,
                 current=running,
             )
+        parent_session_id = parent_turn.session_id if parent_turn is not None else siblings[0].parent_session_id if siblings else None
+        if parent_session_id is None:
+            return
+        parent_session = self.store.get(ChatSession, parent_session_id)
+        depth = self.depth(parent_session)
+        root_session = parent_session
+        while root_session.parent_session_id:
+            root_session = self.store.get(ChatSession, root_session.parent_session_id)
+        mission_runs = self.store.find_entities(
+            AgentRun, {"metadata.supervisor_chat_session_id": root_session.id}
+        )
+        for mission in mission_runs:
+            if mission.metadata.get("supervisor_mode") != "conversation" or mission.status in {
+                RunStatus.COMPLETE, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.INTERRUPTED
+            }:
+                continue
+            if depth >= mission.budget.max_delegation_depth:
+                raise ToolNotPermitted(
+                    "Mission delegation depth is exhausted", rule="subagents.mission_depth"
+                )
+            mission_running = len(self.active(self.descendants_for_session(root_session.id)))
+            if mission_running >= mission.budget.max_concurrency:
+                raise CapacityReached(
+                    f"Mission allows {mission.budget.max_concurrency} running children and {mission_running} already are",
+                    resource="mission_running_subagents",
+                    maximum=mission.budget.max_concurrency,
+                    current=mission_running,
+                )
 
     def _ssh_environment_ids(
         self, record: ChatSubagent, parent_turn: ChatTurn | None

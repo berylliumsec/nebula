@@ -78,6 +78,16 @@ describe("mission activity", () => {
     expect(steerRun).toHaveBeenCalledWith("run-1", "Prioritize the login flow");
   });
 
+  it("opens the live Mission supervisor conversation", async () => {
+    const user = userEvent.setup();
+    (workspace.run as typeof workspace.run & { supervisorChatSessionId?: string }).supervisorChatSessionId = "supervisor-chat";
+    render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
+    expect(screen.queryByLabelText("Steer active harness turn")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Open supervisor chat" }));
+    expect(new URLSearchParams(window.location.search).get("session")).toBe("supervisor-chat");
+    delete (workspace.run as typeof workspace.run & { supervisorChatSessionId?: string }).supervisorChatSessionId;
+  });
+
   it("keeps mission controls visible and technical activity collapsed", async () => {
     const user = userEvent.setup();
     render(<DialogProvider><AgentsPage embedded /></DialogProvider>);
@@ -90,7 +100,7 @@ describe("mission activity", () => {
     const activity = screen.getByRole("region", { name: "Mission activity" });
     expect(within(activity).queryByText("Newest first")).toBeNull();
     await user.click(within(activity).getByRole("button", { name: "Show activity" }));
-    expect(within(activity).getByText("Newest first")).toBeVisible();
+    expect(within(activity).getByText(/latest below/)).toBeVisible();
   });
 
   it("allows an individual mission to be selected", async () => {

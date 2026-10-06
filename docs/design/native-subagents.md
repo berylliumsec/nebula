@@ -6,6 +6,28 @@ subagents; this is the provider-neutral equivalent planned as G8 in
 `openrouter-native-harness.md`. Harness chats can also delegate to a chosen
 provider model (see the last section).
 
+## Delegated Mission supervisors
+
+An operator can enable **Subagents** when creating an immediate Mission with a
+verified provider model or a harness plus a verified provider child model. Core
+starts a durable supervisor conversation and exposes the same child catalog and
+start/wait/list/message/stop tools used by ordinary Conversations. The model can
+create child tasks during the run and assign each child any enabled project
+capability from the catalog. The operator's approval policy and provider privacy
+checks still apply. The Mission form asks for project data sharing consent before
+remote child models receive knowledge or MCP results.
+
+The chat turn and `ChatSubagent` records own execution and recovery. A separate
+Mission watcher projects the supervisor and every descendant into `Task` rows,
+adds task events, and updates Mission progress. It checks aggregate duration,
+tokens, cost, tool calls, artifact queries, global child concurrency and depth.
+The older fixed-plan Mission worker ignores these runs on startup. The Mission
+page links directly to the supervisor conversation for child details and
+approvals. Once children settle, Core starts one synthesis turn to include late
+reports in the final Mission result. Stop cancels the root turn and all active
+descendants; Retry creates a new run and conversation. Delegated Missions start
+immediately; scheduled Missions continue to use the fixed plan.
+
 Mockup (approved September 18, 2026): Figma page "Subagents" in
 https://www.figma.com/design/tVEa0PXZaa7H4ZLflwgcb7?node-id=21-2
 
