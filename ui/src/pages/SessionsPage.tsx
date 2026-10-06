@@ -4180,13 +4180,13 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   }, [api, requestedSessionId, sessionId, sessions]);
 
   useEffect(() => {
-    if (!api || !engagement || requestedSessionId || sessionId || conversationOpen || !sessions.length) return;
+    if ((view !== "chat" && view !== "browser") || !api || !engagement || requestedSessionId || sessionId || conversationOpen || !sessions.length) return;
     const newest = sessions[0];
     const initial = newest.isSubagent && newest.parentSessionId
       ? sessions.find(session => session.id === newest.parentSessionId && !session.isSubagent) ?? newest
       : newest;
     void selectSession(initial.id);
-  }, [api, conversationOpen, engagement, requestedSessionId, sessionId, sessions]);
+  }, [api, conversationOpen, engagement, requestedSessionId, sessionId, sessions, view]);
 
   const openAttachedChat = async (id: string) => {
     if (!api || !engagement) return;

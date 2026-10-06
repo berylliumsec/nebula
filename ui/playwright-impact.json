@@ -34,6 +34,7 @@
     {"name": "project-switcher-search", "patterns": ["ui/src/components/SideNav*", "ui/src/components/ProjectSwitcher*"], "areas": ["project-switcher-search"]},
     {"name": "work-hub", "patterns": ["src/nebula/v3/work.py", "ui/src/pages/WorkPage*", "docs/design/work.md"], "areas": ["work-hub", "work-import"]},
     {"name": "mission-restart-recovery", "patterns": ["ui/src/pages/AgentsPage.tsx", "ui/src/components-workbench.css", "src/nebula/v3/missions.py"], "areas": ["mission-restart-recovery"]},
+    {"name": "mission-supervisor", "patterns": ["src/nebula/v3/mission_delegation.py", "ui/src/components/MissionControls.tsx", "ui/src/pages/AgentsPage.tsx"], "areas": ["mission-supervisor-core"]},
     {"name": "core-connection-resilience", "patterns": ["ui/src/App.tsx", "ui/src/state/useCoreConnectionMonitor.ts", "ui/src/api/client.ts", "ui/src/components/AppShell.tsx"], "areas": ["core-connection-resilience"]},
     {"name": "core-api", "patterns": ["src/nebula/v3/api.py", "src/nebula/v3/core.py", "src/nebula/v3/domain.py", "src/nebula/v3/storage.py", "src/nebula/v3/server.py"], "areas": ["core-api"]},
     {"name": "themes", "patterns": ["ui/src/components/Theme*", "ui/src/pages/Appearance*", "ui/src/theme/**"], "areas": ["themes"]},
@@ -134,6 +135,11 @@
     ],
     "mission-restart-recovery-core": [
       {"area":"mission-restart-recovery-core","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"production LAN mission ledger survives failure, retry, restart recovery, and relaunch through real Core","runtime":"real-core","shard":"1/1"}
+    ],
+    "mission-supervisor-core": [
+      {"area":"mission-supervisor-core","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production LAN delegated Mission opens its durable supervisor chat","runtime":"real-core","shard":"1/1"},
+      {"area":"mission-supervisor-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production LAN delegated Mission opens its durable supervisor chat","runtime":"real-core","shard":"1/1"},
+      {"area":"mission-supervisor-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production LAN delegated Mission opens its durable supervisor chat","runtime":"real-core","shard":"1/1"}
     ],
     "subagent-sidebar": [
       {"area":"subagent-sidebar","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade nests subagents beneath a collapsed main conversation|assistant upgrade sidebar follows subagents created during an active turn","runtime":"mock","shard":"1/1"},
