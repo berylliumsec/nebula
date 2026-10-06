@@ -14,6 +14,8 @@ from nebula.v3.chat import (
 from nebula.v3.chat_goals import ChatGoalService, GoalCreate, GoalWrite
 from nebula.v3.chat_subagents import _capability_selection, subagent_specs
 from nebula.v3.chat_turn_ledger import turn_history
+from nebula.v3.mission_delegation import DelegatedMissionService
+from nebula.v3.missions import MissionService
 from nebula.v3.domain import (
     Approval,
     ChatGoalUsageCharge,
@@ -26,10 +28,20 @@ from nebula.v3.domain import (
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    McpCapabilitySnapshot,
+    McpServerProfile,
+    McpToolSnapshot,
+    McpTransport,
+    NativeHookExecution,
     ProviderCapabilityVerification,
     ProviderProfile,
     ProviderVerificationStatus,
     RiskClass,
+    RunBackend,
+    RunBudget,
+    RunStatus,
+    Task,
+    TaskStatus,
     utc_now,
 )
 from nebula.v3.providers import (
@@ -453,12 +465,27 @@ def test_supervisor_assigns_named_tools_and_a_skill_to_one_child(
         )
         store, project, _, chat = _setup(tmp_path, provider)
         chat.workspace_resolver = lambda _: tmp_path
+        store.create(
+            McpServerProfile(
+                id="on-demand",
+                name="on-demand",
+                transport=McpTransport.STDIO,
+                command="/bin/true",
+                enabled=True,
+                trusted_stdio=True,
+                capabilities=McpCapabilitySnapshot(
+                    checked_at=utc_now(), tools=[McpToolSnapshot(name="read")]
+                ),
+            )
+        )
         prepared = await chat.prepare_async(
             _request(project, content="Delegate route review", allow_subagents=True)
         )
         available = chat.subagents.available_capabilities(prepared.turn.id)
         assert "notes.write" in available["tool_names"]
-        assert available["mcp_servers"] == []
+        assert available["mcp_servers"] == [
+            {"id": "on-demand", "name": "on-demand", "selected": False}
+        ]
         assert {"name": "route-review", "path": str(skill_path)} in available["skills"]
         await _drain(chat, chat.start_provider_turn(prepared))
         await _until(lambda: bool(provider.child_requests))
@@ -480,6 +507,106 @@ def test_supervisor_assigns_named_tools_and_a_skill_to_one_child(
     asyncio.run(scenario())
 
 
+def test_supervisor_discovers_and_assigns_a_lifecycle_hook_to_one_child(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        hook_dir = tmp_path / ".agents" / "hooks" / "child-audit"
+        hook_dir.mkdir(parents=True)
+        executable = hook_dir / "run.sh"
+        executable.write_text("#!/bin/sh\ncat >/dev/null\n", encoding="utf-8")
+        executable.chmod(0o700)
+        (hook_dir / "hook.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "name": "Child audit",
+                    "events": ["chat.turn.started", "chat.turn.completed"],
+                    "command": ["run.sh"],
+                    "side_effects": "none",
+                    "failure_policy": "block",
+                }
+            ),
+            encoding="utf-8",
+        )
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "p1",
+                    "start_subagent",
+                    task="Check the route",
+                    name="Route audit",
+                    capabilities={
+                        "hook_ids": ["child-audit"],
+                        "include_knowledge": True,
+                        "command_runtime": False,
+                    },
+                ),
+                _finish("p2"),
+                _response(text="Delegated."),
+            ],
+            child=[_response(text="Checked.")],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        chat.workspace_resolver = lambda _: tmp_path
+        prepared = await chat.prepare_async(
+            _request(project, content="Audit a route", allow_subagents=True)
+        )
+        available = chat.subagents.available_capabilities(prepared.turn.id)
+        assert available["hooks"] == [
+            {
+                "id": "child-audit",
+                "name": "Child audit",
+                "events": ["chat.turn.started", "chat.turn.completed"],
+                "side_effects": "none",
+                "failure_policy": "block",
+            }
+        ]
+        assert available["knowledge"] == {"ready": False, "selected": False}
+        assert available["command_runtime"] == {
+            "available": False,
+            "selected": False,
+            "tool_names": [],
+        }
+        await _drain(chat, chat.start_provider_turn(prepared))
+        await _until(
+            lambda: any(
+                item.child_turn_id for item in store.list_entities(ChatSubagent)
+            )
+        )
+        (record,) = store.list_entities(ChatSubagent)
+        await _until(
+            lambda: (
+                len(
+                    [
+                        item
+                        for item in store.list_entities(NativeHookExecution)
+                        if item.chat_turn_id == record.child_turn_id
+                    ]
+                )
+                == 2
+            )
+        )
+        executions = [
+            item
+            for item in store.list_entities(NativeHookExecution)
+            if item.chat_turn_id == record.child_turn_id
+        ]
+        assert {item.event_name for item in executions} == {
+            "chat.turn.started",
+            "chat.turn.completed",
+        }
+        assert all(item.status == "complete" for item in executions)
+        assert record.parent_request["capabilities"]["hook_ids"] == ["child-audit"]
+        assert record.parent_request["include_knowledge"] is True
+        assert record.parent_request["tools_enabled"] is False
+        child = store.get(ChatTurn, record.child_turn_id)
+        assert child.request_snapshot["knowledge_enabled"] is True
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_capability_selection_refuses_unselected_mcp_and_keeps_launch_optional() -> (
     None
 ):
@@ -491,8 +618,460 @@ def test_capability_selection_refuses_unselected_mcp_and_keeps_launch_optional()
     assert _capability_selection({"mcp_server_ids": []}, ["selected"]) == {
         "mcp_server_ids": []
     }
-    with pytest.raises(InvalidToolArguments, match="not selected"):
+    assert _capability_selection(
+        {"mcp_server_ids": ["on-demand"]}, ["selected", "on-demand"]
+    ) == {"mcp_server_ids": ["on-demand"]}
+    with pytest.raises(InvalidToolArguments, match="not enabled and probed"):
         _capability_selection({"mcp_server_ids": ["other"]}, ["selected"])
+    assert _capability_selection({"hook_ids": ["audit"]}, []) == {"hook_ids": ["audit"]}
+    assert _capability_selection(
+        {"include_knowledge": True, "command_runtime": False}, []
+    ) == {"include_knowledge": True, "command_runtime": False}
+    with pytest.raises(InvalidToolArguments, match="invalid command_runtime"):
+        _capability_selection({"command_runtime": "true"}, [])
+    assert _capability_selection(
+        {"allow_subagents": True, "max_active_subagents": 2}, []
+    ) == {"allow_subagents": True, "max_active_subagents": 2}
+
+
+def test_conversation_child_can_discover_and_delegate_to_its_own_child(
+    tmp_path: Path,
+) -> None:
+    class NestedProvider(RoutedProvider):
+        def __init__(self) -> None:
+            super().__init__(
+                parent=[
+                    _call(
+                        "root-start",
+                        "start_subagent",
+                        task="Review routes.",
+                        name="Reviewer",
+                        context=None,
+                        capabilities={
+                            "allow_subagents": True,
+                            "max_active_subagents": 2,
+                            "tool_names": [],
+                        },
+                    ),
+                    _call("root-wait", "wait_subagents", subagent_ids=None, mode=None),
+                    _finish("root-finish"),
+                    _response(text="Review complete."),
+                ],
+                child=[],
+            )
+            self.store: NebulaStore | None = None
+            self.grandchild_requests: list[ModelRequest] = []
+            self.reviewer_script: list[Scripted] = [
+                _call("reviewer-catalog", "list_subagent_capabilities"),
+                _call(
+                    "reviewer-start",
+                    "start_subagent",
+                    task="Count route files.",
+                    name="Counter",
+                    context=None,
+                    capabilities={"tool_names": []},
+                ),
+                _call("reviewer-wait", "wait_subagents", subagent_ids=None, mode=None),
+                _finish("reviewer-finish"),
+                _response(text="I found three routes."),
+            ]
+            self.counter_script: list[Scripted] = [
+                _response(text="Counted three files.")
+            ]
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation") == "conversation_naming":
+                return _response(text="Named")
+            session_id = request.metadata.get("chat_session_id")
+            if isinstance(session_id, str) and self.store is not None:
+                session = self.store.get(ChatSession, session_id)
+                if session.parent_session_id:
+                    parent = self.store.get(ChatSession, session.parent_session_id)
+                    if parent.parent_session_id:
+                        self.grandchild_requests.append(request)
+                        script = self.counter_script
+                    else:
+                        self.child_requests.append(request)
+                        script = self.reviewer_script
+                    if not script:
+                        raise AssertionError("nested provider script was exhausted")
+                    upcoming = script[0]
+                    if (
+                        request.tool_choice != ToolChoice.NONE
+                        and isinstance(upcoming, ModelResponse)
+                        and not upcoming.tool_calls
+                    ):
+                        return _finish(f"nested-finish-{len(self.child_requests)}")
+                    return await _play(script.pop(0), request)
+            return await super().complete(request)
+
+    async def scenario() -> None:
+        provider = NestedProvider()
+        store, project, _, chat = _setup(tmp_path, provider)
+        provider.store = store
+        prepared = await chat.prepare_async(
+            _request(project, content="Review routes.", allow_subagents=True)
+        )
+        await _drain(chat, chat.start_provider_turn(prepared))
+        await _until(lambda: len(store.list_entities(ChatSubagent)) == 2)
+        await _until(
+            lambda: all(
+                record.status == ChatSubagentStatus.COMPLETED
+                for record in store.list_entities(ChatSubagent)
+            )
+        )
+        reviewer, counter = sorted(
+            store.list_entities(ChatSubagent), key=lambda record: record.started_at
+        )
+        assert reviewer.parent_request["allow_subagents"] is True
+        assert reviewer.parent_request["max_active_subagents"] == 2
+        assert counter.parent_session_id == reviewer.child_session_id
+        assert provider.child_requests and provider.grandchild_requests
+        reviewer_turn = store.get(ChatTurn, reviewer.child_turn_id)
+        assert reviewer_turn.request_snapshot["allow_subagents"] is True
+        assert "list_subagent_capabilities" in {
+            step["name"] for step in _history(store, reviewer_turn)
+        }
+        assert (
+            chat.subagents.available_capabilities(reviewer_turn.id)["subagents"][
+                "depth"
+            ]
+            == 1
+        )
+        assert (
+            ChatGoalService(store).has_working_subagents(reviewer.parent_session_id)
+            is False
+        )
+        await _until(
+            lambda: any(
+                "Nested subagent Counter" in message.content
+                for message in store.list_entities(ChatSubagentMessage)
+            )
+        )
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_provider_mission_supervisor_creates_child_and_records_result(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "mission-start",
+                    "start_subagent",
+                    task="Inspect routes.",
+                    name="Routes",
+                    context=None,
+                    capabilities={"tool_names": []},
+                ),
+                _call("mission-wait", "wait_subagents", subagent_ids=None, mode=None),
+                _finish("mission-finish"),
+                _response(text="First supervisor answer."),
+                _finish("synthesis-finish"),
+                _response(text="Final Mission result."),
+            ],
+            child=[_response(text="Routes inspected.")],
+        )
+        store, project, profile, chat = _setup(tmp_path, provider)
+        delegated = DelegatedMissionService(store, chat, None)  # type: ignore[arg-type]
+        run = await delegated.start(
+            engagement_id=project.id,
+            name="Route review",
+            objective="Review the routes",
+            backend=RunBackend.NATIVE,
+            provider_id=profile.id,
+            harness_profile_id=None,
+            harness_session_id=None,
+            model="model-a",
+            subagent_provider_id=None,
+            subagent_model=None,
+            mcp_server_ids=[],
+            stages=[],
+            budget=RunBudget(max_concurrency=2),
+            tools_enabled=False,
+            allow_cloud_tool_results=False,
+        )
+        await _until(
+            lambda: (
+                store.get(type(run), run.id).status
+                in {RunStatus.COMPLETE, RunStatus.FAILED}
+            )
+        )
+        final = store.get(type(run), run.id)
+        assert final.status == RunStatus.COMPLETE, final.metadata.get("final_summary")
+        assert final.metadata["final_summary"] == "Final Mission result."
+        assert final.metadata["completed_tasks"] == 2
+        assert final.metadata["total_tasks"] == 2
+        tasks = store.find_entities(Task, {"run_id": run.id})
+        assert {task.title for task in tasks} == {"Mission supervisor", "Routes"}
+        assert {task.status for task in tasks} == {TaskStatus.COMPLETE}
+        await delegated.shutdown()
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_fixed_plan_recovery_leaves_live_delegated_mission_with_its_chat_owner(
+    tmp_path: Path,
+) -> None:
+    class PausedProvider(RoutedProvider):
+        def __init__(self) -> None:
+            super().__init__(
+                parent=[_finish("done"), _response(text="Done.")], child=[]
+            )
+            self.gate = asyncio.Event()
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation") != "conversation_naming":
+                await self.gate.wait()
+            return await super().complete(request)
+
+    async def scenario() -> None:
+        provider = PausedProvider()
+        store, project, profile, chat = _setup(tmp_path, provider)
+        delegated = DelegatedMissionService(store, chat, None)  # type: ignore[arg-type]
+        run = await delegated.start(
+            engagement_id=project.id,
+            name="Recovery",
+            objective="Check scope",
+            backend=RunBackend.NATIVE,
+            provider_id=profile.id,
+            harness_profile_id=None,
+            harness_session_id=None,
+            model="model-a",
+            subagent_provider_id=None,
+            subagent_model=None,
+            mcp_server_ids=[],
+            stages=[],
+            budget=RunBudget(),
+            tools_enabled=False,
+            allow_cloud_tool_results=False,
+        )
+        fixed = MissionService(store, checkpoint_path=tmp_path / "checkpoints.db")
+        await fixed.startup()
+        assert store.get(type(run), run.id).status == RunStatus.RUNNING
+        assert not fixed.active_run_ids
+        await fixed.shutdown()
+        provider.gate.set()
+        await _until(lambda: store.get(type(run), run.id).status == RunStatus.COMPLETE)
+        await delegated.shutdown()
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_stopping_delegated_mission_stops_supervisor_turn(tmp_path: Path) -> None:
+    class PausedProvider(RoutedProvider):
+        def __init__(self) -> None:
+            super().__init__(
+                parent=[_finish("done"), _response(text="Done.")], child=[]
+            )
+            self.gate = asyncio.Event()
+
+        async def complete(self, request: ModelRequest) -> ModelResponse:
+            if request.metadata.get("operation") != "conversation_naming":
+                await self.gate.wait()
+            return await super().complete(request)
+
+    async def scenario() -> None:
+        provider = PausedProvider()
+        store, project, profile, chat = _setup(tmp_path, provider)
+        delegated = DelegatedMissionService(store, chat, None)  # type: ignore[arg-type]
+        run = await delegated.start(
+            engagement_id=project.id,
+            name="Stop review",
+            objective="Check scope",
+            backend=RunBackend.NATIVE,
+            provider_id=profile.id,
+            harness_profile_id=None,
+            harness_session_id=None,
+            model="model-a",
+            subagent_provider_id=None,
+            subagent_model=None,
+            mcp_server_ids=[],
+            stages=[],
+            budget=RunBudget(),
+            tools_enabled=False,
+            allow_cloud_tool_results=False,
+        )
+        await delegated.stop(run.id, reason="Operator stopped the Mission")
+        stopped = store.get(type(run), run.id)
+        assert stopped.status == RunStatus.CANCELLED
+        turn = store.get(ChatTurn, str(stopped.metadata["supervisor_chat_turn_id"]))
+        assert turn.status == ChatTurnStatus.CANCELLED
+        assert store.get(Task, f"supervisor-{run.id}").status == TaskStatus.CANCELLED
+        assert store.replay_events(run.id)[-1].event_type == "run.cancelled"
+        provider.gate.set()
+        await delegated.shutdown()
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_root_goal_sees_running_grandchild_below_completed_child(
+    tmp_path: Path,
+) -> None:
+    store, project, profile, chat = _setup(tmp_path, RoutedProvider([], []))
+    root = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Root",
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    first = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="First",
+            provider_profile_id=profile.id,
+            model="model-a",
+            parent_session_id=root.id,
+            metadata={"subagent_id": "first-record"},
+        )
+    )
+    second = store.create(
+        ChatSession(
+            engagement_id=project.id,
+            title="Second",
+            provider_profile_id=profile.id,
+            model="model-a",
+            parent_session_id=first.id,
+            metadata={"subagent_id": "second-record"},
+        )
+    )
+    root_turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=root.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    first_turn = store.create(
+        ChatTurn(
+            engagement_id=project.id,
+            session_id=first.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+        )
+    )
+    store.create(
+        ChatSubagent(
+            id="first-record",
+            engagement_id=project.id,
+            parent_session_id=root.id,
+            parent_turn_id=root_turn.id,
+            child_session_id=first.id,
+            child_turn_id=first_turn.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            name="First",
+            task="Delegate.",
+            status=ChatSubagentStatus.COMPLETED,
+            finished_at=utc_now(),
+        )
+    )
+    grandchild = store.create(
+        ChatSubagent(
+            id="second-record",
+            engagement_id=project.id,
+            parent_session_id=first.id,
+            parent_turn_id=first_turn.id,
+            child_session_id=second.id,
+            provider_profile_id=profile.id,
+            model="model-a",
+            name="Second",
+            task="Count.",
+        )
+    )
+    goals = ChatGoalService(store)
+    assert goals.has_working_subagents(root.id)
+    assert [item.id for item in chat.subagents.descendants_for_session(root.id)] == [
+        "first-record",
+        "second-record",
+    ]
+    store.update(
+        ChatSubagent,
+        grandchild.id,
+        {"status": ChatSubagentStatus.COMPLETED, "finished_at": utc_now()},
+        expected_revision=grandchild.revision,
+    )
+    assert not goals.has_working_subagents(root.id)
+
+
+def test_supervisor_can_enable_ready_command_runtime_for_one_child(
+    tmp_path: Path,
+) -> None:
+    from nebula.v3.domain import ScopePolicy
+    from nebula.v3.runtime_platform import RuntimeToolComponents
+    from nebula.v3.tools import ToolSpec
+
+    class ReadyRuntime:
+        def chat_components(self, *, engagement_id: str, extra_components=None):
+            assert extra_components is None
+            return RuntimeToolComponents(
+                broker=object(),
+                scope=ScopePolicy(engagement_id=engagement_id),
+                workspace=tmp_path,
+                specs={
+                    "run_command": ToolSpec(
+                        name="run_command",
+                        description="Run a project command.",
+                        input_schema={"type": "object"},
+                        output_schema={"type": "object"},
+                        risk_class=RiskClass.LOCAL_READ,
+                    )
+                },
+                runtime_digest="test-ready-runtime",
+            )
+
+    async def scenario() -> None:
+        provider = RoutedProvider(
+            parent=[
+                _call(
+                    "start",
+                    "start_subagent",
+                    task="Check runtime.",
+                    name="Runner",
+                    context=None,
+                    capabilities={"command_runtime": True},
+                ),
+                _finish("finish"),
+                _response(text="Delegated."),
+            ],
+            child=[_response(text="Runtime is available.")],
+        )
+        store, project, _, chat = _setup(tmp_path, provider)
+        chat.automation_tool_platform = ReadyRuntime()
+        prepared = await chat.prepare_async(
+            _request(project, content="Delegate runtime check.", allow_subagents=True)
+        )
+        assert prepared.turn is not None
+        catalog = chat.subagents.available_capabilities(prepared.turn.id)
+        assert catalog["command_runtime"] == {
+            "available": True,
+            "selected": False,
+            "tool_names": ["run_command"],
+        }
+        assert "run_command" in catalog["tool_names"]
+        await _drain(chat, chat.start_provider_turn(prepared))
+        await _until(
+            lambda: any(
+                record.child_turn_id for record in store.list_entities(ChatSubagent)
+            )
+        )
+        (record,) = store.list_entities(ChatSubagent)
+        child = store.get(ChatTurn, record.child_turn_id)
+        assert record.parent_request["tools_enabled"] is True
+        assert child.request_snapshot["include_oci_tools"] is True
+        assert "run_command" in child.request_snapshot["available_tool_names"]
+        await chat.shutdown()
+
+    asyncio.run(scenario())
 
 
 def test_assigned_tool_names_are_enforced_by_the_execution_broker(
@@ -552,7 +1131,9 @@ def test_cloud_subagent_turn_asks_for_tool_result_consent_before_acceptance(
         provider = RoutedProvider([_response(text="plain")], [])
         provider.config = provider.config.model_copy(update={"local": False})
         store = NebulaStore(tmp_path / "cloud-subagents.db")
-        project = store.create(Engagement(id="project", name="Subagents"))
+        project = store.create(
+            Engagement(id="project", name="Subagents", work_enabled=False)
+        )
         store.create(
             ProviderProfile(
                 id="provider",

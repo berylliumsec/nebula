@@ -589,7 +589,7 @@ def _gateway_subagent_tools(
     wait_default, wait_max = _subagent_wait_limits(kind)
     return {
         "subagent.capabilities": (
-            "List exact tool names, selected MCP servers and available skills a provider subagent may be assigned.",
+            "List exact tool names, enabled MCP servers, project lifecycle hooks and available skills a provider subagent may be assigned.",
             {"type": "object", "properties": {}, "additionalProperties": False},
         ),
         "subagent.start": (

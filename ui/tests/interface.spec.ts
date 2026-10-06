@@ -12005,6 +12005,9 @@ const delegated = [
     capabilities: {
       tool_names: ["notes.write"],
       mcp_server_ids: [],
+      hook_ids: ["child-audit"],
+      include_knowledge: true,
+      command_runtime: false,
       skills: [{ name: "route-review", path: "/project/.agents/skills/route-review/SKILL.md" }],
     },
   },
@@ -12119,6 +12122,9 @@ reloadTest("stabilization an operator allows delegation and acts on a waiting su
   await expect(pane).toContainText("Assigned capabilities");
   await expect(pane).toContainText("Tools: notes.write");
   await expect(pane).toContainText("MCP servers: none");
+  await expect(pane).toContainText("Lifecycle hooks: child-audit");
+  await expect(pane).toContainText("Knowledge: on");
+  await expect(pane).toContainText("Command runtime: off");
   await expect(pane).toContainText("Skills: route-review");
   await expect(pane).toContainText("Recovering");
   await expect(pane).toContainText("Core restarted while the child effect outcome was unknown.");

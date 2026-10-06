@@ -5,6 +5,7 @@ import { DialogProvider } from "./DialogSystem";
 import { localDateTimeInputValue, NewMissionButton } from "./MissionControls";
 
 const startMission = vi.fn().mockResolvedValue({ id: "run-1" });
+const reverifyProvider = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const harness = {
   id: "harness-1",
   name: "Codex",
@@ -31,6 +32,7 @@ const api = {
 };
 
 let engagementId = "engagement-1";
+let providers: Array<Record<string, unknown>> = [];
 
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: () => ({
@@ -38,8 +40,8 @@ vi.mock("../state/WorkspaceContext", () => ({
     coreState: "online",
     engagement: { id: engagementId },
     previewMode: false,
-    providers: [],
-    reverifyProvider: vi.fn(),
+    providers,
+    reverifyProvider,
     startMission,
   }),
 }));
@@ -69,6 +71,7 @@ async function openDialog(user: ReturnType<typeof userEvent.setup>) {
 describe("NewMissionButton", () => {
   afterEach(() => {
     engagementId = "engagement-1";
+    providers = [];
     startMission.mockClear();
   });
 
@@ -185,5 +188,29 @@ describe("NewMissionButton", () => {
       scheduledFor: new Date(`${scheduledLocal}:00`).toISOString(),
       repeatIntervalSeconds: 86_400,
     }));
+  });
+
+  it("lets a harness Mission supervisor select a verified provider child model", async () => {
+    providers = [{
+      id: "provider-1", name: "Local provider", enabled: true, state: "healthy",
+      models: ["model-a"], defaultModel: "model-a", modelAllowlist: ["model-a"],
+      kind: "local", privacy: "local_only", permitsSensitiveData: true,
+      capabilityVerifications: { "model-a": { model: "model-a", status: "verified" } },
+    }];
+    const user = userEvent.setup();
+    const { dialog } = await openDialog(user);
+    await user.type(screen.getByLabelText("Mission name"), "Delegated review");
+    await user.type(screen.getByLabelText("Objective"), "Review the project");
+    await user.click(screen.getByText("Advanced"));
+    await user.selectOptions(screen.getByLabelText("Mission runtime"), "harness");
+    await user.click(screen.getByRole("checkbox", { name: /Let the supervisor create child tasks/ }));
+    expect(screen.getByLabelText("Mission child provider")).toHaveValue("provider-1");
+    expect(screen.getByLabelText("Mission child model")).toHaveValue("model-a");
+    await waitFor(() => expect(dialog.getByRole("button", { name: "Automate task" })).toBeEnabled());
+    await user.click(dialog.getByRole("button", { name: "Automate task" }));
+    await waitFor(() => expect(startMission).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "harness", allowSubagents: true,
+      subagentProviderId: "provider-1", subagentModel: "model-a",
+    })));
   });
 });

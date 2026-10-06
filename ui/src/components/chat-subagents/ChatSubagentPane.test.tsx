@@ -57,8 +57,7 @@ describe("the subagents an operator can see and act on", () => {
     // Without an operator limit there are no slots to fill.
     expect(screen.getByText(/1 running · no limit · 6.2k tokens/)).toBeInTheDocument();
     expect(container.querySelector(".chat-subagent-slot-bar")).toBeNull();
-    // The inheritance rule is stated, not implied.
-    expect(screen.getByText(/cannot start their own subagents/)).toBeInTheDocument();
+    expect(screen.getByText(/assign project tools, MCP servers, skills, hooks, knowledge, command runtime, and delegation/)).toBeInTheDocument();
   });
 
   it("shows the capability choices made by a child's supervisor", async () => {
@@ -67,6 +66,11 @@ describe("the subagents an operator can see and act on", () => {
       capabilities: {
         toolNames: ["notes.write"],
         mcpServerIds: [],
+        hookIds: ["child-audit"],
+        includeKnowledge: true,
+        commandRuntime: false,
+        allowSubagents: true,
+        maxActiveSubagents: 2,
         skills: [{ name: "route-review", path: "/project/.agents/skills/route-review/SKILL.md" }],
       },
     });
@@ -75,6 +79,10 @@ describe("the subagents an operator can see and act on", () => {
     expect(screen.getByText("Assigned capabilities")).toBeInTheDocument();
     expect(screen.getByText("Tools: notes.write")).toBeInTheDocument();
     expect(screen.getByText("MCP servers: none")).toBeInTheDocument();
+    expect(screen.getByText("Lifecycle hooks: child-audit")).toBeInTheDocument();
+    expect(screen.getByText("Knowledge: on")).toBeInTheDocument();
+    expect(screen.getByText("Command runtime: off")).toBeInTheDocument();
+    expect(screen.getByText("Subagents: on · 2 running at once")).toBeInTheDocument();
     expect(screen.getByText("Skills: route-review")).toBeInTheDocument();
     rerender(<ChatSubagentPane {...paneProps} subagents={[assigned]} compact />);
     expect(screen.getByText("Assigned capabilities")).toBeInTheDocument();

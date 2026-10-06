@@ -35,11 +35,15 @@ export function NewMissionButton({ className = "button primary", children, showS
   const [harnessId, setHarnessId] = useState("");
   const [harnessSessionId, setHarnessSessionId] = useState("");
   const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
+  const [allowSubagents, setAllowSubagents] = useState(false);
+  const [subagentProviderId, setSubagentProviderId] = useState("");
+  const [subagentModel, setSubagentModel] = useState("");
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [objective, setObjective] = useState("");
   const [providerId, setProviderId] = useState("");
   const provider = availableProviders.find((item) => item.id === providerId);
+  const subagentProvider = availableProviders.find((item) => item.id === subagentProviderId);
   const [model, setModel] = useState("");
   const [harnessReasoningEffort, setHarnessReasoningEffort] = useState("");
   const [harnessServiceTier, setHarnessServiceTier] = useState("");
@@ -92,6 +96,13 @@ export function NewMissionButton({ className = "button primary", children, showS
     setProviderId(next?.id ?? "");
     if (runtimeKind === "native") setModel(next?.models[0] ?? "");
   }, [availableProviders, providerId, runtimeKind]);
+
+  useEffect(() => {
+    if (subagentProvider?.models.includes(subagentModel)) return;
+    const candidate = availableProviders.find((item) => item.models.some((candidateModel) => providerModelVerification(item, candidateModel)?.status === "verified"));
+    setSubagentProviderId(candidate?.id ?? "");
+    setSubagentModel(candidate?.models.find((candidateModel) => providerModelVerification(candidate, candidateModel)?.status === "verified") ?? "");
+  }, [availableProviders, subagentModel, subagentProvider]);
 
   useEffect(() => {
     let active = true;
@@ -171,7 +182,7 @@ export function NewMissionButton({ className = "button primary", children, showS
   const automaticTools = useMemo(() => runtimeReady && (runtimeKind === "harness" || providerSupportsTools)
     ? ["run_command", "process_io"]
     : [], [providerSupportsTools, runtimeKind, runtimeReady]);
-  const runtimeCanExecute = automaticTools.length > 0 || selectedMcpIds.length > 0;
+  const runtimeCanExecute = allowSubagents || automaticTools.length > 0 || selectedMcpIds.length > 0;
   const toolSelectionMessage = toolVerificationBusy
     ? `Checking tool support for ${model.trim()}…`
     : toolPreparation === "preparing"
@@ -222,8 +233,8 @@ export function NewMissionButton({ className = "button primary", children, showS
   // the operator types a value; a typed limit never reverts under them.
   useEffect(() => {
     if (!open || maxConcurrencyTouched) return;
-    setMaxConcurrency(runtimeKind === "native" && (automaticTools.length || selectedMcpIds.length) ? 2 : 1);
-  }, [automaticTools, maxConcurrencyTouched, open, runtimeKind, selectedMcpIds.length]);
+    setMaxConcurrency(allowSubagents || runtimeKind === "native" && (automaticTools.length || selectedMcpIds.length) ? 2 : 1);
+  }, [allowSubagents, automaticTools, maxConcurrencyTouched, open, runtimeKind, selectedMcpIds.length]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -252,6 +263,18 @@ export function NewMissionButton({ className = "button primary", children, showS
     }
     if (!cleanModel) {
       setValidationError("Select a model for this mission.");
+      return;
+    }
+    if (allowSubagents && scheduledFor) {
+      setValidationError("Delegated Missions currently start immediately. Clear the schedule or turn off Subagents.");
+      return;
+    }
+    if (allowSubagents && runtimeKind === "native" && !providerSupportsTools) {
+      setValidationError("Verify tool calling for this supervisor model before enabling Subagents.");
+      return;
+    }
+    if (allowSubagents && runtimeKind === "harness" && (!subagentProvider || providerModelVerification(subagentProvider, subagentModel)?.status !== "verified")) {
+      setValidationError("Choose a verified provider model for harness subagents.");
       return;
     }
     const cleanStages = stages.map((stage) => ({ title: stage.title.trim(), objective: stage.objective.trim() }));
@@ -308,17 +331,25 @@ export function NewMissionButton({ className = "button primary", children, showS
     const runtimePermitsSensitive = runtimeKind === "harness"
       ? selectedHarness?.permitsSensitiveData
       : provider?.permitsSensitiveData;
+    const childIsRemote = allowSubagents && runtimeKind === "harness" && subagentProvider
+      && subagentProvider.kind !== "local" && subagentProvider.privacy !== "local_only";
+    if (childIsRemote && !subagentProvider.permitsSensitiveData) {
+      setValidationError("The selected child provider cannot receive project data. Choose another provider or update its privacy settings.");
+      return;
+    }
     const toolSharingRuntime: ToolSharingRuntime | undefined = runtimeKind === "harness"
       ? selectedHarness && { kind: "harness", profile: selectedHarness }
       : provider && { kind: "provider", profile: provider };
-    if (runtimeUsesMcp && selectedRuntime && !runtimeIsLocal) {
-      if (!runtimePermitsSensitive) {
+    if ((runtimeUsesMcp || allowSubagents) && selectedRuntime && (!runtimeIsLocal || childIsRemote)) {
+      if ((!runtimeIsLocal && !runtimePermitsSensitive) || (childIsRemote && !subagentProvider?.permitsSensitiveData)) {
         setValidationError("This runtime profile is text-only. Permit project/document data in Settings or remove MCP servers.");
         return;
       }
       allowCloudToolResults = sharesToolResultsAlways(toolSharingRuntime) || await confirm({
-        title: "Allow MCP results in this mission?",
-        message: `Allow bounded MCP tool inputs and result excerpts to reach ${selectedRuntime.name} for this mission? Raw artifacts remain local and every risky call follows its approval policy.`,
+        title: allowSubagents ? "Allow project data in delegated work?" : "Allow MCP results in this mission?",
+        message: allowSubagents
+          ? "Allow selected children to send project knowledge and bounded MCP tool inputs and results to their models? Raw artifacts remain local and every risky call follows its approval policy."
+          : `Allow bounded MCP tool inputs and result excerpts to reach ${selectedRuntime.name} for this mission? Raw artifacts remain local and every risky call follows its approval policy.`,
         confirmLabel: "Allow this mission",
         ...(api && toolSharingRuntime
           ? { remember: rememberToolSharing(api, toolSharingRuntime, rememberToolSharingRuntime) }
@@ -349,6 +380,9 @@ export function NewMissionButton({ className = "button primary", children, showS
         harnessProfileId: selectedHarness?.id,
         harnessSessionId: harnessSessionId || undefined,
         mcpServerIds: harnessSessionId ? [] : selectedMcpIds,
+        allowSubagents,
+        subagentProviderId: allowSubagents ? subagentProviderId : undefined,
+        subagentModel: allowSubagents ? subagentModel : undefined,
         model: cleanModel,
         harnessReasoningEffort: harnessReasoningEffort || undefined,
         harnessServiceTier: harnessServiceTier || undefined,
@@ -357,9 +391,9 @@ export function NewMissionButton({ className = "button primary", children, showS
         repeatIntervalSeconds: repeatIntervalSeconds || undefined,
         ...optionalBudget,
         maxRetries: 0,
-        maxConcurrency: 1,
+        maxConcurrency: allowSubagents ? maxConcurrency : 1,
         allowCloudToolResults,
-      } : { engagementId: engagement.id, name: cleanName, objective: cleanObjective, backend: "native", providerId: provider?.id, mcpServerIds: selectedMcpIds, model: cleanModel, stages: cleanStages, scheduledFor: scheduledDate?.toISOString(), repeatIntervalSeconds: repeatIntervalSeconds || undefined, ...optionalBudget, maxRetries, maxConcurrency: automaticTools.length || selectedMcpIds.length ? maxConcurrency : 1, allowCloudToolResults });
+      } : { engagementId: engagement.id, name: cleanName, objective: cleanObjective, backend: "native", providerId: provider?.id, mcpServerIds: selectedMcpIds, allowSubagents, model: cleanModel, stages: cleanStages, scheduledFor: scheduledDate?.toISOString(), repeatIntervalSeconds: repeatIntervalSeconds || undefined, ...optionalBudget, maxRetries: allowSubagents ? 0 : maxRetries, maxConcurrency: allowSubagents || automaticTools.length || selectedMcpIds.length ? maxConcurrency : 1, allowCloudToolResults });
       setOpen(false);
       setName("");
       setObjective("");
@@ -372,6 +406,7 @@ export function NewMissionButton({ className = "button primary", children, showS
       setMaxToolCalls(null);
       setMaxConcurrency(1);
       setMaxRetries(1);
+      setAllowSubagents(false);
     } catch (startError) {
       void logCaughtDiagnostic("interface.mission_controls.caught_failure_05", "A handled interface operation failed.", startError, "mission_controls");
       setError(startError instanceof Error ? startError.message : "Could not start the mission.");
@@ -398,19 +433,20 @@ export function NewMissionButton({ className = "button primary", children, showS
             <label>Runtime<select aria-label="Mission runtime" value={runtimeKind} onChange={(event) => { const next = event.target.value as "native" | "harness"; runtimeDefaultAppliedRef.current = true; setRuntimeKind(next); setHarnessSessionId(""); setSelectedMcpIds([]); if (next === "native") selectProvider(providerId || availableProviders[0]?.id || ""); }}><option value="native" disabled={availableProviders.length === 0}>Native mission{availableProviders.length === 0 ? " · unavailable" : ""}</option><option value="harness" disabled={harnesses.length === 0}>Agent harness{harnesses.length === 0 ? " · unavailable" : ""}</option></select></label>
             {runtimeKind === "native" ? <label>Provider<select value={providerId} onChange={(event) => { selectProvider(event.target.value); setError(undefined); }}>{availableProviders.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label> : <><label>Harness<select aria-label="Mission harness" value={harnessId} disabled={Boolean(harnessSessionId)} onChange={(event) => { setHarnessId(event.target.value); setError(undefined); }}>{harnesses.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label><label>Session<select aria-label="Harness session" value={harnessSessionId} onChange={(event) => setHarnessSessionId(event.target.value)}><option value="">Start a new session</option>{harnessSessions.filter((item) => item.harnessProfileId === harnessId || item.id === harnessSessionId).map((item) => <option value={item.id} key={item.id}>{item.model} · {item.status}</option>)}</select></label></>}
             <label>Model<select required value={model} disabled={Boolean(harnessSessionId) || !modelOptions.length} onChange={(event) => { setModel(event.target.value); setError(undefined); }}><option value="">{modelOptions.length ? "Select model" : runtimeKind === "harness" ? "Run a harness check to discover models" : "Run provider health check to discover models"}</option>{modelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>
+            <fieldset className="mission-tools"><legend>Subagents</legend><label className="provider-consent"><input type="checkbox" checked={allowSubagents} onChange={(event) => { setAllowSubagents(event.target.checked); if (event.target.checked) { setScheduledFor(""); setRepeatIntervalSeconds(0); } }} /><span><strong>Let the supervisor create child tasks</strong><small>It can assign enabled project tools, MCP servers, skills, hooks, knowledge, command runtime, and further delegation to each child. Project approvals still apply.</small></span></label>{allowSubagents && runtimeKind === "harness" && <><label>Child provider<select aria-label="Mission child provider" value={subagentProviderId} onChange={(event) => { const next = availableProviders.find((item) => item.id === event.target.value); setSubagentProviderId(next?.id ?? ""); setSubagentModel(next?.models.find((candidateModel) => providerModelVerification(next, candidateModel)?.status === "verified") ?? ""); }}>{availableProviders.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Child model<select aria-label="Mission child model" value={subagentModel} onChange={(event) => setSubagentModel(event.target.value)}><option value="">Select verified model</option>{subagentProvider?.models.filter((item) => providerModelVerification(subagentProvider, item)?.status === "verified").map((item) => <option key={item} value={item}>{item}</option>)}</select></label></>}</fieldset>
             {runtimeKind === "harness" && (selectedModelOptions?.reasoningEfforts.length || harnessReasoningEffort) ? <label>Effort<select aria-label="Mission harness effort" value={harnessReasoningEffort} disabled={Boolean(harnessSessionId)} onChange={(event) => setHarnessReasoningEffort(event.target.value)}><option value="">Harness default</option>{harnessReasoningEffort && !selectedModelOptions?.reasoningEfforts.some((item) => item.id === harnessReasoningEffort) && <option value={harnessReasoningEffort}>{harnessReasoningEffort} · saved</option>}{selectedModelOptions?.reasoningEfforts.map((item) => <option value={item.id} title={item.description || undefined} key={item.id}>{item.label}</option>)}</select></label> : null}
             {runtimeKind === "harness" && (selectedModelOptions?.serviceTiers.length || harnessServiceTier) ? <label>Speed<select aria-label="Mission harness speed" value={harnessServiceTier} disabled={Boolean(harnessSessionId)} onChange={(event) => setHarnessServiceTier(event.target.value)}><option value="">Harness default</option>{harnessServiceTier && !selectedModelOptions?.serviceTiers.some((item) => item.id === harnessServiceTier) && <option value={harnessServiceTier}>{harnessServiceTier} · saved</option>}{selectedModelOptions?.serviceTiers.map((item) => <option value={item.id} title={item.description || undefined} key={item.id}>{item.label}</option>)}</select></label> : null}
             <section className="mission-stage-builder" aria-labelledby="mission-stages-title">
-              <header><div><ListTodo size={15} /><span><strong id="mission-stages-title">Stages</strong><small>Optional checkpoints executed in order with a durable result per stage.</small></span></div><button className="button quiet" type="button" disabled={stages.length >= 12} onClick={() => setStages((current) => [...current, { title: `Stage ${current.length + 1}`, objective: "" }])}><Plus size={14} /> Add stage</button></header>
+              <header><div><ListTodo size={15} /><span><strong id="mission-stages-title">Stages</strong><small>{allowSubagents ? "Optional checkpoints given to the supervisor as guidance." : "Optional checkpoints executed in order with a durable result per stage."}</small></span></div><button className="button quiet" type="button" disabled={stages.length >= 12} onClick={() => setStages((current) => [...current, { title: `Stage ${current.length + 1}`, objective: "" }])}><Plus size={14} /> Add stage</button></header>
               {stages.map((stage, index) => <fieldset className="mission-stage" key={index}><legend>Stage {index + 1}</legend><label>Name<input value={stage.title} maxLength={300} onChange={(event) => setStages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, title: event.target.value } : item))} /></label><label>Objective<textarea rows={3} value={stage.objective} maxLength={10_000} onChange={(event) => setStages((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, objective: event.target.value } : item))} /></label><button className="icon-button subtle danger" type="button" aria-label={`Remove stage ${index + 1}`} onClick={() => setStages((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Trash2 size={15} /></button></fieldset>)}
             </section>
-            <section className="mission-schedule" aria-labelledby="mission-schedule-title"><header><strong id="mission-schedule-title">Schedule</strong><small>Core owns the start time; scheduled work survives page closure and Core restarts.</small></header><div className="resource-form-grid"><label>Start time<input type="datetime-local" value={scheduledFor} min={localDateTimeInputValue(new Date(Date.now() + 60_000))} onChange={(event) => setScheduledFor(event.target.value)} /></label><label>Repeat<select value={repeatIntervalSeconds} disabled={!scheduledFor} onChange={(event) => setRepeatIntervalSeconds(Number(event.target.value))}><option value={0}>Do not repeat</option><option value={86400}>Daily</option><option value={604800}>Weekly</option></select></label></div>{repeatIntervalSeconds > 0 && <small>Each occurrence becomes a new audited Mission. It never reuses an uncertain in-flight run.</small>}</section>
+            <section className="mission-schedule" aria-labelledby="mission-schedule-title"><header><strong id="mission-schedule-title">Schedule</strong><small>{allowSubagents ? "Delegated supervisors start immediately." : "Core owns the start time; scheduled work survives page closure and Core restarts."}</small></header><div className="resource-form-grid"><label>Start time<input type="datetime-local" value={scheduledFor} disabled={allowSubagents} min={localDateTimeInputValue(new Date(Date.now() + 60_000))} onChange={(event) => setScheduledFor(event.target.value)} /></label><label>Repeat<select value={repeatIntervalSeconds} disabled={!scheduledFor || allowSubagents} onChange={(event) => setRepeatIntervalSeconds(Number(event.target.value))}><option value={0}>Do not repeat</option><option value={86400}>Daily</option><option value={604800}>Weekly</option></select></label></div>{repeatIntervalSeconds > 0 && <small>Each occurrence becomes a new audited Mission. It never reuses an uncertain in-flight run.</small>}</section>
             {(runtimeKind === "native" || !harnessSessionId) && <fieldset className="mission-tools"><legend>MCP servers · all agent runtimes</legend>{mcpServers.length ? mcpServers.map((server) => <label className="provider-consent" key={server.id}><input type="checkbox" checked={selectedMcpIds.includes(server.id)} onChange={(event) => setSelectedMcpIds((current) => event.target.checked ? [...current, server.id] : current.filter((id) => id !== server.id))} /><span><strong>{server.name}</strong><small>{server.transport} · {server.tools.length} discovered tools · Core artifact capture</small></span></label>) : <p>No enabled MCP profiles. Add one in Settings if this mission needs external tools.</p>}</fieldset>}
             <div className="resource-form-grid">
               <label>Duration (minutes)<small id="mission-duration-unlimited-help">Leave blank for unlimited (default)</small><input aria-label="Duration (minutes)" aria-describedby="mission-duration-unlimited-help" type="number" min={1} placeholder="Unlimited" value={durationMinutes ?? ""} onChange={(event) => setDurationMinutes(event.target.value === "" ? null : Number(event.target.value))} /></label>
               <label>Token limit<small id="mission-token-unlimited-help">Leave blank for unlimited (default)</small><input aria-label="Token limit" aria-describedby="mission-token-unlimited-help" type="number" min={1} max={200000} placeholder="Unlimited" value={maxTokens ?? ""} onChange={(event) => setMaxTokens(event.target.value === "" ? null : Number(event.target.value))} /></label>
               <label>Cost limit (USD)<small id="mission-cost-unlimited-help">Leave blank for unlimited (default)</small><input aria-label="Cost limit (USD)" aria-describedby="mission-cost-unlimited-help" type="number" min={0} max={100} step="0.01" placeholder="Unlimited" value={maxCost ?? ""} onChange={(event) => setMaxCost(event.target.value === "" ? null : Number(event.target.value))} /></label>
-              <label>Retries<input type="number" min={0} max={2} value={maxRetries} onChange={(event) => setMaxRetries(Number(event.target.value))} /></label>
+              <label>Retries<input type="number" min={0} max={2} value={allowSubagents ? 0 : maxRetries} disabled={allowSubagents} onChange={(event) => setMaxRetries(Number(event.target.value))} />{allowSubagents && <small>Retry a finished delegated Mission from its history.</small>}</label>
             </div>
             <section className="mission-tool-selection">
               <header><div><Wrench size={15} /><span><strong>Command runtime</strong><small>Bash and process I/O use the project’s selected execution mode.</small></span></div><span>{automaticTools.length ? "Ready" : "Analysis only"}</span></header>

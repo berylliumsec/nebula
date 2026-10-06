@@ -125,18 +125,22 @@ class ChatGoalService:
         self.store = store
 
     def has_working_subagents(self, session_id: str) -> bool:
-        """Whether a subagent of this conversation is still running."""
+        """Whether this conversation has a running child at any depth."""
 
-        return bool(
-            self.store.find_entities(
-                ChatSubagent,
-                {
-                    "parent_session_id": session_id,
-                    "status": ChatSubagentStatus.RUNNING.value,
-                },
-                limit=1,
+        pending = [session_id]
+        seen = {session_id}
+        while pending:
+            children = self.store.find_entities(
+                ChatSubagent, {"parent_session_id": pending.pop()}
             )
-        )
+            for child in children:
+                if child.status == ChatSubagentStatus.RUNNING:
+                    return True
+                if child.child_session_id in seen:
+                    raise ConflictError("subagent descendant chain is invalid")
+                seen.add(child.child_session_id)
+                pending.append(child.child_session_id)
+        return False
 
     def settle_active_time(self, session_id: str) -> None:
         """Bank or reopen active time after a conversation's work changed.

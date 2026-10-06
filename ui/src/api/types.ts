@@ -180,6 +180,7 @@ export interface AgentRunSummary {
   serviceTier?: string;
   objective?: string;
   finalSummary?: string;
+  supervisorChatSessionId?: Identifier;
   retryOfRunId?: Identifier;
   remoteMcpConfirmed?: boolean;
   scheduledFor?: string;
@@ -209,6 +210,9 @@ export interface MissionCreateRequest {
   harnessProfileId?: Identifier;
   harnessSessionId?: Identifier;
   mcpServerIds?: Identifier[];
+  allowSubagents?: boolean;
+  subagentProviderId?: Identifier;
+  subagentModel?: string;
   model?: string;
   harnessReasoningEffort?: string;
   harnessServiceTier?: string;
@@ -3554,6 +3558,11 @@ export interface ChatSubagentView {
   capabilities?: {
     toolNames?: string[];
     mcpServerIds?: string[];
+    hookIds?: string[];
+    includeKnowledge?: boolean;
+    commandRuntime?: boolean;
+    allowSubagents?: boolean;
+    maxActiveSubagents?: number | null;
     skills?: { name: string; path: string }[];
   };
   stepCount: number;

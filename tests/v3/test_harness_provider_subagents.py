@@ -11,6 +11,7 @@ import pytest
 
 from nebula.v3.chat import ChatConfigurationError, ChatPrivacyError, ChatService
 from nebula.v3.credentials import CredentialStore
+from nebula.v3.mission_delegation import DelegatedMissionService
 from nebula.v3.domain import (
     ChatBackend,
     ChatMessage,
@@ -28,10 +29,16 @@ from nebula.v3.domain import (
     HarnessSession,
     HarnessTurn,
     HarnessTurnStatus,
+    NativeHookExecution,
     ProviderCapabilityVerification,
     ProviderProfile,
     ProviderVerificationStatus,
     ScopePolicy,
+    RunBackend,
+    RunBudget,
+    RunStatus,
+    Task,
+    TaskStatus,
     ToolCall,
     ToolCallStatus,
 )
@@ -395,9 +402,91 @@ def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path):
     asyncio.run(scenario())
 
 
+def test_harness_mission_supervisor_uses_chat_gateway_and_records_child(tmp_path):
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        child_provider = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        child_provider.answers = ["Route count complete."]
+        calls = 0
+
+        async def script(connection: ScriptedConnection, prompt: str) -> str:
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                return "Final Mission result."
+            catalog = _payload(await connection.call("subagent.capabilities"))
+            assert catalog["subagents"]["available"] is True
+            _payload(
+                await connection.call(
+                    "subagent.start",
+                    task="Count routes",
+                    name="Counter",
+                    capabilities={"tool_names": []},
+                )
+            )
+            result = _payload(await connection.call("subagent.wait"))
+            assert result["subagents"][0]["report"] == "Route count complete."
+            return "First supervisor result."
+
+        adapter.script = script
+        service = DelegatedMissionService(store, chat, runtime)
+        run = await service.start(
+            engagement_id=project.id,
+            name="Harness route review",
+            objective="Review routes",
+            backend=RunBackend.HARNESS,
+            provider_id=None,
+            harness_profile_id=harness.id,
+            harness_session_id=None,
+            model=harness.default_model,
+            subagent_provider_id="provider",
+            subagent_model="model-a",
+            mcp_server_ids=[],
+            stages=[],
+            budget=RunBudget(max_concurrency=2),
+            tools_enabled=False,
+            allow_cloud_tool_results=False,
+        )
+        await _until(
+            lambda: (
+                store.get(type(run), run.id).status
+                in {RunStatus.COMPLETE, RunStatus.FAILED}
+            )
+        )
+        final = store.get(type(run), run.id)
+        assert final.status == RunStatus.COMPLETE, final.metadata.get("final_summary")
+        assert final.metadata["final_summary"] == "Final Mission result."
+        tasks = store.find_entities(Task, {"run_id": run.id})
+        assert {task.status for task in tasks} == {TaskStatus.COMPLETE}
+        assert len(tasks) == 2
+        assert calls == 2
+        await service.shutdown()
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
     async def scenario() -> None:
         store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        chat.workspace_resolver = lambda _: tmp_path
+        hook_dir = tmp_path / ".agents" / "hooks" / "audit"
+        hook_dir.mkdir(parents=True)
+        executable = hook_dir / "run.sh"
+        executable.write_text("#!/bin/sh\ncat >/dev/null\n", encoding="utf-8")
+        executable.chmod(0o700)
+        (hook_dir / "hook.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "name": "Audit",
+                    "events": ["chat.turn.completed"],
+                    "command": ["run.sh"],
+                    "side_effects": "none",
+                }
+            ),
+            encoding="utf-8",
+        )
         child = chat.provider_factory(store.get(ProviderProfile, "provider"))
         child.answers = ["Done."]
 
@@ -406,6 +495,7 @@ def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
             available = _payload(await connection.call("subagent.capabilities"))
             assert "notes.write" not in available["tool_names"]
             assert available["mcp_servers"] == []
+            assert [item["id"] for item in available["hooks"]] == ["audit"]
             _payload(
                 await connection.call(
                     "subagent.start",
@@ -413,6 +503,9 @@ def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
                     capabilities={
                         "tool_names": [],
                         "mcp_server_ids": [],
+                        "hook_ids": ["audit"],
+                        "include_knowledge": True,
+                        "command_runtime": False,
                     },
                 )
             )
@@ -432,7 +525,18 @@ def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
         assert record.parent_request["capabilities"] == {
             "tool_names": [],
             "mcp_server_ids": [],
+            "hook_ids": ["audit"],
+            "include_knowledge": True,
+            "command_runtime": False,
         }
+        assert record.parent_request["include_knowledge"] is True
+        assert record.parent_request["tools_enabled"] is False
+        assert any(
+            item.chat_turn_id == record.child_turn_id
+            and item.event_name == "chat.turn.completed"
+            and item.status == "complete"
+            for item in store.list_entities(NativeHookExecution)
+        )
         await chat.shutdown()
 
     asyncio.run(scenario())

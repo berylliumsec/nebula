@@ -2379,6 +2379,7 @@ function mapRun(value: WireAgentRun): AgentRunSummary {
     serviceTier: typeof runtimeOptions?.service_tier === "string" ? runtimeOptions.service_tier : undefined,
     objective: value.objective,
     finalSummary: typeof value.metadata?.final_summary === "string" ? value.metadata.final_summary : undefined,
+    supervisorChatSessionId: typeof value.metadata?.supervisor_chat_session_id === "string" ? value.metadata.supervisor_chat_session_id : undefined,
     retryOfRunId: typeof value.metadata?.retry_of_run_id === "string" ? value.metadata.retry_of_run_id : undefined,
     remoteMcpConfirmed: value.runtime_snapshot?.remote_mcp_confirmed === true,
     scheduledFor: typeof value.metadata?.scheduled_for === "string" ? value.metadata.scheduled_for : undefined,
@@ -4122,6 +4123,11 @@ interface WireChatSubagent {
   capabilities?: {
     tool_names?: string[];
     mcp_server_ids?: string[];
+    hook_ids?: string[];
+    include_knowledge?: boolean;
+    command_runtime?: boolean;
+    allow_subagents?: boolean;
+    max_active_subagents?: number | null;
     skills?: { name: string; path: string }[];
   } | null;
   step_count?: number;
@@ -4160,6 +4166,11 @@ function mapChatSubagent(value: WireChatSubagent): ChatSubagentView {
     capabilities: value.capabilities ? {
       toolNames: value.capabilities.tool_names,
       mcpServerIds: value.capabilities.mcp_server_ids,
+      hookIds: value.capabilities.hook_ids,
+      includeKnowledge: value.capabilities.include_knowledge,
+      commandRuntime: value.capabilities.command_runtime,
+      allowSubagents: value.capabilities.allow_subagents,
+      maxActiveSubagents: value.capabilities.max_active_subagents,
       skills: value.capabilities.skills,
     } : undefined,
     stepCount: value.step_count ?? 0,
@@ -6127,6 +6138,9 @@ export class ApiClient {
         harness_profile_id: body.harnessProfileId,
         harness_session_id: body.harnessSessionId,
         mcp_server_ids: body.mcpServerIds ?? [],
+        allow_subagents: body.allowSubagents === true,
+        subagent_provider_id: body.subagentProviderId,
+        subagent_model: body.subagentModel,
         model: body.model,
         harness_reasoning_effort: body.harnessReasoningEffort,
         harness_service_tier: body.harnessServiceTier,

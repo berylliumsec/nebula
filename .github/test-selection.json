@@ -1,25 +1,32 @@
 {
-  "change_digest": "a9646554b3679a1345d3a90123d7c239a08e3ffea829da14cc5ec7fec3824db0",
-  "reviewed_by": "Codex focused review for project switcher search",
-  "reason": "Search is transient SideNav state over Core project lists. SideNav component cases cover active and archived matching, empty results, focus, clear, and reopen. The catalogued Playwright journey covers desktop and mobile Chromium/WebKit geometry and accessibility. A real-Core production LAN journey covers loading, selecting, and reloading a saved project.",
-  "exclusions": "No Core or native code changed. Unrelated UI journeys and full suites are excluded. No physical device is available; permanent mobile browser profiles provide emulated coverage.",
+  "change_digest": "264cb24501f46d4eb30ff3baf150e6adf1382a1314e8e99cc7bd7b789a70c413",
+  "reviewed_by": "Codex focused review for supervisor child capability assignment",
+  "reason": "Provider and harness Conversation supervisors discover and assign enabled project tools, MCP servers, skills, hooks, knowledge, command runtime and nested delegation per child. Mission supervisors use the same durable child tools and mirror dynamic tasks, status and result into the run. The two selected Python files cover provider routing, harness gateway routing, child capability validation, nested delegation, Mission provider and harness execution, fixed-plan recovery isolation, cancellation, and child lifecycle. The three selected component files cover child assignments, Mission creation, and supervisor chat navigation. Browser selections cover Conversation delegation across desktop and 320/390/430 px mobile Chromium/WebKit, plus real-Core child behavior. The production LAN Mission journey covers its form, saved run, view stability after the new supervisor chat is created, and chat navigation after an authorized relaunch on desktop and 390 px Chromium/WebKit. Existing selected real-Core Conversation journeys check that narrowing background chat selection preserves chat entry and refresh. The cloud consent fixture disables project Work so its assertion isolates subagent consent.",
+  "exclusions": "Native Rust code is unchanged. Unrelated execution, report, and workspace journeys are excluded. Mission delegation scheduling is deliberately unavailable and is validated at creation; existing scheduled Mission mode remains selected separately. No physical device is available, so mobile projects use emulation. The selected real-Core browser journey requires a production test Core and is not replaced by a mock if unavailable.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 25,
+    "python": 56,
+    "frontend": 30,
     "native": 0,
-    "playwright": 9
+    "playwright": 21
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
+  "python": [
+    "tests/v3/test_chat_subagents.py",
+    "tests/v3/test_harness_provider_subagents.py"
+  ],
   "frontend": [
-    "ui/src/components/SideNav.test.tsx"
+    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx",
+    "ui/src/components/MissionControls.test.tsx",
+    "ui/src/pages/AgentsPage.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "area:project-switcher-search"
+    "area:chat-subagents",
+    "area:chat-subagents-core",
+    "area:mission-supervisor-core"
   ]
 }

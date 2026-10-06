@@ -95,6 +95,14 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
       setDiscussingRunId(undefined);
     }
   };
+  const openSupervisor = () => {
+    if (!run?.supervisorChatSessionId) return;
+    const params = new URLSearchParams(window.location.search);
+    params.set("view", "chat");
+    params.set("session", run.supervisorChatSessionId);
+    window.history.pushState({}, "", `${window.location.pathname}?${params}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
   const steer = async (event: FormEvent) => {
     event.preventDefault();
     const text = steeringText.trim();
@@ -155,7 +163,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
         />}
         <section className="mission-commandbar" aria-label="Mission controls">
           <div><Radio size={15} /><span><strong>{run ? "Mission control" : "No mission selected"}</strong><small>{run ? `Core status: ${run.status.replaceAll("_", " ")} · live feed ${streamState}` : "Start a mission to see its plan and live execution here."}</small></span></div>
-          <div>{run?.backend === "harness" && <button className="button secondary" type="button" disabled={Boolean(discussingRunId)} onClick={() => void discuss()}><MessageSquare size={15} /> {discussingRunId === run.id ? "Opening chat…" : "Discuss in chat"}</button>}{terminal && !run?.restartRecovery?.required && <RetryMissionButton />}<StopMissionButton /><DeleteMissionButton /><NewMissionButton /></div>
+          <div>{run?.supervisorChatSessionId ? <button className="button secondary" type="button" onClick={openSupervisor}><MessageSquare size={15} /> Open supervisor chat</button> : run?.backend === "harness" && <button className="button secondary" type="button" disabled={Boolean(discussingRunId)} onClick={() => void discuss()}><MessageSquare size={15} /> {discussingRunId === run.id ? "Opening chat…" : "Discuss in chat"}</button>}{terminal && !run?.restartRecovery?.required && <RetryMissionButton />}<StopMissionButton /><DeleteMissionButton /><NewMissionButton /></div>
         </section>
         <section className="panel mission-picker" aria-label="Missions">
           <header><div><strong>Mission history</strong><small>Select a named mission to inspect its result</small></div><span>{runs.length}</span></header>
@@ -175,7 +183,7 @@ export function AgentsPage({ embedded = false }: { embedded?: boolean }) {
           <div className="mission-hero-progress"><span><strong>{run?.completedTasks ?? 0}</strong><small>complete</small></span><span><strong>{run?.totalTasks ?? 0}</strong><small>recorded tasks</small></span><span><strong>{selectedApprovals.length}</strong><small>need review</small></span></div>
         </section></details>}
         {run && <div className="mission-progress" aria-label={`${progress}% of recorded mission tasks complete`}><span style={{ width: `${progress}%` }} /><small>{progress}% of recorded tasks complete · {events.length} timeline event{events.length === 1 ? "" : "s"} loaded</small></div>}
-        {run?.backend === "harness" && ["running", "waiting_approval"].includes(run.status) && <form className="panel mission-steer" onSubmit={(event) => void steer(event)}><label htmlFor="harness-steering">Steer active harness turn</label><div><input id="harness-steering" value={steeringText} maxLength={20_000} placeholder="Add direction without starting another turn" onChange={(event) => setSteeringText(event.target.value)} /><button className="button secondary" type="submit" disabled={steering || !steeringText.trim()}>{steering ? "Sending…" : "Steer"}</button></div>{steeringError && <DiagnosticErrorNotice error={steeringError} fallback="The harness could not be steered." compact />}</form>}
+        {run?.backend === "harness" && !run.supervisorChatSessionId && ["running", "waiting_approval"].includes(run.status) && <form className="panel mission-steer" onSubmit={(event) => void steer(event)}><label htmlFor="harness-steering">Steer active harness turn</label><div><input id="harness-steering" value={steeringText} maxLength={20_000} placeholder="Add direction without starting another turn" onChange={(event) => setSteeringText(event.target.value)} /><button className="button secondary" type="submit" disabled={steering || !steeringText.trim()}>{steering ? "Sending…" : "Steer"}</button></div>{steeringError && <DiagnosticErrorNotice error={steeringError} fallback="The harness could not be steered." compact />}</form>}
         {resultEvent && <section className={`panel mission-result ${resultEvent.kind === "run.failed" ? "failed" : "complete"}`} aria-labelledby="mission-result-title">
           <header><span className="mission-result-icon"><FileCheck2 size={19} /></span><div><small>{resultEvent.kind === "run.failed" ? "Mission ended with errors" : "Completed mission"}</small><h2 id="mission-result-title">Mission result</h2></div><span className="mission-result-sequence">#{resultEvent.sequence}</span></header>
           <div className="mission-result-body"><AssistantMarkdown content={resultEvent.summary} durable={false} runnableLanguages={new Set()} onRun={() => undefined} /></div>

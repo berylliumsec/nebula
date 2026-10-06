@@ -1230,6 +1230,67 @@ test("production mission defaults to unlimited duration through real Core", asyn
   }
 });
 
+test("assistant upgrade production LAN delegated Mission opens its durable supervisor chat", async ({ page }, testInfo) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const modelStub = await startLocalModelStub({ responseContent: "Delegated Mission review complete." });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const engagements = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = engagements[0]?.id;
+    expect(projectId).toBeTruthy();
+    const providerResponse = await api.post("providers", { data: {
+      name: "Mission supervisor model", provider_type: "vllm",
+      endpoint: `${modelStub.origin}/v1`, enabled: true, is_local: true,
+      model_allowlist: ["security-model"],
+      privacy: { local_only: true, residency: [], permits_sensitive_data: false },
+      metadata: { default_model: "security-model" },
+    } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string; revision: number };
+    const verification = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {
+      data: { model: "security-model", expected_revision: provider.revision },
+    });
+    expect(verification.ok(), await verification.text()).toBe(true);
+    const workbenchUrl = `${core.origin}/projects/${encodeURIComponent(projectId!)}/workbench`;
+    await page.goto(`${workbenchUrl}?view=missions#token=${encodeURIComponent(core.token)}`);
+    await expect(coreReady(page)).toBeVisible();
+    await page.getByRole("region", { name: "Mission controls" }).getByRole("button", { name: "Automate task" }).click();
+    const dialog = page.getByRole("dialog", { name: "Automate task" });
+    await dialog.getByLabel("Mission name").fill("Delegated production Mission");
+    await dialog.getByLabel("Objective", { exact: true }).first().fill("Review the bounded project");
+    await dialog.getByText("Advanced", { exact: true }).click();
+    await dialog.getByRole("checkbox", { name: /Let the supervisor create child tasks/ }).check();
+    await expect(dialog.getByLabel("Start time")).toBeDisabled();
+    await dialog.getByRole("button", { name: "Automate task" }).click();
+    await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Delegated production Mission")).toBeVisible();
+    await expect.poll(async () => {
+      const response = await api.get("runs", { params: { engagement_id: projectId } });
+      expect(response.ok(), await response.text()).toBe(true);
+      const runs = await response.json() as Array<{ id: string; status: string; metadata?: { name?: string; supervisor_mode?: string; supervisor_chat_session_id?: string } }>;
+      return runs.find((item) => item.metadata?.name === "Delegated production Mission");
+    }, { timeout: 30_000 }).toMatchObject({ status: "complete", metadata: { supervisor_mode: "conversation" } });
+    const savedRuns = await (await api.get("runs", { params: { engagement_id: projectId } })).json() as Array<{ id: string; metadata?: { name?: string; supervisor_chat_session_id?: string } }>;
+    const savedRun = savedRuns.find((item) => item.metadata?.name === "Delegated production Mission");
+    expect(savedRun?.metadata?.supervisor_chat_session_id).toBeTruthy();
+    await page.goto(`${workbenchUrl}?view=missions&mission=${encodeURIComponent(savedRun!.id)}#token=${encodeURIComponent(core.token)}`);
+    await expect(coreReady(page)).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Delegated production Mission")).toBeVisible();
+    const accessibility = await new AxeBuilder({ page }).include("main").analyze();
+    expect(accessibility.violations).toEqual([]);
+    await page.getByRole("button", { name: "Open supervisor chat" }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("chat");
+    await testInfo.attach("delegated-mission", { body: JSON.stringify({ origin: core.origin, build: "production", project: testInfo.project.name, chat: new URL(page.url()).searchParams.get("session"), accessibilityViolations: accessibility.violations.length }), contentType: "application/json" });
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(modelStub);
+    await stopRealCore(core);
+  }
+});
+
 test("assistant upgrade conversation switching restores durable Core history promptly", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const lanAddress = localNetworkIpv4();
