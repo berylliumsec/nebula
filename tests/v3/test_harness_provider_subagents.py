@@ -28,6 +28,7 @@ from nebula.v3.domain import (
     HarnessSession,
     HarnessTurn,
     HarnessTurnStatus,
+    NativeHookExecution,
     ProviderCapabilityVerification,
     ProviderProfile,
     ProviderVerificationStatus,
@@ -398,6 +399,24 @@ def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path):
 def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
     async def scenario() -> None:
         store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        chat.workspace_resolver = lambda _: tmp_path
+        hook_dir = tmp_path / ".agents" / "hooks" / "audit"
+        hook_dir.mkdir(parents=True)
+        executable = hook_dir / "run.sh"
+        executable.write_text("#!/bin/sh\ncat >/dev/null\n", encoding="utf-8")
+        executable.chmod(0o700)
+        (hook_dir / "hook.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "name": "Audit",
+                    "events": ["chat.turn.completed"],
+                    "command": ["run.sh"],
+                    "side_effects": "none",
+                }
+            ),
+            encoding="utf-8",
+        )
         child = chat.provider_factory(store.get(ProviderProfile, "provider"))
         child.answers = ["Done."]
 
@@ -406,6 +425,7 @@ def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
             available = _payload(await connection.call("subagent.capabilities"))
             assert "notes.write" not in available["tool_names"]
             assert available["mcp_servers"] == []
+            assert [item["id"] for item in available["hooks"]] == ["audit"]
             _payload(
                 await connection.call(
                     "subagent.start",
@@ -413,6 +433,9 @@ def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
                     capabilities={
                         "tool_names": [],
                         "mcp_server_ids": [],
+                        "hook_ids": ["audit"],
+                        "include_knowledge": True,
+                        "command_runtime": False,
                     },
                 )
             )
@@ -432,7 +455,18 @@ def test_harness_supervisor_can_narrow_one_child_capability_set(tmp_path):
         assert record.parent_request["capabilities"] == {
             "tool_names": [],
             "mcp_server_ids": [],
+            "hook_ids": ["audit"],
+            "include_knowledge": True,
+            "command_runtime": False,
         }
+        assert record.parent_request["include_knowledge"] is True
+        assert record.parent_request["tools_enabled"] is False
+        assert any(
+            item.chat_turn_id == record.child_turn_id
+            and item.event_name == "chat.turn.completed"
+            and item.status == "complete"
+            for item in store.list_entities(NativeHookExecution)
+        )
         await chat.shutdown()
 
     asyncio.run(scenario())

@@ -21,7 +21,8 @@ Static mockups; names, steps and token counts are illustrative.
   project provider chat, the tool loop advertises `start_subagent`,
   `list_subagent_capabilities`, `wait_subagents`, `list_subagents`,
   `message_subagent` and `stop_subagent`.
-  Subagent turns never receive them (depth 1).
+  Child turns receive them only when their supervisor assigns delegation.
+  Core caps the chain at eight child levels.
 - `start_subagent` creates a child `ChatSession` (`parent_session_id`,
   `metadata.subagent_id`) and a `ChatSubagent` record, then runs the child as an
   ordinary background provider turn with the parent's provider, model, command
@@ -38,16 +39,28 @@ Static mockups; names, steps and token counts are illustrative.
   carries its current status, so a retry after it finished does not read as
   running.
 - A supervisor may call `list_subagent_capabilities` (harness:
-  `subagent.capabilities`) to see the exact tool names, selected MCP server IDs,
-  and available skill names and paths. Both start tools accept optional
-  `capabilities: {tool_names, mcp_server_ids, skills}`. Omitted tool or MCP
-  fields keep the parent's defaults; an explicit empty list gives the child
-  none of that field. MCP IDs must be a subset selected on the parent turn.
+  `subagent.capabilities`) to see the exact tool names, enabled MCP server IDs,
+  project lifecycle hooks, knowledge and command runtime status, and available
+  skill names and paths. Both start tools accept optional
+  `capabilities: {tool_names, mcp_server_ids, hook_ids, skills,
+  include_knowledge, command_runtime, allow_subagents,
+  max_active_subagents}`.
+  Omitted tool or MCP fields keep the parent's defaults; an explicit empty list
+  gives the child none of that field. Hooks are opt-in per child, including when
+  the parent selected hooks. MCP IDs must name enabled, probed project servers;
+  their use still follows the child's provider privacy and Core approval policy.
   Skill entries use the exact `{name, path}` returned by discovery. Core
   snapshots their instructions for each child turn. A named tool allowlist is
   enforced both in the model catalog and at execution; parent messaging and
   selected skill resource reading remain available. Child rounds started by
-  `message_subagent` keep the assignment. The subagent pane shows the choices.
+  `message_subagent` keep the assignment. Knowledge is opt-in for the child and
+  cloud retrieval requires the parent's knowledge-sharing consent. The command
+  runtime defaults to the parent's setting and can be explicitly enabled or
+  disabled for one child; Core still checks project runtime readiness and
+  approval policy. A child can delegate its own children only when assigned;
+  each descendant spends the root conversation goal's budget. Descendant
+  reports also reach the root supervisor when an intermediate child has
+  already finished. The subagent pane shows the choices.
 - `wait_subagents` (mode `all` or `any`) pauses the parent turn in
   `waiting_callback` and frees its provider slot. When the wait is satisfied,
   Core resumes it through the provider queue; the turn keeps
@@ -232,7 +245,8 @@ in the same file (`108:2`): H1 settings popover `108:3`, H2 desktop pane
   runtime when the session has one, no SSH hosts, and the project approval
   policy. The optional running-at-once limit travels as
   `provider_subagent.max_active`; changing it reopens the connection so the
-  instructions state it. Depth stays 1.
+  instructions state it. Harness supervisors can assign delegation to provider
+  children, which then use the same bounded provider child chain.
 - The gateway serves one call per session and Codex times a Nebula tool out
   after 900 s (Grok after 6000 s, its `tool_timeout_sec` default), so
   `subagent.wait` blocks for at most `timeout_seconds` (default 300, max 600)
