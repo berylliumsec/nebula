@@ -1281,6 +1281,9 @@ class MissionStartRequest(NebulaModel):
     harness_profile_id: str | None = Field(default=None, min_length=1, max_length=200)
     harness_session_id: str | None = Field(default=None, min_length=1, max_length=200)
     mcp_server_ids: list[str] = Field(default_factory=list, max_length=64)
+    allow_subagents: bool = False
+    subagent_provider_id: str | None = Field(default=None, min_length=1, max_length=200)
+    subagent_model: str | None = Field(default=None, min_length=1, max_length=500)
     model: str | None = Field(default=None, min_length=1, max_length=500)
     harness_reasoning_effort: str | None = Field(default=None, max_length=100)
     harness_service_tier: str | None = Field(default=None, max_length=100)
@@ -1303,6 +1306,14 @@ class MissionStartRequest(NebulaModel):
             raise ValueError("repeating missions require an initial scheduled time")
         if self.scheduled_for is not None and self.scheduled_for.tzinfo is None:
             raise ValueError("scheduled mission time must include a timezone")
+        if self.allow_subagents and self.scheduled_for is not None:
+            raise ValueError("delegated Missions currently start immediately")
+        if self.allow_subagents and self.browser_autonomy is not None:
+            raise ValueError("delegated Missions cannot use browser autonomy")
+        if self.allow_subagents and self.backend == RunBackend.HARNESS and (
+            not self.subagent_provider_id or not self.subagent_model
+        ):
+            raise ValueError("harness Mission subagents require a provider and model")
         if self.backend == RunBackend.NATIVE:
             if not self.provider_id or not self.model:
                 raise ValueError("native missions require provider_id and model")
@@ -1973,6 +1984,9 @@ def create_app(
         harness_runtime.bind_provider_subagents(provider_chat.subagents)
     if harness_runtime.agent_messages is None:
         harness_runtime.bind_agent_messages(provider_chat.agent_messages)
+    from .mission_delegation import DelegatedMissionService
+
+    delegated_missions = DelegatedMissionService(store, provider_chat, harness_runtime)
 
     executions = execution_service
     if executions is None and artifact_store is not None and tool_platform is not None:
@@ -2284,6 +2298,9 @@ def create_app(
             provider_chat.resume_turns_stopped_by_core()
             await provider_chat.subagents.reconcile_after_restart()
             await start_component(
+                "missions", "delegated-supervisors", delegated_missions.startup, delegated_missions.shutdown
+            )
+            await start_component(
                 "chat", "follow-ups", chat_queue.startup, chat_queue.shutdown
             )
             # Event history of records deleted before their events went with
@@ -2339,6 +2356,7 @@ def create_app(
     app.state.allow_browser_diagnostic_events = allow_browser_diagnostic_events
     app.state.allow_insecure_device_pairing = allow_insecure_device_pairing
     app.state.mission_service = missions
+    app.state.delegated_mission_service = delegated_missions
     app.state.harness_runtime_service = harness_runtime
     app.state.mcp_probe_service = mcp_probes
     app.state.operator_profile_service = operators
@@ -8434,15 +8452,35 @@ def create_app(
             requested_tool_calls = min(request.browser_autonomy.max_commands, 100)
         budget = RunBudget(
             max_concurrency=request.max_concurrency,
-            max_delegation_depth=(1 if command_tools or request.mcp_server_ids else 0),
+            max_delegation_depth=(8 if request.allow_subagents else 1 if command_tools or request.mcp_server_ids else 0),
             max_duration_seconds=request.max_duration_seconds,
             max_tokens=request.max_tokens,
             max_cost_usd=request.max_cost_usd,
             max_tool_calls=requested_tool_calls,
             max_artifact_queries=request.max_artifact_queries,
-            max_retries=request.max_retries,
+            max_retries=0 if request.allow_subagents else request.max_retries,
             per_target_active_operations=1,
         )
+        if request.allow_subagents:
+            return await delegated_missions.start(
+                engagement_id=request.engagement_id,
+                name=request.name,
+                objective=request.objective,
+                backend=request.backend,
+                provider_id=request.provider_id,
+                harness_profile_id=request.harness_profile_id,
+                harness_session_id=request.harness_session_id,
+                model=request.model or "",
+                subagent_provider_id=request.subagent_provider_id,
+                subagent_model=request.subagent_model,
+                mcp_server_ids=request.mcp_server_ids,
+                stages=[item.model_dump(mode="json") for item in request.stages],
+                budget=budget,
+                tools_enabled=bool(command_tools),
+                allow_cloud_tool_results=request.allow_cloud_tool_results,
+                harness_reasoning_effort=request.harness_reasoning_effort,
+                harness_service_tier=request.harness_service_tier,
+            )
         if request.backend == RunBackend.HARNESS:
             return await harness_runtime.start_mission(
                 engagement_id=request.engagement_id,
@@ -8488,6 +8526,8 @@ def create_app(
     async def stop_mission(run_id: str, request: MissionStopRequest) -> AgentRun:
         operator_id = active_operator_id()
         run = store.get(AgentRun, run_id)
+        if run.metadata.get("supervisor_mode") == "conversation":
+            return await delegated_missions.stop(run_id, reason=request.reason)
         if run.backend == RunBackend.HARNESS:
             return await harness_runtime.stop(
                 run_id,
@@ -8534,6 +8574,28 @@ def create_app(
         stages = stages if isinstance(stages, list) else []
         name = str(prior.metadata.get("name") or prior.objective)
         operator_id = active_operator_id()
+        if prior.metadata.get("supervisor_mode") == "conversation":
+            options = prior.runtime_snapshot.get("runtime_options") or {}
+            return await delegated_missions.start(
+                engagement_id=prior.engagement_id,
+                name=name,
+                objective=prior.objective,
+                backend=prior.backend,
+                provider_id=prior.supervisor_provider_id,
+                harness_profile_id=prior.harness_profile_id,
+                harness_session_id=prior.harness_session_id,
+                model=prior.supervisor_model or "",
+                subagent_provider_id=prior.runtime_snapshot.get("subagent_provider_id"),
+                subagent_model=prior.runtime_snapshot.get("subagent_model"),
+                mcp_server_ids=list(prior.runtime_snapshot.get("mcp_server_ids") or []),
+                stages=stages,
+                budget=prior.budget,
+                tools_enabled=prior.runtime_snapshot.get("tools_enabled") is True,
+                allow_cloud_tool_results=request.allow_cloud_tool_results,
+                harness_reasoning_effort=options.get("reasoning_effort"),
+                harness_service_tier=options.get("service_tier"),
+                retry_of_run_id=prior.id,
+            )
         if prior.backend == RunBackend.HARNESS:
             options = prior.runtime_snapshot.get("runtime_options")
             options = options if isinstance(options, dict) else {}
@@ -8621,6 +8683,14 @@ def create_app(
     async def steer_harness_run(
         run_id: str, request: HarnessSteerRequest
     ) -> HarnessTurn:
+        run = store.get(AgentRun, run_id)
+        if run.metadata.get("supervisor_mode") == "conversation":
+            turn = store.get(ChatTurn, str(run.metadata["supervisor_chat_turn_id"]))
+            if not turn.harness_turn_id:
+                raise HarnessStateError("this supervisor is not a harness turn")
+            return await harness_runtime.steer_turn(
+                turn.harness_turn_id, request.text, actor_id=active_operator_id()
+            )
         return await harness_runtime.steer(
             run_id, request.text, actor_id=active_operator_id()
         )
@@ -8633,6 +8703,8 @@ def create_app(
     )
     async def discuss_run(run_id: str) -> ChatSession:
         run = store.get(AgentRun, run_id)
+        if run.metadata.get("supervisor_mode") == "conversation":
+            return store.get(ChatSession, str(run.metadata["supervisor_chat_session_id"]))
         if run.backend == RunBackend.HARNESS:
             return harness_runtime.attach_run_to_chat(run_id)
         return chat_service().attach_native_run_to_chat(run_id)

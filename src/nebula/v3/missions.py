@@ -236,6 +236,10 @@ class MissionService:
         for run in self.store.iter_readable_entities(AgentRun):
             if run.backend != RunBackend.NATIVE:
                 continue
+            if run.metadata.get("supervisor_mode") == "conversation":
+                # Its chat turn and children have a separate durable recovery
+                # owner; the fixed-plan MissionRuntime must not replay it.
+                continue
             if (
                 run.metadata.get("origin") == "api"
                 and run.status == RunStatus.COMPLETE

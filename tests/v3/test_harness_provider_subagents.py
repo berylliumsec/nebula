@@ -11,6 +11,7 @@ import pytest
 
 from nebula.v3.chat import ChatConfigurationError, ChatPrivacyError, ChatService
 from nebula.v3.credentials import CredentialStore
+from nebula.v3.mission_delegation import DelegatedMissionService
 from nebula.v3.domain import (
     ChatBackend,
     ChatMessage,
@@ -33,6 +34,11 @@ from nebula.v3.domain import (
     ProviderProfile,
     ProviderVerificationStatus,
     ScopePolicy,
+    RunBackend,
+    RunBudget,
+    RunStatus,
+    Task,
+    TaskStatus,
     ToolCall,
     ToolCallStatus,
 )
@@ -391,6 +397,58 @@ def test_harness_delegates_to_provider_model_and_waits_for_report(tmp_path):
         view = chat.subagents.view(store.get(ChatSubagent, record.id))
         assert view["model"] == "model-a"
         assert view["parent_backend"] == "harness"
+        await chat.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_harness_mission_supervisor_uses_chat_gateway_and_records_child(tmp_path):
+    async def scenario() -> None:
+        store, project, harness, chat, adapter, runtime = _setup(tmp_path)
+        child_provider = chat.provider_factory(store.get(ProviderProfile, "provider"))
+        child_provider.answers = ["Route count complete."]
+        calls = 0
+
+        async def script(connection: ScriptedConnection, prompt: str) -> str:
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                return "Final Mission result."
+            catalog = _payload(await connection.call("subagent.capabilities"))
+            assert catalog["subagents"]["available"] is True
+            _payload(await connection.call("subagent.start", task="Count routes", name="Counter", capabilities={"tool_names": []}))
+            result = _payload(await connection.call("subagent.wait"))
+            assert result["subagents"][0]["report"] == "Route count complete."
+            return "First supervisor result."
+
+        adapter.script = script
+        service = DelegatedMissionService(store, chat, runtime)
+        run = await service.start(
+            engagement_id=project.id,
+            name="Harness route review",
+            objective="Review routes",
+            backend=RunBackend.HARNESS,
+            provider_id=None,
+            harness_profile_id=harness.id,
+            harness_session_id=None,
+            model=harness.default_model,
+            subagent_provider_id="provider",
+            subagent_model="model-a",
+            mcp_server_ids=[],
+            stages=[],
+            budget=RunBudget(max_concurrency=2),
+            tools_enabled=False,
+            allow_cloud_tool_results=False,
+        )
+        await _until(lambda: store.get(type(run), run.id).status in {RunStatus.COMPLETE, RunStatus.FAILED})
+        final = store.get(type(run), run.id)
+        assert final.status == RunStatus.COMPLETE, final.metadata.get("final_summary")
+        assert final.metadata["final_summary"] == "Final Mission result."
+        tasks = store.find_entities(Task, {"run_id": run.id})
+        assert {task.status for task in tasks} == {TaskStatus.COMPLETE}
+        assert len(tasks) == 2
+        assert calls == 2
+        await service.shutdown()
         await chat.shutdown()
 
     asyncio.run(scenario())
