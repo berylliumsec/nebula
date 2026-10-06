@@ -1399,7 +1399,9 @@ class SubagentService:
                 "available": bool(command_tools),
                 "selected": bool(
                     snapshot.get("include_oci_tools")
-                    or (snapshot.get("command_runtime_snapshot") or {}).get("tool_names")
+                    or (snapshot.get("command_runtime_snapshot") or {}).get(
+                        "tool_names"
+                    )
                 ),
                 "tool_names": command_tools,
             },
@@ -1930,7 +1932,9 @@ class SubagentService:
             )
         if allow_subagents and depth + 1 >= SUBAGENT_DEPTH_CEILING:
             raise refused_before_execution(
-                InvalidToolArguments("this child would reach the delegation depth ceiling")
+                InvalidToolArguments(
+                    "this child would reach the delegation depth ceiling"
+                )
             )
         if parent_turn.backend == ChatBackend.HARNESS:
             setting = snapshot.get("provider_subagent")
@@ -2121,7 +2125,13 @@ class SubagentService:
                 maximum=limit,
                 current=running,
             )
-        parent_session_id = parent_turn.session_id if parent_turn is not None else siblings[0].parent_session_id if siblings else None
+        parent_session_id = (
+            parent_turn.session_id
+            if parent_turn is not None
+            else siblings[0].parent_session_id
+            if siblings
+            else None
+        )
         if parent_session_id is None:
             return
         parent_session = self.store.get(ChatSession, parent_session_id)
@@ -2133,15 +2143,23 @@ class SubagentService:
             AgentRun, {"metadata.supervisor_chat_session_id": root_session.id}
         )
         for mission in mission_runs:
-            if mission.metadata.get("supervisor_mode") != "conversation" or mission.status in {
-                RunStatus.COMPLETE, RunStatus.FAILED, RunStatus.CANCELLED, RunStatus.INTERRUPTED
+            if mission.metadata.get(
+                "supervisor_mode"
+            ) != "conversation" or mission.status in {
+                RunStatus.COMPLETE,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+                RunStatus.INTERRUPTED,
             }:
                 continue
             if depth >= mission.budget.max_delegation_depth:
                 raise ToolNotPermitted(
-                    "Mission delegation depth is exhausted", rule="subagents.mission_depth"
+                    "Mission delegation depth is exhausted",
+                    rule="subagents.mission_depth",
                 )
-            mission_running = len(self.active(self.descendants_for_session(root_session.id)))
+            mission_running = len(
+                self.active(self.descendants_for_session(root_session.id))
+            )
             if mission_running >= mission.budget.max_concurrency:
                 raise CapacityReached(
                     f"Mission allows {mission.budget.max_concurrency} running children and {mission_running} already are",
@@ -3565,9 +3583,7 @@ class SubagentService:
         self._close_child_messages(record, unread_note)
         goal_id = self._ancestor_goal_id(record)
         pending_charge = (
-            turn.id
-            if goal_id is not None and turn.usage.total_tokens
-            else None
+            turn.id if goal_id is not None and turn.usage.total_tokens else None
         )
         try:
             record = self.store.update(
@@ -3608,7 +3624,11 @@ class SubagentService:
                     ancestor,
                     ChatSubagentMessageDirection.TO_PARENT,
                     f"Nested subagent {record.name} ({record.id}) {record.status.value}.\n"
-                    + (f"Report: {_report_excerpt(record.result, MESSAGE_CHARACTERS - 500)}" if record.result else "No report was produced.")
+                    + (
+                        f"Report: {_report_excerpt(record.result, MESSAGE_CHARACTERS - 500)}"
+                        if record.result
+                        else "No report was produced."
+                    )
                     + (f"\nError: {record.error}" if record.error else ""),
                     idempotency_key=key,
                 )

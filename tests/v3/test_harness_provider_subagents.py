@@ -416,7 +416,14 @@ def test_harness_mission_supervisor_uses_chat_gateway_and_records_child(tmp_path
                 return "Final Mission result."
             catalog = _payload(await connection.call("subagent.capabilities"))
             assert catalog["subagents"]["available"] is True
-            _payload(await connection.call("subagent.start", task="Count routes", name="Counter", capabilities={"tool_names": []}))
+            _payload(
+                await connection.call(
+                    "subagent.start",
+                    task="Count routes",
+                    name="Counter",
+                    capabilities={"tool_names": []},
+                )
+            )
             result = _payload(await connection.call("subagent.wait"))
             assert result["subagents"][0]["report"] == "Route count complete."
             return "First supervisor result."
@@ -440,7 +447,12 @@ def test_harness_mission_supervisor_uses_chat_gateway_and_records_child(tmp_path
             tools_enabled=False,
             allow_cloud_tool_results=False,
         )
-        await _until(lambda: store.get(type(run), run.id).status in {RunStatus.COMPLETE, RunStatus.FAILED})
+        await _until(
+            lambda: (
+                store.get(type(run), run.id).status
+                in {RunStatus.COMPLETE, RunStatus.FAILED}
+            )
+        )
         final = store.get(type(run), run.id)
         assert final.status == RunStatus.COMPLETE, final.metadata.get("final_summary")
         assert final.metadata["final_summary"] == "Final Mission result."

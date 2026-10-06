@@ -1310,8 +1310,10 @@ class MissionStartRequest(NebulaModel):
             raise ValueError("delegated Missions currently start immediately")
         if self.allow_subagents and self.browser_autonomy is not None:
             raise ValueError("delegated Missions cannot use browser autonomy")
-        if self.allow_subagents and self.backend == RunBackend.HARNESS and (
-            not self.subagent_provider_id or not self.subagent_model
+        if (
+            self.allow_subagents
+            and self.backend == RunBackend.HARNESS
+            and (not self.subagent_provider_id or not self.subagent_model)
         ):
             raise ValueError("harness Mission subagents require a provider and model")
         if self.backend == RunBackend.NATIVE:
@@ -2298,7 +2300,10 @@ def create_app(
             provider_chat.resume_turns_stopped_by_core()
             await provider_chat.subagents.reconcile_after_restart()
             await start_component(
-                "missions", "delegated-supervisors", delegated_missions.startup, delegated_missions.shutdown
+                "missions",
+                "delegated-supervisors",
+                delegated_missions.startup,
+                delegated_missions.shutdown,
             )
             await start_component(
                 "chat", "follow-ups", chat_queue.startup, chat_queue.shutdown
@@ -8452,7 +8457,13 @@ def create_app(
             requested_tool_calls = min(request.browser_autonomy.max_commands, 100)
         budget = RunBudget(
             max_concurrency=request.max_concurrency,
-            max_delegation_depth=(8 if request.allow_subagents else 1 if command_tools or request.mcp_server_ids else 0),
+            max_delegation_depth=(
+                8
+                if request.allow_subagents
+                else 1
+                if command_tools or request.mcp_server_ids
+                else 0
+            ),
             max_duration_seconds=request.max_duration_seconds,
             max_tokens=request.max_tokens,
             max_cost_usd=request.max_cost_usd,
@@ -8704,7 +8715,9 @@ def create_app(
     async def discuss_run(run_id: str) -> ChatSession:
         run = store.get(AgentRun, run_id)
         if run.metadata.get("supervisor_mode") == "conversation":
-            return store.get(ChatSession, str(run.metadata["supervisor_chat_session_id"]))
+            return store.get(
+                ChatSession, str(run.metadata["supervisor_chat_session_id"])
+            )
         if run.backend == RunBackend.HARNESS:
             return harness_runtime.attach_run_to_chat(run_id)
         return chat_service().attach_native_run_to_chat(run_id)
