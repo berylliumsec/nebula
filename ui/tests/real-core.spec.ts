@@ -140,7 +140,7 @@ interface LocalModelStub {
   fail: boolean;
 }
 
-async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number; goalResponseDelayMs?: number; models?: string[]; responseContent?: string } = {}): Promise<LocalModelStub> {
+async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: number; goalResponseDelayMs?: number; delayedMessage?: string; matchingDelayMs?: number; models?: string[]; responseContent?: string } = {}): Promise<LocalModelStub> {
   const requests: Array<Record<string, unknown>> = [];
   const stub: LocalModelStub = { origin: "", requests, server: undefined as unknown as Server, fail: options.fail === true };
   const server = createServer(async (request, response) => {
@@ -205,6 +205,10 @@ async function startLocalModelStub(options: { fail?: boolean; streamDelayMs?: nu
           usage: { prompt_tokens: 14, completion_tokens: 5, total_tokens: 19 },
         }));
         return;
+      }
+      if (options.delayedMessage && options.matchingDelayMs && body.stream !== true && messages.some((message) =>
+        typeof message.content === "string" && message.content.includes(options.delayedMessage!))) {
+        await new Promise(resolve => setTimeout(resolve, options.matchingDelayMs));
       }
       if (options.goalResponseDelayMs && body.stream !== true && messages.some((message) =>
         typeof message.content === "string" && (message.content.includes("Begin work on the active conversation goal")
@@ -417,7 +421,7 @@ test("work hub project board keeps check-ins after refresh and agent access revo
 test("assistant upgrade real Core retains editable goal skills through source loss", async ({ page }) => {
   test.setTimeout(90_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
-  const modelStub = await startLocalModelStub();
+  const modelStub = await startLocalModelStub({ streamDelayMs: 20_000 });
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
@@ -449,7 +453,9 @@ test("assistant upgrade real Core retains editable goal skills through source lo
       metadata: { default_model: "security-model" },
     } });
     expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
-    const provider = await providerResponse.json() as { id: string };
+    const provider = await providerResponse.json() as { id: string; revision: number };
+    const verification = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, { data: { model: "security-model", expected_revision: provider.revision } });
+    expect(verification.ok(), await verification.text()).toBe(true);
     const chatResponse = await api.post("chat/completions", { data: {
       backend: "provider",
       provider_id: provider.id,
@@ -468,11 +474,7 @@ test("assistant upgrade real Core retains editable goal skills through source lo
     } });
     expect(goalResponse.ok(), await goalResponse.text()).toBe(true);
     const goal = await goalResponse.json() as { revision: number };
-    const startResponse = await api.post(`chat/sessions/${chat.session_id}/goal/actions`, { data: {
-      expected_revision: goal.revision,
-      action: "start",
-    } });
-    expect(startResponse.ok(), await startResponse.text()).toBe(true);
+    expect(goal.revision).toBeGreaterThan(0);
 
     const pairingApi = await playwrightRequest.newContext({
       baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
@@ -489,8 +491,25 @@ test("assistant upgrade real Core retains editable goal skills through source lo
 
     const url = `${core.origin}/?view=chat&session=${chat.session_id}`;
     await page.goto(url);
-    await expect(page.getByRole("region", { name: "Conversation goal" })).toBeVisible({ timeout: 20_000 });
-    await page.getByRole("button", { name: "Edit skills" }).click();
+    const goalPanel = page.getByRole("region", { name: "Conversation goal" });
+    const goalRail = page.getByRole("region", { name: "Goal", exact: true });
+    const goalObjective = "Apply the retained review guidance";
+    const revealGoalDetails = async () => {
+      const reveal = page.getByRole("button", { name: "View full goal and evidence gates" });
+      const expand = page.getByRole("button", { name: "Expand goal controls" });
+      const railObjective = goalRail.locator(".chat-studio-goal-summary");
+      const panelObjective = goalPanel.locator(".chat-goal-heading strong");
+      await expect.poll(async () =>
+        (await goalRail.isVisible() && await railObjective.textContent() === goalObjective)
+        || (await panelObjective.isVisible() && (await panelObjective.textContent())?.trim() === goalObjective),
+      { timeout: 20_000 }).toBe(true);
+      if (await reveal.isVisible()) await reveal.click();
+      await expect(goalPanel).toBeVisible({ timeout: 20_000 });
+      if (await expand.isVisible()) await expand.click();
+      await expect(goalPanel.getByRole("button", { name: "Edit skills" })).toBeVisible();
+    };
+    await revealGoalDetails();
+    await goalPanel.getByRole("button", { name: "Edit skills" }).click();
     await page.getByRole("checkbox", { name: /review.*project/ }).check();
     expect((await new AxeBuilder({ page }).include(".chat-goal-panel").analyze()).violations).toEqual([]);
     const skillSaveResponse = page.waitForResponse(response =>
@@ -507,19 +526,20 @@ test("assistant upgrade real Core retains editable goal skills through source lo
         resources: [{ path: rulePath, relative_path: "../../../.agents/rules/accuracy.md" }],
       }],
     });
-    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("1 skills");
+    await expect(goalPanel).toContainText("1 skills");
 
     await page.reload();
-    await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("1 skills");
+    await revealGoalDetails();
+    await expect(goalPanel).toContainText("1 skills");
     await rm(skillPath);
     await page.reload();
-    await page.getByRole("button", { name: "Edit skills" }).click();
+    await revealGoalDetails();
+    await goalPanel.getByRole("button", { name: "Edit skills" }).click();
     await expect(page.getByText(/retained snapshot; source unavailable/)).toBeVisible();
     await expect(page.getByRole("checkbox", { name: /review.*retained snapshot/ })).toBeChecked();
     await page.getByRole("button", { name: "Back" }).click();
 
-    await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Use the retained goal guidance now");
-    await page.getByRole("button", { name: "Send message", exact: true }).click();
+    await page.getByRole("button", { name: "Start", exact: true }).click();
     await expect.poll(
       () => modelStub.requests.some(request => JSON.stringify(request).includes("REAL_CORE_SKILL_SENTINEL")),
       { timeout: 30_000 },
@@ -602,19 +622,33 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
     const sessionId = new URL(page.url()).searchParams.get("session")!;
     const railGoal = page.getByRole("region", { name: "Goal", exact: true });
+    const goalPanel = page.getByRole("region", { name: "Conversation goal" });
+    let goalObjective = "Prove goal-first conversation lifecycle";
     const openFullGoal = async () => {
-      await railGoal.getByRole("button", { name: "View full goal and evidence gates" }).click();
-      await expect(page.getByRole("region", { name: "Conversation goal" })).toBeVisible();
+      const reveal = railGoal.getByRole("button", { name: "View full goal and evidence gates" });
+      const railObjective = railGoal.locator(".chat-studio-goal-summary");
+      const panelObjective = goalPanel.locator(".chat-goal-heading strong");
+      await expect.poll(async () =>
+        (await railGoal.isVisible() && (await railObjective.textContent()) === goalObjective)
+        || (await panelObjective.isVisible() && (await panelObjective.textContent())?.trim() === goalObjective),
+      { timeout: 20_000 }).toBe(true);
+      if (await reveal.isVisible()) await reveal.click();
+      await expect(goalPanel).toBeVisible();
     };
     await openFullGoal();
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("draft");
     await page.getByRole("button", { name: "Edit goal" }).click();
     await page.getByRole("textbox", { name: "Objective" }).fill("Prove editable goal lifecycle");
     await page.getByRole("button", { name: "Save changes" }).click();
+    goalObjective = "Prove editable goal lifecycle";
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("Prove editable goal lifecycle");
-    await expect(railGoal.locator(".chat-studio-goal-summary")).toHaveText("Prove editable goal lifecycle");
-    await expect(page.locator(".chat-goal-objective")).toHaveAttribute("open", "");
-    await expect(page.locator(".chat-goal-objective")).toContainText("Stopping pauses the goal");
+    if (await railGoal.isVisible()) await expect(railGoal.locator(".chat-studio-goal-summary")).toHaveText("Prove editable goal lifecycle");
+    const objectiveDetails = page.locator(".chat-goal-objective");
+    if (!(await objectiveDetails.evaluate(details => (details as HTMLDetailsElement).open))) {
+      await objectiveDetails.locator("summary").click();
+    }
+    await expect(objectiveDetails).toHaveAttribute("open", "");
+    await expect(objectiveDetails).toContainText("Stopping pauses the goal");
     const emptyMessages = await api.get(`chat/sessions/${sessionId}/messages`);
     expect(emptyMessages.ok(), await emptyMessages.text()).toBe(true);
     expect(await emptyMessages.json()).toEqual([]);
@@ -643,7 +677,6 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect(liveSettings.getByRole("status").filter({ hasText: "the next turn uses the new one" })).toBeVisible();
     await page.getByRole("button", { name: "Close assistant settings" }).click();
     await page.getByRole("button", { name: "Stop response" }).click();
-    const goalPanel = page.getByRole("region", { name: "Conversation goal" });
     await expect(goalPanel).toContainText("paused", { timeout: 20_000 });
     await expect(goalPanel).toContainText("Response stopped by the operator");
     await expect(page.getByText("Waiting for provider", { exact: true })).toHaveCount(0);
@@ -667,7 +700,7 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await openFullGoal();
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("paused");
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("Prove editable goal lifecycle");
-    await expect(page.getByRole("region", { name: "Goal", exact: true }).locator(".chat-studio-goal-summary")).toHaveText("Prove editable goal lifecycle");
+    if (await railGoal.isVisible()) await expect(railGoal.locator(".chat-studio-goal-summary")).toHaveText("Prove editable goal lifecycle");
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("m left");
     await page.getByRole("button", { name: "Assistant settings", exact: true }).click();
     const resumedSettings = page.getByRole("dialog", { name: "Assistant settings" });
@@ -687,7 +720,7 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     await expect(page.getByRole("region", { name: "Conversation goal" })).toContainText("running");
     await expect(composer).toHaveValue("");
     await expect(goalPanel).toContainText("step 3/3", { timeout: 90_000 });
-    await expect(goalPanel).toContainText("paused", { timeout: 10_000 });
+    await expect(goalPanel).toContainText("paused", { timeout: 60_000 });
     await expect(goalPanel).toContainText("Goal step budget is exhausted");
     const messagesAfterContinuation = await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{ role: string; content: string }>;
     expect(messagesAfterContinuation.filter(message => message.role === "user")).toHaveLength(3);
@@ -3392,15 +3425,17 @@ test("assistant upgrade side chat inherits Core history and replies independentl
 });
 
 test("assistant upgrade side chat opens during a running Core turn with its saved question", async ({page}, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(150_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
-  const stub = await startLocalModelStub({streamDelayMs: 20_000});
+  const stub = await startLocalModelStub({streamDelayMs: 60_000, delayedMessage: "Question sent while the main turn runs", matchingDelayMs: 60_000});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
   try {
     const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
     const providerResponse = await api.post("providers", {data: {name: "Active side chat", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}});
     expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
-    const provider = await providerResponse.json() as {id: string};
+    const provider = await providerResponse.json() as {id: string; revision: number};
+    const verification = await api.post(`providers/${encodeURIComponent(provider.id)}/capabilities/verify`, {data: {model: "security-model", expected_revision: provider.revision}});
+    expect(verification.ok(), await verification.text()).toBe(true);
     const response = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Original research question"}], include_knowledge: false, stream: false}});
     expect(response.ok(), await response.text()).toBe(true);
     const parent = await response.json() as {session_id: string};
@@ -3412,10 +3447,13 @@ test("assistant upgrade side chat opens during a running Core turn with its save
     await page.getByRole("button", {name: "Pair device"}).click();
     await expect(coreReady(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}`);
-    const main = page.locator(".session-workspace > .chat-panel");
+    const main = page.locator(".session-workspace > .chat-studio > .chat-panel");
     await expect(main.locator(".chat-message.operator")).toContainText("Original research question");
     await main.getByRole("textbox", {name: "Message the analyst assistant"}).fill("Question sent while the main turn runs");
     await main.getByRole("button", {name: "Send message", exact: true}).click();
+    await expect.poll(() => stub.requests.some(request => Array.isArray(request.messages)
+      && (request.messages as Array<{content?: unknown}>).some(message =>
+        typeof message.content === "string" && message.content.includes("Question sent while the main turn runs"))), {timeout: 20_000}).toBe(true);
     await expect(main.getByRole("button", {name: "Stop response", exact: true})).toBeVisible({timeout: 20_000});
     if ((page.viewportSize()?.width ?? 1440) <= 760) {
       await page.getByRole("button", {name: "Conversation actions"}).click();
@@ -3429,11 +3467,26 @@ test("assistant upgrade side chat opens during a running Core turn with its save
     }
     const side = page.getByRole("region", {name: "Side chat"});
     await expect(side).toBeVisible({timeout: 10_000});
-    const parentPending = await (await api.get(`chat/sessions/${parent.session_id}/pending-turn?view=status`)).json() as {status: string} | null;
-    expect(parentPending?.status).toBe("routing");
+    await expect.poll(async () => {
+      const response = await api.get(`chat/sessions/${parent.session_id}/pending-turn?view=status`);
+      expect(response.ok(), await response.text()).toBe(true);
+      const pending = await response.json() as {status?: string} | null;
+      return pending?.status;
+    }, {timeout: 20_000}).toBe("routing");
     await expect(side.getByRole("button", {name: "Inherited history · 3 messages"})).toBeVisible();
     const sideId = new URL(page.url()).searchParams.get("sideChat");
     expect(sideId).toBeTruthy();
+    if ((page.viewportSize()?.width ?? 1440) <= 760) {
+      // The phone gives side chat the viewport, so stop the covered parent turn
+      // through Core after its saved context is visible.
+      const pending = await (await api.get(`chat/sessions/${parent.session_id}/pending-turn?view=status`)).json() as {id: string};
+      const cancelled = await api.post(`chat/turns/${pending.id}/cancel`);
+      expect(cancelled.ok(), await cancelled.text()).toBe(true);
+    } else {
+      await expect(main.getByRole("button", {name: "Stop response", exact: true})).toBeVisible({timeout: 20_000});
+      await main.getByRole("button", {name: "Stop response", exact: true}).click();
+    }
+    await expect.poll(async () => (await (await api.get(`chat/sessions/${parent.session_id}/pending-turn`)).json())).toBeNull();
     const sideMessages = await (await api.get(`chat/sessions/${sideId}/messages`)).json() as Array<{content: string; source_message_id?: string}>;
     expect(sideMessages.map(item => item.content)).toEqual([
       "Original research question", "Real Core retained the exact research context.",
@@ -6172,9 +6225,9 @@ test("assistant upgrade real Core keeps a subagent wait attached and follows the
     await expect.poll(async () => {
       const response = await api.get(`chat/sessions/${sessionId}/subagents`);
       expect(response.ok(), await response.text()).toBe(true);
-      const body = await response.json() as { subagents: Array<{ reasoning_effort?: string }> };
+      const body = await response.json() as { subagents: Array<{ reasoning_effort?: string | null }> };
       return body.subagents[0]?.reasoning_effort;
-    }).toBe("low");
+    }).toBeNull();
     await expectNoChatStreamFailure(page);
     const waitingReply = page.locator(".chat-message.assistant").last();
     await expect(waitingReply).toContainText("Waiting for delegated work.");

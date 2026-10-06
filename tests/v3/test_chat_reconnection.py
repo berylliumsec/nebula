@@ -18,7 +18,7 @@ from nebula.v3.domain import (
 from nebula.v3.storage import NebulaStore
 
 
-def saved_turn(store, backend):
+def saved_turn(store, backend, *, progress=None):
     store.create(Engagement(id="project", name="Project"))
     chat = store.create(
         ChatSession(
@@ -83,7 +83,10 @@ def saved_turn(store, backend):
             session_id=chat.id,
             sequence=1,
             role="assistant",
-            content="Saved final answer",
+            content=(f"{progress}\n\n" if progress else "") + "Saved final answer",
+            metadata=(
+                {"progress_prefix_utf16_length": len(progress)} if progress else {}
+            ),
         )
     )
     store.create(
@@ -104,7 +107,8 @@ def saved_turn(store, backend):
 @pytest.mark.parametrize("backend", ["harness", "provider"])
 def test_chat_follow_is_read_only_and_returns_saved_completion(tmp_path, backend):
     store = NebulaStore(tmp_path / "core.db")
-    saved_turn(store, backend)
+    progress = "Routing update."
+    saved_turn(store, backend, progress=progress)
     app = create_app(store, auth_token="test-token")
     with TestClient(app) as client:
         before = store.get(ChatTurn, "turn").revision
@@ -119,7 +123,8 @@ def test_chat_follow_is_read_only_and_returns_saved_completion(tmp_path, backend
             if line.startswith("data: ")
         ]
         assert frames[-1]["type"] == "done"
-        assert frames[-1]["message"]["content"] == "Saved final answer"
+        assert frames[-1]["message"]["content"] == f"{progress}\n\nSaved final answer"
+        assert frames[-1]["progress_prefix_utf16_length"] == len(progress)
         if backend == "harness":
             assert [f["delta"] for f in frames if f["type"] == "message_delta"] == [
                 "tail"

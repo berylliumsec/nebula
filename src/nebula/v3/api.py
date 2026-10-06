@@ -10099,6 +10099,15 @@ def create_app(
                 )
                 return
             message = store.get(ChatMessage, completed.final_message_id)
+            progress_prefix_utf16_length = message.metadata.get(
+                "progress_prefix_utf16_length"
+            )
+            if (
+                not isinstance(progress_prefix_utf16_length, int)
+                or isinstance(progress_prefix_utf16_length, bool)
+                or progress_prefix_utf16_length < 0
+            ):
+                progress_prefix_utf16_length = None
             response = ChatCompletionResponse(
                 turn_id=completed.id,
                 session_id=chat.id,
@@ -10121,6 +10130,7 @@ def create_app(
                 approval_wait_ms=message.approval_wait_ms,
                 finish_reason="stop",
                 citations=message.citations,
+                progress_prefix_utf16_length=progress_prefix_utf16_length,
             )
             yield _server_sent_event(
                 "done", {"type": "done", **response.model_dump(mode="json")}
