@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction, type FormEvent } from "react";
-import { Archive, Trash2, RotateCcw, Check, ChevronDown, LockKeyhole, Orbit, Plus, X } from "lucide-react";
+import { Archive, Trash2, RotateCcw, Check, ChevronDown, LockKeyhole, Orbit, Plus, Search, X } from "lucide-react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { navigationGroups, navigationItemForPath, navigationItems } from "../navigation";
 import { canonicalNavigationPath, projectSurface, replaceProjectInPath } from "../resourceRoutes";
@@ -39,8 +39,10 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
   const confirm = useConfirmation();
   const switcherButton = useRef<HTMLButtonElement>(null);
   const switcherMenu = useRef<HTMLDivElement>(null);
+  const projectSearchInput = useRef<HTMLInputElement>(null);
   const switcherWasOpen = useRef(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [projectSearch, setProjectSearch] = useState("");
   const [updating, setUpdating] = useState(false);
   const [projectError, setProjectError] = useState<string>();
   const [notice, setNotice] = useState<string>();
@@ -61,7 +63,7 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
   useEffect(() => {
     if (open) {
       switcherWasOpen.current = true;
-      switcherMenu.current?.querySelector<HTMLElement>(SWITCHER_FOCUSABLE)?.focus();
+      (projectSearchInput.current ?? switcherMenu.current?.querySelector<HTMLElement>(SWITCHER_FOCUSABLE))?.focus();
       const closeFromDocument = (event: KeyboardEvent) => {
         if (event.key !== "Escape" || event.defaultPrevented) return;
         if (document.querySelector(".dialog-backdrop > .modal-surface")) return;
@@ -87,6 +89,9 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
     .join("") || "NE";
   const operatorName = activeOperator?.displayName ?? "No operator profile";
   const operatorInitials = operatorName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "OP";
+  const searchTerm = projectSearch.trim().toLocaleLowerCase();
+  const visibleProjects = (showArchived ? archivedEngagements : engagements).filter((item) =>
+    item.name.toLocaleLowerCase().includes(searchTerm) || (item.clientName ?? "").toLocaleLowerCase().includes(searchTerm));
 
   const changeArchived = async (id: string, projectName: string, archived: boolean, trigger: HTMLButtonElement) => {
     if (updating) return;
@@ -177,20 +182,25 @@ export function SideNav({ collapsed, open, setOpen, onNavigate, variant = "stand
       </div>
 
       <div className="engagement-picker">
-        <button ref={switcherButton} className="engagement-switcher" type="button" title={engagementName} aria-label="Switch project" aria-expanded={open} onClick={() => { if (!saving) setOpen((value) => !value); }}>
+        <button ref={switcherButton} className="engagement-switcher" type="button" title={engagementName} aria-label="Switch project" aria-expanded={open} onClick={() => { if (!saving) { if (!open) setProjectSearch(""); setOpen((value) => !value); } }}>
           <span className="engagement-avatar">{initials}</span>
           <span className="engagement-copy"><small>Active project</small><strong>{engagementName}</strong></span>
           <ChevronDown size={16} aria-hidden="true" />
         </button>
-        {open && <div ref={switcherMenu} className="engagement-menu" role="dialog" aria-label="Project switcher">
+        {open && <div ref={switcherMenu} className="engagement-menu" role="dialog" aria-label="Project switcher" data-selection-actions-disabled>
           <header><strong>Projects</strong><button className="icon-button subtle" type="button" aria-label="Close project switcher" disabled={saving} onClick={() => setOpen(false)}><X size={14} /></button></header>
+          {!creating && <div className="engagement-search">
+            <Search size={16} aria-hidden="true" />
+            <input ref={projectSearchInput} type="text" inputMode="search" autoComplete="off" aria-label="Search projects" placeholder="Search projects" value={projectSearch} onChange={(event) => setProjectSearch(event.target.value)} />
+            {projectSearch && <button type="button" aria-label="Clear project search" title="Clear search" onClick={() => { setProjectSearch(""); projectSearchInput.current?.focus(); }}><X size={16} aria-hidden="true" /></button>}
+          </div>}
           {!creating && <div className="engagement-options">
-            {(showArchived ? archivedEngagements : engagements).map((item) => <div className="project-switcher-row" key={item.id}>
+            {visibleProjects.map((item) => <div className="project-switcher-row" key={item.id}>
               {showArchived ? <span className="project-switcher-name">{item.name}<small>Archived</small></span> : <button type="button" disabled={updating} aria-current={item.id === engagement?.id ? "true" : undefined} onClick={() => { const target = /^\/projects\/[^/]+\/work\//.test(location.pathname) ? projectSurface(item.id, "work") : replaceProjectInPath(location.pathname, item.id); navigate(target + location.search); setOpen(false); }}><span>{item.name}<small>{item.clientName || item.status}</small></span>{item.id === engagement?.id && <Check size={14} />}</button>}
               <button className="project-switcher-action" type="button" disabled={updating || coreState !== "online"} aria-label={`${showArchived ? "Restore" : "Remove"} project ${item.name}`} title={showArchived ? "Restore project" : "Remove project"} onClick={(event) => void changeArchived(item.id, item.name, !showArchived, event.currentTarget)}>{showArchived ? <RotateCcw size={16} aria-hidden="true" /> : <Archive size={16} aria-hidden="true" />}</button>
               {showArchived && <button className="project-switcher-action" type="button" disabled={updating || coreState !== "online"} aria-label={`Delete project ${item.name}`} title="Delete permanently" onClick={() => void deleteArchived(item.id, item.name)}><Trash2 size={16} aria-hidden="true" /></button>}
             </div>)}
-            {(showArchived ? archivedEngagements : engagements).length === 0 && <p>{showArchived ? "No archived projects." : "No active projects. Create a project or restore an archived one."}</p>}
+            {visibleProjects.length === 0 && <p>{searchTerm ? `No matching ${showArchived ? "archived " : ""}projects.` : showArchived ? "No archived projects." : "No active projects. Create a project or restore an archived one."}</p>}
           </div>}
           {!creating && <>
             {projectError && <p className="project-switcher-feedback" role="alert">{projectError}</p>}

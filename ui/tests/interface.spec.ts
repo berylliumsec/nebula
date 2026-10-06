@@ -3335,6 +3335,42 @@ test("host folder picker remains usable as a bounded project workflow", async ({
   expect(accessibility.violations).toEqual([]);
 });
 
+test("phone shell project switcher search finds active and archived projects", async ({ page }) => {
+  await page.route(/\/api\/v1\/engagements(?:\?|$)/, route => route.fulfill({ json: [
+    { ...entity, id: "scratch-project", name: "Scratch Project", status: "active", tags: [], metadata: {} },
+    { ...entity, id: "alpha-project", name: "Alpha Project", client_name: "Example Org", status: "active", tags: [], metadata: {} },
+    { ...entity, id: "past-project", name: "Past Review", client_name: "Orion", status: "archived", tags: [], metadata: {} },
+  ] }));
+  await openWorkspace(page, "/settings", "Settings");
+  const sidebar = page.getByRole("button", { name: "Show sidebar" });
+  if (await sidebar.isVisible()) await sidebar.click();
+  await page.getByRole("button", { name: "Switch project" }).click();
+  const switcher = page.getByRole("dialog", { name: "Project switcher" });
+  const search = switcher.getByRole("textbox", { name: "Search projects" });
+  await expect(search).toBeFocused();
+  await search.fill("aLpHa");
+  await expect(switcher.getByText("Alpha Project")).toBeVisible();
+  await expect(switcher.getByText("Scratch Project")).toHaveCount(0);
+  await search.fill("orion");
+  await expect(switcher.getByText("No matching projects.")).toBeVisible();
+  await switcher.getByRole("button", { name: "Archived projects (1)" }).click();
+  await expect(switcher.getByText("Past Review")).toBeVisible();
+  await switcher.getByRole("button", { name: "Clear project search" }).click();
+  await expect(search).toHaveValue("");
+  await expect(search).toBeFocused();
+  const [menuBox, searchBox] = await Promise.all([switcher.boundingBox(), search.boundingBox()]);
+  expect(menuBox).not.toBeNull();
+  expect(searchBox).not.toBeNull();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  expect(searchBox!.height).toBeGreaterThanOrEqual(44);
+  const accessibility = await new AxeBuilder({ page }).include(".engagement-menu").withTags(["wcag2a", "wcag2aa"]).analyze();
+  expect(accessibility.violations).toEqual([]);
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Switch project" }).click();
+  await expect(switcher.getByRole("textbox", { name: "Search projects" })).toHaveValue("");
+});
+
 reloadTest("stabilization empty project offers the existing project picker after reload", async ({ page }, testInfo) => {
   await page.route(/\/api\/v1\/engagements(?:\?|$)/, route => route.fulfill({json: []}));
   await page.goto("/?view=chat");
