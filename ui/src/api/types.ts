@@ -3554,6 +3554,11 @@ export interface ChatSubagentView {
   capabilities?: {
     toolNames?: string[];
     mcpServerIds?: string[];
+    hookIds?: string[];
+    includeKnowledge?: boolean;
+    commandRuntime?: boolean;
+    allowSubagents?: boolean;
+    maxActiveSubagents?: number | null;
     skills?: { name: string; path: string }[];
   };
   stepCount: number;

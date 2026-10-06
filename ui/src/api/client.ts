@@ -4122,6 +4122,11 @@ interface WireChatSubagent {
   capabilities?: {
     tool_names?: string[];
     mcp_server_ids?: string[];
+    hook_ids?: string[];
+    include_knowledge?: boolean;
+    command_runtime?: boolean;
+    allow_subagents?: boolean;
+    max_active_subagents?: number | null;
     skills?: { name: string; path: string }[];
   } | null;
   step_count?: number;
@@ -4160,6 +4165,11 @@ function mapChatSubagent(value: WireChatSubagent): ChatSubagentView {
     capabilities: value.capabilities ? {
       toolNames: value.capabilities.tool_names,
       mcpServerIds: value.capabilities.mcp_server_ids,
+      hookIds: value.capabilities.hook_ids,
+      includeKnowledge: value.capabilities.include_knowledge,
+      commandRuntime: value.capabilities.command_runtime,
+      allowSubagents: value.capabilities.allow_subagents,
+      maxActiveSubagents: value.capabilities.max_active_subagents,
       skills: value.capabilities.skills,
     } : undefined,
     stepCount: value.step_count ?? 0,

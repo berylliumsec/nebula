@@ -170,6 +170,10 @@ export function ChatSubagentPane({
               <strong>Assigned capabilities</strong>
               {subagent.capabilities.toolNames && <span>Tools: {subagent.capabilities.toolNames.join(", ") || "none"}</span>}
               {subagent.capabilities.mcpServerIds && <span>MCP servers: {subagent.capabilities.mcpServerIds.join(", ") || "none"}</span>}
+              {subagent.capabilities.hookIds && <span>Lifecycle hooks: {subagent.capabilities.hookIds.join(", ") || "none"}</span>}
+              {subagent.capabilities.includeKnowledge !== undefined && <span>Knowledge: {subagent.capabilities.includeKnowledge ? "on" : "off"}</span>}
+              {subagent.capabilities.commandRuntime !== undefined && <span>Command runtime: {subagent.capabilities.commandRuntime ? "on" : "off"}</span>}
+              {subagent.capabilities.allowSubagents !== undefined && <span>Subagents: {subagent.capabilities.allowSubagents ? `on${subagent.capabilities.maxActiveSubagents ? ` · ${subagent.capabilities.maxActiveSubagents} running at once` : ""}` : "off"}</span>}
               {subagent.capabilities.skills && <span>Skills: {subagent.capabilities.skills.map((skill) => skill.name).join(", ") || "none"}</span>}
             </p>}
             {subagent.error && <p className="chat-subagent-error" role="alert">{subagent.error}</p>}
@@ -194,8 +198,8 @@ export function ChatSubagentPane({
 
     <p className="chat-subagent-note">
       {harnessDelegation
-        ? `Subagents run on ${delegateTarget || "the chosen provider model"} with this project's approval policy. Their supervisor can narrow tools and assign skills. Tool outputs go to ${harnessDelegation.providerName ?? "that provider"}. They cannot start their own subagents.`
-        : "Subagents use this conversation's model and approval policy. Their supervisor can narrow tools and assign skills. They cannot start their own subagents."}
+        ? `Subagents run on ${delegateTarget || "the chosen provider model"} with this project's approval policy. Their supervisor can assign project tools, MCP servers, skills, hooks, knowledge, command runtime, and delegation to each child. Tool outputs go to ${harnessDelegation.providerName ?? "that provider"}.`
+        : "Subagents use this conversation's model and approval policy. Their supervisor can assign project tools, MCP servers, skills, hooks, knowledge, command runtime, and delegation to each child."}
     </p>
   </section>;
 }
