@@ -3351,6 +3351,24 @@ test("phone shell project switcher search finds active and archived projects", a
   await search.fill("aLpHa");
   await expect(switcher.getByText("Alpha Project")).toBeVisible();
   await expect(switcher.getByText("Scratch Project")).toHaveCount(0);
+  const searchStyle = await search.evaluate(element => {
+    const styles = getComputedStyle(element.closest(".engagement-search")!);
+    return { outline: styles.outlineStyle, border: styles.borderColor };
+  });
+  expect(searchStyle.outline).toBe("none");
+  expect(searchStyle.border).not.toBe("rgb(81, 88, 98)");
+  const alphaRow = switcher.locator(".project-switcher-row > button:first-child").filter({ hasText: "Alpha Project" });
+  const alphaRowBox = await alphaRow.boundingBox();
+  expect(alphaRowBox).not.toBeNull();
+  expect(alphaRowBox!.height).toBeGreaterThanOrEqual(60);
+  const archiveAction = switcher.getByRole("button", { name: "Remove project Alpha Project", exact: true });
+  const archiveActionBox = await archiveAction.boundingBox();
+  expect(archiveActionBox).not.toBeNull();
+  expect(archiveActionBox!.width).toBeGreaterThanOrEqual(44);
+  expect(archiveActionBox!.height).toBeGreaterThanOrEqual(44);
+  const createActionBox = await switcher.getByRole("button", { name: "New project", exact: true }).boundingBox();
+  expect(createActionBox).not.toBeNull();
+  expect(createActionBox!.height).toBeGreaterThanOrEqual(44);
   await search.fill("orion");
   await expect(switcher.getByText("No matching projects.")).toBeVisible();
   await switcher.getByRole("button", { name: "Archived projects (1)" }).click();
