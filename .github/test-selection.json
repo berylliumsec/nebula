@@ -1,14 +1,19 @@
 {
-  "change_digest": "e2d8a7e435053cf0f45965a5cc74b3789a9970c1ef3cdce0bb3c861103518d27",
-  "reviewed_by": "Codex install routing, beta.1, and release-environment review",
-  "reason": "The source diff changes the public install destination, synchronizes the Linux beta version, and suppresses GitHub deployment records for three protected release jobs. One site-link regression, two build-metadata tests, and four exact release/version/workflow contract tests cover those changes. The APT publication pipeline and browser journey are verified separately.",
-  "exclusions": "No app UI, Core behavior, updater logic, or native code changed. Frontend, native, and app Playwright suites are excluded. The static public pages receive a separate desktop and mobile browser check; release preparation compiles and smoke-tests packages. Full suites are excluded.",
+  "change_digest": "c7eaefe9e692917c65e03aafd81cb1fced16fe8a7250addc0486160bdf6e0806",
+  "reviewed_by": "Codex beta.1 release review on current main",
+  "reason": "The branch routes public installation to the signed APT page, synchronizes the beta version, and suppresses deployment records for three protected release jobs. The selected tests cover the site link, build identity, version contracts, supported Linux distribution, and workflow protection.",
+  "exclusions": "No application UI, Core behavior, updater logic, or native code changes belong to this branch diff. Frontend, native, and app Playwright suites are excluded. The static public page receives a separate browser check; release preparation compiles and smoke-tests the package. Full suites are excluded.",
   "expected_tests": {
     "python": 7,
     "frontend": 0,
     "playwright": 0,
     "native": 0
   },
+  "python_versions": [
+    "3.12"
+  ],
+  "python_browser": false,
+  "python_node": false,
   "python": [
     "tests/v3/test_install_routing.py",
     "tests/v3/test_version.py",
