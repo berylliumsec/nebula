@@ -1,5 +1,5 @@
 {
-  "change_digest": "ab2c0bf3cdf551708b53cb1293fcc2f909d9960c903813c3540571096c49506f",
+  "change_digest": "7ce14b28b4432083518892b589d8a1a72df25a3cfb933cc0da65364dda95d69e",
   "reviewed_by": "Codex beta.2 release review on current main",
   "reason": "The diff preserves progress boundaries in synthesized late-join completion events, adds a provider/harness reconnect regression, and refreshes four real-Core acceptance tests for current goal and side-chat behavior. Focused unit and real-Core browser checks cover transcript splitting, stored-state replay, production LAN behavior, and the affected desktop and 390px mobile profiles.",
   "exclusions": "No Rust behavior changes belong to this diff. Unrelated Playwright journeys, unrelated Python/frontend tests, and all full suites are excluded. Physical-device tests are not available here. Release preparation retains its separate focused package and updater checks.",

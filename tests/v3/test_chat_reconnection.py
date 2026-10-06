@@ -85,9 +85,7 @@ def saved_turn(store, backend, *, progress=None):
             role="assistant",
             content=(f"{progress}\n\n" if progress else "") + "Saved final answer",
             metadata=(
-                {"progress_prefix_utf16_length": len(progress)}
-                if progress
-                else {}
+                {"progress_prefix_utf16_length": len(progress)} if progress else {}
             ),
         )
     )
