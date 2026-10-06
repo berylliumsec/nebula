@@ -319,6 +319,7 @@ class DelegatedMissionService:
             try:
                 task = self.store.get(Task, task_id)
             except NotFoundError:
+                # diagnostic-expected: the first projection creates this child task.
                 self.store.create(
                     Task(
                         id=task_id,

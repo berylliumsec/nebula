@@ -1361,6 +1361,7 @@ class SubagentService:
                     ).specs
                 )
             except AutomationRuntimeUnavailable:
+                # diagnostic-expected: an unprepared runtime is omitted from the child catalog.
                 # A configured runtime that has not been prepared is not a
                 # usable child capability yet.
                 pass
@@ -3783,6 +3784,7 @@ class SubagentService:
             try:
                 parent_session = self.store.get(ChatSession, record.parent_session_id)
             except NotFoundError:
+                # diagnostic-expected: a deleted parent has no active goal to charge.
                 return None
             parent_record = self._for_child_session(parent_session)
             if parent_record is None:
