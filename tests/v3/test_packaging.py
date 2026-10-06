@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import tomli
+import yaml
 
 from scripts.nebula3_version import (
     VersionSyncError,
@@ -70,6 +71,22 @@ def test_protected_release_distribution_is_linux_x86_64_only():
         "notarytool",
     ):
         assert unsupported not in workflows
+
+
+def test_protected_release_jobs_do_not_create_deployment_records():
+    jobs = {
+        "nebula3-release.yml": "build",
+        "nebula3-release-finalize.yml": "draft-release",
+        "publish-updater-manifest.yml": "manifest",
+    }
+    for workflow_name, job_name in jobs.items():
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+        )
+        assert workflow["jobs"][job_name]["environment"] == {
+            "name": "desktop-release",
+            "deployment": False,
+        }
 
 
 def test_apt_repository_scaffold_is_secret_free_and_verifies_promotions():

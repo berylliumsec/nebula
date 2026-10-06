@@ -195,7 +195,9 @@ jobs:
 
   build:
     needs: [validate, impact-baseline, sandbox-integration, playwright]
-    environment: desktop-release
+    environment:
+      name: desktop-release
+      deployment: false
     permissions:
       contents: read
       id-token: write

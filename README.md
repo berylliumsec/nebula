@@ -40,9 +40,7 @@ Nebula supports hosted, local, and OpenAI-compatible model runtimes. A model pro
 
 ## Install the preview
 
-Nebula 3 preview builds for Linux x86_64 appear as `nebula-v3.*` prereleases on [GitHub Releases](https://github.com/BerylliumSec/nebula/releases). Choose a release with native artifacts and read its published notes before installing; checked-in [release notes](docs/releases/) may also describe unpublished candidates. Docker or Podman is required for the container terminal and Docker-mode automation. Features in a source checkout may be ahead of the published preview.
-
-The preferred installation method is the signed [Nebula APT repository](https://github.com/BerylliumSec/nebula-apt). Its archive-key fingerprint is:
+Install the Linux x86_64 preview through the signed [Nebula APT repository](https://berylliumsec.github.io/nebula-apt/). Docker or Podman is required for the container terminal and Docker-mode automation. Features in a source checkout may be ahead of the published preview. The archive-key fingerprint is:
 
 ```console
 1D90 1EB3 4C8C 1065 F118 680D 1C5C 924C B4B5 823D

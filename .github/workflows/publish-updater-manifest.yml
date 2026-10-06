@@ -24,7 +24,9 @@ jobs:
   manifest:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'nebula-v3.')
     runs-on: ubuntu-22.04
-    environment: desktop-release
+    environment:
+      name: desktop-release
+      deployment: false
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
     outputs:
