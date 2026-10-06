@@ -275,7 +275,7 @@ class DelegatedMissionService:
         )
 
     def _children(self, root_session_id: str) -> list[tuple[ChatSubagent, str | None]]:
-        queue = deque([(root_session_id, None)])
+        queue: deque[tuple[str, str | None]] = deque([(root_session_id, None)])
         seen = {root_session_id}
         result: list[tuple[ChatSubagent, str | None]] = []
         while queue:
@@ -306,15 +306,16 @@ class DelegatedMissionService:
                 ChatSubagentStatus.STOPPED: TaskStatus.CANCELLED,
                 ChatSubagentStatus.INTERRUPTED: TaskStatus.BLOCKED,
             }[child.status]
-            changes = {
+            child_metadata = {
+                "chat_session_id": child.child_session_id,
+                "capabilities": child.parent_request.get("capabilities", {}),
+                "result": child.result,
+                "error": child.error,
+            }
+            child_changes: dict[str, Any] = {
                 "status": status,
                 "completed_at": child.finished_at,
-                "metadata": {
-                    "chat_session_id": child.child_session_id,
-                    "capabilities": child.parent_request.get("capabilities", {}),
-                    "result": child.result,
-                    "error": child.error,
-                },
+                "metadata": child_metadata,
             }
             try:
                 task = self.store.get(Task, task_id)
@@ -332,7 +333,9 @@ class DelegatedMissionService:
                         title=child.name,
                         instructions=child.task,
                         started_at=child.started_at,
-                        **changes,
+                        status=status,
+                        completed_at=child.finished_at,
+                        metadata=child_metadata,
                     )
                 )
                 self.store.append_event(
@@ -363,9 +366,9 @@ class DelegatedMissionService:
                         idempotency_key=f"delegated:{task_id}:{status.value}",
                     )
             else:
-                if task.status != status or task.metadata != changes["metadata"]:
+                if task.status != status or task.metadata != child_metadata:
                     self.store.update(
-                        Task, task.id, changes, expected_revision=task.revision
+                        Task, task.id, child_changes, expected_revision=task.revision
                     )
                     if task.status != status:
                         self.store.append_event(
@@ -448,19 +451,19 @@ class DelegatedMissionService:
             if child.child_turn_id and child.status == ChatSubagentStatus.RUNNING
         )
         metadata = {**run.metadata, "completed_tasks": completed, "total_tasks": total}
-        status = RunStatus.WAITING_APPROVAL if waiting else RunStatus.RUNNING
-        changes: dict[str, Any] = {}
+        run_status = RunStatus.WAITING_APPROVAL if waiting else RunStatus.RUNNING
+        run_changes: dict[str, Any] = {}
         if metadata != run.metadata:
-            changes["metadata"] = metadata
+            run_changes["metadata"] = metadata
         if (
-            status != run.status
+            run_status != run.status
             and run.status not in _TERMINAL_RUNS
             and run.status != RunStatus.CANCELLING
         ):
-            changes["status"] = status
-        if changes:
+            run_changes["status"] = run_status
+        if run_changes:
             run = self.store.update(
-                AgentRun, run.id, changes, expected_revision=run.revision
+                AgentRun, run.id, run_changes, expected_revision=run.revision
             )
         return run, root_turn, children
 
