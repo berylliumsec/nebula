@@ -6,7 +6,7 @@ as an ordinary background provider turn, and reports the child's final answer
 back: as a ``wait_subagents`` tool result when the parent is waiting, as an
 update Core hands the parent before its next tool step while it works, and as a
 durable result message in the parent conversation once the parent is idle.
-Children cannot start their own subagents.
+Children can delegate when their supervisor explicitly assigns that capability.
 
 Parent and child talk both ways. The parent sends with ``message_subagent``: a
 working child reads the message before its next step, a child waiting on a
@@ -88,6 +88,8 @@ from .domain import (
 )
 from .providers import REASONING_EFFORTS, ReasoningEffort
 from .runtime_platform import RuntimeToolComponents
+from .native_hooks import discover_native_hooks
+from .mcp import catalog_mcp_profiles, mcp_tool_runtime_name, usable_mcp_tools
 from .skill_catalog import SkillSelection, discover_skills, native_skill_roots
 from .storage import ConflictError, NotFoundError, StoreTransaction
 from .tool_results import MAX_EXCERPT_BYTES, model_result_bytes
@@ -110,6 +112,7 @@ if TYPE_CHECKING:
 # Subagents are unlimited unless the operator sets how many may run at once
 # for a conversation. The ceiling only bounds that setting.
 SUBAGENT_LIMIT_CEILING = 100
+SUBAGENT_DEPTH_CEILING = 8
 # A report's own bound (ChatSubagent.result). Delivery no longer needs a
 # smaller one: a long report reaches the parent in parts.
 RESULT_CHARACTERS = 20_000
@@ -183,7 +186,32 @@ def subagent_capabilities_schema() -> dict[str, Any]:
                 "maxItems": 64,
                 "uniqueItems": True,
                 "items": {"type": "string", "minLength": 1, "maxLength": 200},
-                "description": "Subset of this turn's selected MCP servers. Empty means none.",
+                "description": "Enabled, probed project MCP servers to give this child. Empty means none.",
+            },
+            "hook_ids": {
+                "type": "array",
+                "maxItems": 32,
+                "uniqueItems": True,
+                "items": {"type": "string", "minLength": 1, "maxLength": 200},
+                "description": "Project lifecycle hooks to run for this child. Empty or omitted means none.",
+            },
+            "include_knowledge": {
+                "type": "boolean",
+                "description": "Let this child use project knowledge, subject to the parent's cloud-sharing consent.",
+            },
+            "command_runtime": {
+                "type": "boolean",
+                "description": "Give this child the project's command runtime when it is ready.",
+            },
+            "allow_subagents": {
+                "type": "boolean",
+                "description": "Let this child delegate its own children, up to Core's depth ceiling.",
+            },
+            "max_active_subagents": {
+                "type": ["integer", "null"],
+                "minimum": 1,
+                "maximum": SUBAGENT_LIMIT_CEILING,
+                "description": "Maximum children this child may run at once; null means no limit.",
             },
             "skills": {
                 "type": "array",
@@ -206,20 +234,25 @@ def subagent_capabilities_schema() -> dict[str, Any]:
 
 
 def _capability_selection(
-    value: dict[str, Any] | None, inherited_mcp_ids: list[str]
+    value: dict[str, Any] | None, available_mcp_ids: list[str]
 ) -> dict[str, Any] | None:
     if value is None:
         return None
     if not isinstance(value, dict) or set(value) - {
         "tool_names",
         "mcp_server_ids",
+        "hook_ids",
+        "include_knowledge",
+        "command_runtime",
+        "allow_subagents",
+        "max_active_subagents",
         "skills",
     }:
         raise refused_before_execution(
             InvalidToolArguments("invalid subagent capabilities")
         )
     selected: dict[str, Any] = {}
-    for key, limit in (("tool_names", 128), ("mcp_server_ids", 64)):
+    for key, limit in (("tool_names", 128), ("mcp_server_ids", 64), ("hook_ids", 32)):
         if key not in value:
             continue
         items = value[key]
@@ -237,14 +270,32 @@ def _capability_selection(
             )
         selected[key] = items
     if "mcp_server_ids" in selected:
-        unavailable = set(selected["mcp_server_ids"]) - set(inherited_mcp_ids)
+        unavailable = set(selected["mcp_server_ids"]) - set(available_mcp_ids)
         if unavailable:
             raise refused_before_execution(
                 InvalidToolArguments(
-                    "MCP servers were not selected for this parent turn: "
+                    "MCP servers are not enabled and probed for this project: "
                     + ", ".join(sorted(unavailable))
                 )
             )
+    for key in ("include_knowledge", "command_runtime", "allow_subagents"):
+        if key in value:
+            if not isinstance(value[key], bool):
+                raise refused_before_execution(
+                    InvalidToolArguments(f"invalid {key} selection")
+                )
+            selected[key] = value[key]
+    if "max_active_subagents" in value:
+        limit = value["max_active_subagents"]
+        if limit is not None and (
+            not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or not 1 <= limit <= SUBAGENT_LIMIT_CEILING
+        ):
+            raise refused_before_execution(
+                InvalidToolArguments("invalid max_active_subagents selection")
+            )
+        selected["max_active_subagents"] = limit
     if "skills" in value:
         raw = value["skills"]
         if not isinstance(raw, list) or len(raw) > 8:
@@ -270,9 +321,11 @@ parallel. Give it a complete, self-contained task. Do not delegate single
 lookups. Choose reasoning_effort on start_subagent for each task; if omitted,
 the child provider uses its model default. An operator effort setting overrides
 your choice when present. Call list_subagent_capabilities to discover exact tool
-names, selected MCP server IDs and skill paths. Pass capabilities on a start to
-narrow tools or MCP servers and assign skills for that child. Omitted fields
-inherit; an empty list grants none in that field.
+names, enabled MCP server IDs, project hooks and skill paths. Pass capabilities
+on a start to narrow tools or MCP servers and assign skills, lifecycle hooks,
+knowledge, the command runtime or subagents for that child. Omitted tool and
+MCP fields inherit; an empty list grants none.
+Hooks run only when explicitly assigned to the child.
 Call wait_subagents when you need their reports before answering;
 subagents that finish after your answer report back in the conversation.
 message_subagent sends a subagent new instructions or answers its question; a
@@ -365,10 +418,12 @@ def harness_subagent_instructions(
         "Provider subagents: subagent.start hands one independent, multi-step task "
         f"to a child assistant on the Nebula provider model {model} with this "
         "project's command runtime and MCP servers by default. Call "
-        "subagent.capabilities to discover exact tool names, selected MCP server "
-        "IDs and skill paths. Pass capabilities to subagent.start to narrow the "
-        "child's tools or MCP servers and assign skills; omitted fields inherit, "
-        "and an empty list grants none in that field. It returns immediately and "
+        "subagent.capabilities to discover exact tool names, enabled MCP server "
+        "IDs, project hooks and skill paths. Pass capabilities to subagent.start "
+        "to narrow the child's tools or MCP servers and assign skills, lifecycle "
+        "hooks, knowledge, the command runtime or subagents. Omitted tool and MCP fields "
+        "inherit; an empty list grants none. "
+        "Hooks run only when explicitly assigned. It returns immediately and "
         "runs in parallel"
         + (f"; at most {limit} run at once" if limit is not None else "")
         + ". Children "
@@ -992,6 +1047,19 @@ class SubagentService:
         changed, self._changed = self._changed, asyncio.Event()
         changed.set()
 
+    def depth(self, session: ChatSession) -> int:
+        """Count durable supervisor links; a corrupt cycle never grants delegation."""
+
+        depth = 0
+        seen: set[str] = set()
+        while is_subagent_session(session):
+            if session.id in seen or not session.parent_session_id:
+                raise ConflictError("subagent parent chain is invalid")
+            seen.add(session.id)
+            depth += 1
+            session = self.store.get(ChatSession, session.parent_session_id)
+        return depth
+
     # -- queries -----------------------------------------------------------
 
     def for_session(self, parent_session_id: str) -> list[ChatSubagent]:
@@ -1001,6 +1069,21 @@ class SubagentService:
             ),
             key=lambda item: (item.started_at, item.id),
         )
+
+    def descendants_for_session(self, session_id: str) -> list[ChatSubagent]:
+        """Find all descendants, including those below a completed supervisor."""
+
+        records: list[ChatSubagent] = []
+        pending = [session_id]
+        seen = {session_id}
+        while pending:
+            for record in self.for_session(pending.pop()):
+                if record.child_session_id in seen:
+                    raise ConflictError("subagent descendant chain is invalid")
+                seen.add(record.child_session_id)
+                records.append(record)
+                pending.append(record.child_session_id)
+        return records
 
     def get(self, subagent_id: str) -> ChatSubagent:
         return self.store.get(ChatSubagent, subagent_id)
@@ -1215,13 +1298,18 @@ class SubagentService:
 
         turn = self.store.get(ChatTurn, parent_turn_id)
         session = self.store.get(ChatSession, turn.session_id)
-        if is_subagent_session(session):
+        depth = self.depth(session)
+        if depth >= SUBAGENT_DEPTH_CEILING:
             raise refused_before_execution(
-                InvalidToolArguments("subagents cannot assign capabilities to children")
+                InvalidToolArguments("subagent delegation depth is exhausted")
             )
         snapshot = resolve_request_snapshot(
             self.store, turn.request_snapshot, session_id=turn.session_id
         )
+        if depth and not snapshot.get("allow_subagents"):
+            raise refused_before_execution(
+                InvalidToolArguments("this child was not assigned subagents")
+            )
         model_request = snapshot.get("model_request") or {}
         model_tools = model_request.get("tools") or []
         command_snapshot = snapshot.get("command_runtime_snapshot") or {}
@@ -1243,9 +1331,41 @@ class SubagentService:
             item for item in catalog.get("deferred", []) if isinstance(item, str)
         )
         names -= SUBAGENT_TOOL_NAMES | {"finish_response", "tool_catalog.call"}
-        mcp_profiles = snapshot.get("mcp_snapshot") or []
+        engagement = self.store.get(Engagement, session.engagement_id)
+        scope = (
+            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            if engagement.scope_policy_id
+            else ScopePolicy(engagement_id=engagement.id)
+        )
+        mcp_profiles = catalog_mcp_profiles(
+            self.store, bypass_permissions=scope.bypass_permissions
+        )
+        selected_mcp_ids = set(snapshot.get("mcp_server_ids") or [])
+        names.update(
+            mcp_tool_runtime_name(profile.id, tool.name)
+            for profile in mcp_profiles
+            for tool in usable_mcp_tools(
+                profile, bypass_permissions=scope.bypass_permissions
+            )
+        )
+        command_tools: list[str] = []
+        if self.chat.automation_tool_platform is not None:
+            from .automation_runtime import AutomationRuntimeUnavailable
+
+            try:
+                command_tools = sorted(
+                    self.chat.automation_tool_platform.chat_components(
+                        engagement_id=session.engagement_id
+                    ).specs
+                )
+            except AutomationRuntimeUnavailable:
+                # A configured runtime that has not been prepared is not a
+                # usable child capability yet.
+                pass
+        names.update(command_tools)
         from .chat import ChatConfigurationError
 
+        workspace: Path | None = None
         try:
             workspace = self.chat.workspace_resolver(session.engagement_id)
         except (
@@ -1257,14 +1377,46 @@ class SubagentService:
             skills = discover_skills(
                 native_skill_roots(workspace, self.chat.managed_skill_root)
             )
+        hooks = discover_native_hooks(workspace) if workspace is not None else []
         return {
             "tool_names": sorted(names),
             "mcp_servers": [
-                {"id": item["id"], "name": item.get("name", item["id"])}
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "selected": item.id in selected_mcp_ids,
+                }
                 for item in mcp_profiles
-                if isinstance(item, dict) and isinstance(item.get("id"), str)
             ],
             "skills": [{"name": item.name, "path": item.path} for item in skills],
+            "knowledge": {
+                "ready": self.chat._has_ready_knowledge(session.engagement_id),
+                "selected": bool(snapshot.get("knowledge_enabled")),
+            },
+            "command_runtime": {
+                "available": bool(command_tools),
+                "selected": bool(
+                    snapshot.get("include_oci_tools")
+                    or (snapshot.get("command_runtime_snapshot") or {}).get("tool_names")
+                ),
+                "tool_names": command_tools,
+            },
+            "subagents": {
+                "available": depth + 1 < SUBAGENT_DEPTH_CEILING,
+                "selected": bool(snapshot.get("allow_subagents")),
+                "depth": depth,
+                "max_depth": SUBAGENT_DEPTH_CEILING,
+            },
+            "hooks": [
+                {
+                    "id": item.id,
+                    "name": item.manifest.name,
+                    "events": item.manifest.events,
+                    "side_effects": item.manifest.side_effects,
+                    "failure_policy": item.manifest.failure_policy,
+                }
+                for item in hooks
+            ],
         }
 
     def _header(self, record: ChatSubagent) -> dict[str, Any]:
@@ -1713,9 +1865,10 @@ class SubagentService:
             )
         parent_turn = self.store.get(ChatTurn, invocation.chat_turn_id)
         parent_session = self.store.get(ChatSession, parent_turn.session_id)
-        if is_subagent_session(parent_session):
+        depth = self.depth(parent_session)
+        if depth >= SUBAGENT_DEPTH_CEILING:
             raise ToolNotPermitted(
-                "subagents cannot start their own subagents", rule="subagents.depth"
+                "subagent delegation depth is exhausted", rule="subagents.depth"
             )
         task = task.strip()
         if not task:
@@ -1738,13 +1891,45 @@ class SubagentService:
             ):
                 return existing
         snapshot = parent_turn.request_snapshot
+        if depth and not snapshot.get("allow_subagents"):
+            raise ToolNotPermitted(
+                "this child was not assigned subagents", rule="subagents.turned_off"
+            )
         limit = self._limit(parent_turn)
         mcp_server_ids = [
             item for item in snapshot.get("mcp_server_ids", []) if isinstance(item, str)
         ]
-        selection = _capability_selection(capabilities, mcp_server_ids)
+        engagement = self.store.get(Engagement, parent_session.engagement_id)
+        scope = (
+            self.store.get(ScopePolicy, engagement.scope_policy_id)
+            if engagement.scope_policy_id
+            else ScopePolicy(engagement_id=engagement.id)
+        )
+        selection = _capability_selection(
+            capabilities,
+            [
+                item.id
+                for item in catalog_mcp_profiles(
+                    self.store, bypass_permissions=scope.bypass_permissions
+                )
+            ],
+        )
         if selection is not None and "mcp_server_ids" in selection:
             mcp_server_ids = selection["mcp_server_ids"]
+        include_knowledge = bool((selection or {}).get("include_knowledge", False))
+        allow_cloud_knowledge = bool(snapshot.get("cloud_knowledge_confirmed"))
+        allow_subagents = bool((selection or {}).get("allow_subagents", False))
+        child_limit = (selection or {}).get("max_active_subagents")
+        if child_limit is not None and not allow_subagents:
+            raise refused_before_execution(
+                InvalidToolArguments(
+                    "max_active_subagents requires allow_subagents for this child"
+                )
+            )
+        if allow_subagents and depth + 1 >= SUBAGENT_DEPTH_CEILING:
+            raise refused_before_execution(
+                InvalidToolArguments("this child would reach the delegation depth ceiling")
+            )
         if parent_turn.backend == ChatBackend.HARNESS:
             setting = snapshot.get("provider_subagent")
             if not isinstance(setting, dict):
@@ -1763,13 +1948,13 @@ class SubagentService:
                 and bool(runtime_snapshot.get("tool_names"))
                 and self.chat.automation_tool_platform is not None
             )
-            allow_subagents = False
         else:
             provider_id = parent_turn.provider_profile_id or ""
             model = parent_turn.model
             tools_enabled = bool(snapshot.get("include_oci_tools", False))
-            allow_subagents = bool(snapshot.get("allow_subagents", False))
             forced_effort = _known_effort(snapshot.get("subagent_reasoning_effort"))
+        if selection is not None and "command_runtime" in selection:
+            tools_enabled = selection["command_runtime"]
         effort = forced_effort or requested_effort
         if not provider_id or not model:
             raise ToolNotPermitted(
@@ -1781,9 +1966,11 @@ class SubagentService:
         parent_request: dict[str, Any] = {
             "idempotency_key": invocation.idempotency_key,
             "tools_enabled": tools_enabled,
-            "mcp_server_ids": mcp_server_ids,
+            "include_knowledge": include_knowledge,
+            "allow_cloud_knowledge": allow_cloud_knowledge,
             "allow_subagents": allow_subagents,
-            "max_active_subagents": limit if allow_subagents else None,
+            "max_active_subagents": child_limit,
+            "mcp_server_ids": mcp_server_ids,
             **({"capabilities": selection} if selection is not None else {}),
         }
         subagent_id = str(uuid4())
@@ -1837,9 +2024,13 @@ class SubagentService:
                             role=ChatRole.USER, content=_bounded(content, 60_000)
                         )
                     ],
-                    include_knowledge=False,
+                    include_knowledge=include_knowledge,
+                    allow_cloud_knowledge=allow_cloud_knowledge,
+                    allow_subagents=allow_subagents,
+                    max_active_subagents=child_limit,
                     tools_enabled=tools_enabled,
                     mcp_server_ids=mcp_server_ids,
+                    hook_ids=(selection or {}).get("hook_ids", []),
                     skill_selections=(selection or {}).get("skills", []),
                     allowed_tool_names=(selection or {}).get("tool_names"),
                     allow_mcp_catalog=(
@@ -1895,9 +2086,15 @@ class SubagentService:
         """
 
         goal: ChatGoal | None = None
-        if parent_turn is not None and parent_turn.goal_id:
+        goal_id = parent_turn.goal_id if parent_turn is not None else None
+        if parent_turn is not None and goal_id is None:
+            parent_session = self.store.get(ChatSession, parent_turn.session_id)
+            parent_record = self._for_child_session(parent_session)
+            if parent_record is not None:
+                goal_id = self._ancestor_goal_id(parent_record)
+        if goal_id is not None:
             try:
-                goal = self.store.get(ChatGoal, parent_turn.goal_id)
+                goal = self.store.get(ChatGoal, goal_id)
             except NotFoundError:  # diagnostic-expected: the goal was removed; its budget no longer bounds the parent
                 goal = None
         if (
@@ -2116,9 +2313,13 @@ class SubagentService:
                         ),
                     )
                 ],
-                include_knowledge=False,
+                include_knowledge=bool(flags.get("include_knowledge")),
+                allow_cloud_knowledge=bool(flags.get("allow_cloud_knowledge")),
+                allow_subagents=bool(flags.get("allow_subagents")),
+                max_active_subagents=flags.get("max_active_subagents"),
                 tools_enabled=bool(flags.get("tools_enabled")),
                 mcp_server_ids=list(flags.get("mcp_server_ids") or []),
+                hook_ids=selection.get("hook_ids", []),
                 skill_selections=selection.get("skills", []),
                 allowed_tool_names=selection.get("tool_names"),
                 allow_mcp_catalog="mcp_server_ids" not in selection,
@@ -2479,31 +2680,31 @@ class SubagentService:
         ):  # diagnostic-expected: conversation deleted mid-turn; nothing to deliver
             return None
         if is_subagent_session(session):
-            if "read_parent_messages" not in tool_names:
-                return None
             record = self._for_child_session(session)
-            if record is None or record.child_turn_id != turn.id:
-                return None
-            items = self._child_inbox_items(record)
-            if not items:
-                return None
-            child_results, delivered = self._core_results(
-                items,
-                self._child_render,
-                lambda result: (
-                    _parts_summary(result)
-                    or _count(len(result.delivered), "message")
-                    + " from the delegating assistant"
-                ),
-            )
-            return CoreDelivery(
-                "read_parent_messages",
-                child_results,
-                lambda: self._mark_messages(
-                    [item.source for item in delivered],
-                    ChatSubagentMessageStatus.DELIVERED,
-                ),
-            )
+            if (
+                "read_parent_messages" in tool_names
+                and record is not None
+                and record.child_turn_id == turn.id
+            ):
+                items = self._child_inbox_items(record)
+                if items:
+                    child_results, delivered = self._core_results(
+                        items,
+                        self._child_render,
+                        lambda result: (
+                            _parts_summary(result)
+                            or _count(len(result.delivered), "message")
+                            + " from the delegating assistant"
+                        ),
+                    )
+                    return CoreDelivery(
+                        "read_parent_messages",
+                        child_results,
+                        lambda: self._mark_messages(
+                            [item.source for item in delivered],
+                            ChatSubagentMessageStatus.DELIVERED,
+                        ),
+                    )
         if "list_subagents" not in tool_names or not self._has_news(session.id):
             return None
         entries = self._news(self.for_session(session.id), everyone=False)
@@ -2596,6 +2797,11 @@ class SubagentService:
         """
 
         record = self.get(subagent_id)
+        for descendant in self.active(self.for_session(record.child_session_id)):
+            await self.stop(
+                descendant.id,
+                reason=reason or "Its supervising subagent was stopped.",
+            )
         if record.status in CHAT_SUBAGENT_TERMINAL_STATUSES:
             return record
         self._stopping[record.id] = _bounded(reason, 1_000) if reason else None
@@ -3126,7 +3332,8 @@ class SubagentService:
                     f"({type(exc).__name__}): {exc}",
                     usage=turn.usage,
                 )
-            return
+            # A child may also supervise its own children. Its parent-facing
+            # report and its own descendants' lifecycle are independent.
         if turn.status == ChatTurnStatus.WAITING_CALLBACK:
             await self._resume_waiting_turn(turn)
         elif turn.status in {
@@ -3325,12 +3532,10 @@ class SubagentService:
                     await self._deliver(record)
                 return
         self._close_child_messages(record, unread_note)
-        parent_turn = self._parent_turn(record)
+        goal_id = self._ancestor_goal_id(record)
         pending_charge = (
             turn.id
-            if parent_turn is not None
-            and parent_turn.goal_id
-            and turn.usage.total_tokens
+            if goal_id is not None and turn.usage.total_tokens
             else None
         )
         try:
@@ -3353,6 +3558,32 @@ class SubagentService:
         self._charge_parent_goal(record, turn)
         if deliver:
             await self._deliver(record)
+            await self._propagate_descendant_report(record)
+
+    async def _propagate_descendant_report(self, record: ChatSubagent) -> None:
+        """Tell every ancestor when a nested child settles after its parent."""
+
+        session_id = record.parent_session_id
+        seen = {record.child_session_id}
+        while session_id not in seen:
+            seen.add(session_id)
+            session = self.store.get(ChatSession, session_id)
+            ancestor = self._for_child_session(session)
+            if ancestor is None:
+                return
+            key = f"nebula:descendant-report:{record.id}:round:{record.rounds}"
+            if self._existing_message(ancestor, key) is None:
+                self._add_message(
+                    ancestor,
+                    ChatSubagentMessageDirection.TO_PARENT,
+                    f"Nested subagent {record.name} ({record.id}) {record.status.value}.\n"
+                    + (f"Report: {_report_excerpt(record.result, MESSAGE_CHARACTERS - 500)}" if record.result else "No report was produced.")
+                    + (f"\nError: {record.error}" if record.error else ""),
+                    idempotency_key=key,
+                )
+            await self._deliver(ancestor)
+            session_id = ancestor.parent_session_id
+        raise ConflictError("subagent supervisor chain is invalid")
 
     @staticmethod
     def _restart_recovery_marker(record: ChatSubagent) -> dict[str, Any] | None:
@@ -3484,10 +3715,29 @@ class SubagentService:
     def _charge_parent_goal(self, record: ChatSubagent, turn: ChatTurn) -> None:
         """Settle a round's goal debit: whatever the accrual left uncharged."""
 
-        parent_turn = self._parent_turn(record)
-        if parent_turn is None or not parent_turn.goal_id:
+        goal_id = self._ancestor_goal_id(record)
+        if goal_id is None:
             return
-        self._true_up_goal_charge(parent_turn.goal_id, record.id, turn)
+        self._true_up_goal_charge(goal_id, record.id, turn)
+
+    def _ancestor_goal_id(self, record: ChatSubagent) -> str | None:
+        """A descendant spends the same goal budget as its root supervisor."""
+
+        seen: set[str] = set()
+        while record.id not in seen:
+            seen.add(record.id)
+            parent_turn = self._parent_turn(record)
+            if parent_turn is not None and parent_turn.goal_id:
+                return parent_turn.goal_id
+            try:
+                parent_session = self.store.get(ChatSession, record.parent_session_id)
+            except NotFoundError:
+                return None
+            parent_record = self._for_child_session(parent_session)
+            if parent_record is None:
+                return None
+            record = parent_record
+        raise ConflictError("subagent supervisor chain is invalid")
 
     def _child_goal(self, turn: ChatTurn) -> tuple[str, str | None] | None:
         """The subagent a child turn runs for and the goal its parent serves."""
@@ -3504,8 +3754,7 @@ class SubagentService:
         record = self._for_child_session(session)
         if record is None or record.child_turn_id != turn.id:
             return None
-        parent_turn = self._parent_turn(record)
-        link = (record.id, parent_turn.goal_id if parent_turn is not None else None)
+        link = (record.id, self._ancestor_goal_id(record))
         self._child_goals[turn.id] = link
         return link
 
@@ -3638,7 +3887,7 @@ class SubagentService:
         children, and stopping awaits their tasks, so it runs as its own task.
         """
 
-        if not self.active(self.for_session(goal.session_id)):
+        if not self.active(self.descendants_for_session(goal.session_id)):
             return
         try:
             asyncio.get_running_loop()
@@ -3657,9 +3906,9 @@ class SubagentService:
     async def _stop_goal_subagents(
         self, goal_id: str, session_id: str, reason: str
     ) -> None:
-        for record in self.active(self.for_session(session_id)):
+        for record in self.active(self.descendants_for_session(session_id)):
             parent_turn = self._parent_turn(record)
-            if parent_turn is None or parent_turn.goal_id != goal_id:
+            if parent_turn is None or self._ancestor_goal_id(record) != goal_id:
                 continue
             try:
                 await self.stop(record.id, reason=reason)
@@ -3903,7 +4152,14 @@ class SubagentService:
 
         from .chat_goals import ChatGoalService
 
-        ChatGoalService(self.store).settle_active_time(parent_session_id)
+        session = self.store.get(ChatSession, parent_session_id)
+        seen: set[str] = set()
+        while is_subagent_session(session):
+            if session.id in seen or not session.parent_session_id:
+                raise ConflictError("subagent supervisor chain is invalid")
+            seen.add(session.id)
+            session = self.store.get(ChatSession, session.parent_session_id)
+        ChatGoalService(self.store).settle_active_time(session.id)
 
     async def _release_blocked_children(self, parent_session_id: str) -> None:
         """Stop children still blocked on approval now that no supervisor runs.
@@ -4253,6 +4509,7 @@ class SubagentService:
         if turn is not None and turn.id == record.pending_goal_charge_turn_id:
             self._charge_parent_goal(record, turn)
         await self._deliver(record)
+        await self._propagate_descendant_report(record)
 
     async def _reconcile_running_after_restart(
         self, record: ChatSubagent, *, preserve_graceful: bool
@@ -4451,7 +4708,7 @@ def subagent_specs() -> dict[str, ToolSpec]:
     specs = [
         _spec(
             "list_subagent_capabilities",
-            "List tool names, selected MCP servers and available project or installed skills that a child may be assigned.",
+            "List tool names, enabled MCP servers, project lifecycle hooks, knowledge and command runtime status, and available skills that a child may be assigned.",
             {},
         ),
         _spec(

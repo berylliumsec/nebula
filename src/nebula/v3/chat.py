@@ -299,7 +299,9 @@ from .chat_subagents import (
     GOAL_BUDGET_STOP_NOTE,
     PARENT_STOPPED_NOTE,
     SUBAGENT_CHILD_INSTRUCTIONS,
+    SUBAGENT_DEPTH_CEILING,
     SUBAGENT_LIMIT_CEILING,
+    SUBAGENT_TOOL_NAMES,
     SubagentService,
     SubagentWaitPending,
     contract_digest_segment as subagent_digest_segment,
@@ -611,7 +613,7 @@ class ChatCompletionRequest(NebulaModel):
     include_knowledge: bool = True
     allow_cloud_knowledge: bool = False
     tools_enabled: bool = False
-    # Advertise start/wait/list/stop subagent tools. Ignored for subagent turns.
+    # Advertise start/wait/list/stop subagent tools, within the depth ceiling.
     allow_subagents: bool = False
     # Let this independent main conversation discover and message project peers.
     allow_agent_messaging: bool = False
@@ -5470,7 +5472,12 @@ class ChatService:
         )
         subagent_child = session is not None and is_subagent_session(session)
         subagents_enabled = bool(
-            request.allow_subagents and not subagent_child and engagement_id
+            request.allow_subagents
+            and engagement_id
+            and (
+                session is None
+                or self.subagents.depth(session) < SUBAGENT_DEPTH_CEILING
+            )
         )
         agent_messaging_enabled = bool(
             request.allow_agent_messaging and not subagent_child and engagement_id
@@ -5917,6 +5924,7 @@ class ChatService:
                             if subagent_child
                             else frozenset()
                         )
+                        | (SUBAGENT_TOOL_NAMES if subagents_enabled else frozenset())
                         | (
                             frozenset({"skill.read_resource"})
                             if skill_resources_selected
@@ -6319,6 +6327,8 @@ class ChatService:
                     "tool_catalog": tool_catalog,
                     "conversation_search": conversation_search,
                     "knowledge_search": knowledge_search,
+                    "knowledge_enabled": request.include_knowledge,
+                    "cloud_knowledge_confirmed": request.allow_cloud_knowledge,
                     "automation_runtime_digest": getattr(
                         tool_components, "runtime_digest", None
                     ),
@@ -6368,6 +6378,8 @@ class ChatService:
                     "citations": [item.model_dump(mode="json") for item in citations],
                     "context_usage": context_usage.model_dump(mode="json"),
                     "include_oci_tools": False,
+                    "knowledge_enabled": request.include_knowledge,
+                    "cloud_knowledge_confirmed": request.allow_cloud_knowledge,
                 },
             )
         try:
@@ -12256,6 +12268,11 @@ class ChatService:
                     required=(
                         frozenset({"message_parent", "read_parent_messages"})
                         if turn.request_snapshot.get("subagent_child")
+                        else frozenset()
+                    )
+                    | (
+                        SUBAGENT_TOOL_NAMES
+                        if turn.request_snapshot.get("allow_subagents")
                         else frozenset()
                     )
                     | (
