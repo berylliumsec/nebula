@@ -150,13 +150,28 @@ def test_apt_repository_scaffold_is_secret_free_and_verifies_promotions():
     for image in ("ubuntu:24.04", "debian:12-slim", "kalilinux/kali-rolling:latest"):
         assert image in smoke
     builder = (repository / "scripts/build-repository.sh").read_text(encoding="utf-8")
-    assert 'dpkg-scanpackages "pool/$channel"' in builder
+    assert 'dpkg-scanpackages --multiversion "pool/$channel"' in builder
     assert "dpkg-scanpackages --arch" not in builder
+    assert "Require repository admin for APT publication" in workflows
+    assert 'test "$permission" = admin' in workflows
     assert 'dpkg-deb -f "$deb" Architecture' in builder
     assert 'chmod -R u=rwX,go=rX "$public"' in builder
     assert "BEGIN PGP PRIVATE KEY BLOCK" not in workflows
     assert "macos-" not in workflows
     assert "Homebrew" not in workflows
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            str(repository / "tests"),
+            "-q",
+        ],
+        cwd=repository,
+        check=True,
+    )
 
 
 def test_release_stages_and_smoke_tests_bundled_playwright_chromium_only_on_deploy():
