@@ -102,6 +102,19 @@ def test_release_entry_points_require_an_admin_before_using_release_credentials(
         assert "actions/checkout" in steps[1]["uses"]
 
 
+def test_updater_publication_requires_admin_before_protected_job():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/publish-updater-manifest.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    guard = workflow["jobs"]["validate-admin"]["steps"][0]
+    assert guard["env"]["RELEASE_ACTOR"] == "${{ github.actor }}"
+    assert "collaborators/$RELEASE_ACTOR/permission" in guard["run"]
+    assert 'test "$permission" = admin' in guard["run"]
+    assert workflow["jobs"]["manifest"]["needs"] == "validate-admin"
+
+
 def test_apt_repository_scaffold_is_secret_free_and_verifies_promotions():
     repository = ROOT / "packaging/repositories/nebula-apt"
     required = (
