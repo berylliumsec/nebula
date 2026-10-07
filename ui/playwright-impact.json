@@ -45,6 +45,16 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "intel-atlas": [
+      {"area":"intel-atlas","project":"desktop","test_match":"tests/interface.spec.ts","grep":"Intel Atlas restores the research view and keeps unknown evidence explicit","runtime":"mock","shard":"1/1"},
+      {"area":"intel-atlas","project":"compact","test_match":"tests/interface.spec.ts","grep":"Intel Atlas restores the research view and keeps unknown evidence explicit","runtime":"mock","shard":"1/1"},
+      {"area":"intel-atlas","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"Intel Atlas restores the research view and keeps unknown evidence explicit","runtime":"mock","shard":"1/1"},
+      {"area":"intel-atlas","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"Intel Atlas restores the research view and keeps unknown evidence explicit","runtime":"mock","shard":"1/1"},
+      {"area":"intel-atlas","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"Intel Atlas restores the research view and keeps unknown evidence explicit","runtime":"mock","shard":"1/1"},
+      {"area":"intel-atlas","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"Intel Atlas restores the research view and keeps unknown evidence explicit","runtime":"mock","shard":"1/1"},
+      {"area":"intel-atlas","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"Intel Atlas restores the research view and keeps unknown evidence explicit","runtime":"mock","shard":"1/1"},
+      {"area":"intel-atlas","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"Intel Atlas restores the research view and keeps unknown evidence explicit","runtime":"mock","shard":"1/1"}
+    ],
     "projects-navigation": [
       {"area":"projects-navigation","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization Projects is the sole Work navigation destination","runtime":"mock","shard":"1/1"},
       {"area":"projects-navigation","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"stabilization Projects is the sole Work navigation destination","runtime":"mock","shard":"1/1"},

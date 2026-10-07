@@ -52,6 +52,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from . import chat as chat_runtime
+from .intel_atlas import atlas_document, atlas_index
 from .artifacts import ArtifactStore, ArtifactStoreError
 from .approval_delivery import approval_harness_turn
 from .action_registry import ActionRegistry
@@ -7369,6 +7370,28 @@ def create_app(
     )
     async def get_assistant_defaults(engagement_id: str) -> AssistantDefaults:
         return store.get(Engagement, engagement_id).assistant_defaults
+
+    @app.get(
+        f"{API_PREFIX}/atlas",
+        tags=["atlas"],
+        dependencies=[Depends(require_auth)],
+    )
+    def get_intel_atlas(response: Response) -> dict[str, Any]:
+        """Project a linked research map and current Nebula Work status."""
+        response.headers["Cache-Control"] = "no-store"
+        return atlas_index(store)
+
+    @app.get(
+        f"{API_PREFIX}/atlas/documents/{{document_id}}",
+        tags=["atlas"],
+        dependencies=[Depends(require_auth)],
+    )
+    def get_intel_atlas_document(document_id: str, response: Response) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
+        document = atlas_document(store, document_id)
+        if document is None:
+            raise HTTPException(status_code=404, detail="Atlas document not found")
+        return document
 
     @app.get(
         f"{API_PREFIX}/work/items",

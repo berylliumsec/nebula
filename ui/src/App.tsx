@@ -9,6 +9,7 @@ const SessionsPage = lazy(() => import("./pages/SessionsPage").then((module) => 
 const FindingsPage = lazy(() => import("./pages/FindingsPage").then((module) => ({ default: module.FindingsPage })));
 const ProjectPage = lazy(() => import("./pages/ProjectPage").then((module) => ({ default: module.ProjectPage })));
 const WorkPage = lazy(() => import("./pages/WorkPage").then((module) => ({ default: module.WorkPage })));
+const AtlasPage = lazy(() => import("./pages/AtlasPage").then((module) => ({ default: module.AtlasPage })));
 const LibraryPage = lazy(() => import("./pages/LibraryPage").then((module) => ({ default: module.LibraryPage })));
 const ReportsPage = lazy(() => import("./pages/ReportsPage").then((module) => ({ default: module.ReportsPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
@@ -123,6 +124,7 @@ export function App() {
     </Route>
     <Route path="library/:resourceId?" element={route(<LibraryPage />)} />
     <Route path="projects" element={route(<WorkPage />)} />
+    <Route path="atlas" element={route(<AtlasPage />)} />
     <Route path="work" element={<Navigate to="/projects" replace />} />
     <Route path="settings" element={route(<SettingsPage />)} />
     <Route index element={<LegacyProjectRedirect surface="workbench" />} />

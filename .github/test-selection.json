@@ -1,14 +1,14 @@
 {
-  "change_digest": "94fe15d9eae8baab1d1b8714f782818a7be314147bc34422c4083ea293de390f",
+  "change_digest": "08dbd6750dbc4d027b01aa7174eb8db7b92a78f85bd957f073320d47d6989843",
   "reviewed_by": "Codex focused coverage review",
-  "reason": "Synchronize the checked-in APT scaffold with the published repository's admin gate, multiversion index, and fixed policy fixture. One packaging contract test checks the scaffold and executes its seven internal policy tests.",
-  "exclusions": "No Nebula application UI, browser journey, provider, database, or native code changes. Frontend, Playwright, native, unrelated Python tests, and full suites are excluded. Shell syntax checks run locally.",
-  "expected_tests": {"python": 1, "frontend": 0, "playwright": 0, "native": 0},
+  "reason": "Restore Intel Atlas as a cross-project research view. Three API tests cover map projection, current Work authority, unknown lane and binary evidence, simulation records, and bounded document reads. Seven component tests cover entry, source state, filtering, document preview, and retry. Eight focused browser entries exercise the Atlas journey and full tab-label geometry at desktop 1440 and 1024 px and mobile Chromium and WebKit at 320, 390, and 430 px.",
+  "exclusions": "No native code changed. Native and unrelated Python, frontend, and browser tests are excluded. The browser fixture uses a mocked Core response for layout, navigation, reload, and accessibility; a separate live Core and production LAN check is required before an unqualified completion claim. No full suite is authorized.",
+  "expected_tests": {"python": 3, "frontend": 7, "playwright": 8, "native": 0},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": ["tests/v3/test_packaging.py::test_apt_repository_scaffold_is_secret_free_and_verifies_promotions"],
-  "frontend": [],
-  "playwright": [],
+  "python": ["tests/v3/test_intel_atlas_api.py"],
+  "frontend": ["ui/src/pages/AtlasPage.test.tsx"],
+  "playwright": ["area:intel-atlas"],
   "native": []
 }

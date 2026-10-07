@@ -2182,6 +2182,77 @@ test("stabilization Projects is the sole Work navigation destination", async ({ 
   await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
 });
 
+reloadTest("Intel Atlas restores the research view and keeps unknown evidence explicit", async ({ page }) => {
+  await installTruthfulCore(page);
+  const atlas = {
+    generatedAt: "2026-10-07T12:00:00Z",
+    source: { available: true, mapPath: "knowledge/GRAND_THREAT_PROJECT_MAP.md", mapSnapshot: "2026-08-25", statusAuthority: "nebula-work", migrationAuthority: "workspace-link" },
+    counts: { grandThreatProjects: 2, openLanes: null, needsSimulation: null, documents: 1, simulations: 1 },
+    grandThreatProjects: [
+      { name: "AppleJPEGXL", path: "projects/applejpegxl", missing: false, roles: ["focused"], surfaces: ["Image files"], lastWorkedAt: null,
+        workspace: { linked: true, engagementId: "scratch-project" }, workflow: { status: "in_progress", summary: "Research active", nextStep: "Prove capacity", updatedAt: "2026-10-07T11:00:00Z", source: "nebula-work" },
+        migration: { status: "linked", label: "Linked", detail: "Nebula project" },
+        v2Migration: { status: "audited", label: "V2 admitted", detail: "", validation: "validated", auditedAt: "2026-08-20T12:00:00Z", auditDetail: "Reviewed", remainingGate: null },
+        binaries: { count: 1, totalBytes: 2048, files: [] }, lanes: { indexed: true, total: 3, open: 2, needsSimulation: 1, readyForRuntime: 0, stale: 0 } },
+      { name: "Missing target", path: "projects/missing", missing: true, roles: ["supporting"], surfaces: ["IPC"], lastWorkedAt: null,
+        workspace: { linked: false, engagementId: null }, workflow: { status: "unknown", summary: "", nextStep: null, updatedAt: null, source: "unknown" },
+        migration: { status: "missing", label: "Missing", detail: "" },
+        v2Migration: { status: "unknown", label: "Unknown", detail: "", validation: "not_audited", auditedAt: null, auditDetail: "", remainingGate: null },
+        binaries: { count: null, totalBytes: null, files: [] }, lanes: { indexed: false, total: null, open: null, needsSimulation: null, readyForRuntime: null, stale: null } },
+    ],
+    documents: [{ id: "doc-1", title: "Grand Threat Map", kind: "threat", featured: true, project: "Research", path: "knowledge/GRAND_THREAT_PROJECT_MAP.md", excerpt: "Research priorities", headings: ["Overview"], updatedAt: "2026-08-25T12:00:00Z" }],
+    simulations: [{ runKey: "run-1", project: "AppleJPEGXL", status: "bounded", feasibility: "unknown", decisionImpact: "More proof needed", summary: "No validated impact", updatedAt: "2026-10-07T11:00:00Z" }],
+  };
+  await page.route("**/api/v1/atlas", (route) => route.fulfill({ json: atlas }));
+  await page.route("**/api/v1/atlas/documents/doc-1", (route) => route.fulfill({ json: { ...atlas.documents[0], content: "# Grand Threat Map\nResearch priorities", truncated: false } }));
+  await page.goto("/");
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Intel Atlas" }).click();
+  } else {
+    await page.getByRole("complementary", { name: "Primary navigation" }).getByRole("link", { name: "Intel Atlas" }).click();
+  }
+  await expect.poll(() => new URL(page.url()).pathname).toBe("/atlas");
+  await expect(page.getByRole("heading", { name: "AppleJPEGXL" })).toBeVisible();
+  const tabs = await page.locator(".atlas-views").evaluate((nav) => {
+    const navBox = nav.getBoundingClientRect();
+    return {
+      hasHorizontalOverflow: nav.scrollWidth > nav.clientWidth + 1,
+      labels: Array.from(nav.querySelectorAll("a"), (tab) => {
+        const box = tab.getBoundingClientRect();
+        return {
+          text: tab.textContent?.trim(),
+          fullyVisible: box.left >= navBox.left - 1 && box.right <= navBox.right + 1
+            && tab.scrollWidth <= tab.clientWidth + 1 && tab.scrollHeight <= tab.clientHeight + 1,
+        };
+      }),
+    };
+  });
+  expect(tabs.hasHorizontalOverflow).toBe(false);
+  expect(tabs.labels).toEqual([
+    { text: "Priority projects", fullyVisible: true },
+    { text: "Maps & inventories", fullyVisible: true },
+    { text: "Simulation records", fullyVisible: true },
+  ]);
+  const missing = page.locator(".atlas-project").filter({ has: page.getByRole("heading", { name: "Missing target" }) });
+  await expect(missing.getByText("No compiled lane index")).toBeVisible();
+  await expect(missing.getByText("No linked Nebula project")).toBeVisible();
+  await page.getByRole("link", { name: "Maps & inventories" }).click();
+  await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("maps");
+  await page.getByRole("searchbox", { name: "Search" }).fill("Grand Threat");
+  await expect.poll(() => {
+    const url = new URL(page.url());
+    return [url.searchParams.get("view"), url.searchParams.get("q")];
+  }).toEqual(["maps", "Grand Threat"]);
+  await page.reload();
+  await expect(page.getByRole("searchbox", { name: "Search" })).toHaveValue("Grand Threat");
+  await page.getByRole("button", { name: /Grand Threat Map/ }).click();
+  await expect(page.getByRole("dialog", { name: "Grand Threat Map" }).getByText(/Research priorities/)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  const violations = await new AxeBuilder({ page }).include(".atlas-page").analyze();
+  expect(violations.violations).toEqual([]);
+});
+
 test("Missions explains missing runtime setup and provides a working next action", async ({ page }) => {
   await openWorkspace(page, "/?view=missions", "Workbench");
 
