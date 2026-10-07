@@ -50,7 +50,7 @@ for channel in stable prerelease; do
     # Upstream release assets use `linux-x86_64.deb`, not Debian's
     # `_amd64.deb` filename convention. The --arch filter selects by filename
     # and would silently omit them; package metadata is validated above.
-    dpkg-scanpackages "pool/$channel" /dev/null
+    dpkg-scanpackages --multiversion "pool/$channel" /dev/null
   ) >"$binary/Packages"
   expected_count=$(jq -r --arg channel "$channel" \
     '.channels[$channel] | length' "$channels")

@@ -1,13 +1,13 @@
 {
-  "change_digest": "32c9d73a7cb2d9cf63651ce338aace6be05ef19a407839d5cf2a017e48675c49",
+  "change_digest": "94fe15d9eae8baab1d1b8714f782818a7be314147bc34422c4083ea293de390f",
   "reviewed_by": "Codex focused coverage review",
-  "reason": "Updater publication must verify the initiating repository admin before entering the protected release environment. One packaging workflow test verifies the job dependency and guard.",
-  "exclusions": "No application UI, browser journey, provider behavior, native artifact, or persistence change. Frontend, Playwright, native, unrelated Python tests, and full suites are excluded.",
+  "reason": "Synchronize the checked-in APT scaffold with the published repository's admin gate, multiversion index, and fixed policy fixture. One packaging contract test checks the scaffold and executes its seven internal policy tests.",
+  "exclusions": "No Nebula application UI, browser journey, provider, database, or native code changes. Frontend, Playwright, native, unrelated Python tests, and full suites are excluded. Shell syntax checks run locally.",
   "expected_tests": {"python": 1, "frontend": 0, "playwright": 0, "native": 0},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": ["tests/v3/test_packaging.py::test_updater_publication_requires_admin_before_protected_job"],
+  "python": ["tests/v3/test_packaging.py::test_apt_repository_scaffold_is_secret_free_and_verifies_promotions"],
   "frontend": [],
   "playwright": [],
   "native": []

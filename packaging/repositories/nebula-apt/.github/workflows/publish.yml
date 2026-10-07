@@ -24,6 +24,13 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     steps:
+      - name: Require repository admin for APT publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTOR: ${{ github.actor }}
+        run: |
+          permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$RELEASE_ACTOR/permission" --jq .permission)"
+          test "$permission" = admin || { echo 'Only repository admins may publish APT releases.' >&2; exit 1; }
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
