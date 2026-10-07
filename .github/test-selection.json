@@ -1,12 +1,12 @@
 {
-  "change_digest": "7ce14b28b4432083518892b589d8a1a72df25a3cfb933cc0da65364dda95d69e",
-  "reviewed_by": "Codex beta.2 release review on current main",
-  "reason": "The diff preserves progress boundaries in synthesized late-join completion events, adds a provider/harness reconnect regression, and refreshes four real-Core acceptance tests for current goal and side-chat behavior. Focused unit and real-Core browser checks cover transcript splitting, stored-state replay, production LAN behavior, and the affected desktop and 390px mobile profiles.",
-  "exclusions": "No Rust behavior changes belong to this diff. Unrelated Playwright journeys, unrelated Python/frontend tests, and all full suites are excluded. Physical-device tests are not available here. Release preparation retains its separate focused package and updater checks.",
+  "change_digest": "36a3cb733468af43381b5d8f2da858fbd5f559b8697740c6fb3648cd35252715",
+  "reviewed_by": "Codex focused coverage review",
+  "reason": "Expose knowledge gateway tools only when the active harness turn grants access, remove the redundant prompt capability block, and refresh a fixed vendor catalog when that grant changes. Seven exact harness tests cover disabled and enabled discovery, scoped use, connection refresh, browser catalog preservation, and the Core chat entry point.",
+  "exclusions": "No frontend, visual layout, browser-origin, LAN, native, or packaging behavior changed. Unrelated Python tests and all full suites are excluded.",
   "expected_tests": {
-    "python": 5,
-    "frontend": 4,
-    "playwright": 12,
+    "python": 7,
+    "frontend": 0,
+    "playwright": 0,
     "native": 0
   },
   "python_versions": [
@@ -15,24 +15,15 @@
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_reconnection.py"
+    "tests/v3/test_harnesses.py::test_disabled_nebula_knowledge_does_not_suppress_installed_skills",
+    "tests/v3/test_harnesses.py::test_harness_gateway_queries_scoped_knowledge_with_citations",
+    "tests/v3/test_harnesses.py::test_harness_enables_available_knowledge_runtime_before_sources_exist",
+    "tests/v3/test_harnesses.py::test_harness_gateway_catalog_hides_knowledge_without_turn_access",
+    "tests/v3/test_harnesses.py::test_knowledge_access_change_refreshes_fixed_gateway_catalog",
+    "tests/v3/test_harnesses.py::test_browser_attachment_refreshes_catalog_without_replacing_native_thread",
+    "tests/v3/test_harnesses.py::test_harness_chat_enables_direct_knowledge_with_privacy_confirmation"
   ],
-  "frontend": [
-    "ui/src/pages/chatProgressContent.test.ts"
-  ],
-  "playwright": [
-    "entry:conversation-progress/assistant-real-desktop",
-    "entry:conversation-progress/assistant-real-chromium-390",
-    "entry:conversation-progress/assistant-real-webkit-390",
-    "entry:provider-goal-lifecycle-core/assistant-real-desktop",
-    "entry:provider-goal-lifecycle-core/assistant-real-chromium-390",
-    "entry:provider-goal-lifecycle-core/assistant-real-webkit-390",
-    "entry:provider-goal-skills-core/assistant-real-desktop",
-    "entry:provider-goal-skills-core/assistant-real-chromium-390",
-    "entry:provider-goal-skills-core/assistant-real-webkit-390",
-    "entry:side-chat-active/assistant-real-desktop",
-    "entry:side-chat-active/assistant-real-chromium-390",
-    "entry:side-chat-active/assistant-real-webkit-390"
-  ],
+  "frontend": [],
+  "playwright": [],
   "native": []
 }
