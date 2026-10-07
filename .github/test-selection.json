@@ -1,5 +1,5 @@
 {
-  "change_digest": "08dbd6750dbc4d027b01aa7174eb8db7b92a78f85bd957f073320d47d6989843",
+  "change_digest": "fb72aaa5693572e538b961a418843b85551e48dc44308443efec3c6db1e2627b",
   "reviewed_by": "Codex focused coverage review",
   "reason": "Restore Intel Atlas as a cross-project research view. Three API tests cover map projection, current Work authority, unknown lane and binary evidence, simulation records, and bounded document reads. Seven component tests cover entry, source state, filtering, document preview, and retry. Eight focused browser entries exercise the Atlas journey and full tab-label geometry at desktop 1440 and 1024 px and mobile Chromium and WebKit at 320, 390, and 430 px.",
   "exclusions": "No native code changed. Native and unrelated Python, frontend, and browser tests are excluded. The browser fixture uses a mocked Core response for layout, navigation, reload, and accessibility; a separate live Core and production LAN check is required before an unqualified completion claim. No full suite is authorized.",
