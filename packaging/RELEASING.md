@@ -148,6 +148,8 @@ Before publishing the draft, a release manager must verify:
 Publishing the draft triggers channel-specific Linux updater manifest
 generation on GitHub Pages. Confirm that workflow succeeds and preserves the
 existing website before announcing the release.
+The updater publisher also checks that the initiating actor is a repository
+admin before its protected job runs.
 
 If the updater-manifest workflow itself needs a post-publication repair, merge
 the workflow fix to `main`, set `release_tag` to that immutable published tag,
