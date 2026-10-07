@@ -714,8 +714,8 @@ def test_disabled_nebula_knowledge_does_not_suppress_installed_skills():
         not in instructions
     )
     assert (
-        "The knowledge capability state governs only knowledge.list and "
-        "knowledge.search; it does not constrain explicitly invoked installed skills"
+        "Knowledge retrieval is available only through the advertised knowledge "
+        "tools; it does not constrain explicitly invoked installed skills"
         in instructions
     )
 
@@ -2273,7 +2273,7 @@ def test_harness_gateway_queries_scoped_knowledge_with_citations(tmp_path):
             mcp_server_ids=[],
         )
         session = store.get(HarnessSession, harness_turn.harness_session_id)
-        catalog = runtime._gateway_catalog(session)["tools"]
+        catalog = runtime._gateway_catalog(session, turn=harness_turn)["tools"]
         assert (
             next(item for item in catalog if item["name"] == "knowledge.search")[
                 "inputSchema"
@@ -2420,8 +2420,6 @@ def test_harness_answers_cite_weak_search_results_only_when_they_use_them(tmp_pa
 
 
 def test_harness_enables_available_knowledge_runtime_before_sources_exist(tmp_path):
-    from nebula.v3.harnesses import _harness_turn_prompt
-
     store, engagement, profile, _, _, runtime = _runtime(tmp_path)
     service = ChatService(store)
     runtime.bind_knowledge_retriever(
@@ -2446,7 +2444,94 @@ def test_harness_enables_available_knowledge_runtime_before_sources_exist(tmp_pa
     )
 
     assert harness_turn.metadata["knowledge_access"] is True
-    assert '"knowledge.list":"enabled"' in _harness_turn_prompt(harness_turn)
+    session = store.get(HarnessSession, harness_turn.harness_session_id)
+    assert {
+        item["name"]
+        for item in runtime._gateway_catalog(session, turn=harness_turn)["tools"]
+    } >= {"knowledge.list", "knowledge.search"}
+
+
+def test_harness_gateway_catalog_hides_knowledge_without_turn_access(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, _, runtime = _runtime(tmp_path)
+        retrieval_calls = []
+        runtime.bind_knowledge_retriever(
+            lambda engagement_id, query, allow_local_only, token_budget: (
+                retrieval_calls.append(query)
+            )
+        )
+        _, _, turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Do not search knowledge",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+            include_knowledge=False,
+        )
+        session = store.get(HarnessSession, turn.harness_session_id)
+        assert turn.metadata["knowledge_access"] is False
+        assert not {
+            item["name"]
+            for item in runtime._gateway_catalog(session, turn=turn)["tools"]
+        } & {"knowledge.list", "knowledge.search"}
+
+        runtime._active[session.id] = SimpleNamespace(
+            turn_id=turn.id, connection=None, task=None
+        )
+        response = await runtime._gateway_call(
+            session, "knowledge.search", {"query": "private marker"}
+        )
+        assert response["isError"] is True
+        assert response["structuredContent"]["side_effects"] == "none"
+        assert retrieval_calls == []
+        runtime._active.pop(session.id)
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
+
+
+def test_knowledge_access_change_refreshes_fixed_gateway_catalog(tmp_path):
+    async def scenario() -> None:
+        store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
+        runtime.bind_knowledge_retriever(lambda *_args, **_kwargs: None)
+        _, _, disabled_turn = runtime.prepare_chat(
+            engagement_id=engagement.id,
+            profile_id=profile.id,
+            model=None,
+            prompt="Continue this conversation",
+            chat_session_id=None,
+            harness_session_id=None,
+            mcp_server_ids=[],
+            include_knowledge=False,
+        )
+        session = store.get(HarnessSession, disabled_turn.harness_session_id)
+        first = await runtime._connection(session, disabled_turn)
+        assert not {item["name"] for item in adapter.opens[0].gateway_tools} & {
+            "knowledge.list",
+            "knowledge.search",
+        }
+
+        session = store.update(
+            HarnessSession,
+            session.id,
+            {"external_session_id": "same-native-thread"},
+            expected_revision=session.revision,
+        )
+        enabled_turn = disabled_turn.model_copy(
+            update={"metadata": {**disabled_turn.metadata, "knowledge_access": True}}
+        )
+        second = await runtime._connection(session, enabled_turn)
+        assert second is not first and first.closed
+        assert adapter.opens[-1].session.external_session_id == "same-native-thread"
+        assert {item["name"] for item in adapter.opens[-1].gateway_tools} >= {
+            "knowledge.list",
+            "knowledge.search",
+        }
+        await runtime.close_session(session.id)
+
+    asyncio.run(scenario())
 
 
 def test_harness_gateway_queries_workspace_library_without_project_sources(tmp_path):
@@ -2581,7 +2666,7 @@ def test_harness_gateway_lists_scoped_sources_with_url_metadata(tmp_path):
             include_knowledge=True,
         )
         session = store.get(HarnessSession, harness_turn.harness_session_id)
-        catalog = runtime._gateway_catalog(session)["tools"]
+        catalog = runtime._gateway_catalog(session, turn=harness_turn)["tools"]
         assert {
             item["name"] for item in catalog if item["name"].startswith("knowledge.")
         } == {"knowledge.list", "knowledge.search"}
@@ -3229,7 +3314,10 @@ def test_transport_loss_and_restart_interrupt_without_replay(tmp_path):
         assert failed.status == HarnessTurnStatus.INTERRUPTED
         assert store.get(ChatTurn, chat_turn.id).status.value == "interrupted"
         assert len(adapter.connections[0].prompts) == 1
-        assert 'knowledge.list":"disabled"' in adapter.connections[0].prompts[0]
+        assert (
+            "BEGIN NEBULA TURN CAPABILITY STATE"
+            not in adapter.connections[0].prompts[0]
+        )
         assert (
             "BEGIN OPERATOR REQUEST\nDo not replay me\nEND OPERATOR REQUEST"
             in adapter.connections[0].prompts[0]
@@ -3455,8 +3543,6 @@ def test_nebula_side_failure_mid_stream_interrupts_the_vendor_turn(
 
 
 def test_browser_attachment_refreshes_catalog_without_replacing_native_thread(tmp_path):
-    from nebula.v3.harnesses import _harness_turn_prompt
-
     async def scenario() -> None:
         store, engagement, profile, _, adapter, runtime = _runtime(tmp_path)
         chat, _, turn = runtime.prepare_chat(
@@ -3469,16 +3555,9 @@ def test_browser_attachment_refreshes_catalog_without_replacing_native_thread(tm
             mcp_server_ids=[],
         )
         session = store.get(HarnessSession, turn.harness_session_id)
-        assert '"browser.companion":"disabled"' in _harness_turn_prompt(turn)
-        assert '"browser.companion":"enabled"' in _harness_turn_prompt(
-            turn.model_copy(
-                update={
-                    "metadata": {
-                        **turn.metadata,
-                        "browser_companion_session_id": "attached-browser",
-                    }
-                }
-            )
+        assert not any(
+            item["name"] == "browser.companion"
+            for item in runtime._gateway_catalog(session, turn=turn)["tools"]
         )
         first = await runtime._connection(session, turn)
         assert not any(
@@ -3495,6 +3574,10 @@ def test_browser_attachment_refreshes_catalog_without_replacing_native_thread(tm
                     "browser_companion_session_id": "attached-browser",
                 },
             },
+        )
+        assert any(
+            item["name"] == "browser.companion"
+            for item in runtime._gateway_catalog(session, turn=turn)["tools"]
         )
         second = await runtime._connection(session, turn)
         assert second is not first and first.closed
@@ -4309,8 +4392,14 @@ def test_harness_chat_enables_direct_knowledge_with_privacy_confirmation(tmp_pat
         assert allowed.status_code == 200, allowed.text
         assert allowed.json()["citations"] == []
         assert "HARNESS_KNOWLEDGE_443" not in adapter.connections[0].prompts[0]
-        assert '"knowledge.list":"enabled"' in adapter.connections[0].prompts[0]
-        assert '"knowledge.search":"enabled"' in adapter.connections[0].prompts[0]
+        assert (
+            "BEGIN NEBULA TURN CAPABILITY STATE"
+            not in adapter.connections[0].prompts[0]
+        )
+        assert (
+            "BEGIN OPERATOR REQUEST\nWhat harness marker is relevant?\nEND OPERATOR REQUEST"
+            in adapter.connections[0].prompts[0]
+        )
         assigned_gateway_tools = {
             item["name"] for item in adapter.connections[0].request.gateway_tools
         }
@@ -4320,7 +4409,7 @@ def test_harness_chat_enables_direct_knowledge_with_privacy_confirmation(tmp_pat
         session = store.get(HarnessSession, harness_turn.harness_session_id)
         assert any(
             item["name"] == "knowledge.search"
-            for item in runtime._gateway_catalog(session)["tools"]
+            for item in runtime._gateway_catalog(session, turn=harness_turn)["tools"]
         )
         messages = [
             item

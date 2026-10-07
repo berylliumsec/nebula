@@ -911,7 +911,7 @@ def _harness_developer_instructions(
             else ""
         )
         + (
-            "The knowledge capability state governs only knowledge.list and knowledge.search; it does not constrain explicitly invoked installed skills. "
+            "Knowledge retrieval is available only through the advertised knowledge tools; it does not constrain explicitly invoked installed skills. "
             if capabilities.skills
             else ""
         )
@@ -936,26 +936,7 @@ def _codex_developer_instructions(
 def _harness_turn_prompt(turn: HarnessTurn) -> str:
     if turn.origin != HarnessTurnOrigin.CHAT:
         return turn.prompt
-    knowledge_enabled = turn.metadata.get("knowledge_access") is True
-    capability_state = json.dumps(
-        {
-            "browser.companion": "enabled"
-            if turn.metadata.get("browser_companion_session_id")
-            else "disabled",
-            "knowledge.list": "enabled" if knowledge_enabled else "disabled",
-            "knowledge.search": "enabled" if knowledge_enabled else "disabled",
-            "knowledge_scope": "current_engagement" if knowledge_enabled else None,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return (
-        "BEGIN NEBULA TURN CAPABILITY STATE (CORE-GENERATED)\n"
-        + capability_state
-        + "\nEND NEBULA TURN CAPABILITY STATE\n"
-        "BEGIN OPERATOR REQUEST\n" + turn.prompt + "\nEND OPERATOR REQUEST"
-    )
+    return "BEGIN OPERATOR REQUEST\n" + turn.prompt + "\nEND OPERATOR REQUEST"
 
 
 def _gateway_oci_input_schema(spec: ToolSpec) -> dict[str, Any]:
@@ -8131,6 +8112,7 @@ class HarnessRuntimeService:
         self._connections: dict[str, HarnessConnection] = {}
         self._connection_browser_bindings: dict[str, str | None] = {}
         self._connection_subagent_bindings: dict[str, str | None] = {}
+        self._connection_knowledge_bindings: dict[str, bool] = {}
         self.provider_subagents: SubagentService | None = None
         self.agent_messages: AgentMessageService | None = None
         self._gateways: dict[str, McpGatewaySession] = {}
@@ -8635,6 +8617,7 @@ class HarnessRuntimeService:
         )
         self._connections.clear()
         self._connection_browser_bindings.clear()
+        self._connection_knowledge_bindings.clear()
         await gather_diagnostic(
             *(gateway.close() for gateway in self._gateways.values()),
             feature="harnesses",
@@ -9797,6 +9780,7 @@ class HarnessRuntimeService:
         connection = self._connections.pop(session_id, None)
         self._connection_browser_bindings.pop(session_id, None)
         self._connection_subagent_bindings.pop(session_id, None)
+        self._connection_knowledge_bindings.pop(session_id, None)
         if connection is not None:
             await connection.close()
         gateway = self._gateways.pop(session_id, None)
@@ -13054,7 +13038,11 @@ class HarnessRuntimeService:
         )
 
     def _gateway_catalog(
-        self, session: HarnessSession, params: dict[str, Any] | None = None
+        self,
+        session: HarnessSession,
+        params: dict[str, Any] | None = None,
+        *,
+        turn: HarnessTurn | None = None,
     ) -> dict[str, Any]:
         tools: list[dict[str, Any]] = []
         current = self.store.get(HarnessSession, session.id)
@@ -13070,7 +13058,15 @@ class HarnessRuntimeService:
 
         mapping: dict[str, tuple[McpServerProfile, McpToolSnapshot]] = {}
         oci_mapping: dict[str, str] = {}
-        if self.knowledge_retriever is not None:
+        if turn is None:
+            active = self._active.get(current.id)
+            if active is not None:
+                turn = self.store.get(HarnessTurn, active.turn_id)
+        if (
+            self.knowledge_retriever is not None
+            and turn is not None
+            and turn.metadata.get("knowledge_access") is True
+        ):
             for name, description in (
                 (
                     "knowledge.list",
@@ -13348,9 +13344,12 @@ class HarnessRuntimeService:
         cursor = None
         seen_cursors: set[str] = set()
         try:
+            turn = self._active_gateway_turn(session.id)
             for _ in range(64):
                 catalog = self._gateway_catalog(
-                    session, {"cursor": cursor} if cursor else None
+                    session,
+                    {"cursor": cursor} if cursor else None,
+                    turn=turn,
                 )
                 offered = next(
                     (item for item in catalog["tools"] if item["name"] == name),
@@ -14930,6 +14929,7 @@ class HarnessRuntimeService:
             self._connections.pop(session_id, None)
             self._connection_browser_bindings.pop(session_id, None)
             self._connection_subagent_bindings.pop(session_id, None)
+            self._connection_knowledge_bindings.pop(session_id, None)
         record_diagnostic(
             "info",
             "harnesses",
@@ -14965,6 +14965,7 @@ class HarnessRuntimeService:
         browser_binding = session.metadata.get("browser_companion_session_id")
         browser_binding = browser_binding if isinstance(browser_binding, str) else None
         subagent_binding = self._subagent_binding(session)
+        knowledge_binding = turn.metadata.get("knowledge_access") is True
         existing = self._connections.get(session.id)
         if existing is not None:
             stale_reason = (
@@ -14978,6 +14979,10 @@ class HarnessRuntimeService:
                 else "subagent_binding_changed"
                 if self._connection_subagent_bindings.get(session.id)
                 != subagent_binding
+                # Knowledge tools are part of this fixed MCP catalog too.
+                else "knowledge_binding_changed"
+                if self._connection_knowledge_bindings.get(session.id)
+                != knowledge_binding
                 # The vendor process died between turns; writing to it would
                 # fail every later turn on this session.
                 else "disconnected"
@@ -15063,7 +15068,7 @@ class HarnessRuntimeService:
         portable_names = profile.kind == HarnessKind.GROK_ACP
 
         def gateway_catalog(params: dict[str, Any]) -> dict[str, Any]:
-            catalog = self._gateway_catalog(session, params)
+            catalog = self._gateway_catalog(session, params, turn=turn)
             if not portable_names:
                 return catalog
             return {
@@ -15078,7 +15083,7 @@ class HarnessRuntimeService:
             if portable_names:
                 matches = [
                     tool["name"]
-                    for tool in self._gateway_catalog(session)["tools"]
+                    for tool in self._gateway_catalog(session, turn=turn)["tools"]
                     if _portable_gateway_tool_name(tool["name"]) == name
                 ]
                 if len(matches) != 1:
@@ -15166,6 +15171,7 @@ class HarnessRuntimeService:
         self._connections[session.id] = connection
         self._connection_browser_bindings[session.id] = browser_binding
         self._connection_subagent_bindings[session.id] = subagent_binding
+        self._connection_knowledge_bindings[session.id] = knowledge_binding
         return connection
 
     def _subagent_binding(self, session: HarnessSession) -> str | None:
