@@ -89,6 +89,19 @@ def test_protected_release_jobs_do_not_create_deployment_records():
         }
 
 
+def test_release_entry_points_require_an_admin_before_using_release_credentials():
+    for workflow_name in ("nebula3-release.yml", "nebula3-release-finalize.yml"):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+        )
+        steps = workflow["jobs"]["validate"]["steps"]
+        guard = steps[0]
+        assert guard["env"]["RELEASE_ACTOR"] == "${{ github.actor }}"
+        assert "collaborators/$RELEASE_ACTOR/permission" in guard["run"]
+        assert 'test "$permission" = admin' in guard["run"]
+        assert "actions/checkout" in steps[1]["uses"]
+
+
 def test_apt_repository_scaffold_is_secret_free_and_verifies_promotions():
     repository = ROOT / "packaging/repositories/nebula-apt"
     required = (

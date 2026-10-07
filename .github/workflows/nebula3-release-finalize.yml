@@ -34,6 +34,13 @@ jobs:
       prerelease: ${{ steps.release.outputs.prerelease }}
       commit: ${{ steps.release.outputs.commit }}
     steps:
+      - name: Require repository admin for release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTOR: ${{ github.actor }}
+        run: |
+          permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$RELEASE_ACTOR/permission" --jq .permission)"
+          test "$permission" = admin || { echo 'Only repository admins may draft a release.' >&2; exit 1; }
       - name: Check out the immutable release tag
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
