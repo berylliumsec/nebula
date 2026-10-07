@@ -21,9 +21,12 @@ into the signed APT repository.
 
 ## One-time repository setup
 
-Create a protected GitHub environment named `desktop-release`. Require release
-manager approval and restrict deployment branches and tags according to the
-repository policy. Define these environment secrets:
+Create a GitHub environment named `desktop-release` and restrict deployment
+branches and tags according to the repository policy. Release tags are
+admin-restricted, and both preparation and draft workflows verify the initiating
+actor's repository admin permission before reaching this environment. Admin
+release jobs therefore enter without a second reviewer. Define these
+environment secrets:
 
 - `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for the
   AppImage updater signature.

@@ -1,21 +1,15 @@
 {
-  "change_digest": "569a6e422a378742fe75af6f20f731577c99cb48936b89d349ca7af44f43a985",
+  "change_digest": "9736d90a33387287feef2eb19d6b56a2d555fd4872b81643adf275038220688c",
   "reviewed_by": "Codex focused coverage review",
-  "reason": "Correct the subagent capability selection report for harness turns while preserving provider-chat opt-in behavior. Three exact backend tests cover the harness gateway response and launch, a disabled harness setting, and provider-chat disabled/enabled selection.",
-  "exclusions": "No frontend code, visual layout, browser origin, persistence schema, native runtime, or packaging behavior changed. Frontend, Playwright, native, unrelated Python tests, and full suites are excluded. The harness gateway integration test exercises the server-side operator journey without a browser UI change.",
-  "expected_tests": {
-    "python": 3,
-    "frontend": 0,
-    "playwright": 0,
-    "native": 0
-  },
+  "reason": "Beta.3 synchronizes package versions and restricts release preparation and draft entry points to repository admins. The selected packaging tests verify both contracts.",
+  "exclusions": "No application UI, chat behavior, browser origin, persistence, or native behavior changes in this diff. Frontend, Playwright, native, unrelated Python tests, and full suites are excluded; release preparation separately runs its reviewed impact selection and package checks.",
+  "expected_tests": {"python": 2, "frontend": 0, "playwright": 0, "native": 0},
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_chat_subagents.py::test_subagent_tools_require_opt_in",
-    "tests/v3/test_harness_provider_subagents.py::test_harness_mission_supervisor_uses_chat_gateway_and_records_child",
-    "tests/v3/test_harness_provider_subagents.py::test_subagent_tools_follow_the_chat_setting"
+    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
+    "tests/v3/test_packaging.py::test_release_entry_points_require_an_admin_before_using_release_credentials"
   ],
   "frontend": [],
   "playwright": [],
