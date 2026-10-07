@@ -1,27 +1,21 @@
 {
-  "change_digest": "36a3cb733468af43381b5d8f2da858fbd5f559b8697740c6fb3648cd35252715",
+  "change_digest": "569a6e422a378742fe75af6f20f731577c99cb48936b89d349ca7af44f43a985",
   "reviewed_by": "Codex focused coverage review",
-  "reason": "Expose knowledge gateway tools only when the active harness turn grants access, remove the redundant prompt capability block, and refresh a fixed vendor catalog when that grant changes. Seven exact harness tests cover disabled and enabled discovery, scoped use, connection refresh, browser catalog preservation, and the Core chat entry point.",
-  "exclusions": "No frontend, visual layout, browser-origin, LAN, native, or packaging behavior changed. Unrelated Python tests and all full suites are excluded.",
+  "reason": "Correct the subagent capability selection report for harness turns while preserving provider-chat opt-in behavior. Three exact backend tests cover the harness gateway response and launch, a disabled harness setting, and provider-chat disabled/enabled selection.",
+  "exclusions": "No frontend code, visual layout, browser origin, persistence schema, native runtime, or packaging behavior changed. Frontend, Playwright, native, unrelated Python tests, and full suites are excluded. The harness gateway integration test exercises the server-side operator journey without a browser UI change.",
   "expected_tests": {
-    "python": 7,
+    "python": 3,
     "frontend": 0,
     "playwright": 0,
     "native": 0
   },
-  "python_versions": [
-    "3.12"
-  ],
+  "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
   "python": [
-    "tests/v3/test_harnesses.py::test_disabled_nebula_knowledge_does_not_suppress_installed_skills",
-    "tests/v3/test_harnesses.py::test_harness_gateway_queries_scoped_knowledge_with_citations",
-    "tests/v3/test_harnesses.py::test_harness_enables_available_knowledge_runtime_before_sources_exist",
-    "tests/v3/test_harnesses.py::test_harness_gateway_catalog_hides_knowledge_without_turn_access",
-    "tests/v3/test_harnesses.py::test_knowledge_access_change_refreshes_fixed_gateway_catalog",
-    "tests/v3/test_harnesses.py::test_browser_attachment_refreshes_catalog_without_replacing_native_thread",
-    "tests/v3/test_harnesses.py::test_harness_chat_enables_direct_knowledge_with_privacy_confirmation"
+    "tests/v3/test_chat_subagents.py::test_subagent_tools_require_opt_in",
+    "tests/v3/test_harness_provider_subagents.py::test_harness_mission_supervisor_uses_chat_gateway_and_records_child",
+    "tests/v3/test_harness_provider_subagents.py::test_subagent_tools_follow_the_chat_setting"
   ],
   "frontend": [],
   "playwright": [],
