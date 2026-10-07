@@ -1408,7 +1408,11 @@ class SubagentService:
             },
             "subagents": {
                 "available": depth + 1 < SUBAGENT_DEPTH_CEILING,
-                "selected": bool(snapshot.get("allow_subagents")),
+                "selected": bool(
+                    snapshot.get("provider_subagent")
+                    if turn.backend == ChatBackend.HARNESS
+                    else snapshot.get("allow_subagents")
+                ),
                 "depth": depth,
                 "max_depth": SUBAGENT_DEPTH_CEILING,
             },

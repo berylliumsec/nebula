@@ -413,6 +413,12 @@ def test_subagent_tools_require_opt_in(tmp_path: Path) -> None:
         provider = RoutedProvider([_response(text="plain")], [])
         store, project, _, chat = _setup(tmp_path, provider)
         prepared = await chat.prepare_async(_request(project, content="Hello"))
+        assert (
+            chat.subagents.available_capabilities(prepared.turn.id)["subagents"][
+                "selected"
+            ]
+            is False
+        )
         assert "start_subagent" not in (
             prepared.tool_components.specs if prepared.tool_components else {}
         )
@@ -431,6 +437,12 @@ def test_subagent_tools_require_opt_in(tmp_path: Path) -> None:
             "notes.write",
         } <= set(opted_in.tool_components.specs)
         assert opted_in.turn.request_snapshot["allow_subagents"] is True
+        assert (
+            chat.subagents.available_capabilities(opted_in.turn.id)["subagents"][
+                "selected"
+            ]
+            is True
+        )
         await chat.shutdown()
 
     asyncio.run(scenario())

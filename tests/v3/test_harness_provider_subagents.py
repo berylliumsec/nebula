@@ -416,6 +416,7 @@ def test_harness_mission_supervisor_uses_chat_gateway_and_records_child(tmp_path
                 return "Final Mission result."
             catalog = _payload(await connection.call("subagent.capabilities"))
             assert catalog["subagents"]["available"] is True
+            assert catalog["subagents"]["selected"] is True
             _payload(
                 await connection.call(
                     "subagent.start",
@@ -687,8 +688,14 @@ def test_stopping_the_harness_turn_stops_its_subagents(tmp_path):
 def test_subagent_tools_follow_the_chat_setting(tmp_path):
     async def scenario() -> None:
         store, project, harness, chat, adapter, runtime = _setup(tmp_path)
-        parent_chat, _, off_turn = _prepare(
+        parent_chat, off_chat_turn, off_turn = _prepare(
             runtime, project, harness, "No delegation.", setting=None
+        )
+        assert (
+            chat.subagents.available_capabilities(off_chat_turn.id)["subagents"][
+                "selected"
+            ]
+            is False
         )
         session = store.get(HarnessSession, off_turn.harness_session_id)
         names = {item["name"] for item in runtime._gateway_catalog(session)["tools"]}
