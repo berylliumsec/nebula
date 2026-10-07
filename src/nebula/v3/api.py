@@ -7386,7 +7386,9 @@ def create_app(
         tags=["atlas"],
         dependencies=[Depends(require_auth)],
     )
-    def get_intel_atlas_document(document_id: str, response: Response) -> dict[str, Any]:
+    def get_intel_atlas_document(
+        document_id: str, response: Response
+    ) -> dict[str, Any]:
         response.headers["Cache-Control"] = "no-store"
         document = atlas_document(store, document_id)
         if document is None:

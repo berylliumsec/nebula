@@ -33,7 +33,14 @@ FEATURED_DOCUMENTS = {
     "REMOTE_MAC_DATA_INGRESS_MAP.md": "threat",
     "KERNEL_DIRECT_EXTERNAL_INPUT_PROJECT_MAP.md": "kernel",
 }
-SKIP_DIRS = {".git", "node_modules", "scratch_space", "simulation_results", "runtime_artifacts", ".venv"}
+SKIP_DIRS = {
+    ".git",
+    "node_modules",
+    "scratch_space",
+    "simulation_results",
+    "runtime_artifacts",
+    ".venv",
+}
 OPEN_LANE_STATUSES = {"open", "needs_simulation", "ready_for_runtime", "stale"}
 MAX_MAP_BYTES = 2_000_000
 MAX_DOCUMENTS = 1_500
@@ -101,14 +108,20 @@ def _memberships(markdown: str) -> dict[str, dict[str, set[str]]]:
     table = markdown.split("## Surface-to-project index", 1)
     section = table[1].split("\n## ", 1)[0] if len(table) == 2 else ""
     for line in section.splitlines():
-        if not line.startswith("|") or line.startswith("| ---") or line.startswith("| Grand threat surface"):
+        if (
+            not line.startswith("|")
+            or line.startswith("| ---")
+            or line.startswith("| Grand threat surface")
+        ):
             continue
         cells = [cell.strip() for cell in line.split("|")[1:-1]]
         if len(cells) < 3:
             continue
         for cell, role in ((cells[1], "focused"), (cells[2], "supporting")):
             for project_path in re.findall(r"\]\((projects/[^)#]+)\)", cell):
-                entry = membership.setdefault(project_path.rstrip("/"), {"surfaces": set(), "roles": set()})
+                entry = membership.setdefault(
+                    project_path.rstrip("/"), {"surfaces": set(), "roles": set()}
+                )
                 entry["surfaces"].add(cells[0])
                 entry["roles"].add(role)
     stage = "Additional map anchor"
@@ -116,13 +129,22 @@ def _memberships(markdown: str) -> dict[str, dict[str, set[str]]]:
         if line.startswith("### "):
             stage = line[4:]
         for project_path in re.findall(r"\]\((projects/[^)#]+)\)", line):
-            membership.setdefault(project_path.rstrip("/"), {"surfaces": {stage}, "roles": {"stage anchor"}})
+            membership.setdefault(
+                project_path.rstrip("/"),
+                {"surfaces": {stage}, "roles": {"stage anchor"}},
+            )
     return membership
 
 
 def _lanes(project: Path) -> dict[str, Any]:
-    unknown = {"indexed": False, "total": None, "open": None, "needsSimulation": None,
-               "readyForRuntime": None, "stale": None}
+    unknown = {
+        "indexed": False,
+        "total": None,
+        "open": None,
+        "needsSimulation": None,
+        "readyForRuntime": None,
+        "stale": None,
+    }
     lane_path = project / "artifacts/knowledge/research_lanes.jsonl"
     raw = _read_text(lane_path, MAX_LANE_BYTES) if _within(project, lane_path) else None
     if raw is None:
@@ -137,50 +159,99 @@ def _lanes(project: Path) -> dict[str, Any]:
     statuses = []
     for row in rows:
         status = row.get("status") if isinstance(row, dict) else None
-        if (status == "bounded" and row.get("symexec_required") is True
-                and row.get("symexec_requirement_source") in {"lane_regression", "memop_regression"}
-                and row.get("symexec_validated") is not True):
+        if (
+            status == "bounded"
+            and row.get("symexec_required") is True
+            and row.get("symexec_requirement_source")
+            in {"lane_regression", "memop_regression"}
+            and row.get("symexec_validated") is not True
+        ):
             status = "needs_simulation"
         statuses.append(status)
-    return {"indexed": True, "total": len(rows),
-            "open": sum(status in OPEN_LANE_STATUSES for status in statuses),
-            "needsSimulation": statuses.count("needs_simulation"),
-            "readyForRuntime": statuses.count("ready_for_runtime"),
-            "stale": statuses.count("stale")}
+    return {
+        "indexed": True,
+        "total": len(rows),
+        "open": sum(status in OPEN_LANE_STATUSES for status in statuses),
+        "needsSimulation": statuses.count("needs_simulation"),
+        "readyForRuntime": statuses.count("ready_for_runtime"),
+        "stale": statuses.count("stale"),
+    }
 
 
-def _v2_migration(project: Path, audit: dict[str, Any] | None, audited_at: str | None) -> dict[str, Any]:
+def _v2_migration(
+    project: Path, audit: dict[str, Any] | None, audited_at: str | None
+) -> dict[str, Any]:
     evidence = project / "artifacts/evidence"
     status, label, detail = "not_migrated", "Not migrated", "No v2 graph or sidecar."
     manifest_path = evidence / "graph_manifest.json"
     if manifest_path.exists() and _within(project, manifest_path):
         manifest = _json(manifest_path)
-        if isinstance(manifest, dict) and manifest.get("schema_version") == "2.0" and manifest.get("mode") in {"canonical", "shadow"}:
+        if (
+            isinstance(manifest, dict)
+            and manifest.get("schema_version") == "2.0"
+            and manifest.get("mode") in {"canonical", "shadow"}
+        ):
             nodes = evidence / "investigation_nodes.jsonl"
             edges = evidence / "investigation_edges.jsonl"
-            if (not _within(project, nodes) or not _within(project, edges)
-                    or not nodes.is_file() or nodes.stat().st_size == 0 or not edges.is_file()):
-                status, label, detail = "incomplete", "V2 graph incomplete", "Typed graph files are missing."
+            if (
+                not _within(project, nodes)
+                or not _within(project, edges)
+                or not nodes.is_file()
+                or nodes.stat().st_size == 0
+                or not edges.is_file()
+            ):
+                status, label, detail = (
+                    "incomplete",
+                    "V2 graph incomplete",
+                    "Typed graph files are missing.",
+                )
             else:
                 mode = manifest["mode"]
-                status, label = f"{mode}_v2", "Canonical v2" if mode == "canonical" else "Shadow v2"
-                detail = "Canonical cutover recorded." if mode == "canonical" else "Canonical cutover incomplete."
+                status, label = (
+                    f"{mode}_v2",
+                    "Canonical v2" if mode == "canonical" else "Shadow v2",
+                )
+                detail = (
+                    "Canonical cutover recorded."
+                    if mode == "canonical"
+                    else "Canonical cutover incomplete."
+                )
         else:
-            status, label, detail = "unknown", "Unknown migration state", "Graph manifest unreadable or unsupported."
+            status, label, detail = (
+                "unknown",
+                "Unknown migration state",
+                "Graph manifest unreadable or unsupported.",
+            )
     else:
         sidecar_path = evidence / "unresolved_import/manifest.json"
         if sidecar_path.exists() and _within(project, sidecar_path):
             sidecar = _json(sidecar_path)
             if isinstance(sidecar, dict) and sidecar.get("mode") == "unresolved_import":
-                status, label, detail = "provenance_only", "Provenance only", "Sidecar present; canonical migration incomplete."
+                status, label, detail = (
+                    "provenance_only",
+                    "Provenance only",
+                    "Sidecar present; canonical migration incomplete.",
+                )
             else:
-                status, label, detail = "unknown", "Unknown migration state", "Sidecar unreadable or unsupported."
+                status, label, detail = (
+                    "unknown",
+                    "Unknown migration state",
+                    "Sidecar unreadable or unsupported.",
+                )
     audit = audit if isinstance(audit, dict) else None
-    return {"status": status, "label": label, "detail": detail,
-            "validation": audit.get("validation", "not_audited") if audit else "not_audited",
-            "auditedAt": audited_at if audit else None,
-            "auditDetail": audit.get("detail", "No recorded validation audit.") if audit else "No recorded validation audit.",
-            "remainingGate": audit.get("remainingGate") if audit else None}
+    return {
+        "status": status,
+        "label": label,
+        "detail": detail,
+        "validation": audit.get("validation", "not_audited")
+        if audit
+        else "not_audited",
+        "auditedAt": audited_at if audit else None,
+        "auditDetail": audit.get("detail", "No recorded validation audit.")
+        if audit
+        else "No recorded validation audit.",
+        "remainingGate": audit.get("remainingGate") if audit else None,
+    }
 
 
 def _binaries(root: Path, project: Path) -> dict[str, Any]:
@@ -196,7 +267,7 @@ def _binaries(root: Path, project: Path) -> dict[str, Any]:
     seen: set[Path] = set()
     if isinstance(targets, list) and len(targets) > 100:
         return unknown
-    for target in (targets or []):
+    for target in targets or []:
         if not isinstance(target, dict):
             continue
         for key in ("analysisBinaryPath", "sourceBinaryPath"):
@@ -213,10 +284,23 @@ def _binaries(root: Path, project: Path) -> dict[str, Any]:
             if not path.is_file():
                 continue
             seen.add(path)
-            files.append({"name": path.name, "path": path.relative_to(root).as_posix(), "size": stat.st_size})
+            files.append(
+                {
+                    "name": path.name,
+                    "path": path.relative_to(root).as_posix(),
+                    "size": stat.st_size,
+                }
+            )
     if targets:
-        return ({"count": len(files), "totalBytes": sum(item["size"] for item in files), "files": files}
-                if files else unknown)
+        return (
+            {
+                "count": len(files),
+                "totalBytes": sum(item["size"] for item in files),
+                "files": files,
+            }
+            if files
+            else unknown
+        )
     # Older projects can hold local binary copies without project_metadata.json.
     local = project / "data/binaries"
     if not local.is_dir() or not _within(project, local):
@@ -235,12 +319,23 @@ def _binaries(root: Path, project: Path) -> dict[str, Any]:
                 size = path.stat().st_size
             except OSError:
                 continue
-            files.append({"name": name, "path": path.relative_to(root).as_posix(), "size": size})
-    return ({"count": len(files), "totalBytes": sum(item["size"] for item in files), "files": files}
-            if files else unknown)
+            files.append(
+                {"name": name, "path": path.relative_to(root).as_posix(), "size": size}
+            )
+    return (
+        {
+            "count": len(files),
+            "totalBytes": sum(item["size"] for item in files),
+            "files": files,
+        }
+        if files
+        else unknown
+    )
 
 
-def _document(root: Path, path: Path, kind: str, featured: bool = False) -> dict[str, Any] | None:
+def _document(
+    root: Path, path: Path, kind: str, featured: bool = False
+) -> dict[str, Any] | None:
     if root not in path.resolve().parents:
         return None
     try:
@@ -252,18 +347,40 @@ def _document(root: Path, path: Path, kind: str, featured: bool = False) -> dict
     except OSError:
         return None
     relative = path.relative_to(root).as_posix()
-    headings = [heading.replace("`", "") for heading in re.findall(r"^#{2,4}\s+(.+)$", raw, re.M)[:14]]
+    headings = [
+        heading.replace("`", "")
+        for heading in re.findall(r"^#{2,4}\s+(.+)$", raw, re.M)[:14]
+    ]
     title_match = re.search(r"^#\s+(.+)$", raw, re.M)
     title = title_match.group(1).replace("`", "") if title_match else path.stem
-    excerpt = re.sub(r"\s+", " ", re.sub(r"[#|`*_>~-]", " ", re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", re.sub(r"```[\s\S]*?```", " ", raw)))).strip()[:310]
-    return {"id": sha1(relative.encode()).hexdigest()[:12], "kind": kind, "featured": featured,
-            "project": relative.split("/")[1] if relative.startswith("projects/") else "cross-project",
-            "path": relative, "title": title, "excerpt": excerpt, "headings": headings,
-            "updatedAt": _iso(datetime.fromtimestamp(modified, timezone.utc))}
+    excerpt = re.sub(
+        r"\s+",
+        " ",
+        re.sub(
+            r"[#|`*_>~-]",
+            " ",
+            re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", re.sub(r"```[\s\S]*?```", " ", raw)),
+        ),
+    ).strip()[:310]
+    return {
+        "id": sha1(relative.encode()).hexdigest()[:12],
+        "kind": kind,
+        "featured": featured,
+        "project": relative.split("/")[1]
+        if relative.startswith("projects/")
+        else "cross-project",
+        "path": relative,
+        "title": title,
+        "excerpt": excerpt,
+        "headings": headings,
+        "updatedAt": _iso(datetime.fromtimestamp(modified, timezone.utc)),
+    }
 
 
 @lru_cache(maxsize=8)
-def _documents_cached(root: Path, thirty_second_bucket: int) -> tuple[dict[str, Any], ...]:
+def _documents_cached(
+    root: Path, thirty_second_bucket: int
+) -> tuple[dict[str, Any], ...]:
     records = []
     for name, kind in FEATURED_DOCUMENTS.items():
         record = _document(root, root / name, kind, True)
@@ -277,7 +394,11 @@ def _documents_cached(root: Path, thirty_second_bucket: int) -> tuple[dict[str, 
             visited += 1
             if visited > MAX_DIRS or len(records) >= MAX_DOCUMENTS:
                 break
-            dirs[:] = [name for name in dirs if name not in SKIP_DIRS and not name.startswith(".")]
+            dirs[:] = [
+                name
+                for name in dirs
+                if name not in SKIP_DIRS and not name.startswith(".")
+            ]
             for name in files:
                 kind = DOCUMENT_NAMES.get(name)
                 if kind:
@@ -286,7 +407,9 @@ def _documents_cached(root: Path, thirty_second_bucket: int) -> tuple[dict[str, 
                         records.append(record)
                     if len(records) >= MAX_DOCUMENTS:
                         break
-    records.sort(key=lambda record: (not record["featured"], record["title"].casefold()))
+    records.sort(
+        key=lambda record: (not record["featured"], record["title"].casefold())
+    )
     return tuple(records)
 
 
@@ -328,13 +451,19 @@ def _simulations(root: Path, projects: list[Path]) -> list[dict[str, Any]]:
                     continue
                 if not isinstance(row, dict):
                     continue
-                records.append({"project": project_name, "runKey": str(row.get("run_key") or "unknown-run"),
-                                "laneKey": row.get("lane_key"), "hypothesisKey": row.get("hypothesis_key"),
-                                "status": str(row.get("status") or "unknown"),
-                                "feasibility": str(row.get("feasibility") or "unknown"),
-                                "decisionImpact": str(row.get("decision_impact") or "unknown"),
-                                "summary": str(row.get("summary") or "")[:1200],
-                                "updatedAt": _iso(datetime.fromtimestamp(mtime, timezone.utc))})
+                records.append(
+                    {
+                        "project": project_name,
+                        "runKey": str(row.get("run_key") or "unknown-run"),
+                        "laneKey": row.get("lane_key"),
+                        "hypothesisKey": row.get("hypothesis_key"),
+                        "status": str(row.get("status") or "unknown"),
+                        "feasibility": str(row.get("feasibility") or "unknown"),
+                        "decisionImpact": str(row.get("decision_impact") or "unknown"),
+                        "summary": str(row.get("summary") or "")[:1200],
+                        "updatedAt": _iso(datetime.fromtimestamp(mtime, timezone.utc)),
+                    }
+                )
         except OSError:
             continue
     return sorted(records, key=lambda row: row["updatedAt"] or "", reverse=True)[:250]
@@ -344,12 +473,27 @@ def atlas_index(store: NebulaStore) -> dict[str, Any]:
     engagements = _engagements(store)
     root = _repository_root(engagements)
     generated_at = _iso(datetime.now(timezone.utc))
-    source = {"available": root is not None, "mapPath": MAP_NAME, "mapSnapshot": None,
-              "statusAuthority": "nebula-work", "migrationAuthority": "project-evidence-and-dated-audit"}
-    empty = {"generatedAt": generated_at, "source": source,
-             "counts": {"grandThreatProjects": 0, "openLanes": None, "needsSimulation": None,
-                        "documents": 0, "simulations": 0},
-             "grandThreatProjects": [], "documents": [], "simulations": []}
+    source = {
+        "available": root is not None,
+        "mapPath": MAP_NAME,
+        "mapSnapshot": None,
+        "statusAuthority": "nebula-work",
+        "migrationAuthority": "project-evidence-and-dated-audit",
+    }
+    empty = {
+        "generatedAt": generated_at,
+        "source": source,
+        "counts": {
+            "grandThreatProjects": 0,
+            "openLanes": None,
+            "needsSimulation": None,
+            "documents": 0,
+            "simulations": 0,
+        },
+        "grandThreatProjects": [],
+        "documents": [],
+        "simulations": [],
+    }
     if root is None:
         return empty
     markdown = _read_text(root / MAP_NAME, MAX_MAP_BYTES)
@@ -371,21 +515,35 @@ def atlas_index(store: NebulaStore) -> dict[str, Any]:
             continue
         existing = linked.get(workspace)
         # Prefer the active linked project; a later update wins within that class.
-        rank = (engagement.status == EngagementStatus.ACTIVE, engagement.status != EngagementStatus.ARCHIVED,
-                engagement.updated_at, engagement.id)
-        if existing is None or rank > (existing.status == EngagementStatus.ACTIVE,
-                                      existing.status != EngagementStatus.ARCHIVED,
-                                      existing.updated_at, existing.id):
+        rank = (
+            engagement.status == EngagementStatus.ACTIVE,
+            engagement.status != EngagementStatus.ARCHIVED,
+            engagement.updated_at,
+            engagement.id,
+        )
+        if existing is None or rank > (
+            existing.status == EngagementStatus.ACTIVE,
+            existing.status != EngagementStatus.ARCHIVED,
+            existing.updated_at,
+            existing.id,
+        ):
             linked[workspace] = engagement
     projects = []
     project_roots = []
     all_lanes_known = True
     open_lanes = needs_simulation = 0
     for relative, entry in sorted(membership.items()):
-        if not re.fullmatch(r"projects/(?:[^/]+/)*[^/]+", relative) or ".." in Path(relative).parts:
+        if (
+            not re.fullmatch(r"projects/(?:[^/]+/)*[^/]+", relative)
+            or ".." in Path(relative).parts
+        ):
             continue
         project = root / relative
-        if not project.is_dir() or project.is_symlink() or root not in project.resolve().parents:
+        if (
+            not project.is_dir()
+            or project.is_symlink()
+            or root not in project.resolve().parents
+        ):
             missing = True
             engagement = None
         else:
@@ -395,53 +553,123 @@ def atlas_index(store: NebulaStore) -> dict[str, Any]:
         work_item = None
         update = None
         if engagement and engagement.work_enabled:
-            items = store.find_entities(WorkItem, {"title": "Research status"},
-                                        engagement_id=engagement.id, limit=1, newest_first=True)
+            items = store.find_entities(
+                WorkItem,
+                {"title": "Research status"},
+                engagement_id=engagement.id,
+                limit=1,
+                newest_first=True,
+            )
             work_item = items[0] if items else None
             if work_item:
-                updates = store.find_entities(WorkUpdate, {"item_id": work_item.id},
-                                              engagement_id=engagement.id, limit=1, newest_first=True)
+                updates = store.find_entities(
+                    WorkUpdate,
+                    {"item_id": work_item.id},
+                    engagement_id=engagement.id,
+                    limit=1,
+                    newest_first=True,
+                )
                 update = updates[0] if updates else None
-        workflow = {"status": work_item.status if work_item else "unknown",
-                    "summary": update.summary if update else "No current Research status check-in.",
-                    "nextStep": update.next_step if update else None,
-                    "updatedAt": _iso(update.created_at if update else work_item.last_update_at if work_item else None),
-                    "source": "nebula-work" if work_item else "unknown"}
-        lanes = _lanes(project) if not missing else {"indexed": False, "total": None, "open": None,
-                                                     "needsSimulation": None, "readyForRuntime": None,
-                                                     "stale": None}
+        workflow = {
+            "status": work_item.status if work_item else "unknown",
+            "summary": update.summary
+            if update
+            else "No current Research status check-in.",
+            "nextStep": update.next_step if update else None,
+            "updatedAt": _iso(
+                update.created_at
+                if update
+                else work_item.last_update_at
+                if work_item
+                else None
+            ),
+            "source": "nebula-work" if work_item else "unknown",
+        }
+        lanes = (
+            _lanes(project)
+            if not missing
+            else {
+                "indexed": False,
+                "total": None,
+                "open": None,
+                "needsSimulation": None,
+                "readyForRuntime": None,
+                "stale": None,
+            }
+        )
         if not lanes["indexed"]:
             all_lanes_known = False
         else:
             open_lanes += lanes["open"]
             needs_simulation += lanes["needsSimulation"]
-        audit = audit_projects.get(relative) if isinstance(audit_projects, dict) else None
-        migration_status = "missing" if missing else "linked" if engagement else "unlinked"
-        project_record = {"name": project.name, "path": relative, "missing": missing,
-                          "surfaces": sorted(entry["surfaces"]), "roles": sorted(entry["roles"]),
-                          "lastWorkedAt": workflow["updatedAt"],
-                          "workspace": {"linked": engagement is not None, "engagementId": engagement.id if engagement else None},
-                          "workflow": workflow,
-                          "migration": {"status": migration_status,
-                                        "label": {"missing": "Missing project", "linked": "Linked workspace", "unlinked": "Unlinked workspace"}[migration_status],
-                                        "detail": "Current Nebula workspace link." if engagement else "No current Nebula workspace link."},
-                          "v2Migration": _v2_migration(project, audit, audited_at) if not missing else
-                                         {"status": "unknown", "label": "Missing project", "detail": "Project root missing.",
-                                          "validation": audit.get("validation", "not_audited") if isinstance(audit, dict) else "not_audited",
-                                          "auditedAt": audited_at if isinstance(audit, dict) else None,
-                                          "auditDetail": audit.get("detail", "No recorded validation audit.") if isinstance(audit, dict) else "No recorded validation audit.",
-                                          "remainingGate": audit.get("remainingGate") if isinstance(audit, dict) else None},
-                          "binaries": _binaries(root, project) if not missing else
-                                      {"count": None, "totalBytes": None, "files": []},
-                          "lanes": lanes}
+        audit = (
+            audit_projects.get(relative) if isinstance(audit_projects, dict) else None
+        )
+        migration_status = (
+            "missing" if missing else "linked" if engagement else "unlinked"
+        )
+        project_record = {
+            "name": project.name,
+            "path": relative,
+            "missing": missing,
+            "surfaces": sorted(entry["surfaces"]),
+            "roles": sorted(entry["roles"]),
+            "lastWorkedAt": workflow["updatedAt"],
+            "workspace": {
+                "linked": engagement is not None,
+                "engagementId": engagement.id if engagement else None,
+            },
+            "workflow": workflow,
+            "migration": {
+                "status": migration_status,
+                "label": {
+                    "missing": "Missing project",
+                    "linked": "Linked workspace",
+                    "unlinked": "Unlinked workspace",
+                }[migration_status],
+                "detail": "Current Nebula workspace link."
+                if engagement
+                else "No current Nebula workspace link.",
+            },
+            "v2Migration": _v2_migration(project, audit, audited_at)
+            if not missing
+            else {
+                "status": "unknown",
+                "label": "Missing project",
+                "detail": "Project root missing.",
+                "validation": audit.get("validation", "not_audited")
+                if isinstance(audit, dict)
+                else "not_audited",
+                "auditedAt": audited_at if isinstance(audit, dict) else None,
+                "auditDetail": audit.get("detail", "No recorded validation audit.")
+                if isinstance(audit, dict)
+                else "No recorded validation audit.",
+                "remainingGate": audit.get("remainingGate")
+                if isinstance(audit, dict)
+                else None,
+            },
+            "binaries": _binaries(root, project)
+            if not missing
+            else {"count": None, "totalBytes": None, "files": []},
+            "lanes": lanes,
+        }
         projects.append(project_record)
     documents = list(_documents_cached(root, int(time.monotonic() // 30)))
     simulations = _simulations(root, project_roots)
-    empty.update({"counts": {"grandThreatProjects": len(projects),
-                              "openLanes": open_lanes if all_lanes_known else None,
-                              "needsSimulation": needs_simulation if all_lanes_known else None,
-                              "documents": len(documents), "simulations": len(simulations)},
-                  "grandThreatProjects": projects, "documents": documents, "simulations": simulations})
+    empty.update(
+        {
+            "counts": {
+                "grandThreatProjects": len(projects),
+                "openLanes": open_lanes if all_lanes_known else None,
+                "needsSimulation": needs_simulation if all_lanes_known else None,
+                "documents": len(documents),
+                "simulations": len(simulations),
+            },
+            "grandThreatProjects": projects,
+            "documents": documents,
+            "simulations": simulations,
+        }
+    )
     return empty
 
 
@@ -452,7 +680,9 @@ def atlas_document(store: NebulaStore, document_id: str) -> dict[str, Any] | Non
     root = _repository_root(_engagements(store))
     if root is None:
         return None
-    record = next((item for item in index["documents"] if item["id"] == document_id), None)
+    record = next(
+        (item for item in index["documents"] if item["id"] == document_id), None
+    )
     if record is None:
         return None
     path = (root / record["path"]).resolve()
@@ -463,5 +693,8 @@ def atlas_document(store: NebulaStore, document_id: str) -> dict[str, Any] | Non
             payload = stream.read(MAX_DOCUMENT_BYTES + 1)
     except OSError:
         return None
-    return {**record, "content": payload[:MAX_DOCUMENT_BYTES].decode("utf-8", errors="replace"),
-            "truncated": len(payload) > MAX_DOCUMENT_BYTES}
+    return {
+        **record,
+        "content": payload[:MAX_DOCUMENT_BYTES].decode("utf-8", errors="replace"),
+        "truncated": len(payload) > MAX_DOCUMENT_BYTES,
+    }

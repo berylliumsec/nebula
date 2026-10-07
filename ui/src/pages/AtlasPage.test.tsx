@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DialogProvider } from "../components/DialogSystem";
 import { MobileMorePanel } from "../components/MobileMorePanel";
@@ -46,7 +46,8 @@ function CurrentLocation() {
 }
 
 function openAtlas(path = "/atlas") {
-  return render(<MemoryRouter initialEntries={[path]}><DialogProvider><Routes><Route path="/atlas" element={<AtlasPage />} /></Routes><CurrentLocation /></DialogProvider></MemoryRouter>);
+  window.history.replaceState({}, "", path);
+  return render(<BrowserRouter><DialogProvider><Routes><Route path="/atlas" element={<AtlasPage />} /></Routes><CurrentLocation /></DialogProvider></BrowserRouter>);
 }
 
 describe("Intel Atlas operator journey", () => {

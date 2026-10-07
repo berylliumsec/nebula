@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowRight, CircleAlert, FileText, RefreshCw, X } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ModalSurface } from "../components/DialogSystem";
+import { logCaughtDiagnostic } from "../diagnostics";
 import { projectSurface } from "../resourceRoutes";
 import { useWorkspace } from "../state/WorkspaceContext";
 import "./AtlasPage.css";
@@ -85,12 +86,12 @@ export function AtlasPage() {
   const [documentAttempt, setDocumentAttempt] = useState(0);
 
   const setParam = useCallback((key: string, value: string | null, replace = true) => {
-    setParams((current) => {
-      const next = new URLSearchParams(current);
-      if (value) next.set(key, value);
-      else next.delete(key);
-      return next;
-    }, { replace });
+    // The browser URL can move ahead of this render after a tab click. Read it
+    // at the event boundary so a fast search edit keeps the newly selected view.
+    const next = new URLSearchParams(window.location.search);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setParams(next, { replace });
   }, [setParams]);
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -102,7 +103,10 @@ export function AtlasPage() {
       setAtlas(next);
       setError(undefined);
     } catch (caught) {
-      if (!signal?.aborted) setError(errorText(caught));
+      if (!signal?.aborted) {
+        void logCaughtDiagnostic("interface.atlas_page.refresh_failed", "Intel Atlas could not be loaded.", caught, "atlas_page");
+        setError(errorText(caught));
+      }
     } finally {
       if (!signal?.aborted) { setLoading(false); setRefreshing(false); }
     }
@@ -121,7 +125,12 @@ export function AtlasPage() {
     setDocumentError(undefined);
     void api.request<AtlasDocumentDetail>(`atlas/documents/${encodeURIComponent(documentId)}`, { signal: controller.signal })
       .then((record) => { if (!controller.signal.aborted) setDocument(record); })
-      .catch((caught: unknown) => { if (!controller.signal.aborted) setDocumentError(errorText(caught)); });
+      .catch((caught: unknown) => {
+        if (!controller.signal.aborted) {
+          void logCaughtDiagnostic("interface.atlas_page.document_load_failed", "An Intel Atlas document could not be loaded.", caught, "atlas_page");
+          setDocumentError(errorText(caught));
+        }
+      });
     return () => controller.abort();
   }, [api, documentId, documentAttempt]);
 
