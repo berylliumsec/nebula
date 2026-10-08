@@ -46,7 +46,7 @@ const workspaces = [
   ["settings", "/settings", "Settings"],
 ] as const;
 
-const firstRunThemeTest = "Zero Dark is the first-run default theme";
+const firstRunThemeTest = "Studio Dark is the first-run default theme";
 
 const entity = {
   created_at: "2026-07-12T10:00:00Z",
@@ -683,7 +683,7 @@ async function openWorkspace(page: Page, route: string, heading: string) {
   await page.waitForTimeout(120);
 }
 
-async function setTheme(page: Page, theme: "light" | "dark" | "zero-dark") {
+async function setTheme(page: Page, theme: "light" | "dark" | "zero-dark" | "studio-dark") {
   await page.evaluate((value) => {
     const oldValue = localStorage.getItem("nebula.theme");
     localStorage.setItem("nebula.theme", value);
@@ -2059,18 +2059,19 @@ test("hidden terminal views stop emitting resize frames", async ({ page }, testI
 
 test(firstRunThemeTest, async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "studio-dark");
   await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
-test("theme picker offers Light, Dark, Zero Light, and Zero Dark and persists the selection", async ({ page }) => {
+test("theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark and persists the selection", async ({ page }) => {
   await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings" }).click();
   await page.getByText("Identity & Security", { exact: true }).click();
   const appearance = page.locator("#appearance-settings");
 
   for (const [label, theme, zeroShell] of [
+    ["Studio Dark", "studio-dark", false],
     ["Light", "light", false],
     ["Dark", "dark", false],
     ["Zero Light", "zero-light", true],
@@ -2086,6 +2087,60 @@ test("theme picker offers Light, Dark, Zero Light, and Zero Dark and persists th
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
   await expect(page.locator(".app-shell")).toHaveClass(/zero-layer-shell/);
+});
+
+test("theme picker Studio Dark keeps the project and Workbench readable across viewports", async ({ page }, testInfo) => {
+  await openWorkspace(page, "/project", "Scratch Project");
+  await setTheme(page, "studio-dark");
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--blue").trim())).toBe("#b3c7d4");
+  await expect(page.getByRole("region", { name: "Project orientation" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Project summary" }).locator(".metric-card")).toHaveCount(4);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    const metrics = page.getByRole("region", { name: "Project summary" }).locator(".metric-card");
+    const first = await metrics.nth(0).boundingBox();
+    const second = await metrics.nth(1).boundingBox();
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(Math.abs(first!.y - second!.y)).toBeLessThanOrEqual(1);
+  }
+  await page.screenshot({ path: testInfo.outputPath("studio-dark-project.png"), fullPage: true });
+
+  await page.getByRole("link", { name: "Open workbench" }).click();
+  await expect(page).toHaveURL(/\/workbench\?view=chat/);
+  await page.getByRole("button", { name: "Start new chat" }).click();
+  await expect(page.locator(".chat-studio")).toBeVisible();
+  await expect(page.locator(".chat-composer")).toBeVisible();
+  const composer = await page.locator(".chat-composer").boundingBox();
+  expect(composer).not.toBeNull();
+  expect(composer!.x).toBeGreaterThanOrEqual(0);
+  expect(composer!.x + composer!.width).toBeLessThanOrEqual((page.viewportSize()?.width ?? 0) + 1);
+  expect(composer!.y + composer!.height).toBeLessThanOrEqual((page.viewportSize()?.height ?? 0) + 1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("studio-dark-workbench.png") });
+
+  if (testInfo.project.name === "desktop") await page.setViewportSize({ width: 2880, height: 1554 });
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Focus mode" }).click();
+  } else await page.getByRole("button", { name: "Enter focus mode" }).click();
+  await expect(page.locator(".sessions-page.chat-focus")).toBeVisible();
+  const focusGeometry = await page.locator(".sessions-page.chat-focus").evaluate(element => {
+    const root = element.getBoundingClientRect();
+    const composer = element.querySelector<HTMLElement>(".chat-composer")!.getBoundingClientRect();
+    const empty = element.querySelector<HTMLElement>(".chat-scroll .empty-state.compact")!.getBoundingClientRect();
+    return {
+      rightGap: innerWidth - root.right,
+      composerOffset: composer.left + composer.width / 2 - innerWidth / 2,
+      emptyOffset: empty.left + empty.width / 2 - innerWidth / 2,
+      documentOverflow: document.documentElement.scrollWidth - innerWidth,
+    };
+  });
+  expect(Math.abs(focusGeometry.rightGap)).toBeLessThanOrEqual(1);
+  expect(Math.abs(focusGeometry.composerOffset)).toBeLessThanOrEqual(1);
+  expect(Math.abs(focusGeometry.emptyOffset)).toBeLessThanOrEqual(1);
+  expect(focusGeometry.documentOverflow).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("studio-dark-focus.png") });
 });
 
 test("Workbench omits the removed Human controlled badge in every theme", async ({ page }) => {
@@ -7404,6 +7459,7 @@ test("stabilization studio conversation keeps context and thinking readable", as
 
   await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
   await expect(page.getByText("Review the rollout plan", { exact: true }).first()).toBeVisible();
+  await setTheme(page, "studio-dark");
   const thinking = page.getByLabel("Harness thinking");
   await expect(thinking).toContainText("12 updates");
   if (testInfo.project.name === "desktop") {
@@ -8664,6 +8720,57 @@ test("remote Core mode keeps the native Browser and command worker on this deskt
   expect(nativeCalls).toContain("browser_capabilities");
   expect(nativeCalls).toContain("desktop_device_id");
   await context.close();
+});
+
+test("phone shell project notes fill the Workbench writing area", async ({ page }, testInfo) => {
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await openWorkspace(page, "/", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  if (mobile) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Notes", exact: true }).click();
+  } else await page.getByRole("tab", { name: "Project notes", exact: true }).click();
+
+  const assertGeometry = async () => {
+    const bounds = await page.locator(".notes-panel").evaluate((panel) => {
+      const page = panel.closest(".sessions-page")!.getBoundingClientRect();
+      const layout = panel.closest(".session-layout")!.getBoundingClientRect();
+      const workspace = panel.closest(".session-workspace")!.getBoundingClientRect();
+      const note = panel.getBoundingClientRect();
+      const editor = panel.querySelector(".note-editor")!.getBoundingClientRect();
+      const empty = panel.querySelector(".note-empty-state")!.getBoundingClientRect();
+      return {
+        pageGap: page.bottom - layout.bottom,
+        panelGap: workspace.bottom - note.bottom,
+        emptyOffset: empty.top + empty.height / 2 - (editor.top + editor.height / 2),
+        overflow: document.documentElement.scrollWidth - innerWidth,
+      };
+    });
+    expect(bounds.pageGap).toBeLessThanOrEqual(40);
+    expect(bounds.panelGap).toBeLessThanOrEqual(13);
+    expect(Math.abs(bounds.emptyOffset)).toBeLessThanOrEqual(1);
+    expect(bounds.overflow).toBeLessThanOrEqual(1);
+  };
+  await expect(page.getByText("Start a project note", { exact: true })).toBeVisible();
+  if (!mobile) {
+    await expect(page.locator(".sessions-page")).toHaveClass(/screen-fit/);
+    await assertGeometry();
+    if (testInfo.project.name === "desktop") {
+      await page.setViewportSize({ width: 2880, height: 1552 });
+      await assertGeometry();
+    }
+  } else expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("notes-workbench.png") });
+
+  await page.getByRole("button", { name: "New note", exact: true }).click();
+  const body = page.getByRole("textbox", { name: "Note body" });
+  await body.scrollIntoViewIfNeeded();
+  await body.fill("A working observation with enough detail to edit.");
+  await body.pressSequentially(" Latest text stays at the caret.");
+  await expect(body).toHaveValue("A working observation with enough detail to edit. Latest text stays at the caret.");
+  await expect(body).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  expect((await new AxeBuilder({ page }).include(".notes-panel").analyze()).violations).toEqual([]);
 });
 
 test("terminal and notes keep a visible focused caret", async ({ page }, testInfo) => {

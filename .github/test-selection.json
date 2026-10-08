@@ -1,17 +1,23 @@
 {
-  "change_digest": "9736d90a33387287feef2eb19d6b56a2d555fd4872b81643adf275038220688c",
-  "reviewed_by": "Codex focused coverage review",
-  "reason": "Beta.3 synchronizes package versions and restricts release preparation and draft entry points to repository admins. The selected packaging tests verify both contracts.",
-  "exclusions": "No application UI, chat behavior, browser origin, persistence, or native behavior changes in this diff. Frontend, Playwright, native, unrelated Python tests, and full suites are excluded; release preparation separately runs its reviewed impact selection and package checks.",
-  "expected_tests": {"python": 2, "frontend": 0, "playwright": 0, "native": 0},
-  "python_versions": ["3.12"],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
-    "tests/v3/test_packaging.py::test_release_entry_points_require_an_admin_before_using_release_credentials"
+  "change_digest": "2faf31a723e4806f0591d773353c4255b9671e61a712a87fd2d08235cd8b9fc4",
+  "reviewed_by": "Codex, focused Notes opening review on 2026-10-08",
+  "reason": "Notes now initializes from the already loaded workspace observation snapshot instead of refetching on every pane entry. Nine focused component tests cover cached data, loading feedback, write-during-load, retry, and draft operations; three Notes browser journeys cover desktop and mobile engines; the production LAN real-Core journey verifies no duplicate GET and durable Save/reload. Disposable production LAN measurements with 1000 notes compare before and after opening latency.",
+  "exclusions": "No Core, provider, harness, Python, or native implementation changes. SessionsPage changes only pass the project-scoped workspace Notes snapshot and status into NotesPanel; unrelated shared Workbench journeys are excluded after reviewing this boundary. Browser selection has four exact Notes entries. Physical mobile device unavailable; emulated browsers selected.",
+  "python": [],
+  "frontend": [
+    "ui/src/components/NotesPanel.test.tsx"
   ],
-  "frontend": [],
-  "playwright": [],
-  "native": []
+  "native": [],
+  "playwright": [
+    "entry:notes-typing/desktop",
+    "entry:notes-typing/mobile-chromium-small",
+    "entry:notes-typing/mobile-webkit-small",
+    "entry:notes-typing/real-core"
+  ],
+  "expected_tests": {
+    "python": 0,
+    "frontend": 9,
+    "native": 0,
+    "playwright": 4
+  }
 }
