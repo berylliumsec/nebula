@@ -1,15 +1,15 @@
 {
-  "change_digest": "cf5daa4866aaa878a1b9ca0886a050cb928d78655c26bd5d82862900b8291d6b",
-  "reviewed_by": "Codex focused dependency review for multidict 6.9.1",
-  "reason": "The lockfile updates multidict as an indirect dependency of aiohttp and yarl. Nebula has no direct import of those libraries. The large diff is platform wheel and hash metadata; poetry check --lock validated the resolved manifest.",
-  "exclusions": "Python, frontend, native, and Playwright test selections are empty because the change has no direct Nebula call site or targeted operator workflow. Full suites and unrelated network tests are excluded; indirect runtime behavior is not exercised by app tests.",
+  "change_digest": "09fe3277ede7a3494cc780c987e0fe6dc8f6f4bc36eb15cdb3e5ff24b85b5077",
+  "reviewed_by": "Codex focused dependency review for source-map-js 1.2.2",
+  "reason": "source-map-js is used by Vite/PostCSS and jsdom. Two build-identity tests and the selected frontend CI job exercise the updated lockfile installation and production bundle build; an isolated npm ci and production build also passed locally.",
+  "exclusions": "No application source, server state, browser origin behavior, or native dependency changed. Python, native, and Playwright are excluded. Browser/device and real-Core journeys are not selected because this is a build-tool dependency update; no operator workflow behavior is claimed verified.",
   "python": [],
-  "frontend": [],
+  "frontend": ["ui/src/buildIdentity.test.ts"],
   "native": [],
   "playwright": [],
   "expected_tests": {
     "python": 0,
-    "frontend": 0,
+    "frontend": 2,
     "native": 0,
     "playwright": 0
   },
