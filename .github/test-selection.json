@@ -1,14 +1,19 @@
 {
-  "change_digest": "ce56361aa4ab627621d08518581b0946d1e7c160c5a19272ae2bc62872016051",
-  "reviewed_by": "Codex focused dependency review for Mako 1.4.2",
-  "reason": "Mako renders Alembic migration templates. Five collected migration tests cover the upgrade and downgrade path affected by the lockfile update.",
-  "exclusions": "No frontend or native dependency changed, so those layers and Playwright are excluded. The PostgreSQL case requires NEBULA_TEST_POSTGRES_URL and skips when unavailable. Unrelated Python suites and full suites are excluded.",
-  "python": ["tests/v3/test_migrations.py"],
+  "change_digest": "a5e9f7b28e6f7c473beb3ca5c525e9656f2df579e37be7619ae83c5db7daca5f",
+  "reviewed_by": "Codex focused dependency review for pypdf 6.19.0",
+  "reason": "pypdf parses imported PDF knowledge documents and validates exported report PDFs. Four exact cases cover bounded extraction, report rendering and cached output, saved note rendering, and the evidence signoff PDF workflow.",
+  "exclusions": "No frontend or native dependency changed, so those layers and Playwright are excluded. Unrelated Python suites and full suites are excluded. Local collection is blocked by the host pyOpenSSL and cryptography mismatch; clean CI must collect and run the four selected cases.",
+  "python": [
+    "tests/v3/test_knowledge.py::test_pdf_extraction_stops_when_the_text_budget_is_exceeded",
+    "tests/v3/test_reporting.py::test_pdf_is_valid_cached_and_warns_without_interpreting_content",
+    "tests/v3/test_reporting.py::test_pdf_uses_saved_report_local_note_transform",
+    "tests/v3/test_report_signoff.py::test_evidence_validation_signoff_and_pdf_workflow"
+  ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "expected_tests": {
-    "python": 5,
+    "python": 4,
     "frontend": 0,
     "native": 0,
     "playwright": 0
