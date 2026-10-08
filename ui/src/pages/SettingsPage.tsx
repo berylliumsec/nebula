@@ -35,6 +35,7 @@ const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[
   { value: "dark", label: "Dark", icon: Moon },
   { value: "zero-light", label: "Zero Light", icon: Sun },
   { value: "zero-dark", label: "Zero Dark", icon: Moon },
+  { value: "studio-dark", label: "Studio Dark", icon: Moon },
 ];
 
 const settingsSections = [

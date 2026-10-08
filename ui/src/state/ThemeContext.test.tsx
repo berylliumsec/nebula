@@ -17,7 +17,7 @@ describe("ThemeProvider", () => {
 
     render(<ThemeProvider><Probe /></ThemeProvider>);
 
-    expect(screen.getByTestId("preference")).toHaveTextContent("zero-dark");
-    expect(document.documentElement.dataset.theme).toBe("zero-dark");
+    expect(screen.getByTestId("preference")).toHaveTextContent("studio-dark");
+    expect(document.documentElement.dataset.theme).toBe("studio-dark");
   });
 });

@@ -214,7 +214,7 @@ import { currentAgentTurnIndex, followsChatBottom, type ChatScrollGeometry } fro
 const CHAT_TERMINAL_OPEN_KEY = "nebula.chat-terminal.open";
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
 const sessionViews = new Set<string>(["chat", "code", "terminal", "browser", "missions", "activity", "workspace", "notes"] satisfies SessionView[]);
-const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace", "browser"]);
+const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace", "browser", "notes"]);
 const focusedWorkbenchViews = new Set<SessionView>(["chat", "code", "browser", "workspace"]);
 
 function sessionViewFromParam(value: string | null): SessionView | undefined {
