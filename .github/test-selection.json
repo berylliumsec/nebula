@@ -1,8 +1,8 @@
 {
-  "change_digest": "09fe3277ede7a3494cc780c987e0fe6dc8f6f4bc36eb15cdb3e5ff24b85b5077",
-  "reviewed_by": "Codex focused dependency review for source-map-js 1.2.2",
-  "reason": "source-map-js is used by Vite/PostCSS and jsdom. Two build-identity tests and the selected frontend CI job exercise the updated lockfile installation and production bundle build; an isolated npm ci and production build also passed locally.",
-  "exclusions": "No application source, server state, browser origin behavior, or native dependency changed. Python, native, and Playwright are excluded. Browser/device and real-Core journeys are not selected because this is a build-tool dependency update; no operator workflow behavior is claimed verified.",
+  "change_digest": "a08f73cd155da49eba7523be750d14dad058e511ce453746efa96631513ce4bb",
+  "reviewed_by": "Codex focused dependency review for undici 7.30.0",
+  "reason": "undici is installed through jsdom for the UI test environment. Two collected build-identity tests and the selected frontend CI job exercise the updated lockfile installation and production bundle build; an isolated npm ci, scoped test, and production build passed locally.",
+  "exclusions": "No application source, server state, browser origin behavior, or native dependency changed. Python, native, and Playwright are excluded. Browser/device and real-Core journeys are not selected for this test-runtime dependency; no operator workflow behavior is claimed verified.",
   "python": [],
   "frontend": ["ui/src/buildIdentity.test.ts"],
   "native": [],
