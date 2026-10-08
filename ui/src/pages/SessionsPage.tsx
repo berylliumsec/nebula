@@ -1164,6 +1164,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     deleteObservation,
     engagement,
     evidence,
+    observations,
+    resourceStatus,
     ingestKnowledgeUrlSource,
     knowledgeSources,
     libraryItems,
@@ -6338,8 +6340,11 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
             <WorkspacePanel api={api} engagementId={engagement.id} engagementName={engagement.name} onUseWithAssistant={requestNebulaDraft} onOpenTerminal={() => setView("terminal")} onOpenActivity={() => setView("activity")} />
           ) : view === "notes" && api && engagement ? (
             <NotesPanel
+              key={engagement.id}
               api={api}
               engagementId={engagement.id}
+              initialNotes={observations}
+              initialNotesReady={resourceStatus.notes.state === "ready" || resourceStatus.notes.state === "empty"}
               evidenceOptions={evidence.map((item) => ({ id: item.id, label: item.title }))}
               assetOptions={assets.map((item) => ({ id: item.id, label: item.displayName }))}
               providers={providers}

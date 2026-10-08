@@ -25,7 +25,16 @@ test("notes typing production LAN saves and reloads the latest draft", async ({ 
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projects[0].id);
     const url = `${core.origin}/?view=notes#token=${encodeURIComponent(core.token)}`;
-    await page.goto(url);
+    await page.goto(`${core.origin}/?view=chat#token=${encodeURIComponent(core.token)}`);
+    const notesTab = page.getByRole("tab", { name: "Project notes" });
+    await expect(notesTab).toBeVisible();
+    let noteReads = 0;
+    page.on("request", (request) => {
+      if (request.method() === "GET" && new URL(request.url()).pathname.endsWith("/observations")) noteReads += 1;
+    });
+    await notesTab.click();
+    await expect(page.getByRole("button", { name: "Create note" })).toBeVisible();
+    expect(noteReads).toBe(0);
     await page.getByRole("button", { name: "Create note" }).click();
     await page.getByRole("textbox", { name: "Note title" }).fill("LAN typing check");
     const body = page.getByRole("textbox", { name: "Note body" });
