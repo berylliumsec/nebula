@@ -1,21 +1,25 @@
 {
-  "change_digest": "f4598ac1bd58389472831c43502796b3c4b23d20c2bb596d7d3a22d6a66d3ccd",
-  "reviewed_by": "Codex focused review of project switch state and browser journey",
-  "reason": "Project switching now reuses loaded global catalogs and exposes the selected project before its resource requests finish. Eleven workspace state tests cover startup, reconnect, stale links, and delayed project resources; focused browser cases cover the switcher on desktop and mobile plus production real Core selection.",
-  "exclusions": "No backend or native code changed. Unrelated UI and full test suites are excluded. Physical mobile device testing is unavailable; permanent emulated browser profiles are selected.",
-  "expected_tests": {
-    "python": 0,
-    "frontend": 11,
-    "native": 0,
-    "playwright": 4
-  },
-  "python": [],
-  "frontend": ["ui/src/state/WorkspaceContext.recovery.test.tsx"],
+  "change_digest": "4efb3ca702734a3336abf4799072aa085af3e5e73528e4764a54030728904d7e",
+  "reviewed_by": "Codex, scoped release orchestration review on 2026-10-08",
+  "reason": "Daily release coverage now automatically validates conservative catalog selections for shared/unmapped changes. The 83 collected Python regressions cover the real selector in disposable Git repositories, focused/no-impact paths, no-change skips, failed/incomplete CI, advancing main, failed selectors/receipts/artifacts, dispatch propagation, and unchanged full-suite/PR selection guards.",
+  "exclusions": "No UI, native, Core runtime, build, smoke or artifact implementations change. Frontend, Playwright and native execution are excluded. Python tests are bounded to three files, under two minutes, with GitHub mutations mocked. No release dispatch, package install, Nebula launch or offensive testing. Actual protected release execution remains unverified until an authorized future release.",
+  "python_versions": [
+    "3.12"
+  ],
+  "python_browser": false,
+  "python_node": true,
+  "python": [
+    "tests/test_daily_stable_release.py",
+    "tests/test_playwright_impact.py",
+    "tests/test_test_selection.py"
+  ],
+  "frontend": [],
+  "playwright": [],
   "native": [],
-  "playwright": [
-    "entry:project-switcher-search/desktop",
-    "entry:project-switcher-search/mobile-chromium-small",
-    "entry:project-switcher-search/mobile-webkit-small",
-    "entry:project-switcher-search/real-core"
-  ]
+  "expected_tests": {
+    "python": 83,
+    "frontend": 0,
+    "playwright": 0,
+    "native": 0
+  }
 }

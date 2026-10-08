@@ -6,7 +6,7 @@ failed gate leaves its immutable tag or draft for a release manager to inspect.
 
 from __future__ import annotations
 
-import hashlib
+import fnmatch
 import json
 import os
 import re
@@ -21,7 +21,7 @@ REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "")
 MAIN_SHA = os.environ.get("GITHUB_SHA", "")
 SOURCE_MARKER = re.compile(r"<!-- nebula-source-sha: ([0-9a-f]{40}) -->")
 WAIT_SECONDS = 3 * 60 * 60
-COVERAGE_REVIEW = Path(".github/daily-release-coverage.json")
+CONSERVATIVE_AREAS = ("desktop-interface", "mobile-layout", "core-api")
 
 
 def run(*args: str, check: bool = True) -> str:
@@ -71,45 +71,30 @@ def green_main() -> None:
         raise RuntimeError(f"CI has not passed for main {MAIN_SHA}")
 
 
-def reviewed_coverage(baseline: str, candidate: str) -> tuple[str, str]:
-    if not COVERAGE_REVIEW.is_file():
-        return "", ""
-    review = json.loads(COVERAGE_REVIEW.read_text())
-    diff = subprocess.check_output(
-        [
-            "git",
-            "diff",
-            "--binary",
-            "--no-ext-diff",
-            baseline,
-            candidate,
-            "--",
-            ".",
-            ":(exclude).github/daily-release-coverage.json",
-            ":(exclude).github/test-selection.json",
-        ]
+def conservative_coverage(plan: dict) -> tuple[str, str]:
+    """Retain matched journeys and add bounded cross-interface/Core coverage."""
+    manifest = json.loads(Path("ui/playwright-impact.json").read_text())
+    areas = set(CONSERVATIVE_AREAS)
+    for rule in manifest["rules"]:
+        if any(
+            fnmatch.fnmatchcase(path, pattern)
+            for path in plan["changed_files"]
+            for pattern in rule["patterns"]
+        ):
+            areas.update(rule["areas"])
+    selection = ",".join(f"area:{area}" for area in sorted(areas))
+    reason = (
+        "Daily stable release: automatic conservative catalog coverage for "
+        + ", ".join(plan["fallbacks"])
+        + ". Includes desktop/compact interface, small/wide mobile Chromium and "
+        "WebKit, real-Core contracts, and every matched feature area. Other "
+        "full-matrix profiles are excluded; CI, packaging and smoke checks remain required."
     )
-    if (
-        review.get("baseline_sha") != baseline
-        or review.get("change_digest") != hashlib.sha256(diff).hexdigest()
-    ):
-        return "", ""
-    selection = review.get("selection")
-    reason = review.get("review_reason")
-    if (
-        not isinstance(selection, list)
-        or not selection
-        or not isinstance(reason, str)
-        or not reason
-    ):
-        raise RuntimeError("Invalid reviewed daily release coverage")
-    return ",".join(selection), reason
+    return selection, reason
 
 
-def preflight_impact(
-    baseline: str, candidate: str, selection: str = "", review_reason: str = ""
-) -> None:
-    """Keep a review-blocked change from consuming an immutable release tag."""
+def preflight_impact(baseline: str, candidate: str) -> tuple[str, str]:
+    """Resolve and validate daily coverage before consuming an immutable tag."""
     with tempfile.TemporaryDirectory() as directory:
         output = Path(directory, "plan.json")
         args = [
@@ -129,20 +114,45 @@ def preflight_impact(
             "--receipt",
             str(Path(directory, "receipt.md")),
         ]
-        if selection:
-            args.extend(("--selection", selection, "--review-reason", review_reason))
         result = subprocess.run(
             args,
             text=True,
             capture_output=True,
             check=False,
         )
-        if result.returncode:
-            reason = json.loads(output.read_text()) if output.exists() else {}
+        if result.returncode == 0:
+            return "", "Daily stable release: automatic impacted selection."
+        plan = json.loads(output.read_text()) if output.exists() else {}
+        blockers = plan.get("fallbacks", [])
+        if (
+            result.returncode != 2
+            or not plan.get("coverage_review_required")
+            or plan.get("baseline_sha") != baseline
+            or plan.get("candidate_sha") != candidate
+            or not blockers
+            or any(not item.startswith(("global:", "unmapped:")) for item in blockers)
+        ):
             raise RuntimeError(
-                "Coverage review required before tagging: "
-                + ", ".join(reason.get("fallbacks", []))
+                "Cannot resolve daily coverage before tagging: "
+                + (", ".join(blockers) or result.stderr.strip())
             )
+        selection, review_reason = conservative_coverage(plan)
+        args.extend(("--selection", selection, "--review-reason", review_reason))
+        result = subprocess.run(args, text=True, capture_output=True, check=False)
+        accepted = json.loads(output.read_text())
+        if (
+            result.returncode
+            or accepted.get("coverage_review_required", True)
+            or accepted.get("baseline_sha") != baseline
+            or accepted.get("candidate_sha") != candidate
+            or not accepted.get("include")
+        ):
+            raise RuntimeError(
+                "Conservative daily coverage failed validation before tagging: "
+                + result.stderr.strip()
+            )
+        print(Path(directory, "receipt.md").read_text(), flush=True)
+        return selection, review_reason
 
 
 def wait_for_workflow(name: str, ref: str, commit: str, since: datetime) -> int:
@@ -173,7 +183,9 @@ def wait_for_workflow(name: str, ref: str, commit: str, since: datetime) -> int:
     raise RuntimeError(f"Timed out waiting for {name} on {ref}")
 
 
-def verify_impact_receipt(run_id: int, tag: str, baseline: str, candidate: str) -> None:
+def verify_impact_receipt(
+    run_id: int, tag: str, baseline: str, candidate: str, selection: str = ""
+) -> None:
     with tempfile.TemporaryDirectory() as directory:
         run(
             "gh",
@@ -192,6 +204,13 @@ def verify_impact_receipt(run_id: int, tag: str, baseline: str, candidate: str) 
             plan["coverage_review_required"]
             or plan["baseline_sha"] != baseline
             or plan["candidate_sha"] != candidate
+            or (
+                selection
+                and (
+                    plan.get("requested_selection") != selection.split(",")
+                    or not plan.get("include")
+                )
+            )
         ):
             raise RuntimeError(
                 "Release impact receipt lacks an accepted baseline or coverage"
@@ -259,8 +278,7 @@ def main() -> None:
         return
     run("git", "merge-base", "--is-ancestor", previous_source, MAIN_SHA)
     green_main()
-    selection, review_reason = reviewed_coverage(previous_source, MAIN_SHA)
-    preflight_impact(previous_source, MAIN_SHA, selection, review_reason)
+    selection, review_reason = preflight_impact(previous_source, MAIN_SHA)
     run("gh", "attestation", "verify", "--help")
 
     version = next_stable_version(previous_tag)
@@ -342,7 +360,7 @@ def main() -> None:
         "-f",
         "scope=impacted",
         "-f",
-        f"review_reason={review_reason or 'Daily stable release: automatic impacted selection; shared or unmapped changes block publication.'}",
+        f"review_reason={review_reason}",
     ]
     if selection:
         dispatch.extend(("-f", f"selection={selection}"))
@@ -350,7 +368,7 @@ def main() -> None:
     preparation_id = wait_for_workflow(
         "nebula3-release.yml", tag, release_commit, preparation_started
     )
-    verify_impact_receipt(preparation_id, tag, previous_source, MAIN_SHA)
+    verify_impact_receipt(preparation_id, tag, previous_source, MAIN_SHA, selection)
     verify_assets(preparation_id, version)
     finalize_started = datetime.now(timezone.utc).replace(microsecond=0)
     run(
