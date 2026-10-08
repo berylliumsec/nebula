@@ -24,12 +24,16 @@ checksums, and provenance attestations before publishing the stable GitHub
 Release. It explicitly dispatches updater metadata publication because releases
 made by `GITHUB_TOKEN` do not recursively trigger another workflow.
 
-The first daily release carries a one-time focused coverage review in
-`.github/daily-release-coverage.json`, bound to the exact diff since
-`nebula-v3.0.0-beta.3`. It reuses the 16 Studio Dark and Notes browser journeys
-that passed on PR #702. A changed diff invalidates that review; later releases
-use automatic impact selection and stop before tagging if shared or unmapped
-changes require a new review.
+Daily releases resolve coverage automatically before tagging. Known changes use
+the existing impact rules. Shared or unmapped changes select the catalog's
+`desktop-interface`, `mobile-layout`, and `core-api` areas, together with every
+feature area whose rule matches the diff. This conservative selection covers
+desktop/compact, small/wide mobile Chromium and WebKit, and real-Core contracts.
+It can cost more runner time than focused coverage and excludes other full-matrix
+profiles. The exact selection and rationale are passed to preparation and recorded
+in its impact receipt; every selected job must pass before building. Missing or
+invalid baselines and selector errors still stop before tagging. Daily releases
+do not require a separate coverage-review file or authorize `scope=full`.
 
 Any failed check stops publication. An existing release tag or draft is a
 recovery case for a release manager; the daily job never moves a tag or replaces
@@ -120,8 +124,10 @@ receipt. Review its immutable baseline and candidate SHAs, changed files,
 matched rules, selected projects/tests, counts, exclusions, and review blockers
 before draft finalization. A failed or cancelled release (for
 example, a tag whose preparation never reached success) is never a trusted
-baseline. Missing baselines and shared/unmapped changes block for explicit
-coverage review; they NEVER launch the full matrix automatically.
+baseline. Missing baselines and shared/unmapped changes block ordinary tag/manual
+impact selection for explicit coverage review; the daily driver supplies the
+conservative catalog selection described above. They never launch the full matrix
+automatically.
 
 An agent or release manager may replace automatic impact selection with a
 reviewable catalog selection on manual dispatch. The `selection` input accepts
