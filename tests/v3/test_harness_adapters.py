@@ -1084,7 +1084,8 @@ def test_codex_project_never_policy_auto_approves_native_and_gateway_tools(tmp_p
     asyncio.run(scenario())
 
 
-def test_codex_turn_controls_use_structured_skill_and_planning_mode():
+@pytest.mark.parametrize("mode", ["plan", "default"])
+def test_codex_turn_controls_use_structured_skill_and_planning_mode(mode: str):
     async def scenario() -> None:
         rpc = FixtureCodexRpc()
 
@@ -1107,7 +1108,7 @@ def test_codex_turn_controls_use_structured_skill_and_planning_mode():
             async for event in connection.run_turn(
                 "inspect",
                 model="gpt-test",
-                mode="plan",
+                mode=mode,
                 images=[{"media_type": "image/png", "data": "aW1hZ2U="}],
                 skill=HarnessSkillInvocation(
                     name="review",
@@ -1121,7 +1122,14 @@ def test_codex_turn_controls_use_structured_skill_and_planning_mode():
             "type": "image",
             "url": "data:image/png;base64,aW1hZ2U=",
         }
-        assert turn["collaborationMode"] == {"mode": "plan"}
+        if mode == "plan":
+            assert turn["collaborationMode"] == {
+                "mode": "plan",
+                "settings": {"model": "gpt-test"},
+            }
+        else:
+            assert "collaborationMode" not in turn
+        _validate("v2/TurnStartParams.json", turn)
         assert turn["input"][-1] == {
             "type": "skill",
             "name": "review",
