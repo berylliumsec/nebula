@@ -1,18 +1,15 @@
 {
-  "change_digest": "357b166d19ab947ae319f90d3934627b69f6e75dda6de628777bb25a7e0581dc",
-  "reviewed_by": "Codex focused dependency review for Vitest 4.1.11",
-  "reason": "The update changes the Vitest runner and mocker. Eight collected tests across a plain unit module and jsdom hook module exercise assertions, mocks, fake timers, and React rendering under the new runner; npm ci and the production build passed locally.",
-  "exclusions": "No application source or operator workflow behavior changed. Python, native, and Playwright are excluded. Real-Core, LAN-origin, browser/device, and full suites are outside this test-tool update and no operator workflow support is claimed from this selection.",
-  "python": [],
-  "frontend": [
-    "ui/src/buildIdentity.test.ts",
-    "ui/src/state/useCoreConnectionMonitor.test.tsx"
-  ],
+  "change_digest": "10f6a1770819ca7ec3bda129f14580f892f42b6e2ef798df2702bbc3fa9a56e1",
+  "reviewed_by": "Codex focused dependency review for oauthlib 4.0.0",
+  "reason": "oauthlib is indirect through requests-oauthlib and Kubernetes with no direct Nebula import. One collected packaging test triggers clean CI installation and build. Local poetry check --lock and isolated requests-oauthlib 2.0.0 OAuth1/OAuth2 client smoke checks passed.",
+  "exclusions": "No frontend or native dependency changed, so those layers and Playwright are excluded. Nebula has no direct server-side OAuth grant or JSONP token revocation path; the selected test and client smoke do not exercise those release breaking changes. Unrelated Python and full suites are excluded.",
+  "python": ["tests/v3/test_packaging.py::test_runtime_dependency_boundary_rejects_removed_stacks"],
+  "frontend": [],
   "native": [],
   "playwright": [],
   "expected_tests": {
-    "python": 0,
-    "frontend": 8,
+    "python": 1,
+    "frontend": 0,
     "native": 0,
     "playwright": 0
   },
