@@ -1,23 +1,21 @@
 {
-  "change_digest": "4cfd2fe128fb78910dc6c1c0ff1921bb1198c2e718e44684a4ad554a94c8648c",
-  "reviewed_by": "Codex, scoped review on 2026-10-08",
-  "reason": "Daily release automation changes GitHub scheduling, exact source-based impact baseline resolution, reviewed first-release coverage, and release orchestration. Ten focused Python cases check stable version progression, fail-closed CI and impact decisions, exact reviewed-diff binding, and workflow-run matching. Workflow shell syntax and release lineage were reviewed separately.",
-  "exclusions": "No operator UI, browser, native application, or Core runtime behavior changes; frontend, Playwright, and native tests are excluded. The scheduled GitHub run and protected release pipeline cannot be exercised locally without publishing an actual release.",
-  "python_versions": [
-    "3.12"
-  ],
-  "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/test_daily_stable_release.py"
-  ],
-  "frontend": [],
-  "playwright": [],
-  "native": [],
+  "change_digest": "f4598ac1bd58389472831c43502796b3c4b23d20c2bb596d7d3a22d6a66d3ccd",
+  "reviewed_by": "Codex focused review of project switch state and browser journey",
+  "reason": "Project switching now reuses loaded global catalogs and exposes the selected project before its resource requests finish. Eleven workspace state tests cover startup, reconnect, stale links, and delayed project resources; focused browser cases cover the switcher on desktop and mobile plus production real Core selection.",
+  "exclusions": "No backend or native code changed. Unrelated UI and full test suites are excluded. Physical mobile device testing is unavailable; permanent emulated browser profiles are selected.",
   "expected_tests": {
-    "python": 10,
-    "frontend": 0,
-    "playwright": 0,
-    "native": 0
-  }
+    "python": 0,
+    "frontend": 11,
+    "native": 0,
+    "playwright": 4
+  },
+  "python": [],
+  "frontend": ["ui/src/state/WorkspaceContext.recovery.test.tsx"],
+  "native": [],
+  "playwright": [
+    "project-switcher-search/desktop",
+    "project-switcher-search/mobile-chromium-small",
+    "project-switcher-search/mobile-webkit-small",
+    "project-switcher-search/real-core"
+  ]
 }
