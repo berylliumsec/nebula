@@ -1,17 +1,14 @@
 {
-  "change_digest": "15d3e142c5624bb2fecc985f95a719c6a8b3c05bd6a1eb68180455057f0573fe",
-  "reviewed_by": "Codex focused dependency review for urllib3 2.8.0",
-  "reason": "urllib3 is used through botocore. Two exact Bedrock cases cover botocore import and the provider's error and context-limit handling after the lockfile update; CI installation validates the resolved dependency set.",
-  "exclusions": "No frontend or native dependency changed, so those layers and Playwright are excluded. These mocked Bedrock cases do not exercise live AWS HTTP transport. Unrelated Python suites and full suites are excluded. Local collection is blocked by the host pyOpenSSL and cryptography mismatch; clean CI must collect and run the selected cases.",
-  "python": [
-    "tests/v3/test_providers.py::test_bedrock_reports_the_client_error_code_and_message",
-    "tests/v3/test_providers.py::test_bedrock_context_window_rejection_is_typed"
-  ],
+  "change_digest": "a98a56c2b86048c05e61dccc7a312846b42709eda3f14b5eaea2dbdd8c20aa6e",
+  "reviewed_by": "Codex focused dependency review for PyJWT 2.15.0",
+  "reason": "The lockfile updates PyJWT as an indirect MCP dependency. Nebula has no direct PyJWT import or token encode/decode path; poetry check --lock validated the resolved manifest and there is no app test that exercises the changed library behavior.",
+  "exclusions": "Python, frontend, native, and Playwright test selections are empty because the change has no direct Nebula call site or operator workflow. Full suites and unrelated MCP protocol tests are excluded; JWT behavior remains unexercised by app tests.",
+  "python": [],
   "frontend": [],
   "native": [],
   "playwright": [],
   "expected_tests": {
-    "python": 2,
+    "python": 0,
     "frontend": 0,
     "native": 0,
     "playwright": 0
