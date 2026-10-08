@@ -8722,6 +8722,56 @@ test("remote Core mode keeps the native Browser and command worker on this deskt
   await context.close();
 });
 
+test("phone shell project notes fill the Workbench writing area", async ({ page }, testInfo) => {
+  await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));
+  await openWorkspace(page, "/", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  if (mobile) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Notes", exact: true }).click();
+  } else await page.getByRole("tab", { name: "Project notes", exact: true }).click();
+
+  const assertGeometry = async () => {
+    const bounds = await page.locator(".notes-panel").evaluate((panel) => {
+      const page = panel.closest(".sessions-page")!.getBoundingClientRect();
+      const layout = panel.closest(".session-layout")!.getBoundingClientRect();
+      const workspace = panel.closest(".session-workspace")!.getBoundingClientRect();
+      const note = panel.getBoundingClientRect();
+      const editor = panel.querySelector(".note-editor")!.getBoundingClientRect();
+      const empty = panel.querySelector(".note-empty-state")!.getBoundingClientRect();
+      return {
+        pageGap: page.bottom - layout.bottom,
+        panelGap: workspace.bottom - note.bottom,
+        emptyOffset: empty.top + empty.height / 2 - (editor.top + editor.height / 2),
+        overflow: document.documentElement.scrollWidth - innerWidth,
+      };
+    });
+    expect(bounds.pageGap).toBeLessThanOrEqual(40);
+    expect(bounds.panelGap).toBeLessThanOrEqual(13);
+    expect(Math.abs(bounds.emptyOffset)).toBeLessThanOrEqual(1);
+    expect(bounds.overflow).toBeLessThanOrEqual(1);
+  };
+  await expect(page.getByText("Start a project note", { exact: true })).toBeVisible();
+  if (!mobile) {
+    await expect(page.locator(".sessions-page")).toHaveClass(/screen-fit/);
+    await assertGeometry();
+    if (testInfo.project.name === "desktop") {
+      await page.setViewportSize({ width: 2880, height: 1552 });
+      await assertGeometry();
+    }
+  } else expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("notes-workbench.png") });
+
+  await page.getByRole("button", { name: "New note", exact: true }).click();
+  const body = page.getByRole("textbox", { name: "Note body" });
+  await body.scrollIntoViewIfNeeded();
+  await body.fill("A working observation with enough detail to edit.");
+  await expect(body).toHaveValue("A working observation with enough detail to edit.");
+  await expect(body).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+  expect((await new AxeBuilder({ page }).include(".notes-panel").analyze()).violations).toEqual([]);
+});
+
 test("terminal and notes keep a visible focused caret", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
   await page.addInitScript(() => localStorage.setItem("nebula.theme", "zero-dark"));

@@ -1,7 +1,7 @@
 {
-  "change_digest": "a9239239f06ce35f615136d2bef39acafe5f715d0d9cd3914f65188d4e427524",
+  "change_digest": "a0c2d3dcd2638c857453b3f4bbc36a9fd28f78ce7fc56a0d04485703a0227acc",
   "reviewed_by": "Codex, scoped review on 2026-10-08",
-  "reason": "Studio Dark changes the default theme and palette, the project overview orientation, and Workbench geometry. The follow-up centers the empty chat and composer in focus mode at 2880px and replaces mint accents with cool slate. Focused component tests check theme fallback, project data, and settings. Selected browser journeys check the first-run default, theme persistence, project and Workbench geometry including wide focus mode, and a populated conversation across required desktop and phone engines. This is an isolated preview branch with no Core schema or backend behavior change.",
+  "reason": "Studio Dark changes the default theme and palette, the project overview orientation, and Workbench geometry. The focus follow-up centers chat at 2880px and replaces mint accents with cool slate. The Notes follow-up makes the desktop writing surface fill the available Workbench height without changing the phone flow. Focused component tests check theme fallback, project data, settings, and note creation and refresh. Selected browser journeys check the first-run default, theme persistence, project and Workbench geometry, populated conversation, and Notes geometry and drafting across desktop and phone engines. This is an isolated preview branch with no Core schema or backend behavior change.",
   "exclusions": "No Python or native code changed, so their tests are excluded. Unrelated provider, terminal, project mutation, and release suites are excluded. The browser fixture validates responsive presentation; an isolated production Core launch and LAN-origin inspection are separate manual gates.",
   "python_versions": ["3.12"],
   "python_browser": false,
@@ -10,7 +10,8 @@
   "frontend": [
     "ui/src/state/ThemeContext.test.tsx",
     "ui/src/pages/OverviewPage.test.tsx",
-    "ui/src/pages/SettingsPage.test.tsx"
+    "ui/src/pages/SettingsPage.test.tsx",
+    "ui/src/components/NotesPanel.test.tsx"
   ],
   "playwright": [
     "entry:studio-dark-vision/desktop",
@@ -20,13 +21,21 @@
     "entry:studio-dark-vision/mobile-chromium-wide",
     "entry:studio-dark-vision/mobile-webkit-small",
     "entry:studio-dark-vision/mobile-webkit",
-    "entry:studio-dark-vision/mobile-webkit-wide"
+    "entry:studio-dark-vision/mobile-webkit-wide",
+    "entry:notes-screen-fit/desktop",
+    "entry:notes-screen-fit/compact",
+    "entry:notes-screen-fit/mobile-chromium-small",
+    "entry:notes-screen-fit/mobile-chromium",
+    "entry:notes-screen-fit/mobile-chromium-wide",
+    "entry:notes-screen-fit/mobile-webkit-small",
+    "entry:notes-screen-fit/mobile-webkit",
+    "entry:notes-screen-fit/mobile-webkit-wide"
   ],
   "native": [],
   "expected_tests": {
     "python": 0,
-    "frontend": 13,
-    "playwright": 20,
+    "frontend": 18,
+    "playwright": 28,
     "native": 0
   }
 }
