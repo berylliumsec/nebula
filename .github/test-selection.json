@@ -1,8 +1,8 @@
 {
-  "change_digest": "38f5bdbbe4bbb7ba27cb8363838118c6c8b128d30a1604b28d61f44c798290fa",
-  "reviewed_by": "Codex, focused Notes typing review on 2026-10-08",
-  "reason": "Notes body input now updates only the editor state. Six component tests cover draft operations and latest-body Save/Ask behavior; three existing Notes browser journeys cover desktop and mobile engines; one new production LAN real-Core journey covers Save and reload. Before/after disposable Core keyboard measurements cover responsiveness with 250 and 1000 notes.",
-  "exclusions": "No Python, native, provider, or harness implementation changes. Backend and unrelated interface suites are excluded. Browser selection is limited to the Notes workflow: 4 exact catalog entries, with one disposable real-Core LAN test. A physical phone is unavailable; emulated mobile browsers are selected.",
+  "change_digest": "2faf31a723e4806f0591d773353c4255b9671e61a712a87fd2d08235cd8b9fc4",
+  "reviewed_by": "Codex, focused Notes opening review on 2026-10-08",
+  "reason": "Notes now initializes from the already loaded workspace observation snapshot instead of refetching on every pane entry. Nine focused component tests cover cached data, loading feedback, write-during-load, retry, and draft operations; three Notes browser journeys cover desktop and mobile engines; the production LAN real-Core journey verifies no duplicate GET and durable Save/reload. Disposable production LAN measurements with 1000 notes compare before and after opening latency.",
+  "exclusions": "No Core, provider, harness, Python, or native implementation changes. SessionsPage changes only pass the project-scoped workspace Notes snapshot and status into NotesPanel; unrelated shared Workbench journeys are excluded after reviewing this boundary. Browser selection has four exact Notes entries. Physical mobile device unavailable; emulated browsers selected.",
   "python": [],
   "frontend": [
     "ui/src/components/NotesPanel.test.tsx"
@@ -16,7 +16,7 @@
   ],
   "expected_tests": {
     "python": 0,
-    "frontend": 6,
+    "frontend": 9,
     "native": 0,
     "playwright": 4
   }
