@@ -67,6 +67,12 @@ Release tags do not authorize full coverage. Supply reviewed `selection` and
 `review_reason` through manual dispatch if automatic impact needs review. `none`
 is allowed only with an explicit explanation. Missing baseline/shared paths block
 for review; downstream build and sandbox preparation wait for selected coverage.
+The daily stable driver automatically supplies conservative catalog coverage for
+shared/unmapped changes: desktop/compact interface, small/wide mobile Chromium and
+WebKit, real-Core contracts, plus all matched feature areas. It validates that
+selection before tagging and retains the existing downstream test gates. Missing
+or invalid baselines still stop the daily release. This exception applies only to
+daily coverage selection, not routine PR/local runs or exceptional full suites.
 Release packaging runs its focused package/updater contract tests and compile
 checks, not another complete backend, frontend, or Rust test suite. Package
 installation/smoke checks remain required; they are not full product-suite runs.

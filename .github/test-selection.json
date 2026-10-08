@@ -1,17 +1,19 @@
 {
-  "change_digest": "9736d90a33387287feef2eb19d6b56a2d555fd4872b81643adf275038220688c",
-  "reviewed_by": "Codex focused coverage review",
-  "reason": "Beta.3 synchronizes package versions and restricts release preparation and draft entry points to repository admins. The selected packaging tests verify both contracts.",
-  "exclusions": "No application UI, chat behavior, browser origin, persistence, or native behavior changes in this diff. Frontend, Playwright, native, unrelated Python tests, and full suites are excluded; release preparation separately runs its reviewed impact selection and package checks.",
-  "expected_tests": {"python": 2, "frontend": 0, "playwright": 0, "native": 0},
+  "change_digest": "ce56361aa4ab627621d08518581b0946d1e7c160c5a19272ae2bc62872016051",
+  "reviewed_by": "Codex focused dependency review for Mako 1.4.2",
+  "reason": "Mako renders Alembic migration templates. Five collected migration tests cover the upgrade and downgrade path affected by the lockfile update.",
+  "exclusions": "No frontend or native dependency changed, so those layers and Playwright are excluded. The PostgreSQL case requires NEBULA_TEST_POSTGRES_URL and skips when unavailable. Unrelated Python suites and full suites are excluded.",
+  "python": ["tests/v3/test_migrations.py"],
+  "frontend": [],
+  "native": [],
+  "playwright": [],
+  "expected_tests": {
+    "python": 5,
+    "frontend": 0,
+    "native": 0,
+    "playwright": 0
+  },
   "python_versions": ["3.12"],
   "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
-    "tests/v3/test_packaging.py::test_release_entry_points_require_an_admin_before_using_release_credentials"
-  ],
-  "frontend": [],
-  "playwright": [],
-  "native": []
+  "python_node": false
 }
