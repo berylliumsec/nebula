@@ -8766,7 +8766,8 @@ test("phone shell project notes fill the Workbench writing area", async ({ page 
   const body = page.getByRole("textbox", { name: "Note body" });
   await body.scrollIntoViewIfNeeded();
   await body.fill("A working observation with enough detail to edit.");
-  await expect(body).toHaveValue("A working observation with enough detail to edit.");
+  await body.pressSequentially(" Latest text stays at the caret.");
+  await expect(body).toHaveValue("A working observation with enough detail to edit. Latest text stays at the caret.");
   await expect(body).toBeFocused();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
   expect((await new AxeBuilder({ page }).include(".notes-panel").analyze()).violations).toEqual([]);
