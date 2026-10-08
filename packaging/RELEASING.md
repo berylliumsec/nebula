@@ -5,6 +5,38 @@ command contract is release-blocking: `nebula` launches the native desktop,
 while `nebula-core` provides administration and diagnostics. Promotion smoke
 tests exercise both installed commands.
 
+## Daily stable publication
+
+`daily-stable-release.yml` checks `main` every day at 9:00 AM
+`America/New_York`. It skips when no commits have landed since the source commit
+of the latest published Nebula 3 release. A manual dispatch runs the same gate.
+It requires the exact main commit's CI run to have passed before it acts.
+
+For a changed, green main, the job makes a release-only commit containing the
+next stable patch version and a changelog of commit subjects. The first stable
+release after a prerelease keeps its base version, for example
+`3.0.0-beta.3` becomes `3.0.0`; later stable releases advance the patch.
+The release-only commit records both main and the prior release in its ancestry,
+so impact selection can compare immutable releases without changing main.
+It pushes only an immutable tag, then dispatches the existing preparation and
+draft workflows. The release driver checks the Playwright impact receipt,
+checksums, and provenance attestations before publishing the stable GitHub
+Release. It explicitly dispatches updater metadata publication because releases
+made by `GITHUB_TOKEN` do not recursively trigger another workflow.
+
+The first daily release carries a one-time focused coverage review in
+`.github/daily-release-coverage.json`, bound to the exact diff since
+`nebula-v3.0.0-beta.3`. It reuses the 16 Studio Dark and Notes browser journeys
+that passed on PR #702. A changed diff invalidates that review; later releases
+use automatic impact selection and stop before tagging if shared or unmapped
+changes require a new review.
+
+Any failed check stops publication. An existing release tag or draft is a
+recovery case for a release manager; the daily job never moves a tag or replaces
+an asset. GitHub may delay or drop scheduled runs under load, so the manual
+dispatch remains available. APT promotion is a separate protected workflow in
+`BerylliumSec/nebula-apt` and is not performed by this schedule.
+
 ## Supported release matrix
 
 The protected workflow currently produces Linux x86_64 packages only:

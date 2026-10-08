@@ -1,41 +1,23 @@
 {
-  "change_digest": "a0c2d3dcd2638c857453b3f4bbc36a9fd28f78ce7fc56a0d04485703a0227acc",
+  "change_digest": "4cfd2fe128fb78910dc6c1c0ff1921bb1198c2e718e44684a4ad554a94c8648c",
   "reviewed_by": "Codex, scoped review on 2026-10-08",
-  "reason": "Studio Dark changes the default theme and palette, the project overview orientation, and Workbench geometry. The focus follow-up centers chat at 2880px and replaces mint accents with cool slate. The Notes follow-up makes the desktop writing surface fill the available Workbench height without changing the phone flow. Focused component tests check theme fallback, project data, settings, and note creation and refresh. Selected browser journeys check the first-run default, theme persistence, project and Workbench geometry, populated conversation, and Notes geometry and drafting across desktop and phone engines. This is an isolated preview branch with no Core schema or backend behavior change.",
-  "exclusions": "No Python or native code changed, so their tests are excluded. Unrelated provider, terminal, project mutation, and release suites are excluded. The browser fixture validates responsive presentation; an isolated production Core launch and LAN-origin inspection are separate manual gates.",
-  "python_versions": ["3.12"],
+  "reason": "Daily release automation changes GitHub scheduling, exact source-based impact baseline resolution, reviewed first-release coverage, and release orchestration. Ten focused Python cases check stable version progression, fail-closed CI and impact decisions, exact reviewed-diff binding, and workflow-run matching. Workflow shell syntax and release lineage were reviewed separately.",
+  "exclusions": "No operator UI, browser, native application, or Core runtime behavior changes; frontend, Playwright, and native tests are excluded. The scheduled GitHub run and protected release pipeline cannot be exercised locally without publishing an actual release.",
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
-  "python": [],
-  "frontend": [
-    "ui/src/state/ThemeContext.test.tsx",
-    "ui/src/pages/OverviewPage.test.tsx",
-    "ui/src/pages/SettingsPage.test.tsx",
-    "ui/src/components/NotesPanel.test.tsx"
+  "python": [
+    "tests/test_daily_stable_release.py"
   ],
-  "playwright": [
-    "entry:studio-dark-vision/desktop",
-    "entry:studio-dark-vision/compact",
-    "entry:studio-dark-vision/mobile-chromium-small",
-    "entry:studio-dark-vision/mobile-chromium",
-    "entry:studio-dark-vision/mobile-chromium-wide",
-    "entry:studio-dark-vision/mobile-webkit-small",
-    "entry:studio-dark-vision/mobile-webkit",
-    "entry:studio-dark-vision/mobile-webkit-wide",
-    "entry:notes-screen-fit/desktop",
-    "entry:notes-screen-fit/compact",
-    "entry:notes-screen-fit/mobile-chromium-small",
-    "entry:notes-screen-fit/mobile-chromium",
-    "entry:notes-screen-fit/mobile-chromium-wide",
-    "entry:notes-screen-fit/mobile-webkit-small",
-    "entry:notes-screen-fit/mobile-webkit",
-    "entry:notes-screen-fit/mobile-webkit-wide"
-  ],
+  "frontend": [],
+  "playwright": [],
   "native": [],
   "expected_tests": {
-    "python": 0,
-    "frontend": 18,
-    "playwright": 28,
+    "python": 10,
+    "frontend": 0,
+    "playwright": 0,
     "native": 0
   }
 }
