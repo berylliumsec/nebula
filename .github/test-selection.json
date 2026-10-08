@@ -1,14 +1,32 @@
 {
-  "change_digest": "94fe15d9eae8baab1d1b8714f782818a7be314147bc34422c4083ea293de390f",
-  "reviewed_by": "Codex focused coverage review",
-  "reason": "Synchronize the checked-in APT scaffold with the published repository's admin gate, multiversion index, and fixed policy fixture. One packaging contract test checks the scaffold and executes its seven internal policy tests.",
-  "exclusions": "No Nebula application UI, browser journey, provider, database, or native code changes. Frontend, Playwright, native, unrelated Python tests, and full suites are excluded. Shell syntax checks run locally.",
-  "expected_tests": {"python": 1, "frontend": 0, "playwright": 0, "native": 0},
+  "change_digest": "5f536cb8cb8a4b9d50d9a87a93366399a0fce4ddc98ac2cf65da31c28a8a6a4b",
+  "reviewed_by": "Codex, scoped review on 2026-10-08",
+  "reason": "Studio Dark changes the default theme and palette, the project overview orientation, and Workbench geometry. Focused component tests check theme fallback, project data, and settings. Selected browser journeys check the first-run default, theme persistence, project and Workbench geometry, and a populated conversation across required desktop and phone engines. This is an isolated preview branch with no Core schema or backend behavior change.",
+  "exclusions": "No Python or native code changed, so their tests are excluded. Unrelated provider, terminal, project mutation, and release suites are excluded. The browser fixture validates responsive presentation; an isolated production Core launch and LAN-origin inspection are separate manual gates.",
   "python_versions": ["3.12"],
   "python_browser": false,
   "python_node": false,
-  "python": ["tests/v3/test_packaging.py::test_apt_repository_scaffold_is_secret_free_and_verifies_promotions"],
-  "frontend": [],
-  "playwright": [],
-  "native": []
+  "python": [],
+  "frontend": [
+    "ui/src/state/ThemeContext.test.tsx",
+    "ui/src/pages/OverviewPage.test.tsx",
+    "ui/src/pages/SettingsPage.test.tsx"
+  ],
+  "playwright": [
+    "entry:studio-dark-vision/desktop",
+    "entry:studio-dark-vision/compact",
+    "entry:studio-dark-vision/mobile-chromium-small",
+    "entry:studio-dark-vision/mobile-chromium",
+    "entry:studio-dark-vision/mobile-chromium-wide",
+    "entry:studio-dark-vision/mobile-webkit-small",
+    "entry:studio-dark-vision/mobile-webkit",
+    "entry:studio-dark-vision/mobile-webkit-wide"
+  ],
+  "native": [],
+  "expected_tests": {
+    "python": 0,
+    "frontend": 13,
+    "playwright": 20,
+    "native": 0
+  }
 }

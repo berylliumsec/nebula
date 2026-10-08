@@ -20,6 +20,7 @@
 @import url("./vendor-canvas.css") layer(vendor-canvas);
 @import url("./zero-theme.css");
 @import url("./mobile-shell.css");
+@import url("./studio-dark.css");
 
 /* Focus keeps each work surface in the viewport and restores its mounted state on exit. */
 :root[data-nebula-workbench-focus="true"] .app-shell > :is(.top-bar, .side-nav, .mobile-companion-nav) { display: none !important; }

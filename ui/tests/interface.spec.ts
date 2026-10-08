@@ -46,7 +46,7 @@ const workspaces = [
   ["settings", "/settings", "Settings"],
 ] as const;
 
-const firstRunThemeTest = "Zero Dark is the first-run default theme";
+const firstRunThemeTest = "Studio Dark is the first-run default theme";
 
 const entity = {
   created_at: "2026-07-12T10:00:00Z",
@@ -683,7 +683,7 @@ async function openWorkspace(page: Page, route: string, heading: string) {
   await page.waitForTimeout(120);
 }
 
-async function setTheme(page: Page, theme: "light" | "dark" | "zero-dark") {
+async function setTheme(page: Page, theme: "light" | "dark" | "zero-dark" | "studio-dark") {
   await page.evaluate((value) => {
     const oldValue = localStorage.getItem("nebula.theme");
     localStorage.setItem("nebula.theme", value);
@@ -2059,18 +2059,19 @@ test("hidden terminal views stop emitting resize frames", async ({ page }, testI
 
 test(firstRunThemeTest, async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "studio-dark");
   await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
 
-test("theme picker offers Light, Dark, Zero Light, and Zero Dark and persists the selection", async ({ page }) => {
+test("theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark and persists the selection", async ({ page }) => {
   await openWorkspace(page, "/settings#setup-settings", "Settings");
   await page.getByRole("link", { name: "Advanced settings" }).click();
   await page.getByText("Identity & Security", { exact: true }).click();
   const appearance = page.locator("#appearance-settings");
 
   for (const [label, theme, zeroShell] of [
+    ["Studio Dark", "studio-dark", false],
     ["Light", "light", false],
     ["Dark", "dark", false],
     ["Zero Light", "zero-light", true],
@@ -2086,6 +2087,36 @@ test("theme picker offers Light, Dark, Zero Light, and Zero Dark and persists th
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "zero-dark");
   await expect(page.locator(".app-shell")).toHaveClass(/zero-layer-shell/);
+});
+
+test("theme picker Studio Dark keeps the project and Workbench readable across viewports", async ({ page }, testInfo) => {
+  await openWorkspace(page, "/project", "Scratch Project");
+  await setTheme(page, "studio-dark");
+  await expect(page.getByRole("region", { name: "Project orientation" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Project summary" }).locator(".metric-card")).toHaveCount(4);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    const metrics = page.getByRole("region", { name: "Project summary" }).locator(".metric-card");
+    const first = await metrics.nth(0).boundingBox();
+    const second = await metrics.nth(1).boundingBox();
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(Math.abs(first!.y - second!.y)).toBeLessThanOrEqual(1);
+  }
+  await page.screenshot({ path: testInfo.outputPath("studio-dark-project.png"), fullPage: true });
+
+  await page.getByRole("link", { name: "Open workbench" }).click();
+  await expect(page).toHaveURL(/\/workbench\?view=chat/);
+  await page.getByRole("button", { name: "Start new chat" }).click();
+  await expect(page.locator(".chat-studio")).toBeVisible();
+  await expect(page.locator(".chat-composer")).toBeVisible();
+  const composer = await page.locator(".chat-composer").boundingBox();
+  expect(composer).not.toBeNull();
+  expect(composer!.x).toBeGreaterThanOrEqual(0);
+  expect(composer!.x + composer!.width).toBeLessThanOrEqual((page.viewportSize()?.width ?? 0) + 1);
+  expect(composer!.y + composer!.height).toBeLessThanOrEqual((page.viewportSize()?.height ?? 0) + 1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("studio-dark-workbench.png") });
 });
 
 test("Workbench omits the removed Human controlled badge in every theme", async ({ page }) => {
@@ -7404,6 +7435,7 @@ test("stabilization studio conversation keeps context and thinking readable", as
 
   await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
   await expect(page.getByText("Review the rollout plan", { exact: true }).first()).toBeVisible();
+  await setTheme(page, "studio-dark");
   const thinking = page.getByLabel("Harness thinking");
   await expect(thinking).toContainText("12 updates");
   if (testInfo.project.name === "desktop") {
