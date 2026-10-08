@@ -1,5 +1,5 @@
 import { IconAction } from "./IconAction";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, MessageSquareQuote, NotebookPen, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type {
@@ -50,6 +50,15 @@ const blank = {
   metadata: {} as Record<string, unknown>,
 };
 
+const NoteBodyEditor = memo(function NoteBodyEditor({ body, onChange }: { body: string; onChange: (body: string) => void }) {
+  const [value, setValue] = useState(body);
+  useEffect(() => setValue(body), [body]);
+  return <label>Markdown<textarea aria-label="Note body" rows={18} value={value} placeholder="Capture observations, test ideas, or conclusions…" onChange={(event) => {
+    setValue(event.target.value);
+    onChange(event.target.value);
+  }} /></label>;
+});
+
 export function NotesPanel({
   api,
   engagementId,
@@ -69,6 +78,12 @@ export function NotesPanel({
   const [selectedId, setSelectedId] = useState<string>();
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState(blank);
+  const draftBodyRef = useRef("");
+  const [hasBody, setHasBody] = useState(false);
+  const onBodyChange = useCallback((body: string) => {
+    draftBodyRef.current = body;
+    setHasBody((current) => current === Boolean(body.trim()) ? current : Boolean(body.trim()));
+  }, []);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
@@ -139,6 +154,8 @@ export function NotesPanel({
     }
     if (!selected) {
       syncedNoteRef.current = undefined;
+      draftBodyRef.current = "";
+      setHasBody(false);
       setDraft(blank);
       return;
     }
@@ -147,6 +164,8 @@ export function NotesPanel({
     const key = `${selected.id}:${selected.revision}`;
     if (syncedNoteRef.current === key) return;
     syncedNoteRef.current = key;
+    draftBodyRef.current = selected.body;
+    setHasBody(Boolean(selected.body.trim()));
     setDraft({
       title: selected.title,
       body: selected.body,
@@ -178,6 +197,8 @@ export function NotesPanel({
       },
     };
     setDraft(nextDraft);
+    draftBodyRef.current = nextDraft.body;
+    setHasBody(Boolean(nextDraft.body.trim()));
     setError(undefined);
     onInitialDraftConsumed?.();
     setSaving(true);
@@ -203,6 +224,8 @@ export function NotesPanel({
     setCreating(true);
     setSelectedId(undefined);
     setDraft(blank);
+    draftBodyRef.current = "";
+    setHasBody(false);
     setError(undefined);
   };
 
@@ -216,7 +239,7 @@ export function NotesPanel({
           engagementId,
           observationType: "note",
           title: draft.title,
-          body: draft.body,
+          body: draftBodyRef.current,
           evidenceIds: draft.evidenceIds,
           assetIds: draft.assetIds,
           source: "operator-note",
@@ -228,7 +251,7 @@ export function NotesPanel({
       } else {
         const updated = await updateNote(selected.id, {
           title: draft.title,
-          body: draft.body,
+          body: draftBodyRef.current,
           evidenceIds: draft.evidenceIds,
           assetIds: draft.assetIds,
           metadata: draft.metadata,
@@ -308,13 +331,13 @@ export function NotesPanel({
             <input aria-label="Note title" value={draft.title} placeholder="Note title" maxLength={500} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />
             <div>
               {selected && <IconAction icon={Trash2} label="Delete" title="Delete note" onClick={() => void remove()} />}
-              <button className="button quiet" type="button" disabled={!draft.body.trim() || !writingRuntimes.length} onClick={() => setWritingOpen(true)}><Sparkles size={14} /> Transform with AI</button>
-              <button className="button quiet" type="button" disabled={!draft.body.trim() || !onAskNebula} onClick={() => onAskNebula?.({ text: draft.body, sourceKind: "note", sourceId: selected?.id, sourceLabel: draft.title || "Untitled note" })}><MessageSquareQuote size={14} /> Ask Nebula</button>
+              <button className="button quiet" type="button" disabled={!hasBody || !writingRuntimes.length} onClick={() => setWritingOpen(true)}><Sparkles size={14} /> Transform with AI</button>
+              <button className="button quiet" type="button" disabled={!hasBody || !onAskNebula} onClick={() => onAskNebula?.({ text: draftBodyRef.current, sourceKind: "note", sourceId: selected?.id, sourceLabel: draft.title || "Untitled note" })}><MessageSquareQuote size={14} /> Ask Nebula</button>
               <button className="button primary" type="button" disabled={saving || !draft.title.trim()} onClick={() => void save()}><Save size={14} /> {saving ? "Saving…" : "Save"}</button>
             </div>
           </header>
           <div className="note-editor-body">
-            <label>Markdown<textarea aria-label="Note body" rows={18} value={draft.body} placeholder="Capture observations, test ideas, or conclusions…" onChange={(event) => setDraft((current) => ({ ...current, body: event.target.value }))} /></label>
+            <NoteBodyEditor key={creating ? "new" : `${selected?.id}:${selected?.revision}`} body={draft.body} onChange={onBodyChange} />
           </div>
           {(evidenceOptions.length > 0 || assetOptions.length > 0) && <details><summary>Links · {draft.evidenceIds.length} evidence · {draft.assetIds.length} assets</summary>
             {evidenceOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.evidenceIds.includes(option.id)} onChange={() => toggleLink("evidenceIds", option.id)} /> {option.label}</label>)}
@@ -331,10 +354,12 @@ export function NotesPanel({
         title="Transform note with AI"
         description="Tell Nebula how to organize or rewrite this note. The generated text remains editable and is not persisted until you save the note."
         sourceLabel={draft.title || "Untitled note"}
-        sourceText={draft.body}
+        sourceText={draftBodyRef.current}
         initialInstruction="Turn this into a concise analyst note. Preserve exact observations, separate hypotheses, and keep useful technical details."
         onClose={() => setWritingOpen(false)}
         onApply={(result) => {
+          draftBodyRef.current = result.content;
+          setHasBody(Boolean(result.content.trim()));
           setDraft((current) => ({
             ...current,
             body: result.content,

@@ -70,6 +70,32 @@ describe("NotesPanel", () => {
     expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({ text: "Changed", sourceKind: "note", sourceId: "note-1" }));
   });
 
+  it("keeps the latest typed body through link edits and uses it for Save and Ask Nebula", async () => {
+    const user = userEvent.setup();
+    const updateObservation = vi.fn().mockImplementation(async (_id, request) => ({ ...note, ...request, revision: 2 }));
+    const onAsk = vi.fn();
+    render(<DialogProvider><NotesPanel
+      api={{ listObservations: vi.fn().mockResolvedValue({ items: [note], total: 1 }) } as unknown as ApiClient}
+      engagementId="eng-1"
+      evidenceOptions={[{ id: "evidence-1", label: "Screenshot" }]}
+      updateObservation={updateObservation}
+      onAskNebula={onAsk}
+    /></DialogProvider>);
+
+    const body = await screen.findByRole("textbox", { name: "Note body" });
+    await waitFor(() => expect(body).toHaveValue(note.body));
+    await user.clear(body);
+    await user.type(body, "Latest unsaved text");
+    await user.click(screen.getByText(/Links ·/));
+    await user.click(screen.getByRole("checkbox", { name: "Screenshot" }));
+    await user.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({ text: "Latest unsaved text" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledWith("note-1", expect.objectContaining({
+      body: "Latest unsaved text", evidenceIds: ["evidence-1"], expectedRevision: 1,
+    })));
+  });
+
   it("keeps unsaved edits when the note list is refreshed", async () => {
     const user = userEvent.setup();
     const listObservations = vi.fn().mockImplementation(async () => ({ items: [{ ...note }], total: 1 }));
