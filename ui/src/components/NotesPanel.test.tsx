@@ -28,6 +28,47 @@ function renderPanel(api: Partial<ApiClient>, onAskNebula = vi.fn()) {
 }
 
 describe("NotesPanel", () => {
+  it("uses the loaded workspace notes without fetching them again", async () => {
+    const listObservations = vi.fn();
+    render(<DialogProvider><NotesPanel
+      api={{ listObservations } as unknown as ApiClient}
+      engagementId="eng-1"
+      initialNotes={[note]}
+      initialNotesReady
+    /></DialogProvider>);
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue(note.body));
+    expect(screen.getByRole("button", { name: /Initial note/ })).toHaveClass("active");
+    expect(listObservations).not.toHaveBeenCalled();
+  });
+
+  it("shows loading progress and lets the operator start writing before saved notes arrive", async () => {
+    const user = userEvent.setup();
+    let resolveNotes!: (value: { items: ObservationSummary[]; total: number }) => void;
+    const listObservations = vi.fn().mockReturnValue(new Promise((resolve) => { resolveNotes = resolve; }));
+    renderPanel({ listObservations });
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Loading saved notes…");
+    await user.click(screen.getByRole("button", { name: "New note" }));
+    await user.type(screen.getByRole("textbox", { name: "Note body" }), "Draft during load");
+    resolveNotes({ items: [note], total: 1 });
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("Draft during load");
+  });
+
+  it("retries a failed note load from the pane", async () => {
+    const user = userEvent.setup();
+    const listObservations = vi.fn()
+      .mockRejectedValueOnce(new Error("Could not reach saved notes"))
+      .mockResolvedValue({ items: [note], total: 1 });
+    renderPanel({ listObservations });
+
+    expect(await screen.findByText("Could not reach saved notes")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Refresh notes" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue(note.body));
+    expect(screen.queryByText("Could not reach saved notes")).not.toBeInTheDocument();
+  });
+
   it("names a finalized report that retains a note and directs the user to Reports", async () => {
     const user = userEvent.setup();
     const deleteObservation = vi.fn();
