@@ -28,6 +28,47 @@ function renderPanel(api: Partial<ApiClient>, onAskNebula = vi.fn()) {
 }
 
 describe("NotesPanel", () => {
+  it("uses the loaded workspace notes without fetching them again", async () => {
+    const listObservations = vi.fn();
+    render(<DialogProvider><NotesPanel
+      api={{ listObservations } as unknown as ApiClient}
+      engagementId="eng-1"
+      initialNotes={[note]}
+      initialNotesReady
+    /></DialogProvider>);
+
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue(note.body));
+    expect(screen.getByRole("button", { name: /Initial note/ })).toHaveClass("active");
+    expect(listObservations).not.toHaveBeenCalled();
+  });
+
+  it("shows loading progress and lets the operator start writing before saved notes arrive", async () => {
+    const user = userEvent.setup();
+    let resolveNotes!: (value: { items: ObservationSummary[]; total: number }) => void;
+    const listObservations = vi.fn().mockReturnValue(new Promise((resolve) => { resolveNotes = resolve; }));
+    renderPanel({ listObservations });
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Loading saved notes…");
+    await user.click(screen.getByRole("button", { name: "New note" }));
+    await user.type(screen.getByRole("textbox", { name: "Note body" }), "Draft during load");
+    resolveNotes({ items: [note], total: 1 });
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("Draft during load");
+  });
+
+  it("retries a failed note load from the pane", async () => {
+    const user = userEvent.setup();
+    const listObservations = vi.fn()
+      .mockRejectedValueOnce(new Error("Could not reach saved notes"))
+      .mockResolvedValue({ items: [note], total: 1 });
+    renderPanel({ listObservations });
+
+    expect(await screen.findByText("Could not reach saved notes")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Refresh notes" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue(note.body));
+    expect(screen.queryByText("Could not reach saved notes")).not.toBeInTheDocument();
+  });
+
   it("names a finalized report that retains a note and directs the user to Reports", async () => {
     const user = userEvent.setup();
     const deleteObservation = vi.fn();
@@ -68,6 +109,32 @@ describe("NotesPanel", () => {
 
     await user.click(screen.getByRole("button", { name: /ask nebula/i }));
     expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({ text: "Changed", sourceKind: "note", sourceId: "note-1" }));
+  });
+
+  it("keeps the latest typed body through link edits and uses it for Save and Ask Nebula", async () => {
+    const user = userEvent.setup();
+    const updateObservation = vi.fn().mockImplementation(async (_id, request) => ({ ...note, ...request, revision: 2 }));
+    const onAsk = vi.fn();
+    render(<DialogProvider><NotesPanel
+      api={{ listObservations: vi.fn().mockResolvedValue({ items: [note], total: 1 }) } as unknown as ApiClient}
+      engagementId="eng-1"
+      evidenceOptions={[{ id: "evidence-1", label: "Screenshot" }]}
+      updateObservation={updateObservation}
+      onAskNebula={onAsk}
+    /></DialogProvider>);
+
+    const body = await screen.findByRole("textbox", { name: "Note body" });
+    await waitFor(() => expect(body).toHaveValue(note.body));
+    await user.clear(body);
+    await user.type(body, "Latest unsaved text");
+    await user.click(screen.getByText(/Links ·/));
+    await user.click(screen.getByRole("checkbox", { name: "Screenshot" }));
+    await user.click(screen.getByRole("button", { name: "Ask Nebula" }));
+    expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({ text: "Latest unsaved text" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledWith("note-1", expect.objectContaining({
+      body: "Latest unsaved text", evidenceIds: ["evidence-1"], expectedRevision: 1,
+    })));
   });
 
   it("keeps unsaved edits when the note list is refreshed", async () => {

@@ -2492,10 +2492,14 @@ class CodexAppServerConnection(HarnessConnection):
         }
         if self.cyber_access_program is not None:
             turn_params["cyberAccessProgram"] = self.cyber_access_program
-        if mode:
+        if mode and mode != "default":
             # App Server calls this a collaboration mode.  It is only sent when
             # the negotiated capability admitted the operator's selection.
-            turn_params["collaborationMode"] = {"mode": mode}
+            # The advertised default mode uses Codex's own thread default.
+            turn_params["collaborationMode"] = {
+                "mode": mode,
+                "settings": {"model": model},
+            }
         result = await self.rpc.request(
             "turn/start",
             turn_params,

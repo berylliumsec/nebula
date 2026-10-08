@@ -1,17 +1,19 @@
 {
-  "change_digest": "9736d90a33387287feef2eb19d6b56a2d555fd4872b81643adf275038220688c",
-  "reviewed_by": "Codex focused coverage review",
-  "reason": "Beta.3 synchronizes package versions and restricts release preparation and draft entry points to repository admins. The selected packaging tests verify both contracts.",
-  "exclusions": "No application UI, chat behavior, browser origin, persistence, or native behavior changes in this diff. Frontend, Playwright, native, unrelated Python tests, and full suites are excluded; release preparation separately runs its reviewed impact selection and package checks.",
-  "expected_tests": {"python": 2, "frontend": 0, "playwright": 0, "native": 0},
+  "change_digest": "09fe3277ede7a3494cc780c987e0fe6dc8f6f4bc36eb15cdb3e5ff24b85b5077",
+  "reviewed_by": "Codex focused dependency review for source-map-js 1.2.2",
+  "reason": "source-map-js is used by Vite/PostCSS and jsdom. Two build-identity tests and the selected frontend CI job exercise the updated lockfile installation and production bundle build; an isolated npm ci and production build also passed locally.",
+  "exclusions": "No application source, server state, browser origin behavior, or native dependency changed. Python, native, and Playwright are excluded. Browser/device and real-Core journeys are not selected because this is a build-tool dependency update; no operator workflow behavior is claimed verified.",
+  "python": [],
+  "frontend": ["ui/src/buildIdentity.test.ts"],
+  "native": [],
+  "playwright": [],
+  "expected_tests": {
+    "python": 0,
+    "frontend": 2,
+    "native": 0,
+    "playwright": 0
+  },
   "python_versions": ["3.12"],
   "python_browser": false,
-  "python_node": false,
-  "python": [
-    "tests/v3/test_packaging.py::test_nebula3_version_is_synchronized_across_every_package",
-    "tests/v3/test_packaging.py::test_release_entry_points_require_an_admin_before_using_release_credentials"
-  ],
-  "frontend": [],
-  "playwright": [],
-  "native": []
+  "python_node": false
 }

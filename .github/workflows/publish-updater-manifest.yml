@@ -21,8 +21,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-admin:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Require repository admin for updater publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ACTOR: ${{ github.actor }}
+        run: |
+          permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$RELEASE_ACTOR/permission" --jq .permission)"
+          test "$permission" = admin || { echo 'Only repository admins may publish updater metadata.' >&2; exit 1; }
+
   manifest:
     if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'nebula-v3.')
+    needs: validate-admin
     runs-on: ubuntu-22.04
     environment:
       name: desktop-release

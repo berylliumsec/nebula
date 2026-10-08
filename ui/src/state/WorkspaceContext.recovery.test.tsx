@@ -23,11 +23,13 @@ function Probe() {
   useLayoutEffect(() => { fixture.onCommit?.(); });
   return <><output data-testid="state">{JSON.stringify({
     workspace: value.workspaceState, status: value.resourceStatus,
-    library: value.libraryItems, harnesses: value.harnesses,
+    library: value.libraryItems, harnesses: value.harnesses, assets: value.assets,
     run: value.run, runs: value.runs, events: value.events,
     approvals: value.approvals, engagement: value.engagement?.id,
   })}</output>{(["library", "harnesses", "activity"] as const).map((resource) =>
     <button key={resource} onClick={() => void value.retryResource(resource).catch(() => {})}>Retry {resource}</button>)}
+  <button onClick={() => value.selectEngagement("project-b")}>Select project B</button>
+  <button onClick={() => value.selectEngagement("project")}>Select project A</button>
   <button onClick={() => void value.resolveApproval(value.approvals[0]?.id ?? "", { decision: "approve" }).catch((error: Error) => fixture.errors.push(error.message))}>Approve first</button></>;
 }
 const state = () => JSON.parse(screen.getByTestId("state").textContent!);
@@ -58,6 +60,42 @@ beforeEach(() => {
 });
 
 describe("workspace resource recovery", () => {
+  it("shows a selected project before its resources finish and does not reload global catalogs", async () => {
+    fixture.methods.listEngagements.mockResolvedValue({ items: [
+      { id: "project", name: "Project A", status: "active" },
+      { id: "project-b", name: "Project B", status: "active" },
+    ] });
+    await mount();
+    let finishAssets!: (value: unknown) => void;
+    fixture.methods.listAssets.mockImplementationOnce(() => new Promise((resolve) => { finishAssets = resolve; }));
+
+    fireEvent.click(screen.getByText("Select project B"));
+    expect(state().engagement).toBe("project-b");
+    expect(state().workspace).toBe("ready");
+    expect(state().assets).toEqual([]);
+    await waitFor(() => expect(fixture.methods.listAssets).toHaveBeenCalledTimes(2));
+    expect(fixture.methods.health).toHaveBeenCalledTimes(1);
+    expect(fixture.methods.listEngagements).toHaveBeenCalledTimes(1);
+    expect(fixture.methods.listProviders).toHaveBeenCalledTimes(1);
+
+    await act(async () => finishAssets({ items: [{ id: "asset-b" }] }));
+    await waitFor(() => expect(state().assets).toEqual([{ id: "asset-b" }]));
+    fireEvent.click(screen.getByText("Select project A"));
+    expect(state().engagement).toBe("project");
+    expect(state().assets).toEqual([]);
+    await waitFor(() => expect(fixture.methods.listAssets).toHaveBeenCalledTimes(3));
+    expect(fixture.methods.listEngagements).toHaveBeenCalledTimes(1);
+
+    let finishStaleAssets!: (value: unknown) => void;
+    fixture.methods.listAssets.mockImplementationOnce(() => new Promise((resolve) => { finishStaleAssets = resolve; }));
+    fireEvent.click(screen.getByText("Select project B"));
+    await waitFor(() => expect(fixture.methods.listAssets).toHaveBeenCalledTimes(4));
+    fireEvent.click(screen.getByText("Select project A"));
+    await act(async () => finishStaleAssets({ items: [{ id: "stale-b" }] }));
+    expect(state().engagement).toBe("project");
+    expect(state().assets).toEqual([]);
+  });
+
   it("does not let a queued catalog-health effect overwrite observed connection loss", async () => {
     await mount();
     fixture.methods.listLibraryItems.mockResolvedValue({items: [{id: "refreshed"}]});
