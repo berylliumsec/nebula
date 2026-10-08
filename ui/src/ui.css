@@ -48,7 +48,7 @@
 
 /* Chat focus uses the full viewport for one conversation. Keep temporary panes
    mounted so leaving focus restores them with their current state. */
-.sessions-page.chat-focus.full-screen { padding: 0; background: var(--canvas); }
+.sessions-page.chat-focus.full-screen { width: 100%; max-width: none; padding: 0; background: var(--canvas); }
 .sessions-page.chat-focus > .session-toolbar { display: none; }
 .sessions-page.chat-focus > .session-layout.chat,
 .sessions-page.chat-focus > .session-layout.chat.conversation-panel-open,

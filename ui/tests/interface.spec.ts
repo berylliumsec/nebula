@@ -2092,6 +2092,7 @@ test("theme picker offers Studio Dark, Light, Dark, Zero Light, and Zero Dark an
 test("theme picker Studio Dark keeps the project and Workbench readable across viewports", async ({ page }, testInfo) => {
   await openWorkspace(page, "/project", "Scratch Project");
   await setTheme(page, "studio-dark");
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--blue").trim())).toBe("#b3c7d4");
   await expect(page.getByRole("region", { name: "Project orientation" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Project summary" }).locator(".metric-card")).toHaveCount(4);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
@@ -2117,6 +2118,29 @@ test("theme picker Studio Dark keeps the project and Workbench readable across v
   expect(composer!.y + composer!.height).toBeLessThanOrEqual((page.viewportSize()?.height ?? 0) + 1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("studio-dark-workbench.png") });
+
+  if (testInfo.project.name === "desktop") await page.setViewportSize({ width: 2880, height: 1554 });
+  if ((page.viewportSize()?.width ?? 1440) <= 760) {
+    await page.getByRole("button", { name: "More workbench views" }).click();
+    await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Focus mode" }).click();
+  } else await page.getByRole("button", { name: "Enter focus mode" }).click();
+  await expect(page.locator(".sessions-page.chat-focus")).toBeVisible();
+  const focusGeometry = await page.locator(".sessions-page.chat-focus").evaluate(element => {
+    const root = element.getBoundingClientRect();
+    const composer = element.querySelector<HTMLElement>(".chat-composer")!.getBoundingClientRect();
+    const empty = element.querySelector<HTMLElement>(".chat-scroll .empty-state.compact")!.getBoundingClientRect();
+    return {
+      rightGap: innerWidth - root.right,
+      composerOffset: composer.left + composer.width / 2 - innerWidth / 2,
+      emptyOffset: empty.left + empty.width / 2 - innerWidth / 2,
+      documentOverflow: document.documentElement.scrollWidth - innerWidth,
+    };
+  });
+  expect(Math.abs(focusGeometry.rightGap)).toBeLessThanOrEqual(1);
+  expect(Math.abs(focusGeometry.composerOffset)).toBeLessThanOrEqual(1);
+  expect(Math.abs(focusGeometry.emptyOffset)).toBeLessThanOrEqual(1);
+  expect(focusGeometry.documentOverflow).toBeLessThanOrEqual(1);
+  await page.screenshot({ path: testInfo.outputPath("studio-dark-focus.png") });
 });
 
 test("Workbench omits the removed Human controlled badge in every theme", async ({ page }) => {
