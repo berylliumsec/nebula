@@ -1,23 +1,19 @@
 {
-  "change_digest": "2faf31a723e4806f0591d773353c4255b9671e61a712a87fd2d08235cd8b9fc4",
-  "reviewed_by": "Codex, focused Notes opening review on 2026-10-08",
-  "reason": "Notes now initializes from the already loaded workspace observation snapshot instead of refetching on every pane entry. Nine focused component tests cover cached data, loading feedback, write-during-load, retry, and draft operations; three Notes browser journeys cover desktop and mobile engines; the production LAN real-Core journey verifies no duplicate GET and durable Save/reload. Disposable production LAN measurements with 1000 notes compare before and after opening latency.",
-  "exclusions": "No Core, provider, harness, Python, or native implementation changes. SessionsPage changes only pass the project-scoped workspace Notes snapshot and status into NotesPanel; unrelated shared Workbench journeys are excluded after reviewing this boundary. Browser selection has four exact Notes entries. Physical mobile device unavailable; emulated browsers selected.",
-  "python": [],
-  "frontend": [
-    "ui/src/components/NotesPanel.test.tsx"
-  ],
+  "change_digest": "ce56361aa4ab627621d08518581b0946d1e7c160c5a19272ae2bc62872016051",
+  "reviewed_by": "Codex focused dependency review for Mako 1.4.2",
+  "reason": "Mako renders Alembic migration templates. Five collected migration tests cover the upgrade and downgrade path affected by the lockfile update.",
+  "exclusions": "No frontend or native dependency changed, so those layers and Playwright are excluded. The PostgreSQL case requires NEBULA_TEST_POSTGRES_URL and skips when unavailable. Unrelated Python suites and full suites are excluded.",
+  "python": ["tests/v3/test_migrations.py"],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:notes-typing/desktop",
-    "entry:notes-typing/mobile-chromium-small",
-    "entry:notes-typing/mobile-webkit-small",
-    "entry:notes-typing/real-core"
-  ],
+  "playwright": [],
   "expected_tests": {
-    "python": 0,
-    "frontend": 9,
+    "python": 5,
+    "frontend": 0,
     "native": 0,
-    "playwright": 4
-  }
+    "playwright": 0
+  },
+  "python_versions": ["3.12"],
+  "python_browser": false,
+  "python_node": false
 }
