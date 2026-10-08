@@ -40,6 +40,7 @@
     {"name": "themes", "patterns": ["ui/src/components/Theme*", "ui/src/pages/Appearance*", "ui/src/theme/**"], "areas": ["themes"]},
     {"name": "studio-dark-vision", "patterns": ["ui/src/studio-dark.css", "ui/src/pages/OverviewPage*", "ui/src/state/ThemeContext*", "ui/src/pages/SettingsPage*"], "areas": ["studio-dark-vision"]},
     {"name": "notes-screen-fit", "patterns": ["ui/src/components-workbench.css", "ui/src/pages/SessionsPage.tsx"], "areas": ["notes-screen-fit"]},
+    {"name": "notes-typing", "patterns": ["ui/src/components/NotesPanel.tsx"], "areas": ["notes-typing"]},
     {"name": "desktop-shell", "patterns": ["ui/src-tauri/**"], "areas": ["desktop-shell"]},
     {"name": "file-navigation-search", "patterns": ["src/nebula/v3/workspace.py", "ui/src/components/WorkspacePanel*", "ui/src/components/EditorWorkspaceSearch*", "ui/src/components/CodeEditorPanel*", "ui/src/api/types.ts"], "areas": ["editor-files-scroll", "file-search-real-core"]},
     {"name": "code-editor", "patterns": ["ui/src/components/CodeEditorPanel*", "ui/src/components/CodeMirrorSurface*", "ui/src/components/Editor*", "ui/src/components/editor*", "ui/src/components/fileIcons*", "ui/src/components/useEditorSidebarWidth*"], "areas": ["coding-makeover", "editor-files-scroll"]},
@@ -1321,6 +1322,12 @@
       {"area":"notes-screen-fit","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"phone shell project notes fill the Workbench writing area","runtime":"mock","shard":"1/1"},
       {"area":"notes-screen-fit","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"phone shell project notes fill the Workbench writing area","runtime":"mock","shard":"1/1"},
       {"area":"notes-screen-fit","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"phone shell project notes fill the Workbench writing area","runtime":"mock","shard":"1/1"}
+    ],
+    "notes-typing": [
+      {"area":"notes-typing","project":"desktop","test_match":"tests/interface.spec.ts","grep":"phone shell project notes fill the Workbench writing area","runtime":"mock","shard":"1/1"},
+      {"area":"notes-typing","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"phone shell project notes fill the Workbench writing area","runtime":"mock","shard":"1/1"},
+      {"area":"notes-typing","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"phone shell project notes fill the Workbench writing area","runtime":"mock","shard":"1/1"},
+      {"area":"notes-typing","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"notes typing production LAN saves and reloads the latest draft","runtime":"real-core","shard":"1/1"}
     ],
     "desktop-shell": [
       {"area":"desktop-shell","project":"desktop","test_match":"tests/interface.spec.ts","grep":"desktop|window|updater|paired-device","runtime":"mock","shard":"1/1"},
