@@ -1,19 +1,17 @@
 {
-  "change_digest": "a5e9f7b28e6f7c473beb3ca5c525e9656f2df579e37be7619ae83c5db7daca5f",
-  "reviewed_by": "Codex focused dependency review for pypdf 6.19.0",
-  "reason": "pypdf parses imported PDF knowledge documents and validates exported report PDFs. Four exact cases cover bounded extraction, report rendering and cached output, saved note rendering, and the evidence signoff PDF workflow.",
-  "exclusions": "No frontend or native dependency changed, so those layers and Playwright are excluded. Unrelated Python suites and full suites are excluded. Local collection is blocked by the host pyOpenSSL and cryptography mismatch; clean CI must collect and run the four selected cases.",
+  "change_digest": "15d3e142c5624bb2fecc985f95a719c6a8b3c05bd6a1eb68180455057f0573fe",
+  "reviewed_by": "Codex focused dependency review for urllib3 2.8.0",
+  "reason": "urllib3 is used through botocore. Two exact Bedrock cases cover botocore import and the provider's error and context-limit handling after the lockfile update; CI installation validates the resolved dependency set.",
+  "exclusions": "No frontend or native dependency changed, so those layers and Playwright are excluded. These mocked Bedrock cases do not exercise live AWS HTTP transport. Unrelated Python suites and full suites are excluded. Local collection is blocked by the host pyOpenSSL and cryptography mismatch; clean CI must collect and run the selected cases.",
   "python": [
-    "tests/v3/test_knowledge.py::test_pdf_extraction_stops_when_the_text_budget_is_exceeded",
-    "tests/v3/test_reporting.py::test_pdf_is_valid_cached_and_warns_without_interpreting_content",
-    "tests/v3/test_reporting.py::test_pdf_uses_saved_report_local_note_transform",
-    "tests/v3/test_report_signoff.py::test_evidence_validation_signoff_and_pdf_workflow"
+    "tests/v3/test_providers.py::test_bedrock_reports_the_client_error_code_and_message",
+    "tests/v3/test_providers.py::test_bedrock_context_window_rejection_is_typed"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "expected_tests": {
-    "python": 4,
+    "python": 2,
     "frontend": 0,
     "native": 0,
     "playwright": 0
