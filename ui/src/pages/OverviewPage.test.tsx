@@ -10,6 +10,9 @@ import "../components-workbench.css";
 vi.mock("../state/ChromeContext", () => ({
   useChrome: () => ({ setActivityOpen: vi.fn(), toolbarHost: null }),
 }));
+vi.mock("../state/ThemeContext", () => ({
+  useTheme: () => ({ resolvedTheme: "studio-dark" }),
+}));
 
 vi.mock("../state/WorkspaceContext", () => ({
   useWorkspace: () => ({
@@ -66,6 +69,7 @@ describe("project overview mission activity", () => {
     expect(within(activity!).getByText("192.168.1.1").tagName).toBe("CODE");
     expect(screen.queryByText(/\*\*Analyst-Facing Result\*\*/)).toBeNull();
     expect(screen.getByText("$0.000038")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Project orientation" })).toHaveTextContent("Network review is complete");
   });
 
   it("formats mission costs without hiding small harness totals", () => {

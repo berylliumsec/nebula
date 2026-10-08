@@ -48,6 +48,7 @@ jobs:
       channel: ${{ steps.release.outputs.channel }}
       prerelease: ${{ steps.release.outputs.prerelease }}
       commit: ${{ steps.release.outputs.commit }}
+      source_commit: ${{ steps.release.outputs.source_commit }}
       build_timestamp: ${{ steps.release.outputs.build_timestamp }}
     steps:
       - name: Require repository admin for release preparation
@@ -80,6 +81,9 @@ jobs:
             *) channel=stable; prerelease=false ;;
           esac
           commit="$(git rev-parse HEAD)"
+          source_commit="$(sed -n 's/.*<!-- nebula-source-sha: \([0-9a-f]\{40\}\) -->.*/\1/p' "docs/releases/$version.md" | head -n 1)"
+          if test -z "$source_commit"; then source_commit="$commit"; fi
+          git merge-base --is-ancestor "$source_commit" "$commit"
           build_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           {
             printf 'tag=%s\n' "$RELEASE_TAG"
@@ -87,6 +91,7 @@ jobs:
             printf 'channel=%s\n' "$channel"
             printf 'prerelease=%s\n' "$prerelease"
             printf 'commit=%s\n' "$commit"
+            printf 'source_commit=%s\n' "$source_commit"
             printf 'build_timestamp=%s\n' "$build_timestamp"
           } >> "$GITHUB_OUTPUT"
 
@@ -97,6 +102,7 @@ jobs:
       sha: ${{ steps.baseline.outputs.sha }}
       tag: ${{ steps.baseline.outputs.tag }}
       run_id: ${{ steps.baseline.outputs.run_id }}
+      source_sha: ${{ steps.baseline.outputs.source_sha }}
     steps:
       - name: Check out the validated tag
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -118,15 +124,49 @@ jobs:
           sha="$(jq -r '.sha // empty' <<<"$baseline")"
           tag="$(jq -r '.tag // empty' <<<"$baseline")"
           run_id="$(jq -r '.run_id // empty' <<<"$baseline")"
+          if test -z "$sha" || test -z "$tag" \
+            || ! git rev-parse --verify "$tag^{commit}" >/dev/null \
+            || test "$(git rev-parse "$tag^{commit}" 2>/dev/null)" != "$sha" \
+            || ! git merge-base --is-ancestor "$sha" "$CANDIDATE_SHA"; then
+            sha= tag= run_id=
+          fi
+          if test -z "$sha"; then
+            # Older successful manual dispatches used main as the workflow ref.
+            # Bind one to a published immutable tag only when its exact commit
+            # and both preparation artifacts match.
+            published_tag="$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '[.[] | select(.draft == false and (.tag_name | startswith("nebula-v3.")))] | sort_by(.published_at) | last | .tag_name // empty')"
+            if test -n "$published_tag" && git rev-parse --verify "$published_tag^{commit}" >/dev/null; then
+              published_sha="$(git rev-parse "$published_tag^{commit}")"
+              published_run="$(jq -r --arg sha "$published_sha" \
+                '[.workflow_runs[] | select(.conclusion == "success" and .head_sha == $sha)] | first | .id // empty' \
+                "$RUNNER_TEMP/release-runs.json")"
+              if test -n "$published_run"; then
+                artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$published_run/artifacts" \
+                  --jq '.artifacts[].name')"
+                if grep -Fx "release-playwright-impact-$published_tag" <<<"$artifacts" >/dev/null \
+                  && grep -Fx nebula3-linux-x64 <<<"$artifacts" >/dev/null; then
+                  sha="$published_sha"
+                  tag="$published_tag"
+                  run_id="$published_run"
+                fi
+              fi
+            fi
+          fi
           if test -n "$sha" && test -n "$tag" \
             && git rev-parse --verify "$tag^{commit}" >/dev/null \
             && test "$(git rev-parse "$tag^{commit}")" = "$sha" \
             && git merge-base --is-ancestor "$sha" "$CANDIDATE_SHA"
           then
-            printf 'sha=%s\ntag=%s\nrun_id=%s\n' "$sha" "$tag" "$run_id" >> "$GITHUB_OUTPUT"
+            version="${tag#nebula-v}"
+            source_sha="$(git show "$tag:docs/releases/$version.md" 2>/dev/null \
+              | sed -n 's/.*<!-- nebula-source-sha: \([0-9a-f]\{40\}\) -->.*/\1/p' | head -n 1)"
+            if test -z "$source_sha"; then source_sha="$sha"; fi
+            git merge-base --is-ancestor "$source_sha" "$sha"
+            printf 'sha=%s\ntag=%s\nrun_id=%s\nsource_sha=%s\n' "$sha" "$tag" "$run_id" "$source_sha" >> "$GITHUB_OUTPUT"
           else
             printf 'No trustworthy baseline; explicit coverage review is required, not full coverage.\n'
-            printf 'sha=\ntag=\nrun_id=\n' >> "$GITHUB_OUTPUT"
+            printf 'sha=\ntag=\nrun_id=\nsource_sha=\n' >> "$GITHUB_OUTPUT"
           fi
 
   sandbox-integration:
@@ -191,8 +231,8 @@ jobs:
     needs: [validate, impact-baseline]
     uses: ./.github/workflows/playwright-impact.yml
     with:
-      baseline_sha: ${{ needs.impact-baseline.outputs.sha }}
-      candidate_sha: ${{ needs.validate.outputs.commit }}
+      baseline_sha: ${{ needs.impact-baseline.outputs.source_sha }}
+      candidate_sha: ${{ needs.validate.outputs.source_commit }}
       candidate_ref: ${{ needs.validate.outputs.tag }}
       scope: ${{ inputs.scope || 'impacted' }}
       receipt_name: release-playwright-impact-${{ needs.validate.outputs.tag }}

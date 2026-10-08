@@ -198,6 +198,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   ));
   const [selectedMissionId, setSelectedMissionId] = useState(() => missionIdFromUrl() || readStorage("nebula.mission") || "");
   const runtimeResolution = useRef<Promise<ApiRuntime> | undefined>(undefined);
+  const bootstrappedAttempt = useRef<number | undefined>(undefined);
   const connectionLost = useRef(false);
 
   const loseConnection = useCallback((message: string) => {
@@ -243,95 +244,106 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     let eventStream: NebulaEventStream | undefined;
 
     void (async () => {
-      runtimeResolution.current ??= resolveApiRuntime();
-      const resolved = await runtimeResolution.current;
-      if (!active) return;
-      setRuntime(resolved);
-      if (resolved.state !== "ready") {
-        setCoreError(resolved.message ?? "Nebula Core could not be started.");
-        setWorkspaceState("failed");
-        return;
+      const switching = bootstrappedAttempt.current === attempt && api !== undefined;
+      let nextApi: ApiClient;
+      if (!switching) {
+        runtimeResolution.current ??= resolveApiRuntime();
+        const resolved = await runtimeResolution.current;
+        if (!active) return;
+        setRuntime(resolved);
+        if (resolved.state !== "ready") {
+          setCoreError(resolved.message ?? "Nebula Core could not be started.");
+          setWorkspaceState("failed");
+          return;
+        }
+        nextApi = new ApiClient({ baseUrl: resolved.baseUrl, token: resolved.token });
+        setApi(nextApi);
+      } else {
+        nextApi = api;
       }
-
-      const nextApi = new ApiClient({ baseUrl: resolved.baseUrl, token: resolved.token });
-      setApi(nextApi);
       try {
-        const nextHealth = await nextApi.health(controller.signal);
-        if (!active) return;
-        setCoreDiagnosticsHealth(nextHealth);
-        setHealth(nextHealth);
-        setWorkspaceState("bootstrapping");
-
         const loadErrors: string[] = [];
-        const [engagementResult, providerResult, harnessResult, catalogResult, operatorResult, setupResult, libraryResult] = await Promise.allSettled([
-          nextApi.listEngagements(controller.signal),
-          nextApi.listProviders(controller.signal),
-          nextApi.listHarnesses(controller.signal),
-          nextApi.listProviderCatalog(controller.signal),
-          nextApi.listOperatorProfiles(controller.signal),
-          nextApi.setupStatus(controller.signal),
-          nextApi.listLibraryItems(controller.signal),
-        ]);
-        if (!active) return;
-
-        const engagementItems = engagementResult.status === "fulfilled" ? engagementResult.value.items : [];
-        if (engagementResult.status === "rejected") loadErrors.push("projects");
-        setEngagements(engagementItems);
-        const urlProjectId = projectIdFromPath(window.location.pathname);
-        const storedProjectId = readStorage(ENGAGEMENT_STORAGE_KEY) || "";
-        const rememberedId = urlProjectId || selectedEngagementId || storedProjectId;
-        const availableEngagements = engagementItems.filter((item) => item.status !== "archived");
-        const nextEngagement = availableEngagements.find((item) => item.id === rememberedId)
-          ?? (urlProjectId ? undefined : availableEngagements[0]);
-        if (nextEngagement && nextEngagement.id !== selectedEngagementId) {
-          setSelectedEngagementId(nextEngagement.id);
-          writeStorage(ENGAGEMENT_STORAGE_KEY, nextEngagement.id);
-        }
-        // A stale link to an archived or unknown project is refused without
-        // substitution, but it must not forget the project the operator was using.
-        if (!nextEngagement && !availableEngagements.some((item) => item.id === storedProjectId)) removeStorage(ENGAGEMENT_STORAGE_KEY);
-
-        if (providerResult.status === "fulfilled") {
-          const items = providerResult.value.items;
-          setProviders((current) => providersWithDiscoveredModels(current, items));
+        let nextHealth = health;
+        let nextEngagement: EngagementSummary | undefined;
+        if (switching) {
+          nextEngagement = engagements.find((item) => item.id === selectedEngagementId && item.status !== "archived");
         } else {
-          setProviders([]);
-          loadErrors.push("model providers");
+          nextHealth = await nextApi.health(controller.signal);
+          if (!active) return;
+          setCoreDiagnosticsHealth(nextHealth);
+          setHealth(nextHealth);
+          setWorkspaceState("bootstrapping");
+
+          const [engagementResult, providerResult, harnessResult, catalogResult, operatorResult, setupResult, libraryResult] = await Promise.allSettled([
+            nextApi.listEngagements(controller.signal),
+            nextApi.listProviders(controller.signal),
+            nextApi.listHarnesses(controller.signal),
+            nextApi.listProviderCatalog(controller.signal),
+            nextApi.listOperatorProfiles(controller.signal),
+            nextApi.setupStatus(controller.signal),
+            nextApi.listLibraryItems(controller.signal),
+          ]);
+          if (!active) return;
+
+          const engagementItems = engagementResult.status === "fulfilled" ? engagementResult.value.items : [];
+          if (engagementResult.status === "rejected") loadErrors.push("projects");
+          setEngagements(engagementItems);
+          const urlProjectId = projectIdFromPath(window.location.pathname);
+          const storedProjectId = readStorage(ENGAGEMENT_STORAGE_KEY) || "";
+          const rememberedId = urlProjectId || selectedEngagementId || storedProjectId;
+          const availableEngagements = engagementItems.filter((item) => item.status !== "archived");
+          nextEngagement = availableEngagements.find((item) => item.id === rememberedId)
+            ?? (urlProjectId ? undefined : availableEngagements[0]);
+          if (nextEngagement && nextEngagement.id !== selectedEngagementId) {
+            setSelectedEngagementId(nextEngagement.id);
+            writeStorage(ENGAGEMENT_STORAGE_KEY, nextEngagement.id);
+          }
+          // A stale link to an archived or unknown project is refused without
+          // substitution, but it must not forget the project the operator was using.
+          if (!nextEngagement && !availableEngagements.some((item) => item.id === storedProjectId)) removeStorage(ENGAGEMENT_STORAGE_KEY);
+
+          if (providerResult.status === "fulfilled") {
+            const items = providerResult.value.items;
+            setProviders((current) => providersWithDiscoveredModels(current, items));
+          } else {
+            setProviders([]);
+            loadErrors.push("model providers");
+          }
+          setHarnesses(harnessResult.status === "fulfilled" ? harnessResult.value : []);
+          if (harnessResult.status === "rejected") loadErrors.push("harnesses");
+          if (catalogResult.status === "fulfilled") setProviderCatalog(catalogResult.value);
+          else {
+            setProviderCatalog([]);
+            loadErrors.push("provider catalog");
+          }
+          if (operatorResult.status === "fulfilled") setOperatorProfiles(operatorResult.value);
+          else {
+            setOperatorProfiles([]);
+            loadErrors.push("operator profiles");
+          }
+          if (setupResult.status === "fulfilled") {
+            setSetupStatus(setupResult.value);
+            if (setupResult.value.core.status !== "ready") loadErrors.push("setup");
+          } else {
+            setSetupStatus(undefined);
+            loadErrors.push("setup status");
+          }
+          if (libraryResult.status === "fulfilled") setLibraryItems(libraryResult.value.items);
+          else {
+            setLibraryItems([]);
+            loadErrors.push("library");
+          }
+          setResourceStatus((current) => ({
+            ...current,
+            projects: engagementResult.status === "fulfilled" ? { state: engagementItems.length ? "ready" : "empty" } : { state: "failed", error: engagementResult.reason },
+            providers: providerResult.status === "fulfilled" ? { state: providerResult.value.items.length ? "ready" : "empty" } : { state: "failed", error: providerResult.reason },
+            harnesses: harnessResult.status === "fulfilled" ? { state: harnessResult.value.length ? "ready" : "empty" } : { state: "failed", error: harnessResult.reason },
+            providerCatalog: catalogResult.status === "fulfilled" ? { state: catalogResult.value.length ? "ready" : "empty" } : { state: "failed", error: catalogResult.reason },
+            operators: operatorResult.status === "fulfilled" ? { state: operatorResult.value.length ? "ready" : "empty" } : { state: "failed", error: operatorResult.reason },
+            setup: setupResult.status === "fulfilled" ? { state: "ready" } : { state: "failed", error: setupResult.reason },
+            library: libraryResult.status === "fulfilled" ? { state: libraryResult.value.items.length ? "ready" : "empty" } : { state: "failed", error: libraryResult.reason },
+          }));
         }
-        setHarnesses(harnessResult.status === "fulfilled" ? harnessResult.value : []);
-        if (harnessResult.status === "rejected") loadErrors.push("harnesses");
-        if (catalogResult.status === "fulfilled") setProviderCatalog(catalogResult.value);
-        else {
-          setProviderCatalog([]);
-          loadErrors.push("provider catalog");
-        }
-        if (operatorResult.status === "fulfilled") setOperatorProfiles(operatorResult.value);
-        else {
-          setOperatorProfiles([]);
-          loadErrors.push("operator profiles");
-        }
-        if (setupResult.status === "fulfilled") {
-          setSetupStatus(setupResult.value);
-          if (setupResult.value.core.status !== "ready") loadErrors.push("setup");
-        } else {
-          setSetupStatus(undefined);
-          loadErrors.push("setup status");
-        }
-        if (libraryResult.status === "fulfilled") setLibraryItems(libraryResult.value.items);
-        else {
-          setLibraryItems([]);
-          loadErrors.push("library");
-        }
-        setResourceStatus((current) => ({
-          ...current,
-          projects: engagementResult.status === "fulfilled" ? { state: engagementItems.length ? "ready" : "empty" } : { state: "failed", error: engagementResult.reason },
-          providers: providerResult.status === "fulfilled" ? { state: providerResult.value.items.length ? "ready" : "empty" } : { state: "failed", error: providerResult.reason },
-          harnesses: harnessResult.status === "fulfilled" ? { state: harnessResult.value.length ? "ready" : "empty" } : { state: "failed", error: harnessResult.reason },
-          providerCatalog: catalogResult.status === "fulfilled" ? { state: catalogResult.value.length ? "ready" : "empty" } : { state: "failed", error: catalogResult.reason },
-          operators: operatorResult.status === "fulfilled" ? { state: operatorResult.value.length ? "ready" : "empty" } : { state: "failed", error: operatorResult.reason },
-          setup: setupResult.status === "fulfilled" ? { state: "ready" } : { state: "failed", error: setupResult.reason },
-          library: libraryResult.status === "fulfilled" ? { state: libraryResult.value.items.length ? "ready" : "empty" } : { state: "failed", error: libraryResult.reason },
-        }));
 
         let nextRun: AgentRunSummary | undefined;
         setApprovals([]);
@@ -383,11 +395,12 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
 
         setEngagement(nextEngagement);
         setRun(nextRun);
-        const degraded = nextHealth.status === "degraded" || loadErrors.length > 0;
+        if (!switching) bootstrappedAttempt.current = attempt;
+        const degraded = nextHealth?.status === "degraded" || loadErrors.length > 0;
         setWorkspaceState(degraded ? "degraded" : "ready");
         setCoreError(loadErrors.length
           ? undefined
-          : nextHealth.status === "degraded" ? "Nebula Core reported limited availability." : undefined);
+          : nextHealth?.status === "degraded" ? "Nebula Core reported limited availability." : undefined);
         setEvents([]);
 
         if (nextRun) {
@@ -571,9 +584,28 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
     if (!id || id === selectedEngagementId) return;
     writeStorage(ENGAGEMENT_STORAGE_KEY, id);
     setSelectedEngagementId(id);
-    setWorkspaceState("starting");
+    // The catalog already identifies this project. Show it while its own
+    // resources refresh; the previous project's data must not cross over.
+    if (bootstrappedAttempt.current === attempt) {
+      setEngagement(engagements.find((item) => item.id === id && item.status !== "archived"));
+      setRun(undefined);
+      setRuns([]);
+      setApprovals([]);
+      setAssets([]);
+      setFindings([]);
+      setEvidence([]);
+      setObservations([]);
+      setKnowledgeSources([]);
+      setReports([]);
+      setEvents([]);
+      setResourceStatus((current) => ({
+        ...current,
+        ...Object.fromEntries(["activity", "approvals", "assets", "findings", "evidence", "notes", "sources", "reports"]
+          .map((resource) => [resource, { state: "loading" }])),
+      } as Record<WorkspaceResource, ResourceStatus>));
+    } else setWorkspaceState("starting");
     setCoreError(undefined);
-  }, [selectedEngagementId]);
+  }, [attempt, engagements, selectedEngagementId]);
 
   const createEngagement = useCallback(async (request: EngagementCreateRequest) => {
     if (coreState !== "online" || !api) {

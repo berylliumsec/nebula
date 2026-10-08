@@ -15,7 +15,8 @@ export { formatProjectModelCost } from "../components/ProjectSummaryCards";
 import { NewMissionButton, StopMissionButton } from "../components/MissionControls";
 import { useWorkspace } from "../state/WorkspaceContext";
 import { useChrome } from "../state/ChromeContext";
-import { projectRoot } from "../resourceRoutes";
+import { useTheme } from "../state/ThemeContext";
+import { projectRoot, projectSurface } from "../resourceRoutes";
 
 type EventStepState = "complete" | "running" | "waiting" | "failed" | "stopped" | "queued";
 
@@ -33,6 +34,8 @@ function eventStepState(kind: string): EventStepState {
 
 export function OverviewPage() {
   const { setActivityOpen } = useChrome();
+  const { resolvedTheme } = useTheme();
+  const studioDark = resolvedTheme === "studio-dark";
   const { approvals, assets, engagement, engagements, events, findings, health, run } = useWorkspace();
   const parentProject = engagements?.find((project) => project.id === engagement?.parentEngagementId);
   const validatedFindings = findings.filter((finding) => ["validated", "confirmed"].includes(finding.status));
@@ -43,8 +46,11 @@ export function OverviewPage() {
   const missionStatus = run?.status.replace("_", " ");
   const priorityFinding = findings.find((finding) => finding.severity === "critical") ?? findings[0];
   const hasCoverage = assets.length > 0 || findings.length > 0 || events.length > 0 || approvals.length > 0;
+  const heroDestination = engagement?.id
+    ? `${projectSurface(engagement.id, "workbench")}?view=${run ? "activity" : "chat"}`
+    : "/?view=chat";
   return (
-    <div className="page overview-page">
+    <div className={`page overview-page${studioDark ? " studio-overview" : ""}`}>
       <PageHeader
         eyebrow={engagement?.clientName ?? "Nebula project"}
         title={engagement?.name ?? "No project available"}
@@ -67,9 +73,25 @@ export function OverviewPage() {
         </div>
       )}
 
-      {engagement?.id && <ProjectWorkOverview projectId={engagement.id} />}
+      {studioDark && engagement?.id && <section className="studio-project-hero" aria-label="Project orientation">
+        <div>
+          <span className="studio-hero-eyebrow">YOUR WORKSPACE, IN FOCUS</span>
+          <h2>{run ? "Keep the mission moving." : "A clearer view of what matters."}</h2>
+          <p>{run
+            ? `${run.title} is ${run.status.replace("_", " ")}. Review the latest activity and decide what needs your attention.`
+            : "See your project state, follow active work, and take the next step from one quiet space."}</p>
+          <Link to={heroDestination} className="studio-hero-link">
+            {run ? "Explore activity" : "Open workbench"} <ArrowUpRight size={16} aria-hidden="true" />
+          </Link>
+        </div>
+        <div className="studio-hero-orbit" aria-hidden="true"><span /><span /><span /></div>
+      </section>}
 
-      {hasCoverage && <ProjectSummaryCards assets={assets} findings={findings} run={run} />}
+      {!studioDark && engagement?.id && <ProjectWorkOverview projectId={engagement.id} />}
+
+      {(hasCoverage || (studioDark && engagement?.id)) && <ProjectSummaryCards assets={assets} findings={findings} run={run} />}
+
+      {studioDark && engagement?.id && <ProjectWorkOverview projectId={engagement.id} />}
 
       <div className="overview-grid">
         <section className={`panel mission-panel${events.length === 0 ? " is-empty" : ""}`}>

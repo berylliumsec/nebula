@@ -5,6 +5,42 @@ command contract is release-blocking: `nebula` launches the native desktop,
 while `nebula-core` provides administration and diagnostics. Promotion smoke
 tests exercise both installed commands.
 
+## Daily stable publication
+
+`daily-stable-release.yml` checks `main` every day at 9:00 AM
+`America/New_York`. It skips when no commits have landed since the source commit
+of the latest published Nebula 3 release. A manual dispatch runs the same gate.
+It requires the exact main commit's CI run to have passed before it acts.
+
+For a changed, green main, the job makes a release-only commit containing the
+next stable patch version and a changelog of commit subjects. The first stable
+release after a prerelease keeps its base version, for example
+`3.0.0-beta.3` becomes `3.0.0`; later stable releases advance the patch.
+The release-only commit records both main and the prior release in its ancestry,
+so impact selection can compare immutable releases without changing main.
+It pushes only an immutable tag, then dispatches the existing preparation and
+draft workflows. The release driver checks the Playwright impact receipt,
+checksums, and provenance attestations before publishing the stable GitHub
+Release. It explicitly dispatches updater metadata publication because releases
+made by `GITHUB_TOKEN` do not recursively trigger another workflow.
+
+Daily releases resolve coverage automatically before tagging. Known changes use
+the existing impact rules. Shared or unmapped changes select the catalog's
+`desktop-interface`, `mobile-layout`, and `core-api` areas, together with every
+feature area whose rule matches the diff. This conservative selection covers
+desktop/compact, small/wide mobile Chromium and WebKit, and real-Core contracts.
+It can cost more runner time than focused coverage and excludes other full-matrix
+profiles. The exact selection and rationale are passed to preparation and recorded
+in its impact receipt; every selected job must pass before building. Missing or
+invalid baselines and selector errors still stop before tagging. Daily releases
+do not require a separate coverage-review file or authorize `scope=full`.
+
+Any failed check stops publication. An existing release tag or draft is a
+recovery case for a release manager; the daily job never moves a tag or replaces
+an asset. GitHub may delay or drop scheduled runs under load, so the manual
+dispatch remains available. APT promotion is a separate protected workflow in
+`BerylliumSec/nebula-apt` and is not performed by this schedule.
+
 ## Supported release matrix
 
 The protected workflow currently produces Linux x86_64 packages only:
@@ -88,8 +124,10 @@ receipt. Review its immutable baseline and candidate SHAs, changed files,
 matched rules, selected projects/tests, counts, exclusions, and review blockers
 before draft finalization. A failed or cancelled release (for
 example, a tag whose preparation never reached success) is never a trusted
-baseline. Missing baselines and shared/unmapped changes block for explicit
-coverage review; they NEVER launch the full matrix automatically.
+baseline. Missing baselines and shared/unmapped changes block ordinary tag/manual
+impact selection for explicit coverage review; the daily driver supplies the
+conservative catalog selection described above. They never launch the full matrix
+automatically.
 
 An agent or release manager may replace automatic impact selection with a
 reviewable catalog selection on manual dispatch. The `selection` input accepts
@@ -148,6 +186,8 @@ Before publishing the draft, a release manager must verify:
 Publishing the draft triggers channel-specific Linux updater manifest
 generation on GitHub Pages. Confirm that workflow succeeds and preserves the
 existing website before announcing the release.
+The updater publisher also checks that the initiating actor is a repository
+admin before its protected job runs.
 
 If the updater-manifest workflow itself needs a post-publication repair, merge
 the workflow fix to `main`, set `release_tag` to that immutable published tag,

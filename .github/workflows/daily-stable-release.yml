@@ -1,0 +1,35 @@
+name: Daily stable Nebula Linux release
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+      timezone: America/New_York
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: write
+  attestations: read
+
+concurrency:
+  group: daily-stable-nebula-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-22.04
+    environment: desktop-release
+    timeout-minutes: 360
+    steps:
+      - name: Check out current main with release history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - name: Install Python for version and release checks
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.12'
+      - name: Release new green main commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/daily_stable_release.py

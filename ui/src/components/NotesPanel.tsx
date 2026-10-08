@@ -1,5 +1,5 @@
 import { IconAction } from "./IconAction";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, MessageSquareQuote, NotebookPen, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type {
@@ -25,6 +25,8 @@ interface LinkOption {
 interface NotesPanelProps {
   api: ApiClient;
   engagementId: string;
+  initialNotes?: ObservationSummary[];
+  initialNotesReady?: boolean;
   evidenceOptions?: LinkOption[];
   assetOptions?: LinkOption[];
   providers?: ProviderHealth[];
@@ -50,9 +52,20 @@ const blank = {
   metadata: {} as Record<string, unknown>,
 };
 
+const NoteBodyEditor = memo(function NoteBodyEditor({ body, onChange }: { body: string; onChange: (body: string) => void }) {
+  const [value, setValue] = useState(body);
+  useEffect(() => setValue(body), [body]);
+  return <label>Markdown<textarea aria-label="Note body" rows={18} value={value} placeholder="Capture observations, test ideas, or conclusions…" onChange={(event) => {
+    setValue(event.target.value);
+    onChange(event.target.value);
+  }} /></label>;
+});
+
 export function NotesPanel({
   api,
   engagementId,
+  initialNotes = [],
+  initialNotesReady = false,
   evidenceOptions = [],
   assetOptions = [],
   providers = [],
@@ -65,11 +78,27 @@ export function NotesPanel({
   onAskNebula,
 }: NotesPanelProps) {
   const confirm = useConfirmation();
-  const [notes, setNotes] = useState<ObservationSummary[]>([]);
-  const [selectedId, setSelectedId] = useState<string>();
+  const deferredInitialNotes = useDeferredValue(initialNotes, initialNotes.length ? [] : initialNotes);
+  const cachedNotesReady = initialNotesReady && deferredInitialNotes === initialNotes;
+  const [notes, setNotes] = useState<ObservationSummary[]>(() => cachedNotesReady
+    ? deferredInitialNotes.filter((note) => note.engagementId === engagementId && (note.observationType === "note" || note.observationType === "ai_tool_note"))
+    : []);
+  const [selectedId, setSelectedId] = useState<string | undefined>(() => notes[0]?.id);
   const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState(blank);
-  const [loading, setLoading] = useState(false);
+  const [draft, setDraft] = useState(() => notes[0] ? {
+    title: notes[0].title,
+    body: notes[0].body,
+    evidenceIds: notes[0].evidenceIds,
+    assetIds: notes[0].assetIds,
+    metadata: notes[0].metadata,
+  } : blank);
+  const draftBodyRef = useRef(draft.body);
+  const [hasBody, setHasBody] = useState(Boolean(draft.body.trim()));
+  const onBodyChange = useCallback((body: string) => {
+    draftBodyRef.current = body;
+    setHasBody((current) => current === Boolean(body.trim()) ? current : Boolean(body.trim()));
+  }, []);
+  const [loading, setLoading] = useState(!cachedNotesReady);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const [writingOpen, setWritingOpen] = useState(false);
@@ -127,10 +156,19 @@ export function NotesPanel({
   }, [api, engagementId]);
 
   useEffect(() => {
+    if (initialNotesReady) return;
     const controller = new AbortController();
     void load(controller.signal);
     return () => controller.abort();
-  }, [load]);
+  }, [initialNotesReady, load]);
+
+  useEffect(() => {
+    if (!cachedNotesReady) return;
+    const next = deferredInitialNotes.filter((note) => note.engagementId === engagementId && (note.observationType === "note" || note.observationType === "ai_tool_note"));
+    setNotes(next);
+    setSelectedId((current) => creatingRef.current || (current && next.some((note) => note.id === current)) ? current : next[0]?.id);
+    setLoading(false);
+  }, [cachedNotesReady, deferredInitialNotes, engagementId]);
 
   useEffect(() => {
     if (creating || initialDraft) {
@@ -139,6 +177,8 @@ export function NotesPanel({
     }
     if (!selected) {
       syncedNoteRef.current = undefined;
+      draftBodyRef.current = "";
+      setHasBody(false);
       setDraft(blank);
       return;
     }
@@ -147,6 +187,8 @@ export function NotesPanel({
     const key = `${selected.id}:${selected.revision}`;
     if (syncedNoteRef.current === key) return;
     syncedNoteRef.current = key;
+    draftBodyRef.current = selected.body;
+    setHasBody(Boolean(selected.body.trim()));
     setDraft({
       title: selected.title,
       body: selected.body,
@@ -178,6 +220,8 @@ export function NotesPanel({
       },
     };
     setDraft(nextDraft);
+    draftBodyRef.current = nextDraft.body;
+    setHasBody(Boolean(nextDraft.body.trim()));
     setError(undefined);
     onInitialDraftConsumed?.();
     setSaving(true);
@@ -203,6 +247,8 @@ export function NotesPanel({
     setCreating(true);
     setSelectedId(undefined);
     setDraft(blank);
+    draftBodyRef.current = "";
+    setHasBody(false);
     setError(undefined);
   };
 
@@ -216,7 +262,7 @@ export function NotesPanel({
           engagementId,
           observationType: "note",
           title: draft.title,
-          body: draft.body,
+          body: draftBodyRef.current,
           evidenceIds: draft.evidenceIds,
           assetIds: draft.assetIds,
           source: "operator-note",
@@ -228,7 +274,7 @@ export function NotesPanel({
       } else {
         const updated = await updateNote(selected.id, {
           title: draft.title,
-          body: draft.body,
+          body: draftBodyRef.current,
           evidenceIds: draft.evidenceIds,
           assetIds: draft.assetIds,
           metadata: draft.metadata,
@@ -298,6 +344,7 @@ export function NotesPanel({
           </div>
         </header>
         {notes.map((note) => <button type="button" className={note.id === selectedId ? "active" : undefined} key={note.id} onClick={() => { setCreating(false); setSelectedId(note.id); }}><strong>{note.title}</strong><small>{note.observationType === "ai_tool_note" ? "AI-generated · " : ""}{new Date(note.updatedAt).toLocaleString()}</small></button>)}
+        {loading && <p className="notes-load-status" role="status">{notes.length ? "Refreshing notes…" : "Loading saved notes…"}</p>}
         {!notes.length && !loading && <p>No notes yet.</p>}
       </aside>
       <section className={`note-editor${creating || selected ? "" : " is-empty"}`} aria-label={creating ? "New note" : selected ? `Edit ${selected.title}` : "Note editor"}>
@@ -308,19 +355,19 @@ export function NotesPanel({
             <input aria-label="Note title" value={draft.title} placeholder="Note title" maxLength={500} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />
             <div>
               {selected && <IconAction icon={Trash2} label="Delete" title="Delete note" onClick={() => void remove()} />}
-              <button className="button quiet" type="button" disabled={!draft.body.trim() || !writingRuntimes.length} onClick={() => setWritingOpen(true)}><Sparkles size={14} /> Transform with AI</button>
-              <button className="button quiet" type="button" disabled={!draft.body.trim() || !onAskNebula} onClick={() => onAskNebula?.({ text: draft.body, sourceKind: "note", sourceId: selected?.id, sourceLabel: draft.title || "Untitled note" })}><MessageSquareQuote size={14} /> Ask Nebula</button>
+              <button className="button quiet" type="button" disabled={!hasBody || !writingRuntimes.length} onClick={() => setWritingOpen(true)}><Sparkles size={14} /> Transform with AI</button>
+              <button className="button quiet" type="button" disabled={!hasBody || !onAskNebula} onClick={() => onAskNebula?.({ text: draftBodyRef.current, sourceKind: "note", sourceId: selected?.id, sourceLabel: draft.title || "Untitled note" })}><MessageSquareQuote size={14} /> Ask Nebula</button>
               <button className="button primary" type="button" disabled={saving || !draft.title.trim()} onClick={() => void save()}><Save size={14} /> {saving ? "Saving…" : "Save"}</button>
             </div>
           </header>
           <div className="note-editor-body">
-            <label>Markdown<textarea aria-label="Note body" rows={18} value={draft.body} placeholder="Capture observations, test ideas, or conclusions…" onChange={(event) => setDraft((current) => ({ ...current, body: event.target.value }))} /></label>
+            <NoteBodyEditor key={creating ? "new" : `${selected?.id}:${selected?.revision}`} body={draft.body} onChange={onBodyChange} />
           </div>
           {(evidenceOptions.length > 0 || assetOptions.length > 0) && <details><summary>Links · {draft.evidenceIds.length} evidence · {draft.assetIds.length} assets</summary>
             {evidenceOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.evidenceIds.includes(option.id)} onChange={() => toggleLink("evidenceIds", option.id)} /> {option.label}</label>)}
             {assetOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.assetIds.includes(option.id)} onChange={() => toggleLink("assetIds", option.id)} /> {option.label}</label>)}
           </details>}
-        </> : <StandardEmptyState className="note-empty-state" icon={<NotebookPen size={24} aria-hidden="true" />} title="Start a project note" explanation="Capture working thoughts in Markdown. Preserve exact files and screenshots as Evidence." primaryAction={<button className="button primary" type="button" onClick={startNote}><Plus size={14} /> New note</button>} />}
+        </> : <StandardEmptyState className="note-empty-state" icon={<NotebookPen size={24} aria-hidden="true" />} title={loading ? "Loading saved notes" : "Start a project note"} explanation={loading ? "You can start a new note while they load." : "Capture working thoughts in Markdown. Preserve exact files and screenshots as Evidence."} primaryAction={<button className="button primary" type="button" onClick={startNote}><Plus size={14} /> New note</button>} />}
       </section>
       {writingOpen && <AIWritingDialog
         api={api}
@@ -331,10 +378,12 @@ export function NotesPanel({
         title="Transform note with AI"
         description="Tell Nebula how to organize or rewrite this note. The generated text remains editable and is not persisted until you save the note."
         sourceLabel={draft.title || "Untitled note"}
-        sourceText={draft.body}
+        sourceText={draftBodyRef.current}
         initialInstruction="Turn this into a concise analyst note. Preserve exact observations, separate hypotheses, and keep useful technical details."
         onClose={() => setWritingOpen(false)}
         onApply={(result) => {
+          draftBodyRef.current = result.content;
+          setHasBody(Boolean(result.content.trim()));
           setDraft((current) => ({
             ...current,
             body: result.content,

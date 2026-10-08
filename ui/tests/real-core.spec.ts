@@ -17,6 +17,39 @@ interface RealCore {
   token: string;
 }
 
+test("notes typing production LAN saves and reloads the latest draft", async ({ page }) => {
+  test.setTimeout(60_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projects[0].id);
+    const url = `${core.origin}/?view=notes#token=${encodeURIComponent(core.token)}`;
+    await page.goto(`${core.origin}/?view=chat#token=${encodeURIComponent(core.token)}`);
+    const notesTab = page.getByRole("tab", { name: "Project notes" });
+    await expect(notesTab).toBeVisible();
+    let noteReads = 0;
+    page.on("request", (request) => {
+      if (request.method() === "GET" && new URL(request.url()).pathname.endsWith("/observations")) noteReads += 1;
+    });
+    await notesTab.click();
+    await expect(page.getByRole("button", { name: "Create note" })).toBeVisible();
+    expect(noteReads).toBe(0);
+    await page.getByRole("button", { name: "Create note" }).click();
+    await page.getByRole("textbox", { name: "Note title" }).fill("LAN typing check");
+    const body = page.getByRole("textbox", { name: "Note body" });
+    await body.fill("First line");
+    await body.pressSequentially(" and latest text");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("button", { name: /LAN typing check/ })).toBeVisible();
+    await page.goto(url);
+    await expect(page.getByRole("textbox", { name: "Note body" })).toHaveValue("First line and latest text");
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
 /**
  * Wider screens show the shell's Core status chip. Phones drop that chip from the
  * Workbench (status lives in the conversation drawer), so the paired shell's

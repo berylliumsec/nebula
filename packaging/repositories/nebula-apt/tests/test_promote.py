@@ -10,6 +10,39 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def starting_channels() -> str:
+    """Keep promotion policy examples independent of the published channel."""
+    return json.dumps(
+        {
+            "schema": 1,
+            "channels": {
+                "stable": [],
+                "prerelease": [
+                    {
+                        "asset": "Nebula-3.0.0-alpha.5-linux-x86_64.deb",
+                        "sha256": "a" * 64,
+                        "tag": "nebula-v3.0.0-alpha.5",
+                        "version": "3.0.0-alpha.5",
+                    }
+                ],
+            },
+        },
+        indent=2,
+    ) + "\n"
+
+
+class PublicationWorkflowTests(unittest.TestCase):
+    def test_admin_gate_precedes_signing_access(self):
+        workflow = (ROOT / ".github/workflows/publish.yml").read_text()
+        guard = workflow.index("Require repository admin for APT publication")
+        signing_job = workflow.index("  build-and-test:")
+        signing_secret = workflow.index("APT_SIGNING_SUBKEY")
+        self.assertLess(guard, signing_job)
+        self.assertLess(signing_job, signing_secret)
+        self.assertIn("collaborators/$RELEASE_ACTOR/permission", workflow)
+        self.assertIn('test "$permission" = admin', workflow)
+
+
 class PromotionTests(unittest.TestCase):
     def run_promotion(
         self,
@@ -40,7 +73,7 @@ class PromotionTests(unittest.TestCase):
     def test_promotion_keeps_current_and_previous(self):
         with tempfile.TemporaryDirectory() as directory:
             channels = Path(directory) / "channels.json"
-            channels.write_text((ROOT / "channels.json").read_text(), encoding="utf-8")
+            channels.write_text(starting_channels(), encoding="utf-8")
 
             for version, digest in (
                 ("3.0.0-alpha.7", "a" * 64),
@@ -64,7 +97,7 @@ class PromotionTests(unittest.TestCase):
     def test_stable_and_prerelease_channels_must_match_version(self):
         with tempfile.TemporaryDirectory() as directory:
             channels = Path(directory) / "channels.json"
-            channels.write_text((ROOT / "channels.json").read_text(), encoding="utf-8")
+            channels.write_text(starting_channels(), encoding="utf-8")
 
             stable = self.run_promotion(
                 channels,
@@ -84,7 +117,7 @@ class PromotionTests(unittest.TestCase):
     def test_invalid_tag_and_digest_are_rejected_without_changing_channels(self):
         with tempfile.TemporaryDirectory() as directory:
             channels = Path(directory) / "channels.json"
-            original = (ROOT / "channels.json").read_text()
+            original = starting_channels()
             channels.write_text(original, encoding="utf-8")
 
             bad_tag = self.run_promotion(
@@ -106,7 +139,7 @@ class PromotionTests(unittest.TestCase):
     def test_promotion_rejects_downgrade_and_immutable_tag_change(self):
         with tempfile.TemporaryDirectory() as directory:
             channels = Path(directory) / "channels.json"
-            channels.write_text((ROOT / "channels.json").read_text(), encoding="utf-8")
+            channels.write_text(starting_channels(), encoding="utf-8")
 
             first = self.run_promotion(
                 channels,
