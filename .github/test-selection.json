@@ -1,8 +1,8 @@
 {
-  "change_digest": "a98a56c2b86048c05e61dccc7a312846b42709eda3f14b5eaea2dbdd8c20aa6e",
-  "reviewed_by": "Codex focused dependency review for PyJWT 2.15.0",
-  "reason": "The lockfile updates PyJWT as an indirect MCP dependency. Nebula has no direct PyJWT import or token encode/decode path; poetry check --lock validated the resolved manifest and there is no app test that exercises the changed library behavior.",
-  "exclusions": "Python, frontend, native, and Playwright test selections are empty because the change has no direct Nebula call site or operator workflow. Full suites and unrelated MCP protocol tests are excluded; JWT behavior remains unexercised by app tests.",
+  "change_digest": "cf5daa4866aaa878a1b9ca0886a050cb928d78655c26bd5d82862900b8291d6b",
+  "reviewed_by": "Codex focused dependency review for multidict 6.9.1",
+  "reason": "The lockfile updates multidict as an indirect dependency of aiohttp and yarl. Nebula has no direct import of those libraries. The large diff is platform wheel and hash metadata; poetry check --lock validated the resolved manifest.",
+  "exclusions": "Python, frontend, native, and Playwright test selections are empty because the change has no direct Nebula call site or targeted operator workflow. Full suites and unrelated network tests are excluded; indirect runtime behavior is not exercised by app tests.",
   "python": [],
   "frontend": [],
   "native": [],
