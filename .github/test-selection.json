@@ -9,10 +9,10 @@
   ],
   "native": [],
   "playwright": [
-    "notes-typing/desktop",
-    "notes-typing/mobile-chromium-small",
-    "notes-typing/mobile-webkit-small",
-    "notes-typing/real-core"
+    "entry:notes-typing/desktop",
+    "entry:notes-typing/mobile-chromium-small",
+    "entry:notes-typing/mobile-webkit-small",
+    "entry:notes-typing/real-core"
   ],
   "expected_tests": {
     "python": 0,
