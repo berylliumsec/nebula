@@ -76,6 +76,16 @@
         "shard": "1/1"
       }
     ],
+    "release-ui-ledger-persistence": [
+      {
+        "area": "release-ui-ledger-persistence",
+        "project": "assistant-real-desktop",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "assistant upgrade native commands retain thinking and replies across Core restart",
+        "runtime": "real-core",
+        "shard": "1/1"
+      }
+    ],
     "release-ui-correctness": [
       {
         "area": "release-ui-correctness",

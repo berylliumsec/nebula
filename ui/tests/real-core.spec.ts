@@ -5473,7 +5473,7 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       const goalReply = goalMessage.locator(".assistant-markdown").filter({hasText: "Goal work completed."});
       await expect(goalReply).toHaveText("Goal work completed.", {timeout: 20_000});
       await expect(goalReply).not.toHaveClass(/streaming/, {timeout: 20_000});
-      await goalMessage.getByRole("button", {name: /Inspect saved work|Show activity/}).click();
+      await goalMessage.getByRole("button", {name: /Inspect saved work|Show activity|View work/}).click();
       await expect(goalMessage.locator(".activity-ledger-audit .harness-reasoning-summary")).toContainText("Retained thinking from the native peer.");
       if (id === "inert-fixture") {
         await composer.fill("/vendor");
@@ -5501,8 +5501,13 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       await core.restart();
       await page.reload();
       await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Input tokens: 12", {timeout: 20_000});
+      // Reload follows the latest turn; older virtualized rows must be reached
+      // through the transcript scroll owner before inspecting their saved work.
+      await page.locator(".chat-scroll").hover();
+      await page.mouse.wheel(0, -10_000);
       const retainedGoal = page.locator(".chat-message.assistant").filter({hasText: "Goal work completed."}).last();
-      await retainedGoal.getByRole("button", {name: /Inspect saved work|Show activity/}).click();
+      await expect(retainedGoal).toBeVisible();
+      await retainedGoal.getByRole("button", {name: /Inspect saved work|Show activity|View work/}).click();
       const retainedThinking = retainedGoal.locator(".activity-ledger-audit .harness-reasoning-summary");
       await expect(retainedThinking).toContainText("Retained thinking from the native peer.");
       await composer.fill("/goal status");
@@ -5510,6 +5515,8 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Goal: Clock", {timeout: 20_000});
       const entries = (await readFile(path.join(core.dataDir, "command-requests.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
       expect(entries.some(row => row.method === (id === codex.id ? "account/usage/read" : "_x.ai/session/usage"))).toBe(true);
+      await page.locator(".chat-scroll").hover();
+      await page.mouse.wheel(0, -10_000);
       await retainedThinking.scrollIntoViewIfNeeded();
       await info.attach(`native-command-${id}`, {body: await page.screenshot({path: info.outputPath(`native-command-${id}.png`)}), contentType: "image/png"});
     }
