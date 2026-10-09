@@ -6667,3 +6667,112 @@ test("assistant upgrade real Core keeps a subagent wait attached and follows the
     {name: "Core fixture", dispose: () => stopRealCore(core)},
   ]);
 });
+
+test("production chat companions open a workspace file in a disposable Core", async ({ page }) => {
+  test.setTimeout(90_000);
+  const lanAddress = localNetworkIpv4();
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
+  const api = await playwrightRequest.newContext({
+    baseURL: `${core.origin}/api/v1/`,
+    extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+  });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0]?.id;
+    expect(projectId).toBeTruthy();
+    const upload = await api.put(`engagements/${projectId}/workspace/file?path=companion-proof.ts&overwrite=false`, {
+      data: Buffer.from("export const companionProof = true;\n"),
+      headers: { "Content-Type": "text/plain" },
+    });
+    expect(upload.ok(), await upload.text()).toBe(true);
+
+    const pairingApi = await playwrightRequest.newContext({
+      baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`,
+      extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
+    });
+    const pairing = await (await pairingApi.post("auth/pairings", { data: { name: "Companion LAN browser" } })).json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Companion LAN browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=workspace`);
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await page.locator(".workspace-entry-list button[title=\"companion-proof.ts\"]").click();
+    await page.getByRole("button", { name: "Open in Code" }).click();
+    await expect(page).toHaveURL(/view=chat.*side=code/);
+    const code = page.getByRole("region", { name: "Code beside chat" });
+    await expect(code).toBeVisible();
+    await expect(code.locator(".cm-line").first()).toHaveText("export const companionProof = true;");
+    await page.reload();
+    await expect(code).toBeVisible();
+    await expect(code.locator(".cm-line").first()).toHaveText("export const companionProof = true;");
+    await code.getByRole("button", { name: "Hide Code editor" }).click();
+    await page.getByRole("button", { name: "Chat tools" }).click();
+    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Browser/ }).click();
+    await expect(page.getByRole("region", { name: "Browser beside chat" })).toBeVisible();
+    await page.getByRole("button", { name: "Chat tools" }).click();
+    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Notes/ }).click();
+    const notes = page.getByRole("region", { name: "Notes beside chat" });
+    await expect(notes).toBeVisible();
+    await notes.getByRole("button", { name: "Create note" }).click();
+    await notes.getByRole("textbox", { name: "Note title" }).fill("Companion acceptance note");
+    await notes.getByRole("textbox", { name: "Note body" }).fill("Saved from the chat companion.");
+    await notes.getByRole("button", { name: "Save" }).click();
+    await expect(notes.getByRole("button", { name: /Companion acceptance note/ })).toBeVisible();
+    await page.reload();
+    await expect(notes.getByRole("button", { name: /Companion acceptance note/ })).toBeVisible();
+    expect(new URL(page.url()).hostname).toBe(lanAddress);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  } finally {
+    await api.dispose();
+    await stopRealCore(core);
+  }
+});
+
+test("production side chat branches and resumes from its parent conversation", async ({ page }) => {
+  test.setTimeout(90_000);
+  const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
+  const stub = await startLocalModelStub({ streamDelayMs: 20 });
+  const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+  try {
+    const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
+    const projectId = projects[0].id;
+    const providerResponse = await api.post("providers", { data: { name: "Side chat acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: { local_only: true, residency: [], permits_sensitive_data: false }, metadata: { default_model: "security-model" } } });
+    expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
+    const provider = await providerResponse.json() as { id: string };
+    const parentResponse = await api.post("chat/completions", { data: { backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projectId, messages: [{ role: "user", content: "Parent branch context" }], include_knowledge: false, stream: false } });
+    expect(parentResponse.ok(), await parentResponse.text()).toBe(true);
+    const parent = await parentResponse.json() as { session_id: string };
+    const pairingApi = await playwrightRequest.newContext({ baseURL: `http://127.0.0.1:${new URL(core.origin).port}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
+    const pairingResponse = await pairingApi.post("auth/pairings", { data: { name: "Side chat LAN browser" } });
+    expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
+    const pairing = await pairingResponse.json() as { secret: string; confirmation_code: string };
+    await pairingApi.dispose();
+    await page.goto(`${core.origin}/#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
+    await page.getByLabel("Device name").fill("Side chat LAN browser");
+    await page.getByRole("button", { name: "Pair device" }).click();
+    await expect(coreReady(page)).toBeVisible({ timeout: 20_000 });
+    await page.goto(`${core.origin}/projects/${projectId}/workbench?view=chat&session=${parent.session_id}`);
+    await expect(page.locator(".chat-message.operator")).toContainText("Parent branch context");
+    await page.getByRole("button", { name: "Chat tools" }).click();
+    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Side chat/ }).click();
+    const side = page.getByRole("region", { name: "Side chat" });
+    await expect(side.getByRole("textbox", { name: "Message the analyst assistant" })).toBeEnabled();
+    const sessions = await (await api.get(`chat/sessions/${parent.session_id}/side-chats`)).json() as Array<{ id: string; parent_session_id?: string; title: string }>;
+    const branch = sessions.find(item => item.parent_session_id === parent.session_id && item.title.startsWith("Side chat"));
+    expect(branch).toBeTruthy();
+    await side.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Separate side question");
+    await side.getByRole("button", { name: "Send message" }).click();
+    await expect(side.locator(".chat-message.operator")).toContainText("Separate side question");
+    await page.reload();
+    await expect(side.getByRole("textbox", { name: "Message the analyst assistant" })).toBeEnabled();
+    const sessionsAfter = await (await api.get(`chat/sessions/${parent.session_id}/side-chats`)).json() as Array<{ parent_session_id?: string; title: string }>;
+    expect(sessionsAfter.filter(item => item.parent_session_id === parent.session_id)).toHaveLength(1);
+    expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
+  } finally {
+    await api.dispose();
+    await stopLocalModelStub(stub);
+    await stopRealCore(core);
+  }
+});
