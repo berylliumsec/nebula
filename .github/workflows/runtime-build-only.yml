@@ -1,0 +1,39 @@
+name: Runtime image build only
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Prepare disposable build infrastructure
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          podman info --format '{{.Host.Security.Rootless}}' | grep -Fx true
+          python -m pip install "poetry==2.1.3"
+          poetry install --only main --no-interaction
+          podman pull docker.io/kalilinux/kali-rolling:latest
+          repository_digest="$(podman image inspect docker.io/kalilinux/kali-rolling:latest --format '{{index .RepoDigests 0}}')"
+          printf 'NEBULA_BUILD_SOURCE=%s\n' "$repository_digest" >> "$GITHUB_ENV"
+      - name: Build canonical recipe and inspect metadata
+        run: poetry run python scripts/runtime_build_only.py --source-reference "$NEBULA_BUILD_SOURCE" --output runtime-build-only-receipt.json
+      - name: Record available disk
+        if: always()
+        run: df -h /
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: runtime-build-only-receipt
+          path: runtime-build-only-receipt.json

@@ -1587,7 +1587,7 @@
       {"area":"terminal-assistant","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"Terminal opens Assistant beside the live shell|Assistant opens the live terminal beside the chat","runtime":"mock","shard":"1/1"}
     ],
     "core-api": [
-      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"}
+      {"area":"core-api","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core-sandbox","shard":"1/1"}
     ],
     "themes": [
       {"area":"themes","project":"desktop","test_match":"tests/interface.spec.ts","grep":"theme","runtime":"mock","shard":"1/1"},
@@ -1622,7 +1622,7 @@
     ],
     "desktop-shell": [
       {"area":"desktop-shell","project":"desktop","test_match":"tests/interface.spec.ts","grep":"desktop|window|updater|paired-device","runtime":"mock","shard":"1/1"},
-      {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core","shard":"1/1"}
+      {"area":"desktop-shell","project":"real-core","test_match":"tests/real-core.spec.ts","runtime":"real-core-sandbox","shard":"1/1"}
     ],
     "desktop-interface": [
       {"area":"desktop-interface","project":"desktop","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
