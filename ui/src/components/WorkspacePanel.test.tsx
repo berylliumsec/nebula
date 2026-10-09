@@ -68,6 +68,23 @@ describe("WorkspacePanel uploads", () => {
     await user.click(await within(folderDialog).findByRole("option", { name: /src\/reports/ }));
     expect(listWorkspace).toHaveBeenCalledWith("project-1", "src/reports", 0, expect.any(AbortSignal));
   });
+
+  it("opens a selected workspace file in the shared code editor", async () => {
+    const user = userEvent.setup();
+    const onOpenInEditor = vi.fn();
+    render(<DialogProvider><WorkspacePanel
+      api={{
+        listWorkspace: vi.fn().mockResolvedValue({ ...listing(), total: 1, entries: [{ path: "src/parser.ts", name: "parser.ts", kind: "file", size: 12, modifiedAt: "2026-07-13T12:00:00Z" }] }),
+        previewWorkspaceFile: vi.fn().mockResolvedValue({ engagementId: "project-1", path: "src/parser.ts", text: "export {};", bytesReturned: 10, truncated: false, previewSha256: "a".repeat(64) }),
+        workspaceResetStatus: vi.fn().mockResolvedValue({ engagementId: "project-1", canReset: true, activeTerminalCount: 0, activeExecutionCount: 0, detail: "Ready" }),
+      } as unknown as ApiClient}
+      engagementId="project-1" engagementName="Scratch Project" onOpenInEditor={onOpenInEditor}
+    /></DialogProvider>);
+    await user.click(await screen.findByRole("button", { name: /^parser\.ts/ }));
+    await user.click(await screen.findByRole("button", { name: "Open in Code" }));
+    expect(onOpenInEditor).toHaveBeenCalledWith("src/parser.ts");
+
+  });
   it("blocks reset while the workspace is in use and offers the relevant recovery view", async () => {
     const user = userEvent.setup();
     const onOpenTerminal = vi.fn();

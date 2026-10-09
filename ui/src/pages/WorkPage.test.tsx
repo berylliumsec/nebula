@@ -9,6 +9,8 @@ const { workspace, saved, live } = vi.hoisted(() => {
   const saved = {
     enabled: true,
     agents: [] as Array<{ session_id: string; engagement_id: string; title: string; state: "working" | "waiting"; turn_id: string }>,
+    sessions: [{ id: "session-1", title: "Search implementation" }],
+    sessionActivity: [{ sessionId: "session-1", state: "working" }],
     item: { id: "item-1", engagement_id: project.id, title: "Build the search page", description: "Add filters", status: "in_progress", priority: "normal", assignee_session_id: "session-1", source_kind: "chat", source_id: "session-1", created_at: "2026-01-01T12:00:00Z", updated_at: "2026-01-01T12:00:00Z", last_update_at: null } as Record<string, unknown>,
     items: [] as Array<Record<string, unknown>>,
     updates: [] as Array<Record<string, unknown>>,
@@ -26,6 +28,18 @@ const { workspace, saved, live } = vi.hoisted(() => {
     }
     if (path === "work/agents") return saved.agents;
     if (path.endsWith("/work/setting") && init?.method === "PATCH") { saved.enabled = !saved.enabled; return { work_enabled: saved.enabled }; }
+    if (path.endsWith("/work") && init?.method === "POST") {
+      const body = JSON.parse(String(init.body));
+      const projectId = path.split("/")[1];
+      const item = { ...saved.item, ...body, id: "tracked-item", engagement_id: projectId, last_update_at: null };
+      saved.items = [item, ...saved.items];
+      return item;
+    }
+    if (/\/work\/[^/]+$/.test(path)) {
+      const item = saved.items.find((candidate) => candidate.id === path.split("/").at(-1));
+      if (init?.method === "PATCH" && item) Object.assign(item, JSON.parse(String(init.body)));
+      return item;
+    }
     if (path.endsWith("/work/item-1/updates") && init?.method === "POST") {
       const body = JSON.parse(String(init.body));
       const update = { id: "update-1", engagement_id: project.id, item_id: "item-1", summary: body.summary, next_step: body.next_step, blocker: body.blocker, status: body.status, actor_kind: "operator", actor_id: "operator", source_session_id: null, source_turn_id: null, source_run_id: null, created_at: "2026-01-01T13:00:00Z" };
@@ -33,13 +47,13 @@ const { workspace, saved, live } = vi.hoisted(() => {
       return update;
     }
     if (path.endsWith("/work/item-1/updates")) return saved.updates;
-    if (path.endsWith("/work")) return [saved.item];
+    if (path.endsWith("/work")) return saved.items;
     return [];
   });
   return {
     saved,
     live,
-    workspace: { api: { request, listChatSessions: vi.fn(async () => ({ items: [{ id: "session-1", title: "Search implementation" }] })), listChatSessionActivity: vi.fn(async () => [{ sessionId: "session-1", state: "working" }]), watchWorkChanges: vi.fn((onChange: typeof live.onChange, onReady: typeof live.onReady, signal: AbortSignal) => {
+    workspace: { api: { request, listChatSessions: vi.fn(async () => ({ items: saved.sessions })), listChatSessionActivity: vi.fn(async () => saved.sessionActivity), watchWorkChanges: vi.fn((onChange: typeof live.onChange, onReady: typeof live.onReady, signal: AbortSignal) => {
       live.onChange = onChange; live.onReady = onReady;
       return new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
     }) },
@@ -56,7 +70,9 @@ function openItem() {
 describe("Work operator journey", () => {
   beforeEach(() => {
     saved.enabled = true; saved.agents = []; saved.updates = []; saved.item.status = "in_progress"; saved.item.last_update_at = null;
-    saved.item.source_kind = "chat"; saved.item.description = "Add filters";
+    saved.sessions = [{ id: "session-1", title: "Search implementation" }];
+    saved.sessionActivity = [{ sessionId: "session-1", state: "working" }];
+    saved.item.source_kind = "chat"; saved.item.source_id = "session-1"; saved.item.assignee_session_id = "session-1"; saved.item.description = "Add filters";
     live.onChange = undefined; live.onReady = undefined;
     saved.items = [saved.item]; workspace.engagements = [workspace.engagement];
     vi.clearAllMocks();
@@ -85,13 +101,89 @@ describe("Work operator journey", () => {
   });
 
   it("shows active conversations even before an agent links a Work item", async () => {
-    saved.agents = [{ session_id: "session-2", engagement_id: "project-1", title: "Review documentation", state: "working", turn_id: "turn-2" }];
+    saved.agents = [
+      { session_id: "session-2", engagement_id: "project-1", title: "Review documentation", state: "working", turn_id: "turn-2" },
+      { session_id: "session-3", engagement_id: "project-1", title: "Approve documentation", state: "waiting", turn_id: "turn-3" },
+    ];
     render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
     expect(await screen.findByText("Review documentation")).toBeVisible();
     expect(screen.getByText(/No Work item linked/)).toBeVisible();
     expect(screen.getByRole("link", { name: "Open Review documentation" })).toHaveAttribute("href", "/projects/project-1/workbench?view=chat&session=session-2");
+    expect(screen.getByRole("region", { name: "Needs attention" })).toHaveTextContent("Approve documentation");
+    await userEvent.setup().click(screen.getByRole("button", { name: "1 Waiting" }));
+    expect(screen.getByRole("region", { name: "Waiting details" })).toHaveTextContent("Documentation portal · Waiting for input");
     expect(workspace.api.request).toHaveBeenCalledWith("work/agents", expect.any(Object));
     expect(workspace.api.listChatSessionActivity).not.toHaveBeenCalled();
+  });
+
+  it("shows project ownership for every working conversation and opens status counts", async () => {
+    const user = userEvent.setup();
+    saved.sessions = [
+      { id: "session-1", title: "Search implementation" },
+      { id: "session-2", title: "Independent accessibility review" },
+    ];
+    saved.sessionActivity = [
+      { sessionId: "session-1", state: "working" },
+      { sessionId: "session-2", state: "working" },
+    ];
+    saved.items = [saved.item, { ...saved.item, id: "item-2", title: "Review blocked search results", status: "blocked", assignee_session_id: null }, { ...saved.item, id: "item-3", title: "Check accessibility", status: "review", assignee_session_id: null }];
+    render(<MemoryRouter initialEntries={["/projects/project-1/work"]}><Routes><Route path="/projects/:projectId/work/:itemId?" element={<WorkPage />} /></Routes></MemoryRouter>);
+
+    const working = await screen.findByRole("region", { name: "Working now details" });
+    expect(within(working).getByRole("link", { name: /Search implementation/ })).toHaveAttribute("href", "/projects/project-1/workbench?view=chat&session=session-1");
+    expect(within(working).getByRole("link", { name: /Independent accessibility review/ })).toHaveAttribute("href", "/projects/project-1/workbench?view=chat&session=session-2");
+    expect(within(working).getAllByText(/Documentation portal · Working/)).toHaveLength(2);
+    expect(within(working).getByText(/No Work item linked/)).toBeVisible();
+    expect(within(working).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/item-1");
+
+    await user.click(screen.getByRole("button", { name: "1 In progress" }));
+    expect(within(screen.getByRole("region", { name: "In progress details" })).getByRole("link", { name: /Build the search page/ })).toHaveAttribute("href", "/projects/project-1/work/item-1");
+    await user.click(screen.getByRole("button", { name: "1 Blocked" }));
+    const blocked = screen.getByRole("region", { name: "Blocked details" });
+    expect(within(blocked).getByRole("link", { name: /Review blocked search results/ })).toHaveAttribute("href", "/projects/project-1/work/item-2");
+    expect(within(blocked).getByText(/Documentation portal · Unassigned/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "1 In review" }));
+    expect(within(screen.getByRole("region", { name: "In review details" })).getByRole("link", { name: /Check accessibility/ })).toHaveAttribute("href", "/projects/project-1/work/item-3");
+  });
+
+  it("creates a durable Work item for an untracked conversation in its project", async () => {
+    const user = userEvent.setup();
+    saved.agents = [{ session_id: "session-2", engagement_id: "project-1", title: "Review documentation", state: "working", turn_id: "turn-2" }];
+    const view = render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await screen.findByText("Review documentation");
+    await user.click(screen.getByRole("button", { name: "Track work" }));
+    const dialog = screen.getByRole("dialog", { name: "Track conversation work" });
+    expect(dialog).toHaveTextContent("Documentation portal · Review documentation");
+    expect(within(dialog).getByRole("textbox", { name: "Title" })).toHaveValue("Review documentation");
+    await user.click(within(dialog).getByRole("button", { name: "Create and link" }));
+    expect(workspace.api.request).toHaveBeenCalledWith("engagements/project-1/work", expect.objectContaining({ method: "POST", body: expect.stringContaining('"assignee_session_id":"session-2"') }));
+    await user.click(screen.getByRole("button", { name: "1 Working now" }));
+    expect(within(screen.getByRole("region", { name: "Working now details" })).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/tracked-item");
+    view.unmount();
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await user.click(await screen.findByRole("button", { name: "1 Working now" }));
+    expect(within(screen.getByRole("region", { name: "Working now details" })).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/tracked-item");
+  });
+
+  it("links an existing open item and reports a stale assignment without replacing it", async () => {
+    const user = userEvent.setup();
+    saved.agents = [{ session_id: "session-2", engagement_id: "project-1", title: "Review documentation", state: "working", turn_id: "turn-2" }];
+    saved.items.push({ ...saved.item, id: "available-item", title: "Finish documentation", status: "ready", assignee_session_id: null, source_kind: "manual", source_id: null });
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await screen.findByText("Review documentation");
+    await user.click(screen.getByRole("button", { name: "Track work" }));
+    const dialog = screen.getByRole("dialog", { name: "Track conversation work" });
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: "Work item" }), "available-item");
+    saved.items.find((item) => item.id === "available-item")!.assignee_session_id = "another-session";
+    await user.click(within(dialog).getByRole("button", { name: "Link item" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("assigned to another conversation");
+    expect(workspace.api.request).not.toHaveBeenCalledWith("engagements/project-1/work/available-item", expect.objectContaining({ method: "PATCH" }));
+    saved.items.find((item) => item.id === "available-item")!.assignee_session_id = null;
+    await user.click(within(dialog).getByRole("button", { name: "Link item" }));
+    expect(workspace.api.request).toHaveBeenCalledWith("engagements/project-1/work/available-item", expect.objectContaining({ method: "PATCH", body: '{"assignee_session_id":"session-2"}' }));
+    expect(await screen.findByRole("button", { name: "1 Working now" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "1 Working now" }));
+    expect(within(screen.getByRole("region", { name: "Working now details" })).getByRole("link", { name: "Work item" })).toHaveAttribute("href", "/projects/project-1/work/available-item");
   });
 
   it("waits for the operator to refresh instead of polling", async () => {
@@ -180,14 +272,31 @@ describe("Work operator journey", () => {
   it("groups subprojects under their parent and finds them by name", async () => {
     const user = userEvent.setup();
     workspace.engagements = [workspace.engagement, { id: "child-1", name: "Review plan", status: "active", workEnabled: true, parentEngagementId: "project-1" }];
+    saved.items = [saved.item, { ...saved.item, id: "child-item", engagement_id: "child-1", title: "Review the plan", status: "blocked", last_update_at: "2026-01-02T12:00:00Z" }];
+    saved.agents = [{ session_id: "child-session", engagement_id: "child-1", title: "Plan review agent", state: "working", turn_id: "child-turn" }];
     render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
     expect(await screen.findByText("1 subprojects · Agent tools on")).toBeVisible();
-    expect(screen.queryByRole("link", { name: /Review plan/ })).not.toBeInTheDocument();
+    const parent = screen.getByRole("link", { name: /Documentation portal/ });
+    expect(parent).toHaveTextContent("1 working · 0 waiting · 1 in progress · 1 blocked · 0 review");
+    expect(screen.getByRole("link", { name: /Latest check-in: Review the plan/ })).toHaveAttribute("href", "/projects/child-1/work/child-item");
+    const projects = screen.getByRole("region", { name: "Projects" });
+    expect(within(projects).queryByRole("link", { name: /^Review plan/ })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Show subprojects of Documentation portal" }));
-    expect(screen.getByRole("link", { name: /Review plan/ })).toBeVisible();
+    expect(within(projects).getByRole("link", { name: /^Review plan/ })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Hide subprojects of Documentation portal" }));
     await user.type(screen.getByRole("searchbox", { name: "Search projects" }), "Review plan");
     expect(screen.getByRole("link", { name: /Documentation portal/ })).toBeVisible();
-    expect(screen.getByRole("link", { name: /Review plan/ })).toBeVisible();
+    expect(within(projects).getByRole("link", { name: /^Review plan/ })).toBeVisible();
+  });
+
+  it("keeps other top-level projects visible when one project has many subprojects", async () => {
+    workspace.engagements = [workspace.engagement, ...Array.from({ length: 90 }, (_, index) => ({
+      id: `child-${index}`, name: `Child project ${index}`, status: "active", workEnabled: true, parentEngagementId: "project-1",
+    })), { id: "other-project", name: "Other portfolio", status: "active", workEnabled: true }];
+    render(<MemoryRouter initialEntries={["/projects"]}><Routes><Route path="/projects" element={<WorkPage />} /></Routes></MemoryRouter>);
+    await screen.findByRole("button", { name: "Show subprojects of Documentation portal" });
+    await userEvent.setup().click(screen.getByRole("button", { name: "Show subprojects of Documentation portal" }));
+    expect(screen.getByRole("link", { name: /Other portfolio/ })).toBeVisible();
+    expect(screen.getByText("Showing 80 rows. Search to narrow the list.")).toBeVisible();
   });
 });

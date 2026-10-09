@@ -27,6 +27,8 @@ interface NotesPanelProps {
   engagementId: string;
   initialNotes?: ObservationSummary[];
   initialNotesReady?: boolean;
+  panelSessionKey?: string;
+
   evidenceOptions?: LinkOption[];
   assetOptions?: LinkOption[];
   providers?: ProviderHealth[];
@@ -60,12 +62,30 @@ const NoteBodyEditor = memo(function NoteBodyEditor({ body, onChange }: { body: 
     onChange(event.target.value);
   }} /></label>;
 });
+interface NotePanelState {
+  selectedId?: string;
+  creating: boolean;
+  draft: typeof blank;
+  syncedNoteKey?: string;
+}
+
+// Saved notes live in Core for the project. Draft and selection stay with a chat.
+const notePanelStates = new Map<string, NotePanelState>();
+
+export function adoptNotePanelState(from: string, to: string) {
+  if (from === to || !notePanelStates.has(from) || notePanelStates.has(to)) return;
+  notePanelStates.set(to, notePanelStates.get(from)!);
+  notePanelStates.delete(from);
+}
+
 
 export function NotesPanel({
   api,
   engagementId,
   initialNotes = [],
   initialNotesReady = false,
+  panelSessionKey,
+
   evidenceOptions = [],
   assetOptions = [],
   providers = [],
@@ -82,22 +102,25 @@ export function NotesPanel({
   const [notes, setNotes] = useState<ObservationSummary[]>(() => cachedNotesReady
     ? initialNotes.filter((note) => note.engagementId === engagementId && (note.observationType === "note" || note.observationType === "ai_tool_note"))
     : []);
-  const [selectedId, setSelectedId] = useState<string | undefined>(() => notes[0]?.id);
-  const [creating, setCreating] = useState(false);
-  const [draft, setDraft] = useState(() => notes[0] ? {
-    title: notes[0].title,
-    body: notes[0].body,
-    evidenceIds: notes[0].evidenceIds,
-    assetIds: notes[0].assetIds,
-    metadata: notes[0].metadata,
-  } : blank);
+  const restoredPanel = panelSessionKey ? notePanelStates.get(panelSessionKey) : undefined;
+  const [selectedId, setSelectedId] = useState<string | undefined>(restoredPanel?.selectedId ?? notes[0]?.id);
+  const [creating, setCreating] = useState(restoredPanel?.creating ?? false);
+  const [draft, setDraft] = useState(restoredPanel?.draft ?? (notes[0] ? {
+    title: notes[0].title, body: notes[0].body, evidenceIds: notes[0].evidenceIds,
+    assetIds: notes[0].assetIds, metadata: notes[0].metadata,
+  } : blank));
   const draftBodyRef = useRef(draft.body);
   const [hasBody, setHasBody] = useState(Boolean(draft.body.trim()));
   const onBodyChange = useCallback((body: string) => {
     draftBodyRef.current = body;
+    if (panelSessionKey) {
+      const panel = notePanelStates.get(panelSessionKey);
+      if (panel) notePanelStates.set(panelSessionKey, { ...panel, draft: { ...panel.draft, body } });
+    }
     setHasBody((current) => current === Boolean(body.trim()) ? current : Boolean(body.trim()));
-  }, []);
+  }, [panelSessionKey]);
   const [loading, setLoading] = useState(!cachedNotesReady);
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const [writingOpen, setWritingOpen] = useState(false);
@@ -106,7 +129,12 @@ export function NotesPanel({
   const capturedNoteRef = useRef<ObservationSummary | undefined>(undefined);
   const creatingRef = useRef(false);
   creatingRef.current = creating;
-  const syncedNoteRef = useRef<string | undefined>(undefined);
+  const syncedNoteRef = useRef<string | undefined>(restoredPanel?.syncedNoteKey);
+  useEffect(() => {
+    if (!panelSessionKey) return;
+    if (!notePanelStates.has(panelSessionKey) && notePanelStates.size >= 64) notePanelStates.delete(notePanelStates.keys().next().value!);
+    notePanelStates.set(panelSessionKey, { selectedId, creating, draft: { ...draft, body: draftBodyRef.current }, syncedNoteKey: syncedNoteRef.current });
+  }, [panelSessionKey, selectedId, creating, draft]);
   const createNote = useCallback(
     (request: ObservationCreateRequest) => createObservation ? createObservation(request) : api.createObservation(request),
     [api, createObservation],

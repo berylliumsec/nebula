@@ -48,6 +48,20 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "chat-companions": [
+      {"area":"chat-companions","project":"desktop","test_match":"tests/interface.spec.ts","grep":"Dark is the first-run default theme","runtime":"mock","shard":"1/1"},
+      {"area":"chat-companions","project":"compact","test_match":"tests/interface.spec.ts","grep":"Dark is the first-run default theme","runtime":"mock","shard":"1/1"},
+      {"area":"chat-companions","project":"desktop","test_match":"tests/interface.spec.ts","grep":"chat companions reveal Code, Browser, and Notes from the conversation","runtime":"mock","shard":"1/1"},
+      {"area":"chat-companions","project":"compact","test_match":"tests/interface.spec.ts","grep":"chat companions reveal Code, Browser, and Notes from the conversation","runtime":"mock","shard":"1/1"},
+      {"area":"chat-companions","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"chat companions reveal Code, Browser, and Notes from the conversation","runtime":"mock","shard":"1/1"},
+      {"area":"chat-companions","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"chat companions reveal Code, Browser, and Notes from the conversation","runtime":"mock","shard":"1/1"},
+      {"area":"chat-companions","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"chat companions reveal Code, Browser, and Notes from the conversation","runtime":"mock","shard":"1/1"},
+      {"area":"chat-companions","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"chat companions reveal Code, Browser, and Notes from the conversation","runtime":"mock","shard":"1/1"},
+      {"area":"chat-companions","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"chat companions reveal Code, Browser, and Notes from the conversation","runtime":"mock","shard":"1/1"},
+      {"area":"chat-companions","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"chat companions reveal Code, Browser, and Notes from the conversation","runtime":"mock","shard":"1/1"},
+      {"area":"chat-companions","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"production chat companions open a workspace file in a disposable Core","runtime":"real-core","shard":"1/1"},
+      {"area":"chat-companions","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"production side chat branches and resumes from its parent conversation","runtime":"real-core","shard":"1/1"}
+    ],
     "release-contract-ui": [
       {
         "area": "release-contract-ui",
@@ -445,6 +459,7 @@
       {"area":"mission-supervisor-core","project":"real-core","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production LAN delegated Mission opens its durable supervisor chat","runtime":"real-core","shard":"1/1"},
       {"area":"mission-supervisor-core","project":"assistant-real-chromium-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production LAN delegated Mission opens its durable supervisor chat","runtime":"real-core","shard":"1/1"},
       {"area":"mission-supervisor-core","project":"assistant-real-webkit-390","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade production LAN delegated Mission opens its durable supervisor chat","runtime":"real-core","shard":"1/1"}
+
     ],
     "subagent-sidebar": [
       {"area":"subagent-sidebar","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade nests subagents beneath a collapsed main conversation|assistant upgrade sidebar follows subagents created during an active turn","runtime":"mock","shard":"1/1"},

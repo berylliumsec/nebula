@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title description">
+  <title id="title">Nebula Assistant in Zero Dark mode</title>
+  <desc id="description">The quiet Assistant workbench ready for a new project conversation.</desc>
+  <rect width="1440" height="900" fill="#090d12"/>
+  <g font-family="Geist, Inter, Arial, sans-serif">
+    <rect x="10" y="8" width="1420" height="68" rx="28" fill="#111820" stroke="#34404b"/>
+    <text x="75" y="46" fill="#edf4fb" font-size="15" font-weight="700">Workbench</text>
+    <rect x="222" y="21" width="108" height="44" rx="10" fill="#203146"/>
+    <text x="241" y="48" fill="#e9f3fc" font-size="13" font-weight="650">▢  Assistant</text>
+    <text x="349" y="48" fill="#a8b8c7" font-size="13">Terminal</text>
+    <text x="456" y="48" fill="#a8b8c7" font-size="13">Code</text>
+    <text x="536" y="48" fill="#a8b8c7" font-size="13">Browser</text>
+    <text x="1206" y="48" fill="#93b9a7" font-size="12">Ready</text>
+    <rect x="1364" y="20" width="45" height="45" rx="11" fill="#a9cefa"/>
+    <text x="1386" y="49" fill="#142536" text-anchor="middle" font-size="22">+</text>
+    <rect x="10" y="85" width="1420" height="715" rx="28" fill="#0b1016" stroke="#27323d"/>
+    <text x="42" y="128" fill="#c8d5e2" font-size="13" font-weight="600">New conversation</text>
+    <g transform="translate(1368 111)" fill="none" stroke="#b9c9d8" stroke-width="2" stroke-linecap="round"><circle cx="10" cy="10" r="4"/><path d="M1 7V2h5M14 2h5v5M19 13v5h-5M6 18H1v-5"/></g>
+    <path d="M30 146H1410" stroke="#25323d"/>
+    <rect x="300" y="206" width="840" height="165" rx="12" fill="#121a23"/>
+    <text x="720" y="262" fill="#eaf1f9" text-anchor="middle" font-size="15" font-weight="700">Start an analyst conversation</text>
+    <text x="720" y="289" fill="#a7b7c7" text-anchor="middle" font-size="13">Ask a question or bring something you want to work on.</text>
+    <text x="720" y="324" fill="#9bc5f0" text-anchor="middle" font-size="12" font-weight="600">Ask about this project      Review a document</text>
+    <rect x="300" y="639" width="840" height="136" rx="12" fill="#19232e" stroke="#344452"/>
+    <text x="321" y="666" fill="#b7c8d9" font-size="12">Add goal</text>
+    <text x="321" y="704" fill="#8c9eaf" font-size="13">Ask about this project…</text>
+    <path d="M300 726H1140" stroke="#334150"/>
+    <text x="321" y="754" fill="#d0deeb" font-size="12" font-weight="650">Local assistant</text>
+    <text x="1040" y="754" fill="#adc0d1" font-size="17">✧  ♧  ➤</text>
+    <rect x="10" y="810" width="1420" height="80" rx="28" fill="#111820" stroke="#34404b"/>
+    <text x="42" y="852" fill="#e9f1f8" font-size="15" font-weight="700">Nebula</text>
+    <text x="248" y="843" fill="#aabccd" font-size="10">ACTIVE PROJECT</text>
+    <text x="248" y="863" fill="#edf4fb" font-size="13" font-weight="650">Scratch Project</text>
+    <rect x="550" y="822" width="92" height="55" rx="12" fill="#1a2838"/>
+    <text x="596" y="854" fill="#dfeefa" text-anchor="middle" font-size="12" font-weight="650">Workbench</text>
+    <text x="670" y="854" fill="#aebdcb" font-size="12">Work</text>
+    <text x="740" y="854" fill="#aebdcb" font-size="12">Findings</text>
+    <text x="840" y="854" fill="#aebdcb" font-size="12">Reports</text>
+    <text x="940" y="854" fill="#aebdcb" font-size="12">Project</text>
+    <text x="1030" y="854" fill="#aebdcb" font-size="12">Library</text>
+    <text x="1140" y="854" fill="#aebdcb" font-size="12">Settings</text>
+  </g>
+</svg>

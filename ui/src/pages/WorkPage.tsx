@@ -27,6 +27,7 @@ type WorkAgentActivity = {
   session_id: string; engagement_id: string; title: string;
   state: "working" | "waiting"; turn_id: string;
 };
+type SummaryView = "working" | "waiting" | "in_progress" | "blocked" | "review";
 
 const columns: { id: Status; label: string }[] = [
   { id: "backlog", label: "Backlog" }, { id: "ready", label: "Ready" },
@@ -65,7 +66,13 @@ export function WorkPage() {
   const [error, setError] = useState<string>();
   const [liveState, setLiveState] = useState<"connecting" | "live" | "reconnecting" | "offline">("connecting");
   const [showCreate, setShowCreate] = useState(false);
+  const [trackingAgent, setTrackingAgent] = useState<{ sessionId: string; projectId: string; title: string } | null>(null);
+  const [trackItemId, setTrackItemId] = useState("");
+  const [trackTitle, setTrackTitle] = useState("");
+  const [trackSearch, setTrackSearch] = useState("");
+  const [trackError, setTrackError] = useState<string>();
   const [projectQuery, setProjectQuery] = useState("");
+  const [summaryView, setSummaryView] = useState<SummaryView | null>(projectId ? "working" : null);
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set());
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -145,6 +152,7 @@ export function WorkPage() {
   }, [api, projectId, itemId]);
 
   useEffect(() => { setEnabled(selectedProject?.workEnabled ?? false); }, [projectId, selectedProject?.workEnabled]);
+  useEffect(() => { setSummaryView(projectId ? "working" : null); }, [projectId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -239,32 +247,101 @@ export function WorkPage() {
     }
     return { rows, count: query ? matching.size : activeProjects.length };
   }, [activeProjects, childrenByParent, expandedProjects, projectById, projectQuery]);
-  const visibleProjects = projectRows.rows.slice(0, visibleProjectLimit);
   const projectCounts = useMemo(() => {
-    const byProject = new Map<string, { active: number; blocked: number }>();
+    const byProject = new Map<string, { working: number; waiting: number; inProgress: number; blocked: number; review: number; latest?: WorkItem }>();
+    const get = (id: string) => {
+      const existing = byProject.get(id);
+      if (existing) return existing;
+      const created = { working: 0, waiting: 0, inProgress: 0, blocked: 0, review: 0, latest: undefined as WorkItem | undefined };
+      byProject.set(id, created);
+      return created;
+    };
     for (const item of items) {
       let projectId: string | undefined = item.engagement_id;
       const seen = new Set<string>();
       while (projectId && !seen.has(projectId)) {
         seen.add(projectId);
-        const counts = byProject.get(projectId) ?? { active: 0, blocked: 0 };
-        if (item.status === "in_progress") counts.active += 1;
+        const counts = get(projectId);
+        if (item.status === "in_progress") counts.inProgress += 1;
         if (item.status === "blocked") counts.blocked += 1;
-        byProject.set(projectId, counts);
+        if (item.status === "review") counts.review += 1;
+        if (item.last_update_at && (!counts.latest?.last_update_at || item.last_update_at > counts.latest.last_update_at)) counts.latest = item;
+        projectId = projectById.get(projectId)?.parentEngagementId;
+      }
+    }
+    for (const [sessionId, state] of Object.entries(activity)) {
+      if (state !== "working" && state !== "waiting") continue;
+      let projectId: string | undefined = activityProjects[sessionId];
+      const seen = new Set<string>();
+      while (projectId && !seen.has(projectId)) {
+        seen.add(projectId);
+        get(projectId)[state] += 1;
         projectId = projectById.get(projectId)?.parentEngagementId;
       }
     }
     return byProject;
-  }, [items, projectById]);
-  const working = useMemo(() => items.filter((item) => item.assignee_session_id && activity[item.assignee_session_id] === "working" && item.status !== "done"), [items, activity]);
-  const workingAgents = useMemo(() => Object.entries(activity).filter(([, state]) => state === "working").map(([sessionId]) => ({
+  }, [items, activity, activityProjects, projectById]);
+  const visibleProjects = useMemo(() => {
+    const roots = projectRows.rows.filter((row) => row.depth === 0).slice(0, visibleProjectLimit);
+    const children = projectRows.rows.filter((row) => row.depth > 0).slice(0, visibleProjectLimit - roots.length);
+    const visible = new Set([...roots, ...children].map((row) => row.project.id));
+    return projectRows.rows.filter((row) => visible.has(row.project.id));
+  }, [projectRows]);
+  const activeItems = useMemo(() => items.filter((item) => item.status !== "done"), [items]);
+  const agentEntries = useMemo(() => Object.entries(activity).filter(([, state]) => state === "working" || state === "waiting").map(([sessionId, state]) => ({
     sessionId,
+    state,
     projectId: activityProjects[sessionId],
     title: sessionTitles[sessionId] || "Active conversation",
-    item: working.find((candidate) => candidate.assignee_session_id === sessionId),
-  })).filter((entry) => Boolean(entry.projectId)), [activity, activityProjects, sessionTitles, working]);
+    item: activeItems.find((candidate) => candidate.engagement_id === activityProjects[sessionId] && (candidate.assignee_session_id === sessionId || (candidate.source_kind === "chat" && candidate.source_id === sessionId))),
+  })).filter((entry): entry is typeof entry & { projectId: string } => Boolean(entry.projectId)), [activity, activityProjects, sessionTitles, activeItems]);
+  const workingAgents = agentEntries.filter((agent) => agent.state === "working");
+  const waitingAgents = agentEntries.filter((agent) => agent.state === "waiting");
   const projectName = (id: string) => engagements.find((project) => project.id === id)?.name ?? "Project unavailable";
   const assignee = (item: WorkItem) => item.assignee_session_id ? sessionTitles[item.assignee_session_id] ?? "Agent session" : "Unassigned";
+  const summaryOptions: { id: SummaryView; label: string; count: number }[] = [
+    { id: "working", label: "Working now", count: workingAgents.length },
+    { id: "waiting", label: "Waiting", count: waitingAgents.length },
+    { id: "in_progress", label: "In progress", count: counts.in_progress },
+    { id: "blocked", label: "Blocked", count: counts.blocked },
+    { id: "review", label: "In review", count: counts.review },
+  ];
+  const selectedSummary = summaryOptions.find((option) => option.id === summaryView);
+  const summaryItems = summaryView && summaryView !== "working" ? items.filter((item) => item.status === summaryView) : [];
+  const availableTrackItems = trackingAgent ? items.filter((item) => item.engagement_id === trackingAgent.projectId && item.status !== "done" && !item.assignee_session_id) : [];
+  const visibleTrackItems = availableTrackItems.filter((item) => item.id === trackItemId || item.title.toLocaleLowerCase().includes(trackSearch.trim().toLocaleLowerCase())).sort((a, b) => Number(b.id === trackItemId) - Number(a.id === trackItemId)).slice(0, 30);
+
+  const openTracking = (agent: { sessionId: string; projectId: string; title: string }) => {
+    setTrackingAgent(agent);
+    setTrackItemId(""); setTrackTitle(agent.title); setTrackSearch(""); setTrackError(undefined);
+  };
+
+  const trackWork = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!api || !trackingAgent || (!trackItemId && !trackTitle.trim())) return;
+    setBusy(true); setTrackError(undefined);
+    const target = `engagements/${encodeURIComponent(trackingAgent.projectId)}/work`;
+    try {
+      if (trackItemId) {
+        const current = await api.request<WorkItem>(`${target}/${encodeURIComponent(trackItemId)}`);
+        if (current.assignee_session_id && current.assignee_session_id !== trackingAgent.sessionId) {
+          throw new Error("This item was assigned to another conversation. Refresh Work and choose another item.");
+        }
+        await api.request<WorkItem>(`${target}/${encodeURIComponent(trackItemId)}`, {
+          method: "PATCH", body: JSON.stringify({ assignee_session_id: trackingAgent.sessionId }),
+        });
+      } else {
+        await api.request<WorkItem>(target, {
+          method: "POST", body: JSON.stringify({ title: trackTitle.trim(), status: "in_progress", source_kind: "chat", source_id: trackingAgent.sessionId, assignee_session_id: trackingAgent.sessionId, request_id: `track:${trackingAgent.sessionId}` }),
+        });
+      }
+      await refresh();
+      setTrackingAgent(null);
+    } catch (failure) {
+      void logCaughtDiagnostic("interface.work_page.track_failed", "A conversation could not be linked to Work.", failure, "work_page");
+      setTrackError(errorText(failure));
+    } finally { setBusy(false); }
+  };
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
@@ -339,35 +416,49 @@ export function WorkPage() {
     {error && <div className="work-error" role="alert"><CircleAlert size={17} /><span>{error}</span><button type="button" className="button quiet" onClick={() => void refresh()}>Retry</button></div>}
     {loading ? <div className="work-loading" role="status">Loading Work…</div> : <>
       <section className="work-summary" aria-label="Work summary">
-        <div><strong>{workingAgents.length}</strong><span>Working now</span></div>
-        <div><strong>{counts.in_progress}</strong><span>In progress</span></div>
-        <div><strong>{counts.blocked}</strong><span>Blocked</span></div>
-        <div><strong>{counts.review}</strong><span>In review</span></div>
+        {summaryOptions.map((option) => <button key={option.id} type="button" aria-label={`${option.count} ${option.label}`} aria-pressed={summaryView === option.id} aria-controls={summaryView ? "work-summary-detail" : undefined} onClick={() => setSummaryView(option.id)}><strong>{option.count}</strong><span>{option.label}</span></button>)}
       </section>
+      {selectedSummary && <section className="work-panel work-summary-detail" id="work-summary-detail" aria-label={`${selectedSummary.label} details`}>
+        <div className="work-panel-head"><h2>{selectedSummary.label}</h2><span>{selectedSummary.count}</span></div>
+        {summaryView === "working" || summaryView === "waiting" ? (summaryView === "working" ? workingAgents : waitingAgents).length ? <ul className="work-summary-list">{(summaryView === "working" ? workingAgents : waitingAgents).map((agent) => <li key={agent.sessionId}>
+          <Link className="work-summary-main-link" to={resourcePath(agent.projectId, "conversation", agent.sessionId)}><strong>{agent.title}</strong><small>{projectName(agent.projectId)} · {summaryView === "working" ? "Working" : "Waiting for input"}{agent.item ? ` · ${agent.item.title}` : " · No Work item linked"}</small></Link>
+          {agent.item && <Link className="work-summary-item-link" to={projectSurface(agent.item.engagement_id, "work", agent.item.id)}>Work item <ArrowRight size={14} aria-hidden="true" /></Link>}
+          {!agent.item && <button className="work-summary-track" type="button" disabled={busy || coreState !== "online"} onClick={() => openTracking(agent)}>Track work</button>}
+        </li>)}</ul> : <p className="work-empty-inline">No conversations are {summaryView === "working" ? "working right now" : "waiting for input"}.</p>
+          : summaryItems.length ? <ul className="work-summary-list">{summaryItems.map((item) => <li key={item.id}>
+            <Link className="work-summary-main-link" to={projectSurface(item.engagement_id, "work", item.id)}><strong>{item.title}</strong><small>{projectName(item.engagement_id)} · {assignee(item)} · {time(item.last_update_at)}</small></Link>
+            <ArrowRight size={16} aria-hidden="true" />
+          </li>)}</ul> : <p className="work-empty-inline">No {selectedSummary.label.toLowerCase()} Work items.</p>}
+      </section>}
       {!projectId ? <>
         <div className="work-overview-grid">
           <section className="work-panel" aria-labelledby="work-active-title">
             <div className="work-panel-head"><h2 id="work-active-title">Agents working now</h2><span>{workingAgents.length}</span></div>
             {workingAgents.length ? <ul className="work-activity-list">{workingAgents.map((agent) => <li key={agent.sessionId}>
               <span className="work-live-dot" aria-hidden="true" /><div><strong>{agent.item?.title ?? agent.title}</strong><small>{projectName(agent.projectId)} · {agent.item ? time(agent.item.last_update_at) : "No Work item linked"}</small></div>
+              {!agent.item && <button className="work-summary-track" type="button" disabled={busy || coreState !== "online"} onClick={() => openTracking(agent)}>Track work</button>}
               <Link aria-label={`Open ${agent.item?.title ?? agent.title}`} to={agent.item ? projectSurface(agent.projectId, "work", agent.item.id) : resourcePath(agent.projectId, "conversation", agent.sessionId)}><ArrowRight size={16} /></Link>
             </li>)}</ul> : <p className="work-empty-inline">No agents are working right now.</p>}
           </section>
           <section className="work-panel" aria-labelledby="work-attention-title">
-            <div className="work-panel-head"><h2 id="work-attention-title">Needs attention</h2><span>{counts.blocked}</span></div>
+            <div className="work-panel-head"><h2 id="work-attention-title">Needs attention</h2><span>{counts.blocked + counts.review + waitingAgents.length}</span></div>
             {items.filter((item) => item.status === "blocked").slice(0, 8).map((item) => <Link className="work-attention-row" key={item.id} to={projectSurface(item.engagement_id, "work", item.id)}><CircleAlert size={16} /><span><strong>{item.title}</strong><small>{projectName(item.engagement_id)} · Blocked</small></span><ArrowRight size={15} /></Link>)}
-            {!counts.blocked && <p className="work-empty-inline">No blocked items.</p>}
+            {items.filter((item) => item.status === "review").slice(0, 8).map((item) => <Link className="work-attention-row" key={item.id} to={projectSurface(item.engagement_id, "work", item.id)}><Clock3 size={16} /><span><strong>{item.title}</strong><small>{projectName(item.engagement_id)} · In review</small></span><ArrowRight size={15} /></Link>)}
+            {waitingAgents.slice(0, 8).map((agent) => <Link className="work-attention-row" key={agent.sessionId} to={resourcePath(agent.projectId, "conversation", agent.sessionId)}><Clock3 size={16} /><span><strong>{agent.title}</strong><small>{projectName(agent.projectId)} · Waiting for input</small></span><ArrowRight size={15} /></Link>)}
+            {!counts.blocked && !counts.review && !waitingAgents.length && <p className="work-empty-inline">Nothing needs attention right now.</p>}
           </section>
         </div>
         <section className="work-panel work-projects" aria-labelledby="work-projects-title"><div className="work-panel-head"><h2 id="work-projects-title">Projects</h2><span>{projectRows.count}</span></div>
           <div className="work-project-search"><input type="search" aria-label="Search projects" placeholder="Search projects" value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} /></div>
           <div className="work-project-list">{visibleProjects.map(({ project, depth }) => {
-            const projectItems = projectCounts.get(project.id) ?? { active: 0, blocked: 0 };
+            const projectItems = projectCounts.get(project.id) ?? { working: 0, waiting: 0, inProgress: 0, blocked: 0, review: 0 };
+            const latestUpdate = projectItems.latest && recent.find((update) => update.item_id === projectItems.latest?.id && update.created_at === projectItems.latest?.last_update_at);
             const childCount = childrenByParent.get(project.id)?.length ?? 0;
             const expanded = Boolean(projectQuery.trim()) || expandedProjects.has(project.id);
             return <div className={`work-project-row${depth ? " is-child" : ""}`} key={project.id} style={{ paddingLeft: Math.min(depth, 5) * 22 }}>
               {childCount > 0 ? <button type="button" aria-label={`${expanded ? "Hide" : "Show"} subprojects of ${project.name}`} aria-expanded={expanded} onClick={() => setExpandedProjects((current) => { const next = new Set(current); if (next.has(project.id)) next.delete(project.id); else next.add(project.id); return next; })}>{expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}</button> : <span className="work-project-spacer" />}
-              <Link to={projectRoot(project.id)}><span><strong>{project.name}</strong><small>{childCount ? `${childCount} subprojects · ` : ""}{project.workEnabled ? "Agent tools on" : "Agent tools off"}</small></span><span>{projectItems.active} active · {projectItems.blocked} blocked</span><ArrowRight size={16} /></Link>
+              <div className="work-project-content"><Link className="work-project-primary" to={projectRoot(project.id)}><span className="work-project-main"><strong>{project.name}</strong><small>{childCount ? `${childCount} subprojects · ` : ""}{project.workEnabled ? "Agent tools on" : "Agent tools off"}</small>{!projectItems.latest && <small>No check-ins yet</small>}</span><span className="work-project-status">{projectItems.working} working · {projectItems.waiting} waiting · {projectItems.inProgress} in progress · {projectItems.blocked} blocked · {projectItems.review} review</span><ArrowRight size={16} /></Link>
+                {projectItems.latest && <Link className="work-project-latest" to={projectSurface(projectItems.latest.engagement_id, "work", projectItems.latest.id)}><span><strong>Latest check-in: {projectItems.latest.title}</strong><small>{projectName(projectItems.latest.engagement_id)} · {time(projectItems.latest.last_update_at)}</small>{latestUpdate && <small>{latestUpdate.blocker ? `Blocked: ${latestUpdate.blocker}` : latestUpdate.next_step ? `Next: ${latestUpdate.next_step}` : latestUpdate.summary}</small>}</span><ArrowRight size={15} aria-hidden="true" /></Link>}</div>
             </div>;
           })}</div>
           {projectRows.rows.length > visibleProjectLimit && <p className="work-empty-inline">Showing {visibleProjectLimit} rows. Search to narrow the list.</p>}
@@ -410,5 +501,10 @@ export function WorkPage() {
       </>}
     </>}
     {showCreate && <div className="work-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setShowCreate(false); }}><form className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="work-create-title" onSubmit={(event) => void create(event)}><header><h2 id="work-create-title">New work item</h2><button className="work-dialog-close" type="button" aria-label="Close" disabled={busy} onClick={() => setShowCreate(false)}><X size={18} /></button></header>{!projectId && <label>Project<select required value={createProjectId} onChange={(event) => setCreateProjectId(event.target.value)}><option value="">Choose a project</option>{engagements.filter((project) => project.status !== "archived").map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}<label>Title<input autoFocus required maxLength={300} value={title} onChange={(event) => setTitle(event.target.value)} /></label><label>Description<textarea maxLength={20000} value={description} onChange={(event) => setDescription(event.target.value)} /></label><footer><button type="button" className="button quiet" disabled={busy} onClick={() => setShowCreate(false)}>Cancel</button><button type="submit" className="button primary" disabled={busy || !title.trim()}><ListTodo size={16} /> Create item</button></footer></form></div>}
+    {trackingAgent && <div className="work-dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setTrackingAgent(null); }}><form className="work-dialog" role="dialog" aria-modal="true" aria-labelledby="work-track-title" onSubmit={(event) => void trackWork(event)}><header><h2 id="work-track-title">Track conversation work</h2><button className="work-dialog-close" type="button" aria-label="Close" title="Close" disabled={busy} onClick={() => setTrackingAgent(null)}><X size={18} aria-hidden="true" /></button></header><p className="work-track-context">{projectName(trackingAgent.projectId)} · {trackingAgent.title}</p>
+      {availableTrackItems.length > 0 && <><label>Find an existing item<input type="search" value={trackSearch} onChange={(event) => setTrackSearch(event.target.value)} placeholder="Search open items" /></label><label>Work item<select value={trackItemId} onChange={(event) => setTrackItemId(event.target.value)}><option value="">Create a new item</option>{visibleTrackItems.map((item) => <option key={item.id} value={item.id}>{item.title} · {label(item.status)}</option>)}</select></label></>}
+      {!trackItemId && <label>Title<input autoFocus required maxLength={300} value={trackTitle} onChange={(event) => setTrackTitle(event.target.value)} /></label>}
+      {trackError && <p className="work-track-error" role="alert">{trackError}</p>}
+      <footer><button type="button" className="button quiet" disabled={busy} onClick={() => setTrackingAgent(null)}>Cancel</button><button type="submit" className="button primary" disabled={busy || (!trackItemId && !trackTitle.trim())}>{trackItemId ? "Link item" : "Create and link"}</button></footer></form></div>}
   </div>;
 }

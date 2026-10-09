@@ -42,19 +42,19 @@
   --weight-bold: 700;
 
   /* Three visual depths: canvas, surface, and raised overlay. */
-  --canvas: #1a1c1f;
-  --surface: #24272b;
-  --surface-muted: #292d31;
-  --surface-raised: #34383e;
+  --canvas: #0b111a;
+  --surface: #111b27;
+  --surface-muted: #172230;
+  --surface-raised: #1c2a39;
   /* Overlapping text needs an opaque plane even in translucent themes. */
   --surface-overlay: var(--surface-raised);
-  --surface-hover: #3c4148;
-  --text: #e7eaee;
-  --text-strong: #f6f7f8;
-  --muted: #b1bac4;
-  --muted-strong: #c3cad2;
-  --border: #50565f;
-  --border-soft: #3a4047;
+  --surface-hover: #26374a;
+  --text: #e4edf7;
+  --text-strong: #f4f8fc;
+  --muted: #a6b8ca;
+  --muted-strong: #bdcddd;
+  --border: #35475b;
+  --border-soft: #253649;
   --blue: #6aa8eb;
   --blue-bright: #87d7ff;
   --blue-muted: rgb(106 168 235 / 12%);

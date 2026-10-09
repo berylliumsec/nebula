@@ -1,7 +1,7 @@
 import "fake-indexeddb/auto";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WorkbenchEditorProvider, useWorkbenchEditor } from "./WorkbenchEditorContext";
+import { WorkbenchEditorProvider, useAdoptWorkbenchEditorSession, useWorkbenchEditor } from "./WorkbenchEditorContext";
 import { clearEditorSessions, loadEditorSessions } from "./editorSessionPersistence";
 
 vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn() }));
@@ -9,6 +9,23 @@ vi.mock("../diagnostics", () => ({ logCaughtDiagnostic: vi.fn() }));
 afterEach(async () => { cleanup(); await clearEditorSessions(); });
 
 describe("editor hot-exit provider", () => {
+  it("keeps buffers separate per chat and adopts a new chat draft", async () => {
+    const editor = renderHook(() => ({
+      first: useWorkbenchEditor("chat-a"),
+      second: useWorkbenchEditor("chat-b"),
+      draft: useWorkbenchEditor("draft-new"),
+      saved: useWorkbenchEditor("chat-new"),
+      adopt: useAdoptWorkbenchEditorSession(),
+    }), { wrapper: WorkbenchEditorProvider });
+    await waitFor(() => expect(editor.result.current.first.persistenceState).toBe("ready"));
+    act(() => editor.result.current.first.setBuffer({ id: "a", content: "A draft", savedContent: "", existing: false, filePath: "shared.txt" }));
+    expect(editor.result.current.second.buffers).toHaveLength(0);
+    act(() => editor.result.current.draft.setBuffer({ id: "new", content: "Before first message", savedContent: "", existing: false, filePath: "new.txt" }));
+    act(() => editor.result.current.adopt("draft-new", "chat-new"));
+    expect(editor.result.current.saved.buffer?.content).toBe("Before first message");
+    expect(editor.result.current.draft.buffers).toHaveLength(0);
+    expect(editor.result.current.first.buffer?.content).toBe("A draft");
+  });
   it("recovers the active 21st draft after remount", async () => {
     const editor = renderHook(() => useWorkbenchEditor("project"), { wrapper: WorkbenchEditorProvider });
     await waitFor(() => expect(editor.result.current.persistenceState).toBe("ready"));
