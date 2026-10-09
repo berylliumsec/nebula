@@ -551,6 +551,7 @@ def test_workflow_checks_initiator_before_exposing_app_key():
     assert step["env"] == {
         "GH_TOKEN": "${{ github.token }}",
         "RELEASE_ACTOR": "${{ github.actor }}",
+        "RELEASE_TRIGGERING_ACTOR": "${{ github.triggering_actor }}",
     }
     assert 'test "$permission" = admin' in step["run"]
     steps = jobs["release"]["steps"]

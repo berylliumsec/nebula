@@ -76,6 +76,10 @@ jobs:
             echo 'Verified dedicated release App dispatch.'
             exit 0
           fi
+          if [ "$RELEASE_TRIGGERING_ACTOR" != "$RELEASE_ACTOR" ]; then
+            permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$RELEASE_TRIGGERING_ACTOR/permission" --jq .permission)"
+            test "$permission" = admin || { echo 'Only repository admins may rerun releases.' >&2; exit 1; }
+          fi
           permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$RELEASE_ACTOR/permission" --jq .permission)"
           test "$permission" = admin || { echo 'Only repository admins may prepare a release.' >&2; exit 1; }
       - name: Check out the immutable release tag

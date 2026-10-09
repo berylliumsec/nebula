@@ -25,9 +25,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ACTOR: ${{ github.actor }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: |
           permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$RELEASE_ACTOR/permission" --jq .permission)"
           test "$permission" = admin || { echo 'Only repository admins may start a daily release.' >&2; exit 1; }
+          if [ "$RELEASE_TRIGGERING_ACTOR" != "$RELEASE_ACTOR" ]; then
+            permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$RELEASE_TRIGGERING_ACTOR/permission" --jq .permission)"
+            test "$permission" = admin || { echo 'Only repository admins may rerun a daily release.' >&2; exit 1; }
+          fi
 
   release:
     if: github.ref == 'refs/heads/main'

@@ -137,6 +137,7 @@ def installation_token(permission: str):
         installation.get("app_id") != int(config["ID"])
         or installation.get("account", {}).get("login") != owner
         or installation.get("repository_selection") != "selected"
+        or installation.get("permissions") != expected_permissions
         or installation.get("suspended_at") is not None
     ):
         raise RuntimeError("Release App installation does not match the approved scope")

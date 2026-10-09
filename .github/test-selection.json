@@ -1,7 +1,7 @@
 {
-  "change_digest": "87e02c67d0e4f7c931d666718bead2a27889b43992d043ebb2f0ee490919c695",
+  "change_digest": "3d97c7007cddb508f09c01ba715d045942b451fe36d5f2a435e67127c1ca122a",
   "reviewed_by": "Codex focused release engineering review, 2026-10-09",
-  "reason": "Adapt daily release orchestration to a dedicated short-lived GitHub App. The 163 collected tests cover exact App/installation/bot identities, owner and single-repository/one-permission scopes, fresh token lifetimes and revocation on success/failure/denial, key isolation and temporary-file cleanup, executable downstream actor gates for the exact App versus unrelated bots/users and unauthorized reruns, initiator admin and immutable-tag guards, existing CI/coverage/artifact/finalization gates, and focused selection/full-suite safeguards. All GitHub writes, credentials and signing are mocked; shell actor checks use a fake local gh.",
+  "reason": "Adapt daily release orchestration to a dedicated short-lived GitHub App. The 179 collected tests cover exact App/installation/bot identities, approved installation permissions, owner and single-repository/one-permission scopes, fresh token lifetimes and revocation on success/failure/denial, key isolation, temporary-file cleanup, API error redaction and blocked credential redirects, executable downstream actor gates for the exact App versus unrelated bots/users and unauthorized App/human reruns; daily initiator and rerun admin checks before key access, initiator admin and immutable-tag guards, existing CI/coverage/artifact/finalization gates, and focused selection/full-suite safeguards. All GitHub writes, credentials and signing are mocked; shell actor checks use a fake local gh.",
   "exclusions": "Release engineering only. Python 3.12 bounded to four named files and two minutes; no network requests, real keys or credentials, publishing workflows, repository-rule changes, product runtime, UI/native/Core/package/signing/smoke execution or full suites. Actual RSA signing and protected end-to-end release remain unverified pending separately approved App setup and publication.",
   "python": [
     "tests/test_daily_stable_release.py",
@@ -13,7 +13,7 @@
   "native": [],
   "playwright": [],
   "expected_tests": {
-    "python": 163,
+    "python": 179,
     "frontend": 0,
     "native": 0,
     "playwright": 0

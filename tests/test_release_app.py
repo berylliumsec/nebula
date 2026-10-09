@@ -15,6 +15,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 import pytest
 import yaml
@@ -54,6 +55,11 @@ def app(monkeypatch):
             "account": {"login": "example"},
             "repository_selection": "selected",
             "suspended_at": None,
+            "permissions": {
+                "contents": "write",
+                "actions": "write",
+                "metadata": "read",
+            },
         },
         "bot": {"id": 789, "type": "Bot"},
         "repositories": {
@@ -133,6 +139,7 @@ def test_wrong_app_or_expanded_permission_fails_before_mint(app, field, value):
         ("account", {"login": "other"}),
         ("repository_selection", "all"),
         ("suspended_at", "2026-10-09"),
+        ("permissions", {"contents": "write", "actions": "read", "metadata": "read"}),
     ],
 )
 def test_wrong_or_suspended_installation_fails_before_mint(app, field, value):
@@ -262,6 +269,8 @@ WORKFLOWS = (
         ("app", True),
         ("human-admin", True),
         ("human-writer", False),
+        ("human-admin-rerun", True),
+        ("human-writer-rerun", False),
         ("wrong-id", False),
         ("wrong-sender", False),
         ("wrong-slug", False),
@@ -285,7 +294,10 @@ def test_actor_gate_executes_exact_identity_and_admin_fallback(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     gh = bin_dir / "gh"
-    gh.write_text('#!/bin/sh\nprintf "%s\\n" "$FAKE_PERMISSION"\n')
+    gh.write_text(
+        '#!/bin/sh\ncase "$2" in */collaborators/unauthorized/permission) echo write;; '
+        '*) printf "%s\\n" "$FAKE_PERMISSION";; esac\n'
+    )
     gh.chmod(0o700)
     env = {
         **release_app.child_env(),
@@ -309,7 +321,7 @@ def test_actor_gate_executes_exact_identity_and_admin_fallback(
             RELEASE_SENDER_TYPE="User",
             RELEASE_TRIGGERING_ACTOR="human",
         )
-        env["FAKE_PERMISSION"] = "admin" if case == "human-admin" else "write"
+        env["FAKE_PERMISSION"] = "write" if case == "human-writer" else "admin"
     if case == "wrong-id":
         env["RELEASE_ACTOR_ID"] = "1"
     if case == "wrong-sender":
@@ -320,9 +332,13 @@ def test_actor_gate_executes_exact_identity_and_admin_fallback(
         env["GITHUB_EVENT_NAME"] = "push"
     if case == "missing-config":
         env["RELEASE_APP_BOT_ID"] = ""
-    if case.endswith("rerun"):
+    if case in {"writer-rerun", "admin-rerun"}:
         env["RELEASE_TRIGGERING_ACTOR"] = "human"
         env["FAKE_PERMISSION"] = "admin" if case == "admin-rerun" else "write"
+    if case == "human-admin-rerun":
+        env["RELEASE_TRIGGERING_ACTOR"] = "another-admin"
+    if case == "human-writer-rerun":
+        env["RELEASE_TRIGGERING_ACTOR"] = "unauthorized"
     result = subprocess.run(
         ["bash", "-eo", "pipefail", "-c", step["run"]],
         env=env,
@@ -331,3 +347,90 @@ def test_actor_gate_executes_exact_identity_and_admin_fallback(
         timeout=5,
     )
     assert (result.returncode == 0) == accepted, result.stderr
+
+
+@pytest.mark.parametrize(
+    "actor,trigger,accepted",
+    [
+        ("admin", "admin", True),
+        ("admin", "writer", False),
+        ("writer", "admin", False),
+        ("writer", "writer", False),
+        ("admin", "admin-two", True),
+    ],
+)
+def test_daily_initiator_and_rerun_gate_before_key_access(
+    tmp_path, actor, trigger, accepted
+):
+    source = (
+        Path(__file__).resolve().parents[1]
+        / ".github/workflows/daily-stable-release.yml"
+    )
+    step = yaml.safe_load(source.read_text())["jobs"]["validate-admin"]["steps"][0]
+    gh = tmp_path / "gh"
+    gh.write_text(
+        '#!/bin/sh\ncase "$2" in */collaborators/admin/permission|*/collaborators/admin-two/permission) echo admin;; *) echo write;; esac\n'
+    )
+    gh.chmod(0o700)
+    env = {
+        **release_app.child_env(),
+        "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+        "GITHUB_REPOSITORY": "example/nebula",
+        "RELEASE_ACTOR": actor,
+        "RELEASE_TRIGGERING_ACTOR": trigger,
+    }
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", step["run"]],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert (result.returncode == 0) == accepted, result.stderr
+
+
+def test_api_errors_do_not_expose_authorization_or_response_body():
+    def fail(request, timeout):
+        assert timeout == 30
+        assert request.get_header("Authorization") == "Bearer fixture-secret"
+        raise HTTPError(
+            request.full_url, 403, "fixture-secret in server body", None, None
+        )
+
+    with patch.object(
+        release_app, "build_opener", return_value=SimpleNamespace(open=fail)
+    ):
+        with pytest.raises(RuntimeError) as error:
+            release_app.api("GET", "app", "fixture-secret")
+    assert str(error.value) == "GitHub App API GET app: HTTP 403"
+    assert error.value.__suppress_context__ is True
+
+
+def test_api_redirects_cannot_forward_credentials():
+    assert (
+        release_app.NoRedirect().redirect_request(
+            None, None, 302, "", {}, "https://example.invalid"
+        )
+        is None
+    )
+
+
+def test_signing_failure_hides_key_and_removes_temporary_file():
+    paths = []
+
+    def fail(args, **kwargs):
+        paths.append(Path(args[-1]))
+        return SimpleNamespace(returncode=1, stdout=b"", stderr=b"NOT A KEY")
+
+    with patch.object(release_app.subprocess, "run", side_effect=fail):
+        with pytest.raises(RuntimeError, match="Cannot sign") as error:
+            release_app.jwt("Iv1.fixture", "NOT A KEY")
+    assert "NOT A KEY" not in str(error.value)
+    assert all(not path.exists() for path in paths)
+
+
+def test_unsupported_permission_cannot_mint_a_token(app):
+    with pytest.raises(RuntimeError, match="Unsupported"):
+        with release_app.installation_token("administration"):
+            pytest.fail("must not yield")
+    assert not app["calls"]
