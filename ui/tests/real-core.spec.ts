@@ -1195,7 +1195,10 @@ async function runAssistantGuideTour(page: Page, testInfo: TestInfo, selectedGui
     await page.goto(`${core.origin}/?view=chat`);
     await page.getByRole("button", { name: "New chat", exact: true }).click();
     // A saved provider turn makes message actions and goals available.
-    await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Summarize the scope");
+    const composer = page.getByRole("textbox", { name: "Message the analyst assistant" });
+    await expect(composer).toHaveValue("");
+    await composer.pressSequentially("Summarize the scope");
+    await expect(composer).toHaveValue("Summarize the scope");
     await page.getByRole("button", { name: "Send message", exact: true }).click();
     await expect(page.locator('[data-guide="message-actions"]').first()).toBeAttached({ timeout: 30_000 });
     await expect(page).toHaveURL(/session=/);
@@ -2275,8 +2278,12 @@ test("assistant upgrade real Core persists network scope changed through univers
     const lens = page.getByRole("dialog", { name: "Project policy and network scope" });
     const saveScope = page.getByRole("button", { name: "Save scope" });
     await expect(saveScope).toBeEnabled({ timeout: 20_000 });
-    await page.getByLabel("Allowed domains").fill("https://www.Google.com/");
+    const domains = lens.getByLabel("Allowed domains");
+    await expect(domains).toHaveValue("");
+    await domains.pressSequentially("https://www.Google.com/");
+    await expect(domains).toHaveValue("https://www.Google.com/");
     await lens.getByRole("radio", {name: /All destinations/}).check();
+    await expect(domains).toHaveValue("https://www.Google.com/");
     await saveScope.click();
     const confirmation = page.getByRole("dialog", { name: "Allow every network target and port?" });
     await expect(confirmation).toBeVisible();
