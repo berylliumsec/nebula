@@ -12266,6 +12266,8 @@ reloadTest("assistant upgrade posted subagent failures stay collapsed after the 
       }] } });
     } else if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) {
       await route.fulfill({ json: null });
+    } else if (path.endsWith(`/chat/sessions/${sessionId}/queue`)) {
+      await route.fulfill({ json: { revision: 0, paused: false, items: [] } });
     } else await route.fallback();
   });
   await page.goto(`/?view=chat&session=${sessionId}`);

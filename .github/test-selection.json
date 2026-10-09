@@ -1,5 +1,5 @@
 {
-  "change_digest": "4f574f4a7cfaaf98ae17616de17c92b17e1197bc4fc0550daba9f64257285985",
+  "change_digest": "fbb48365409929493a8b1152b88a5d4b9bd6259dcf32717b23474718375b116e",
   "reviewed_by": "Codex focused review for compact posted subagent failures",
   "reason": "Linked and superseded subagent result messages render once through collapsed disclosures, with complete saved details available on demand. Sixteen component cases cover presentation and controls. Eight mocked browser projects cover answer order, disclosure, refresh, accessibility, and responsive presentation; one real-Core browser case covers superseded results after restart on a production LAN origin.",
   "exclusions": "No backend, Python, or native behavior changed. Unrelated UI journeys and full suites are excluded. Physical-device testing is unavailable; the mobile Chromium and WebKit projects use emulation.",
