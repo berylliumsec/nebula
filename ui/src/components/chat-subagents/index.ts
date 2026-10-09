@@ -10,7 +10,7 @@
 export { ChatSubagentPane } from "./ChatSubagentPane";
 export { ChatSubagentAttention } from "./ChatSubagentAttention";
 export { ChatSubagentRail } from "./ChatSubagentRail";
-export { ChatSubagentResultCard } from "./ChatSubagentResultCard";
+export { ChatSubagentPostedResult, ChatSubagentResultCard } from "./ChatSubagentResultCard";
 export {
   defaultSubagentChoice,
   HarnessSubagentSettings,

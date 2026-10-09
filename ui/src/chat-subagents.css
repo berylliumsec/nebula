@@ -87,6 +87,8 @@
 .chat-subagent-result p { margin: 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .chat-subagent-result-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .chat-subagent-result-actions .button { min-height: 32px; }
+.chat-subagent-posted > summary { min-height: 44px; padding: 11px 4px; cursor: pointer; font-weight: 600; }
+.chat-subagent-posted > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 @media (max-width: 760px), (pointer: coarse) {
   .chat-subagent-rail .icon-button { width: 44px; min-height: 44px; }
