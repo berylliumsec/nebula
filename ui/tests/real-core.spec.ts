@@ -4031,6 +4031,12 @@ for (const scenario of ["stop", "double_click", "lost_response", "disconnect", "
       await expect.poll(async () => (await state()).execution, {timeout: 20_000}).toBe(expected);
       if (scenario === "disconnect") await page.context().setOffline(false);
       // Reconnect must reconcile the existing screen; refresh is a second gate.
+      if (scenario.startsWith("crash_") && (page.viewportSize()?.width ?? 0) >= 1024) {
+        // API startup precedes the browser's five-second health poll and
+        // authoritative bootstrap. Observe automatic desktop recovery first;
+        // keep the composer assertion's original deadline and outcome below.
+        await expect(page.getByRole("button", {name: /^Nebula Core (ready|degraded)(\.|$)/})).toBeVisible({timeout: 20_000});
+      }
       await expect(page.getByText("Action required", {exact: true})).toHaveCount(0, {timeout: 20_000});
       await expect(page.getByRole("button", {name: "Review pending actions", exact: true})).toHaveCount(0);
       await expect(page.locator(".chat-composer").getByRole("button", {name: "Stop response", exact: true})).toHaveCount(0);
