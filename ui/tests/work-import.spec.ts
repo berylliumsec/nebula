@@ -102,6 +102,18 @@ test("work hub import finds a project and its saved task after refresh", async (
     expect(imported.ok(), await imported.text()).toBe(true);
     const importedResult = await imported.json() as { projects: Array<{ engagement_id: string; items: Array<{ item_id: string }> }> };
     const parentId = (await first.json() as { projects: Array<{ engagement_id: string }> }).projects[0].engagement_id;
+    const repository = path.resolve(import.meta.dirname, "../..");
+    const commonGitDir = spawnSync("git", ["-C", repository, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8" }).stdout.trim();
+    const python = process.env.NEBULA_TEST_PYTHON ?? path.join(path.dirname(commonGitDir), ".venv/bin/python");
+    const seeded = spawnSync(python, ["-c", [
+      "import sys",
+      "from pathlib import Path",
+      "from nebula.v3.domain import ChatSession",
+      "from nebula.v3.storage import NebulaStore",
+      "store = NebulaStore(Path(sys.argv[1]) / 'nebula.db')",
+      "store.create(ChatSession(id='sample-active-session', engagement_id=sys.argv[2], title='Sample research handoff', model='test-model', provider_profile_id='provider-1'))",
+    ].join("\n"), core.dataDir, parentId], { cwd: repository, env: { ...process.env, PYTHONPATH: path.join(repository, "src") }, encoding: "utf8" });
+    expect(seeded.status, seeded.stderr || seeded.stdout).toBe(0);
     const linked = await api.patch("work/projects", { data: { project_ids: [importedResult.projects.at(-1)!.engagement_id], parent_engagement_id: parentId } });
     expect(linked.ok(), await linked.text()).toBe(true);
     const repeated = await api.post("work/import", { data: lastBatch });
@@ -130,7 +142,24 @@ test("work hub import finds a project and its saved task after refresh", async (
     }
     await page.goto(`${core.origin}/projects`);
     await expect(page.getByRole("heading", { name: "All projects", exact: true })).toBeVisible();
-    await page.getByRole("link", { name: "Open Sample research handoff" }).click();
+    const parentProject = page.locator(".work-project-list").getByRole("link", { name: /Sample project 1/ }).first();
+    await expect(parentProject).toContainText("1 working · 0 waiting · 0 in progress · 1 blocked · 0 review");
+    await expect(page.locator(".work-project-list").getByRole("link", { name: /Latest check-in: Review the release plan/ }).first()).toHaveAttribute("href", new RegExp(`/projects/${importedResult.projects.at(-1)!.engagement_id}/work/${importedResult.projects.at(-1)!.items[0].item_id}$`));
+    await page.getByRole("button", { name: "Track work" }).click();
+    const trackDialog = page.getByRole("dialog", { name: "Track conversation work" });
+    await expect(trackDialog).toContainText("Sample project 1 · Sample research handoff");
+    await trackDialog.getByRole("button", { name: "Create and link" }).click();
+    await expect(trackDialog).toBeHidden();
+    const tracked = await (await api.get(`engagements/${parentId}/work`)).json() as Array<{ id: string; assignee_session_id: string | null; source_id: string | null }>;
+    const trackedItem = tracked.find((item) => item.assignee_session_id === "sample-active-session");
+    expect(trackedItem?.source_id).toBe("sample-active-session");
+    await page.reload();
+    await page.getByRole("button", { name: "1 Working now" }).click();
+    const workingDetails = page.getByRole("region", { name: "Working now details" });
+    await expect(workingDetails).toContainText("Sample project 1 · Working · Sample research handoff");
+    await expect(workingDetails.getByRole("link", { name: "Work item" })).toHaveAttribute("href", new RegExp(`/projects/${parentId}/work/${trackedItem!.id}$`));
+    await expect(workingDetails.getByRole("link", { name: /Sample research handoff/ })).toHaveAttribute("href", new RegExp(`/projects/${parentId}/workbench\\?view=chat&session=sample-active-session$`));
+    await workingDetails.getByRole("link", { name: /Sample research handoff/ }).click();
     await expect(page).toHaveURL(new RegExp(`/projects/${parentId}/workbench\\?view=chat&session=sample-active-session$`));
     const desktopChat = page.getByRole("tab", { name: "Analyst chat" });
     const mobileChat = page.getByRole("button", { name: "Chat", exact: true });
@@ -143,7 +172,7 @@ test("work hub import finds a project and its saved task after refresh", async (
     await expect(page.getByRole("button", { name: "Show subprojects of Sample project 1" })).toBeVisible();
     await page.getByRole("searchbox", { name: "Search projects" }).fill("Imported plan");
     await expect(page.locator(".work-project-list").getByRole("link", { name: /Sample project 1/ })).toBeVisible();
-    await page.locator(".work-project-list").getByRole("link", { name: /Imported plan/ }).click();
+    await page.locator(".work-project-list .work-project-primary").filter({ hasText: "Imported plan" }).click();
     await expect(page.getByRole("link", { name: "Sample project 1" })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("link", { name: "Sample project 1" }).click();
     await page.getByRole("navigation", { name: "Project sections" }).getByRole("button", { name: "Work" }).click();
@@ -151,12 +180,16 @@ test("work hub import finds a project and its saved task after refresh", async (
     await expect(page.getByRole("link", { name: /Imported plan/ })).toBeVisible();
     await page.getByRole("link", { name: /Imported plan/ }).click();
     await expect(page.getByRole("button", { name: "Disable agent tools" })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "1 Blocked" }).click();
+    const blockedDetails = page.getByRole("region", { name: "Blocked details" });
+    await expect(blockedDetails).toContainText("Imported plan");
+    await expect(blockedDetails.getByRole("link", { name: /Review the release plan/ })).toHaveAttribute("href", new RegExp(`/projects/${importedResult.projects.at(-1)!.engagement_id}/work/${importedResult.projects.at(-1)!.items[0].item_id}$`));
     await page.getByRole("button", { name: "New item" }).click();
     const createDialog = page.getByRole("dialog", { name: "New work item" });
     await createDialog.getByRole("textbox", { name: "Title" }).fill("Prepare follow-up");
     await createDialog.getByRole("button", { name: "Create item" }).click();
     await expect(page.getByRole("heading", { name: "Prepare follow-up" })).toBeVisible();
-    await page.getByRole("link", { name: /Review the release plan/ }).click();
+    await page.locator(".work-card").filter({ hasText: "Review the release plan" }).click();
     await expect(page.getByRole("heading", { name: "Review the release plan" })).toBeVisible();
     await expect(page.getByRole("region", { name: "Current progress" })).toContainText("Draft is waiting for approval");
     await expect(page.getByText("Initial plan needs review")).toBeHidden();
