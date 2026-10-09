@@ -1,20 +1,25 @@
 {
-  "change_digest": "c68b17e3eb93aaf6522db6f89d21b1a419954d4db1b483c1f0ee080fb30fac3b",
-  "reviewed_by": "Codex release build infrastructure review,2026-10-09",
-  "reason": "Original release core-api selected unrestricted real-core file but labeled real-core, skipping existing rootless Podman/disk reclamation/pinned source preparation. Correct core-api and identical desktop-shell alias to real-core-sandbox; preserve test scope and gates. Regression verifies both selectors and full alias and dedup provenance. Add manual-only canonical image build verifier with Contents read only; pin official source and require rootless runtime, invoke production build phase only then image metadata. Four inert recording/mocking tests verify no prepare/admission/run, source rejects and nonrootless early stop. No actual runtime executes in tests.",
-  "exclusions": "No browser or security-runtime execution, no models/targets/prod provider/probe/agent changes or release publishing; these catalog entries are verified through planner only. Actual benign build-only manual workflow separate; no container daemon on Mac.",
+  "change_digest": "ed998ccc83cf4e209311a311133885789ea55d1959775ea24fe8c43addc9d262",
+  "reviewed_by": "Codex established contract reconciliation, 2026-10-09",
+  "reason": "Documentation NEBULA3.md188-195 and existing budget tests conclusively require2048 for unknown-limit inert profile with model/operator/window bounds. Correct exact128 expectation to exact2048, retaining nonce-only tool declaration, no unsent draft and <=1request. Read-only existing units verify operator768/smallwindow/unknown2048. Progress presentation docs distinguish active status from completed final text; canonical routing prose and goal-answer units accept one JSON answer, while synthesis recovery unit excludes incomplete control frames. Replace obsolete partial-final-text checkpoints with stricter active UI and actual Core-running state while holding a fixed inert reply; release only after viewer detaches or goal viewer attaches. Preserve exact final text, project ownership, >=2goal continuations, paused status, answer counts/no duplicates/no failures and reload persistence. No production behavior changes. Six existing inert Python cases and three UI journeys across desktop1440, emulated AndroidChromium390 and iPhoneWebKit390. Prefix the existing project-switch test with assistant upgrade so permanent assistant/mobile projects collect it; all original final ownership and text outcomes remain. Phone fixtures use existing More/Settings/project-picker controls and close the initial setup sheet before switching. Center the short virtualized goal transcript before retaining the exact all-answer counts, including the seed, before and after reload; no count assertions removed.",
+  "exclusions": "No full suites, security tools/runtime execution, real models or external targets, production provider/probe/agent changes, weakened privacy/limit/ownership/durability assertions, security rules/credentials or release publishing. Frontend/native empty: no product source changed. Physical/manual unavailable. Build-only packaging is separate from this selection.",
   "python": [
-    "tests/test_playwright_impact.py::test_unfiltered_real_core_catalog_entries_require_disposable_runtime",
-    "tests/test_playwright_impact.py::test_identical_entries_from_multiple_areas_run_once_and_retain_provenance",
-    "tests/test_runtime_build_only.py"
+    "tests/v3/test_inference_timeouts_probe_budget.py::test_capability_probe_budget_is_bounded_by_the_model_limits",
+    "tests/v3/test_routing_prose_answer.py::test_glm_prose_reply_on_the_first_routing_step_is_the_answer",
+    "tests/v3/test_routing_prose_answer.py::test_goal_turn_answered_by_routing_is_charged_once_and_completes",
+    "tests/v3/test_chat_final_synthesis_recovery.py::test_final_synthesis_recovers_from_a_nameless_tool_call_fragment"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "entry:release-contract-ui/assistant-real-desktop",
+    "entry:release-contract-ui/assistant-real-chromium-390",
+    "entry:release-contract-ui/assistant-real-webkit-390"
+  ],
   "expected_tests": {
     "python": 6,
     "frontend": 0,
     "native": 0,
-    "playwright": 0
+    "playwright": 9
   }
 }

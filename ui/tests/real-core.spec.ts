@@ -1999,11 +1999,16 @@ test("assistant upgrade running tool details survive a production LAN chat reloa
   ]);
 });
 
-test("production assistant work survives a project switch through real Core", async ({ page }) => {
+test("assistant upgrade production assistant work survives a project switch through real Core", async ({ page }) => {
   test.setTimeout(60_000);
   const lanAddress = localNetworkIpv4();
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: lanAddress });
-  const modelStub = await startLocalModelStub({ streamDelayMs: 1_500 });
+  let releaseAnswer = () => {};
+  const answerHeld = new Promise<void>(resolve => {releaseAnswer = resolve;});
+  const modelStub = await startLocalModelStub({
+    responseContent: "**Core is continuing in Project A** and finished after the viewer detached.",
+    beforeResponse: async () => {await answerHeld;},
+  });
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
@@ -2041,13 +2046,38 @@ test("production assistant work survives a project switch through real Core", as
     await expect(composer).toBeEnabled({ timeout: 20_000 });
     await composer.fill("Keep this response running while I switch projects");
     await page.getByRole("button", { name: "Send message" }).click();
-    await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveText("Core is continuing in Project A", { timeout: 20_000 });
+    // Routing may return the final answer as JSON; synthesis text is validated
+    // before display. Observe the active turn rather than an unvalidated prefix.
+    await expect(page.getByRole("button", {name: "Stop response"})).toBeVisible({timeout: 20_000});
+    await expect(page.locator(".chat-message.assistant").last().locator(".chat-thinking")).toBeVisible();
+    await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveCount(0);
 
     await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeTruthy();
     const sourceSessionId = new URL(page.url()).searchParams.get("session")!;
-    await page.getByRole("button", { name: "Switch project" }).click();
+    const phone = (page.viewportSize()?.width ?? 1440) <= 760;
+    const openProjectSwitcher = async () => {
+      const closeSettings = page.getByRole("button", {name: "Close assistant settings", exact: true});
+      if (await closeSettings.isVisible()) await closeSettings.click();
+      if (phone) {
+        await page.getByRole("button", {name: "More workbench views", exact: true}).click();
+        await page.getByRole("dialog", {name: "More", exact: true}).getByRole("button", {name: "Switch project", exact: true}).click();
+      } else await page.getByRole("button", {name: "Switch project", exact: true}).click();
+    };
+    await openProjectSwitcher();
     await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: "Background Project B active", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Background Project B");
+    await expect(page.getByRole("button", { name: "Switch project", exact: true })).toContainText("Background Project B");
+    const closePhoneSidebar = async () => {
+      if (!phone) return;
+      const scrim = page.getByRole("button", {name: "Close sidebar", exact: true});
+      const bounds = await scrim.boundingBox();
+      expect(bounds).toBeTruthy();
+      // The sidebar overlaps most of its scrim on phones; tap its exposed edge.
+      await scrim.click({position: {x: bounds!.width - 4, y: 100}});
+    };
+    await closePhoneSidebar();
+    const activeSource = await (await api.get(`chat/sessions/${sourceSessionId}/state`)).json();
+    expect(activeSource.execution).toBe("running");
+    releaseAnswer();
 
     await expect.poll(async () => {
       const messagesResponse = await api.get(`chat/sessions/${sourceSessionId}/messages`);
@@ -2056,14 +2086,16 @@ test("production assistant work survives a project switch through real Core", as
       return messages.find((message) => message.role === "assistant")?.content ?? "";
     }, { timeout: 20_000 }).toBe("**Core is continuing in Project A** and finished after the viewer detached.");
 
-    await page.getByRole("button", { name: "Switch project" }).click();
+    await openProjectSwitcher();
     await page.getByRole("dialog", { name: "Project switcher" }).getByRole("button", { name: `${projectA.name} active`, exact: true }).click();
-    await page.getByRole("button", { name: "Show conversations" }).click();
+    await closePhoneSidebar();
+    await page.getByRole("button", { name: phone ? "Open conversations" : "Show conversations", exact: true }).click();
     await page.goto(`${core.origin}/?view=chat&session=${sourceSessionId}#token=${encodeURIComponent(core.token)}`);
     await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveText("Core is continuing in Project A", { timeout: 20_000 });
     await expect(page.locator(".chat-message.assistant .assistant-markdown")).toContainText("and finished after the viewer detached.");
     expect(new URL(page.url()).hostname).toBe(lanAddress);
   }, [
+    {name: "inert reply barrier", dispose: () => releaseAnswer()},
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
@@ -4757,6 +4789,19 @@ for (const runtime of ["provider", "harness"] as const) {
     const name = `Local ${runtime} acceptance`;
     const collection = runtime === "harness" ? "harnesses" : "providers";
     const navigate = async (name: "Settings" | "Workbench") => {
+      const closeSetting = page.getByRole("button", {name: "Close setting", exact: true});
+      if (await closeSetting.isVisible()) await closeSetting.click();
+      const workbench = page.getByRole("button", {name: "Workbench", exact: true});
+      if (name === "Workbench" && await workbench.isVisible()) {
+        await workbench.click();
+        return;
+      }
+      const more = page.getByRole("button", {name: "More workbench views", exact: true});
+      if (name === "Settings" && await more.isVisible()) {
+        await more.click();
+        await page.getByRole("dialog", {name: "More", exact: true}).getByRole("button", {name, exact: true}).click();
+        return;
+      }
       const link = page.getByRole("link", {name, exact: true});
       if (!await link.isVisible()) await page.getByRole("button", {name: "Show sidebar", exact: true}).click({timeout: 10_000});
       await link.click({timeout: 10_000});
@@ -4769,12 +4814,21 @@ for (const runtime of ["provider", "harness"] as const) {
       await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
       await page.getByLabel("Device name").fill(name);
       await page.getByRole("button", {name: "Pair device", exact: true}).click();
-      await expect(page.getByRole("button", {name: /Nebula Core (ready|degraded)/})).toBeVisible({timeout: 20_000});
+      await expect(coreShell(page, /Nebula Core (ready|degraded)/)).toBeVisible({timeout: 20_000});
       await navigate("Settings");
-      await page.getByRole("link", {name: "Advanced settings", exact: true}).click();
+      const advancedSettings = page.getByRole("link", {name: "Advanced settings", exact: true});
+      const settingsEntry = page.getByRole("button", {name: runtime === "provider" ? /^Model providers / : /^Assistant harnesses /});
+      await expect(advancedSettings.or(settingsEntry).filter({visible: true}).first()).toBeVisible();
+      if (await advancedSettings.isVisible()) await advancedSettings.click();
+      else {
+        await settingsEntry.click();
+        await expect(page.getByRole("button", {name: runtime === "provider" ? "Add provider" : "Add Grok", exact: true})).toBeVisible();
+      }
       if (runtime === "harness") await page.locator("#automation-settings > summary").click();
       await page.getByRole("button", {name: runtime === "provider" ? "Add provider" : "Add Grok", exact: true}).click();
-      const dialog = page.getByRole("dialog");
+      const dialog = runtime === "provider"
+        ? page.getByRole("dialog", {name: new RegExp(`^(Add model provider|Edit ${name})$`)})
+        : page.getByRole("dialog");
       const profileName = dialog.getByRole("textbox", {name: runtime === "provider" ? "Profile name" : "Name", exact: true});
       if (runtime === "provider") {
         await dialog.getByRole("combobox", {name: "Provider type", exact: true}).selectOption("vllm");
@@ -4835,6 +4889,11 @@ for (const runtime of ["provider", "harness"] as const) {
       await dialog.getByRole("button", {name: runtime === "provider" ? "Save provider" : "Save harness", exact: true}).click();
       await expect(dialog).toHaveCount(0);
       await page.reload();
+      const providerEntry = page.getByRole("button", {name: /^Model providers /});
+      if (runtime === "provider") {
+        await expect(providerEntry.or(card).filter({visible: true}).first()).toBeVisible();
+        if (await providerEntry.isVisible()) await providerEntry.click();
+      }
       await expect(card).toBeVisible();
       await card.getByRole("button", {name: `Edit ${name}`, exact: true}).click();
       await expect(models).toHaveValue(model!);
@@ -4876,7 +4935,9 @@ for (const runtime of ["provider", "harness"] as const) {
         expect(stub.requests.length).toBeLessThanOrEqual(1);
         for (const request of stub.requests) {
           expect(request.tools).toEqual([expect.objectContaining({function: expect.objectContaining({name: "nebula_capability_probe"})})]);
-          expect(request.max_tokens).toBe(128);
+          // Documented allowance for an unknown-limit profile; operator/model
+          // caps remain covered by test_inference_timeouts_probe_budget.py.
+          expect(request.max_tokens).toBe(2_048);
           expect(JSON.stringify(request.messages)).not.toContain("Disposable unsent");
         }
       }
@@ -6296,7 +6357,12 @@ async function expectNoChatStreamFailure(page: Page) {
 test("assistant upgrade real Core follows goal turns Core starts while the viewer waits", async ({ page }, testInfo) => {
   test.setTimeout(150_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
-  const modelStub = await startLocalModelStub({ streamDelayMs: 4_000 });
+  let releaseGoalAnswer = () => {};
+  const goalAnswerHeld = new Promise<void>(resolve => {releaseGoalAnswer = resolve;});
+  const modelStub = await startLocalModelStub({beforeResponse: async body => {
+    if (JSON.stringify(body.messages).includes("Begin work on the active conversation goal")
+      || JSON.stringify(body.messages).includes("Review the active conversation goal")) await goalAnswerHeld;
+  }});
   const api = await playwrightRequest.newContext({
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
@@ -6330,13 +6396,17 @@ test("assistant upgrade real Core follows goal turns Core starts while the viewe
     await expect(page.getByText("Real Core retained the exact research context.", { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByRole("button", { name: "Stop response" })).toHaveCount(0);
 
+    modelStub.responseContent = "**Core is continuing in Project A** and finished after the viewer detached.";
     // Another device starts the goal; Core runs every turn with no viewer here.
     const started = await api.post(`chat/sessions/${sessionId}/goal/actions`, { data: { expected_revision: goal.revision, action: "start" } });
     expect(started.ok(), await started.text()).toBe(true);
-    // The open transcript attaches to Core's turn and shows it streaming.
+    // The open transcript attaches while the inert answer is still pending.
+    // Final answer text is displayed only after validation, not as a prefix.
     await expect(page.getByRole("button", { name: "Stop response" })).toBeVisible({ timeout: 20_000 });
-    const streaming = page.locator(".chat-message.assistant").filter({ hasText: "Core is continuing in Project A" }).filter({ hasNotText: "finished after the viewer detached." });
-    await expect(streaming.first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(".chat-message.assistant").last().locator(".chat-thinking")).toBeVisible();
+    await expect(page.locator(".chat-message.assistant").filter({hasText: "finished after the viewer detached."})).toHaveCount(0);
+    expect((await (await api.get(`chat/sessions/${sessionId}/state`)).json()).execution).toBe("running");
+    releaseGoalAnswer();
 
     await expect.poll(async () => (await (await api.get(`chat/sessions/${sessionId}/goal`)).json() as { status: string }).status, { timeout: 90_000 }).toBe("paused");
     const saved = (await (await api.get(`chat/sessions/${sessionId}/messages`)).json() as Array<{ role: string; content: string }>)
@@ -6344,6 +6414,14 @@ test("assistant upgrade real Core follows goal turns Core starts while the viewe
     const goalAnswers = saved.filter(message => message.content.includes("finished after the viewer detached."));
     // The goal's own turns and its automatic continuation, not just one turn.
     expect(goalAnswers.length).toBeGreaterThanOrEqual(2);
+    // Center this short transcript so phone virtualization includes both ends.
+    // Keep the exact counts for all saved answers, including the original seed.
+    const centerTranscript = async () => {
+      await page.locator(".chat-scroll").evaluate(element => {
+        element.scrollTop = (element.scrollHeight - element.clientHeight) / 2;
+      });
+    };
+    await centerTranscript();
     // Every saved answer is on screen exactly once, without a reload.
     await expect(page.locator(".chat-message.assistant")).toHaveCount(saved.length, { timeout: 20_000 });
     await expect(page.locator(".chat-message.assistant").filter({ hasText: "finished after the viewer detached." })).toHaveCount(goalAnswers.length);
@@ -6352,10 +6430,13 @@ test("assistant upgrade real Core follows goal turns Core starts while the viewe
     expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
     expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
     await page.reload();
+    await expect(page.locator(".chat-message.assistant").first()).toBeVisible({timeout: 20_000});
+    await centerTranscript();
     await expect(page.locator(".chat-message.assistant")).toHaveCount(saved.length, { timeout: 20_000 });
     await testInfo.attach("core-started-goal-turns", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, goalAnswers: goalAnswers.length }), contentType: "application/json" });
     await page.screenshot({ path: testInfo.outputPath("core-started-goal-turns.png") });
   }, [
+    {name: "inert goal reply barrier", dispose: () => releaseGoalAnswer()},
     {name: "API context", dispose: () => api.dispose()},
     {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
