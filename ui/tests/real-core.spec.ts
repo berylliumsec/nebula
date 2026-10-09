@@ -3572,7 +3572,8 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     await expect(coreReady(page)).toBeVisible({timeout: 20_000});
     await page.goto(`${core.origin}/?view=chat&session=${parent.session_id}`);
     await expect(page.locator(".session-workspace > .chat-studio > .chat-panel .chat-message.operator")).toContainText("Original research question");
-    await page.getByRole("button", {name: "Open side chat", exact: true}).click();
+    await page.getByRole("button", {name: "Chat tools"}).click();
+    await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /Side chat/}).click();
     const side = page.getByRole("region", {name: "Side chat"});
     await expect(side).toBeVisible();
     const parentPanel = page.locator(".session-workspace.side-chat-open > .chat-studio > .chat-panel");
@@ -3686,7 +3687,8 @@ test("assistant upgrade side chat opens during a running Core turn with its save
       await expect(action).toBeEnabled();
       await action.click();
     } else {
-      const action = page.getByRole("button", {name: "Open side chat", exact: true});
+      await page.getByRole("button", {name: "Chat tools"}).click();
+      const action = page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /Side chat/});
       await expect(action).toBeEnabled();
       await action.click();
     }
@@ -3794,7 +3796,8 @@ with store.transaction() as transaction:
       await page.getByRole("button", {name: "Conversation actions", exact: true}).click();
       await page.getByRole("menuitem", {name: /Open side chat/}).click();
     } else {
-      await page.getByRole("button", {name: "Open side chat", exact: true}).click();
+      await page.getByRole("button", {name: "Chat tools"}).click();
+      await page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /Side chat/}).click();
     }
     const side = page.getByRole("region", {name: "Side chat"});
     await expect(side.getByRole("button", {name: "Inherited history · 454 messages"})).toBeVisible({timeout: 30_000});
