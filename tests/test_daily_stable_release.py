@@ -6,6 +6,8 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +15,8 @@ from unittest.mock import patch
 
 import pytest
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 SPEC = importlib.util.spec_from_file_location(
     "daily_stable_release",
@@ -310,14 +314,14 @@ def release_driver(tmp_path, monkeypatch):
     monkeypatch.setattr(daily, "REPOSITORY", "example/nebula")
     monkeypatch.setattr(daily, "MAIN_SHA", "b" * 40)
     monkeypatch.setenv("GH_TOKEN", "fixture-actions-token")
-    monkeypatch.setenv("NEBULA_RELEASE_TOKEN", "fixture-admin-token")
+    monkeypatch.setenv("NEBULA_RELEASE_APP_PRIVATE_KEY", "fixture-private-key")
     previous = {"tag_name": "nebula-v3.0.0-beta.3"}
     commands = []
     state = {
         "source": "a" * 40,
         "ci": "success",
         "advanced": False,
-        "permission": "admin",
+        "app_error": None,
     }
     calls = []
 
@@ -355,10 +359,6 @@ def release_driver(tmp_path, monkeypatch):
         return ""
 
     def api(endpoint, **_kwargs):
-        if endpoint == "user":
-            return {"login": "release-admin"}
-        if endpoint == "repos/example/nebula/collaborators/release-admin/permission":
-            return {"permission": state["permission"]}
         if "ci.yml/runs" in endpoint:
             return {
                 "workflow_runs": [
@@ -371,6 +371,13 @@ def release_driver(tmp_path, monkeypatch):
             }
         return {"sha": "b" * 40}
 
+    @contextmanager
+    def app_token(_permission):
+        if state["app_error"]:
+            raise RuntimeError(state["app_error"])
+        yield "fixture-installation-token"
+
+    monkeypatch.setattr(daily.release_app, "installation_token", app_token)
     monkeypatch.setattr(daily, "run", run)
     monkeypatch.setattr(daily, "gh_json", api)
     monkeypatch.setattr(daily, "published_release", lambda: previous)
@@ -452,35 +459,24 @@ def test_coverage_validation_failure_stops_before_tagging(release_driver):
     assert_no_release_mutations(release_driver)
 
 
-@pytest.mark.parametrize("credential", ["GH_TOKEN", "NEBULA_RELEASE_TOKEN"])
-def test_missing_credential_stops_before_coverage_and_tagging(
-    release_driver,
-    monkeypatch,
-    credential,
+def test_missing_publication_credential_stops_before_coverage_and_tagging(
+    release_driver, monkeypatch
 ):
-    monkeypatch.delenv(credential)
-    with pytest.raises(RuntimeError, match="credentials are required"):
+    monkeypatch.delenv("GH_TOKEN")
+    with pytest.raises(RuntimeError, match="publication credential is required"):
         daily.main()
     release_driver.preflight.assert_not_called()
     assert_no_release_mutations(release_driver)
 
 
-@pytest.mark.parametrize("permission", ["write", "maintain", "read", None])
-def test_non_admin_credential_stops_before_coverage_and_tagging(
-    release_driver,
-    permission,
-):
-    release_driver.state["permission"] = permission
-    with pytest.raises(RuntimeError, match="must belong to a repository admin"):
+@pytest.mark.parametrize(
+    "error", ["missing configuration", "wrong App", "wrong scope", "HTTP 403"]
+)
+def test_invalid_app_identity_stops_before_coverage_and_tagging(release_driver, error):
+    release_driver.state["app_error"] = error
+    with pytest.raises(RuntimeError, match=error):
         daily.main()
     release_driver.preflight.assert_not_called()
-    assert_no_release_mutations(release_driver)
-
-
-def test_inaccessible_token_identity_fails_closed(release_driver):
-    with patch.object(daily, "gh_json", side_effect=RuntimeError("HTTP 403")):
-        with pytest.raises(RuntimeError, match="Cannot verify"):
-            daily.require_release_admin()
     assert_no_release_mutations(release_driver)
 
 
@@ -507,13 +503,20 @@ def test_single_explicit_release_path_preserves_every_gate(release_driver):
     release_driver.receipt.assert_called_once()
     release_driver.assets.assert_called_once()
     privileged = [
-        args for args, kwargs in release_driver.calls if kwargs.get("release_admin")
+        args
+        for args, kwargs in release_driver.calls
+        if kwargs.get("release_permission")
     ]
     assert len(privileged) == 4
     assert privileged[0][0] == "git" and "push" in privileged[0]
+    assert [
+        kwargs["release_permission"]
+        for _, kwargs in release_driver.calls
+        if kwargs.get("release_permission")
+    ] == ["contents", "actions", "actions", "actions"]
     assert privileged[1:] == dispatches
     assert all(
-        not kwargs.get("release_admin")
+        not kwargs.get("release_permission")
         for args, kwargs in release_driver.calls
         if args[:3] == ("gh", "release", "edit")
     )
@@ -524,7 +527,7 @@ def test_single_explicit_release_path_preserves_every_gate(release_driver):
     assert commands.index(publication) < commands.index(dispatches[2])
 
 
-def test_missing_publication_token_cannot_fall_back_to_admin_token(monkeypatch):
+def test_missing_publication_token_cannot_fall_back_to_app_token(monkeypatch):
     monkeypatch.delenv("GH_TOKEN", raising=False)
     with patch.object(daily, "run") as run:
         with pytest.raises(RuntimeError, match="publication credential is required"):
@@ -532,7 +535,7 @@ def test_missing_publication_token_cannot_fall_back_to_admin_token(monkeypatch):
     run.assert_not_called()
 
 
-def test_workflow_checks_initiator_before_exposing_one_admin_credential():
+def test_workflow_checks_initiator_before_exposing_app_key():
     workflow = yaml.safe_load(
         (
             Path(__file__).resolve().parents[1]
@@ -548,6 +551,7 @@ def test_workflow_checks_initiator_before_exposing_one_admin_credential():
     assert step["env"] == {
         "GH_TOKEN": "${{ github.token }}",
         "RELEASE_ACTOR": "${{ github.actor }}",
+        "RELEASE_TRIGGERING_ACTOR": "${{ github.triggering_actor }}",
     }
     assert 'test "$permission" = admin' in step["run"]
     steps = jobs["release"]["steps"]
@@ -563,32 +567,48 @@ def test_workflow_checks_initiator_before_exposing_one_admin_credential():
     assert "token" not in checkout["with"]
     assert driver["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert (
-        driver["env"]["NEBULA_RELEASE_TOKEN"] == "${{ secrets.NEBULA_RELEASE_TOKEN }}"
+        driver["env"]["NEBULA_RELEASE_APP_PRIVATE_KEY"]
+        == "${{ secrets.NEBULA_RELEASE_APP_PRIVATE_KEY }}"
     )
     assert jobs["release"]["if"] == "github.ref == 'refs/heads/main'"
     assert all(
-        "NEBULA_RELEASE_TOKEN" not in str(step) for step in steps if step is not driver
+        "NEBULA_RELEASE_APP_PRIVATE_KEY" not in str(step)
+        for step in steps
+        if step is not driver
     )
     assert workflow["permissions"]["actions"] == "read"
 
 
-def test_default_child_processes_never_receive_the_admin_secret(monkeypatch):
+def test_default_children_exclude_key_and_privileged_children_get_only_lease(
+    monkeypatch,
+):
     monkeypatch.setenv("GH_TOKEN", "fixture-actions-token")
-    monkeypatch.setenv("NEBULA_RELEASE_TOKEN", "fixture-admin-token")
-    with patch.object(
-        daily.subprocess,
-        "run",
-        return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
-    ) as process:
+    monkeypatch.setenv("NEBULA_RELEASE_APP_PRIVATE_KEY", "fixture-private-key")
+
+    @contextmanager
+    def token(permission):
+        assert permission == "actions"
+        yield "fixture-installation-token"
+
+    with (
+        patch.object(daily.release_app, "installation_token", token),
+        patch.object(
+            daily.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+        ) as process,
+    ):
         daily.run("gh", "attestation", "verify", "fixture.deb")
         environment = process.call_args.kwargs["env"]
         assert environment["GH_TOKEN"] == "fixture-actions-token"
-        assert "NEBULA_RELEASE_TOKEN" not in environment
-        assert "fixture-admin-token" not in environment.values()
-        daily.run("gh", "workflow", "run", "nebula3-release.yml", release_admin=True)
+        assert "fixture-private-key" not in environment.values()
+        daily.run(
+            "gh", "workflow", "run", "nebula3-release.yml", release_permission="actions"
+        )
         environment = process.call_args.kwargs["env"]
-        assert environment["GH_TOKEN"] == "fixture-admin-token"
-        assert "NEBULA_RELEASE_TOKEN" not in environment
+        assert environment["GH_TOKEN"] == "fixture-installation-token"
+        assert "fixture-private-key" not in environment.values()
+        assert process.call_args.kwargs["timeout"] == 120
 
 
 @pytest.mark.parametrize("existing", ["existing_tag", "existing_release"])

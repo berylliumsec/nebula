@@ -30,7 +30,31 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ACTOR: ${{ github.actor }}
+          RELEASE_ACTOR_ID: ${{ github.actor_id }}
+          RELEASE_SENDER_ID: ${{ github.event.sender.id }}
+          RELEASE_SENDER_TYPE: ${{ github.event.sender.type }}
+          RELEASE_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RELEASE_APP_BOT_ID: ${{ vars.NEBULA_RELEASE_APP_BOT_ID }}
+          RELEASE_APP_SLUG: ${{ vars.NEBULA_RELEASE_APP_SLUG }}
         run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] &&
+             [[ "$RELEASE_APP_BOT_ID" =~ ^[1-9][0-9]*$ ]] &&
+             [ -n "$RELEASE_APP_SLUG" ] &&
+             [ "$RELEASE_ACTOR_ID" = "$RELEASE_APP_BOT_ID" ] &&
+             [ "$RELEASE_SENDER_ID" = "$RELEASE_APP_BOT_ID" ] &&
+             [ "$RELEASE_SENDER_TYPE" = Bot ] &&
+             [ "$RELEASE_ACTOR" = "${RELEASE_APP_SLUG}[bot]" ]; then
+            if [ "$RELEASE_TRIGGERING_ACTOR" != "$RELEASE_ACTOR" ]; then
+              permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$RELEASE_TRIGGERING_ACTOR/permission" --jq .permission)"
+              test "$permission" = admin || { echo 'Only repository admins may rerun App releases.' >&2; exit 1; }
+            fi
+            echo 'Verified dedicated release App dispatch.'
+            exit 0
+          fi
+          if [ "$RELEASE_TRIGGERING_ACTOR" != "$RELEASE_ACTOR" ]; then
+            permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$RELEASE_TRIGGERING_ACTOR/permission" --jq .permission)"
+            test "$permission" = admin || { echo 'Only repository admins may rerun releases.' >&2; exit 1; }
+          fi
           permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$RELEASE_ACTOR/permission" --jq .permission)"
           test "$permission" = admin || { echo 'Only repository admins may publish updater metadata.' >&2; exit 1; }
 
