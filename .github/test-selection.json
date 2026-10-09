@@ -1,10 +1,11 @@
 {
-  "change_digest": "37e2e5891603cccc41dccc08580d73d6c06878c9b28c8df570536b03450b2bc5",
+  "change_digest": "87e02c67d0e4f7c931d666718bead2a27889b43992d043ebb2f0ee490919c695",
   "reviewed_by": "Codex focused release engineering review, 2026-10-09",
-  "reason": "Correct daily release credential identity and limit its exposure to identity checks, tag push, and three authenticated dispatches. The 105 collected tests cover initiator/admin guards, missing/inaccessible/non-admin credentials, token removal from ordinary children, immutable existing state, uncertain command failures and unsuccessful runs at each stage, unchanged selected coverage and full-suite guards, and diff-bound selection. Existing selectors execute in disposable Git repositories; all GitHub writes remain mocked.",
-  "exclusions": "Release orchestration only. Python 3.12 tests bounded to these three files and two minutes, with all GitHub writes mocked. No UI, native, Core, package, signing, smoke or offensive code changes. Frontend/native/Playwright execution and all full suites are excluded. Protected GitHub end-to-end publication requires separate approval and remains unverified.",
+  "reason": "Adapt daily release orchestration to a dedicated short-lived GitHub App. The 163 collected tests cover exact App/installation/bot identities, owner and single-repository/one-permission scopes, fresh token lifetimes and revocation on success/failure/denial, key isolation and temporary-file cleanup, executable downstream actor gates for the exact App versus unrelated bots/users and unauthorized reruns, initiator admin and immutable-tag guards, existing CI/coverage/artifact/finalization gates, and focused selection/full-suite safeguards. All GitHub writes, credentials and signing are mocked; shell actor checks use a fake local gh.",
+  "exclusions": "Release engineering only. Python 3.12 bounded to four named files and two minutes; no network requests, real keys or credentials, publishing workflows, repository-rule changes, product runtime, UI/native/Core/package/signing/smoke execution or full suites. Actual RSA signing and protected end-to-end release remain unverified pending separately approved App setup and publication.",
   "python": [
     "tests/test_daily_stable_release.py",
+    "tests/test_release_app.py",
     "tests/test_playwright_impact.py",
     "tests/test_test_selection.py"
   ],
@@ -12,7 +13,7 @@
   "native": [],
   "playwright": [],
   "expected_tests": {
-    "python": 105,
+    "python": 163,
     "frontend": 0,
     "native": 0,
     "playwright": 0

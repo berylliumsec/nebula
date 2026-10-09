@@ -1,6 +1,6 @@
 """Publish a verified stable Linux release for new commits on main.
 
-The protected admin credential creates tags and dispatches gated workflows.
+The dedicated GitHub App creates tags and dispatches gated workflows.
 Publication uses GITHUB_TOKEN so the driver owns the updater dispatch. A failed
 gate leaves its immutable tag or draft for a release manager to inspect.
 """
@@ -18,6 +18,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import release_app
+
 REPOSITORY = os.environ.get("GITHUB_REPOSITORY", "")
 MAIN_SHA = os.environ.get("GITHUB_SHA", "")
 SOURCE_MARKER = re.compile(r"<!-- nebula-source-sha: ([0-9a-f]{40}) -->")
@@ -25,55 +27,47 @@ WAIT_SECONDS = 3 * 60 * 60
 CONSERVATIVE_AREAS = ("desktop-interface", "mobile-layout", "core-api")
 
 
-def child_env(*, release_admin: bool = False) -> dict[str, str]:
-    """Keep the privileged token out of ordinary child processes and Git config."""
-    env = dict(os.environ)
-    token = env.pop("NEBULA_RELEASE_TOKEN", "")
-    if release_admin:
-        if not token:
-            raise RuntimeError("Protected release credential is required")
-        env["GH_TOKEN"] = token
-    return env
+def child_env() -> dict[str, str]:
+    return release_app.child_env()
 
 
-def run(*args: str, check: bool = True, release_admin: bool = False) -> str:
-    result = subprocess.run(
-        args,
-        text=True,
-        capture_output=True,
-        check=False,
-        env=child_env(release_admin=release_admin),
-    )
-    if check and result.returncode:
-        raise RuntimeError(f"{' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout.strip()
-
-
-def gh_json(endpoint: str, *, release_admin: bool = False) -> object:
-    return json.loads(run("gh", "api", endpoint, release_admin=release_admin))
-
-
-def require_release_admin() -> None:
-    """Validate the authenticated principal, not the schedule's displayed actor."""
-    if not os.environ.get("GH_TOKEN") or not os.environ.get("NEBULA_RELEASE_TOKEN"):
-        raise RuntimeError(
-            "Protected release and GITHUB_TOKEN publication credentials are required"
+def run(*args: str, check: bool = True, release_permission: str | None = None) -> str:
+    def execute(token: str | None = None) -> str:
+        env = child_env()
+        if token:
+            env["GH_TOKEN"] = token
+        result = subprocess.run(
+            args,
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+            timeout=120 if token else None,
         )
-    try:
-        actor = gh_json("user", release_admin=True)["login"]
-        permission = gh_json(
-            f"repos/{REPOSITORY}/collaborators/{actor}/permission",
-            release_admin=True,
-        )
-    except (RuntimeError, KeyError, TypeError) as error:
-        raise RuntimeError(
-            "Cannot verify the protected release credential's repository-admin identity"
-        ) from error
-    if permission.get("permission") != "admin":
-        raise RuntimeError(
-            "The protected release credential must belong to a repository admin"
-        )
-    print(f"Release credential: verified repository admin {actor}", flush=True)
+        if check and result.returncode:
+            error = result.stderr.strip()
+            if token:
+                error = error.replace(token, "[REDACTED]")
+            raise RuntimeError(f"{' '.join(args)} failed: {error}")
+        return result.stdout.strip()
+
+    if release_permission:
+        with release_app.installation_token(release_permission) as token:
+            return execute(token)
+    return execute()
+
+
+def gh_json(endpoint: str) -> object:
+    return json.loads(run("gh", "api", endpoint))
+
+
+def require_release_app() -> None:
+    """Verify exact App, installation, bot, permission and repository identities."""
+    if not os.environ.get("GH_TOKEN"):
+        raise RuntimeError("GITHUB_TOKEN publication credential is required")
+    with release_app.installation_token("contents"):
+        pass
+    print("Release credential: verified dedicated GitHub App", flush=True)
 
 
 def publish_release(tag: str) -> None:
@@ -340,7 +334,7 @@ def main() -> None:
         return
     run("git", "merge-base", "--is-ancestor", previous_source, MAIN_SHA)
     green_main()
-    require_release_admin()
+    require_release_app()
     selection, review_reason = preflight_impact(previous_source, MAIN_SHA)
     run("gh", "attestation", "verify", "--help")
 
@@ -421,7 +415,7 @@ def main() -> None:
         "push",
         "origin",
         f"refs/tags/{tag}",
-        release_admin=True,
+        release_permission="contents",
     )
     print(f"Created {tag} at {release_commit} from main {MAIN_SHA}", flush=True)
 
@@ -444,7 +438,7 @@ def main() -> None:
     ]
     if selection:
         dispatch.extend(("-f", f"selection={selection}"))
-    run(*dispatch, release_admin=True)
+    run(*dispatch, release_permission="actions")
     preparation_id = wait_for_workflow(
         "nebula3-release.yml", tag, release_commit, preparation_started
     )
@@ -466,7 +460,7 @@ def main() -> None:
         f"preparation_run_id={preparation_id}",
         "-f",
         "create_draft=true",
-        release_admin=True,
+        release_permission="actions",
     )
     wait_for_workflow(
         "nebula3-release-finalize.yml", tag, release_commit, finalize_started
@@ -501,7 +495,7 @@ def main() -> None:
         "main",
         "-f",
         f"release_tag={tag}",
-        release_admin=True,
+        release_permission="actions",
     )
     wait_for_workflow(
         "publish-updater-manifest.yml", "main", updater_commit, updater_started
