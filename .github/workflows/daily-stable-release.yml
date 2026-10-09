@@ -30,27 +30,23 @@ jobs:
           test "$permission" = admin || { echo 'Only repository admins may start a daily release.' >&2; exit 1; }
 
   release:
+    if: github.ref == 'refs/heads/main'
     needs: validate-admin
     runs-on: ubuntu-22.04
     environment: desktop-release
     timeout-minutes: 360
     steps:
-      - name: Require the protected release credential
-        env:
-          GH_TOKEN: ${{ secrets.NEBULA_RELEASE_TOKEN }}
-        run: |
-          test -n "$GH_TOKEN" || { echo 'Configure NEBULA_RELEASE_TOKEN in desktop-release with an approved repository-admin credential.' >&2; exit 1; }
       - name: Check out current main with release history
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          token: ${{ secrets.NEBULA_RELEASE_TOKEN }}
+          persist-credentials: false
       - name: Install Python for version and release checks
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.12'
       - name: Release new green main commits
         env:
-          GH_TOKEN: ${{ secrets.NEBULA_RELEASE_TOKEN }}
-          NEBULA_PUBLISH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          NEBULA_RELEASE_TOKEN: ${{ secrets.NEBULA_RELEASE_TOKEN }}
         run: python scripts/daily_stable_release.py

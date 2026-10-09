@@ -25,26 +25,46 @@ WAIT_SECONDS = 3 * 60 * 60
 CONSERVATIVE_AREAS = ("desktop-interface", "mobile-layout", "core-api")
 
 
-def run(*args: str, check: bool = True, env: dict[str, str] | None = None) -> str:
-    result = subprocess.run(args, text=True, capture_output=True, check=False, env=env)
+def child_env(*, release_admin: bool = False) -> dict[str, str]:
+    """Keep the privileged token out of ordinary child processes and Git config."""
+    env = dict(os.environ)
+    token = env.pop("NEBULA_RELEASE_TOKEN", "")
+    if release_admin:
+        if not token:
+            raise RuntimeError("Protected release credential is required")
+        env["GH_TOKEN"] = token
+    return env
+
+
+def run(*args: str, check: bool = True, release_admin: bool = False) -> str:
+    result = subprocess.run(
+        args,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=child_env(release_admin=release_admin),
+    )
     if check and result.returncode:
         raise RuntimeError(f"{' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
-def gh_json(endpoint: str) -> object:
-    return json.loads(run("gh", "api", endpoint))
+def gh_json(endpoint: str, *, release_admin: bool = False) -> object:
+    return json.loads(run("gh", "api", endpoint, release_admin=release_admin))
 
 
 def require_release_admin() -> None:
     """Validate the authenticated principal, not the schedule's displayed actor."""
-    if not os.environ.get("GH_TOKEN") or not os.environ.get("NEBULA_PUBLISH_TOKEN"):
+    if not os.environ.get("GH_TOKEN") or not os.environ.get("NEBULA_RELEASE_TOKEN"):
         raise RuntimeError(
             "Protected release and GITHUB_TOKEN publication credentials are required"
         )
     try:
-        actor = gh_json("user")["login"]
-        permission = gh_json(f"repos/{REPOSITORY}/collaborators/{actor}/permission")
+        actor = gh_json("user", release_admin=True)["login"]
+        permission = gh_json(
+            f"repos/{REPOSITORY}/collaborators/{actor}/permission",
+            release_admin=True,
+        )
     except (RuntimeError, KeyError, TypeError) as error:
         raise RuntimeError(
             "Cannot verify the protected release credential's repository-admin identity"
@@ -58,8 +78,7 @@ def require_release_admin() -> None:
 
 def publish_release(tag: str) -> None:
     """Suppress a second release-event updater run; explicitly dispatch it below."""
-    token = os.environ.get("NEBULA_PUBLISH_TOKEN")
-    if not token:
+    if not os.environ.get("GH_TOKEN"):
         raise RuntimeError("GITHUB_TOKEN publication credential is required")
     run(
         "gh",
@@ -70,7 +89,6 @@ def publish_release(tag: str) -> None:
         REPOSITORY,
         "--draft=false",
         "--prerelease=false",
-        env={**os.environ, "GH_TOKEN": token},
     )
 
 
@@ -158,6 +176,7 @@ def preflight_impact(baseline: str, candidate: str) -> tuple[str, str]:
             text=True,
             capture_output=True,
             check=False,
+            env=child_env(),
         )
         if result.returncode == 0:
             return "", "Daily stable release: automatic impacted selection."
@@ -177,7 +196,9 @@ def preflight_impact(baseline: str, candidate: str) -> tuple[str, str]:
             )
         selection, review_reason = conservative_coverage(plan)
         args.extend(("--selection", selection, "--review-reason", review_reason))
-        result = subprocess.run(args, text=True, capture_output=True, check=False)
+        result = subprocess.run(
+            args, text=True, capture_output=True, check=False, env=child_env()
+        )
         accepted = json.loads(output.read_text())
         if (
             result.returncode
@@ -282,7 +303,9 @@ def verify_assets(run_id: int, version: str) -> None:
         ]
         if not checksum.is_file() or any(not path.is_file() for path in required):
             raise RuntimeError("Missing required Linux artifact or checksum manifest")
-        subprocess.run(["sha256sum", "-c", checksum.name], cwd=root, check=True)
+        subprocess.run(
+            ["sha256sum", "-c", checksum.name], cwd=root, check=True, env=child_env()
+        )
         for path in required:
             run("gh", "attestation", "verify", str(path), "--repo", REPOSITORY)
 
@@ -337,7 +360,9 @@ def main() -> None:
     )
     run("git", "checkout", "-B", "daily-release", MAIN_SHA)
     if subprocess.run(
-        ["git", "merge-base", "--is-ancestor", previous_tag, "HEAD"], check=False
+        ["git", "merge-base", "--is-ancestor", previous_tag, "HEAD"],
+        check=False,
+        env=child_env(),
     ).returncode:
         # Retain previous release ancestry while taking the exact current main tree.
         run(
@@ -384,8 +409,20 @@ def main() -> None:
     # workflow_dispatch is unaffected; all release gates still run below.
     run("git", "commit", "-m", f"Prepare Nebula {version} stable release [skip ci]")
     release_commit = run("git", "rev-parse", "HEAD")
+    if run("git", "diff", "--name-only", MAIN_SHA, "HEAD", "--", ".github/workflows"):
+        raise RuntimeError("Release-only commit unexpectedly changes workflows")
     run("git", "tag", "-a", tag, "-m", f"Nebula {version}")
-    run("git", "push", "origin", f"refs/tags/{tag}")
+    run(
+        "git",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "credential.helper=!gh auth git-credential",
+        "push",
+        "origin",
+        f"refs/tags/{tag}",
+        release_admin=True,
+    )
     print(f"Created {tag} at {release_commit} from main {MAIN_SHA}", flush=True)
 
     preparation_started = datetime.now(timezone.utc).replace(microsecond=0)
@@ -407,7 +444,7 @@ def main() -> None:
     ]
     if selection:
         dispatch.extend(("-f", f"selection={selection}"))
-    run(*dispatch)
+    run(*dispatch, release_admin=True)
     preparation_id = wait_for_workflow(
         "nebula3-release.yml", tag, release_commit, preparation_started
     )
@@ -429,6 +466,7 @@ def main() -> None:
         f"preparation_run_id={preparation_id}",
         "-f",
         "create_draft=true",
+        release_admin=True,
     )
     wait_for_workflow(
         "nebula3-release-finalize.yml", tag, release_commit, finalize_started
@@ -463,6 +501,7 @@ def main() -> None:
         "main",
         "-f",
         f"release_tag={tag}",
+        release_admin=True,
     )
     wait_for_workflow(
         "publish-updater-manifest.yml", "main", updater_commit, updater_started

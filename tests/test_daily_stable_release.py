@@ -309,8 +309,8 @@ def release_driver(tmp_path, monkeypatch):
     Path("docs/releases").mkdir(parents=True)
     monkeypatch.setattr(daily, "REPOSITORY", "example/nebula")
     monkeypatch.setattr(daily, "MAIN_SHA", "b" * 40)
-    monkeypatch.setenv("GH_TOKEN", "fixture-admin-token")
-    monkeypatch.setenv("NEBULA_PUBLISH_TOKEN", "fixture-actions-token")
+    monkeypatch.setenv("GH_TOKEN", "fixture-actions-token")
+    monkeypatch.setenv("NEBULA_RELEASE_TOKEN", "fixture-admin-token")
     previous = {"tag_name": "nebula-v3.0.0-beta.3"}
     commands = []
     state = {
@@ -319,12 +319,23 @@ def release_driver(tmp_path, monkeypatch):
         "advanced": False,
         "permission": "admin",
     }
-    publication_envs = []
+    calls = []
 
     def run(*args, **_kwargs):
         commands.append(args)
-        if args[:3] == ("gh", "release", "edit"):
-            publication_envs.append(_kwargs.get("env"))
+        calls.append((args, _kwargs))
+        if state.get("error_predicate", lambda _args: False)(args):
+            raise RuntimeError("simulated uncertain command failure")
+        if args[:3] == ("git", "ls-remote", "--tags") and state.get("existing_tag"):
+            return "c" * 40
+        if (
+            args[:3] == ("gh", "release", "view")
+            and "--json" not in args
+            and state.get("existing_release")
+        ):
+            return "existing release"
+        if args[:3] == ("git", "diff", "--name-only") and state.get("workflow_change"):
+            return ".github/workflows/nebula3-release.yml"
         if args == ("git", "rev-parse", "HEAD"):
             return (
                 "c" * 40
@@ -343,7 +354,7 @@ def release_driver(tmp_path, monkeypatch):
             )
         return ""
 
-    def api(endpoint):
+    def api(endpoint, **_kwargs):
         if endpoint == "user":
             return {"login": "release-admin"}
         if endpoint == "repos/example/nebula/collaborators/release-admin/permission":
@@ -386,11 +397,14 @@ def release_driver(tmp_path, monkeypatch):
             wait=wait,
             receipt=receipt,
             assets=assets,
-            publication_envs=publication_envs,
+            calls=calls,
         )
 
 
 def assert_no_release_mutations(driver):
+    assert not any(
+        command[0] == "git" and "push" in command for command in driver.commands
+    )
     assert not any(
         command[:2]
         in {
@@ -438,7 +452,7 @@ def test_coverage_validation_failure_stops_before_tagging(release_driver):
     assert_no_release_mutations(release_driver)
 
 
-@pytest.mark.parametrize("credential", ["GH_TOKEN", "NEBULA_PUBLISH_TOKEN"])
+@pytest.mark.parametrize("credential", ["GH_TOKEN", "NEBULA_RELEASE_TOKEN"])
 def test_missing_credential_stops_before_coverage_and_tagging(
     release_driver,
     monkeypatch,
@@ -492,8 +506,17 @@ def test_single_explicit_release_path_preserves_every_gate(release_driver):
     )
     release_driver.receipt.assert_called_once()
     release_driver.assets.assert_called_once()
-    assert len(release_driver.publication_envs) == 1
-    assert release_driver.publication_envs[0]["GH_TOKEN"] == "fixture-actions-token"
+    privileged = [
+        args for args, kwargs in release_driver.calls if kwargs.get("release_admin")
+    ]
+    assert len(privileged) == 4
+    assert privileged[0][0] == "git" and "push" in privileged[0]
+    assert privileged[1:] == dispatches
+    assert all(
+        not kwargs.get("release_admin")
+        for args, kwargs in release_driver.calls
+        if args[:3] == ("gh", "release", "edit")
+    )
     publication = next(
         command for command in commands if command[:3] == ("gh", "release", "edit")
     )
@@ -502,7 +525,7 @@ def test_single_explicit_release_path_preserves_every_gate(release_driver):
 
 
 def test_missing_publication_token_cannot_fall_back_to_admin_token(monkeypatch):
-    monkeypatch.delenv("NEBULA_PUBLISH_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
     with patch.object(daily, "run") as run:
         with pytest.raises(RuntimeError, match="publication credential is required"):
             daily.publish_release("nebula-v3.0.0")
@@ -536,13 +559,99 @@ def test_workflow_checks_initiator_before_exposing_one_admin_credential():
         for step in steps
         if step.get("run") == "python scripts/daily_stable_release.py"
     )
+    assert checkout["with"]["persist-credentials"] is False
+    assert "token" not in checkout["with"]
+    assert driver["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert (
-        checkout["with"]["token"]
-        == driver["env"]["GH_TOKEN"]
-        == "${{ secrets.NEBULA_RELEASE_TOKEN }}"
+        driver["env"]["NEBULA_RELEASE_TOKEN"] == "${{ secrets.NEBULA_RELEASE_TOKEN }}"
     )
-    assert driver["env"]["NEBULA_PUBLISH_TOKEN"] == "${{ github.token }}"
+    assert jobs["release"]["if"] == "github.ref == 'refs/heads/main'"
+    assert all(
+        "NEBULA_RELEASE_TOKEN" not in str(step) for step in steps if step is not driver
+    )
     assert workflow["permissions"]["actions"] == "read"
+
+
+def test_default_child_processes_never_receive_the_admin_secret(monkeypatch):
+    monkeypatch.setenv("GH_TOKEN", "fixture-actions-token")
+    monkeypatch.setenv("NEBULA_RELEASE_TOKEN", "fixture-admin-token")
+    with patch.object(
+        daily.subprocess,
+        "run",
+        return_value=SimpleNamespace(returncode=0, stdout="", stderr=""),
+    ) as process:
+        daily.run("gh", "attestation", "verify", "fixture.deb")
+        environment = process.call_args.kwargs["env"]
+        assert environment["GH_TOKEN"] == "fixture-actions-token"
+        assert "NEBULA_RELEASE_TOKEN" not in environment
+        assert "fixture-admin-token" not in environment.values()
+        daily.run("gh", "workflow", "run", "nebula3-release.yml", release_admin=True)
+        environment = process.call_args.kwargs["env"]
+        assert environment["GH_TOKEN"] == "fixture-admin-token"
+        assert "NEBULA_RELEASE_TOKEN" not in environment
+
+
+@pytest.mark.parametrize("existing", ["existing_tag", "existing_release"])
+def test_retry_never_recreates_existing_release_state(release_driver, existing):
+    release_driver.state[existing] = True
+    with pytest.raises(RuntimeError, match="release manager recovery"):
+        daily.main()
+    assert_no_release_mutations(release_driver)
+
+
+@pytest.mark.parametrize(
+    "phase", ["push", "preparation", "finalize", "publication", "updater"]
+)
+def test_uncertain_external_failure_never_advances_to_the_next_phase(
+    release_driver, phase
+):
+    def predicate(args):
+        if phase == "push":
+            return args[0] == "git" and "push" in args
+        if phase == "publication":
+            return args[:3] == ("gh", "release", "edit")
+        target = {
+            "preparation": "nebula3-release.yml",
+            "finalize": "nebula3-release-finalize.yml",
+            "updater": "publish-updater-manifest.yml",
+        }[phase]
+        return args[:4] == ("gh", "workflow", "run", target)
+
+    release_driver.state["error_predicate"] = predicate
+    with pytest.raises(RuntimeError, match="uncertain command failure"):
+        daily.main()
+    assert predicate(release_driver.commands[-1])
+    if phase in {"push", "preparation", "finalize"}:
+        assert not any(
+            command[:3] == ("gh", "release", "edit")
+            for command in release_driver.commands
+        )
+
+
+@pytest.mark.parametrize("phase", ["preparation", "finalize", "updater"])
+def test_failed_dispatched_run_stops_the_driver(release_driver, phase):
+    stages = {"preparation": 0, "finalize": 1, "updater": 2}
+    release_driver.wait.side_effect = [101, 102][: stages[phase]] + [
+        RuntimeError("dispatched run failed")
+    ]
+    with pytest.raises(RuntimeError, match="dispatched run failed"):
+        daily.main()
+    assert release_driver.wait.call_count == stages[phase] + 1
+    if phase != "updater":
+        assert not any(
+            command[:3] == ("gh", "release", "edit")
+            for command in release_driver.commands
+        )
+
+
+def test_release_only_workflow_changes_stop_before_tag_creation(release_driver):
+    release_driver.state["workflow_change"] = True
+    with pytest.raises(RuntimeError, match="unexpectedly changes workflows"):
+        daily.main()
+    assert not any(
+        command[:2] == ("git", "tag") or (command[0] == "git" and "push" in command)
+        for command in release_driver.commands
+    )
 
 
 def test_daily_dispatch_carries_conservative_selection_and_checks_artifacts(

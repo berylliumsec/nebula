@@ -1,7 +1,7 @@
 {
-  "change_digest": "e3c2dced92a5c06dfadb7471edb3bf61bfabf430cc280bc382d7758589f722b5",
+  "change_digest": "37e2e5891603cccc41dccc08580d73d6c06878c9b28c8df570536b03450b2bc5",
   "reviewed_by": "Codex focused release engineering review, 2026-10-09",
-  "reason": "Correct daily release credential identity and avoid duplicate event-triggered preparation/updater runs. The 93 collected tests exercise absent/inaccessible/non-admin credentials, initiator admin guard before protected credentials, authenticated dispatch/publication separation, explicit required release stages, no-change and CI gates, receipt/artifact failures, real selectors in disposable Git repositories, and unchanged full-suite/selection guards.",
+  "reason": "Correct daily release credential identity and limit its exposure to identity checks, tag push, and three authenticated dispatches. The 105 collected tests cover initiator/admin guards, missing/inaccessible/non-admin credentials, token removal from ordinary children, immutable existing state, uncertain command failures and unsuccessful runs at each stage, unchanged selected coverage and full-suite guards, and diff-bound selection. Existing selectors execute in disposable Git repositories; all GitHub writes remain mocked.",
   "exclusions": "Release orchestration only. Python 3.12 tests bounded to these three files and two minutes, with all GitHub writes mocked. No UI, native, Core, package, signing, smoke or offensive code changes. Frontend/native/Playwright execution and all full suites are excluded. Protected GitHub end-to-end publication requires separate approval and remains unverified.",
   "python": [
     "tests/test_daily_stable_release.py",
@@ -12,7 +12,7 @@
   "native": [],
   "playwright": [],
   "expected_tests": {
-    "python": 93,
+    "python": 105,
     "frontend": 0,
     "native": 0,
     "playwright": 0
