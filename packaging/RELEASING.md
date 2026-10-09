@@ -24,6 +24,30 @@ checksums, and provenance attestations before publishing the stable GitHub
 Release. It explicitly dispatches updater metadata publication because releases
 made by `GITHUB_TOKEN` do not recursively trigger another workflow.
 
+The protected `NEBULA_RELEASE_TOKEN` credential authenticates only the tag push,
+identity preflight, and the driver's workflow dispatches. It must belong to a repository
+admin: `contents: write` on `GITHUB_TOKEN` does not satisfy the admin-only tag
+creation rule, and that token's dispatch actor does not satisfy the downstream
+admin checks. The driver verifies the authenticated identity's admin permission
+before coverage selection or tag creation; missing, expired, inaccessible, or
+non-admin credentials stop the job. The schedule's displayed actor is not proof
+of the credential's identity. An unprivileged job also verifies the initiating
+actor's admin permission before the protected job can access the credential.
+The daily job accepts only `main`. Checkout uses its ordinary job token with
+credential persistence disabled; the admin credential is injected into Git's
+temporary credential helper only for the push. Reads, selectors, version tools,
+artifact downloads, checksum/provenance verification, and publication use the
+job token. Ordinary child processes do not inherit the admin secret.
+
+The generated release-only commit includes `[skip ci]` to avoid a second tag-push
+preparation without the selected coverage inputs. This commit never changes main.
+Explicit `workflow_dispatch` still runs preparation, coverage, signing, package
+smoke checks, and draft validation, and the driver must verify their successful
+runs and receipts. Ordinary release tag pushes retain their existing trigger.
+The final draft publication uses `GITHUB_TOKEN` to suppress a duplicate
+release-event updater run. The
+updater dispatch uses the verified admin credential and retains its admin gate.
+
 Daily releases resolve coverage automatically before tagging. Known changes use
 the existing impact rules. Shared or unmapped changes select the catalog's
 `desktop-interface`, `mobile-layout`, and `core-api` areas, together with every
@@ -35,11 +59,24 @@ in its impact receipt; every selected job must pass before building. Missing or
 invalid baselines and selector errors still stop before tagging. Daily releases
 do not require a separate coverage-review file or authorize `scope=full`.
 
-Any failed check stops publication. An existing release tag or draft is a
+Any failed check before publication stops publication. An existing release tag or draft is a
 recovery case for a release manager; the daily job never moves a tag or replaces
 an asset. GitHub may delay or drop scheduled runs under load, so the manual
 dispatch remains available. APT promotion is a separate protected workflow in
 `BerylliumSec/nebula-apt` and is not performed by this schedule.
+
+The driver deliberately does not retry mutations or resume partially completed
+releases automatically. A tag push or dispatch can succeed remotely even when
+its response is lost. After tag creation, a failure or cancellation leaves that
+immutable tag (and possibly a draft) reserved for release-manager recovery;
+subsequent daily runs stop rather than retagging or replacing assets. Since the
+release commit has `[skip ci]`, a failed preparation dispatch requires an approved
+manual preparation on the same tag with the recorded selection and rationale.
+Recover finalization using its verified successful preparation run. A publication
+response failure requires reading actual release state before any next action.
+If updater dispatch or execution fails after publication, the release stays
+published: authorize `publish-updater-manifest.yml` on `main` with that same
+`release_tag`. A no-new-commits daily run skips; it does not repair updater state.
 
 ## Supported release matrix
 
@@ -63,6 +100,27 @@ admin-restricted, and both preparation and draft workflows verify the initiating
 actor's repository admin permission before reaching this environment. Admin
 release jobs therefore enter without a second reviewer. Define these
 environment secrets:
+
+- `NEBULA_RELEASE_TOKEN` for the daily driver, only after explicit credential
+  configuration approval. Use an expiring fine-grained personal access token
+  owned by an existing repository admin, resource owner `berylliumsec`, restricted
+  to `nebula`, with Contents read/write for the new tag/commit and Actions
+  read/write for the three admin-authenticated dispatches. Metadata read is
+  implicit. Do not request Workflows write: the generated release commit retains
+  exactly main's already-present workflow files, and the driver rejects changes
+  to `.github/workflows` before tagging. Do not request Attestations read on the
+  PAT: verification uses the job token, whose existing `attestations: read` stays
+  enabled. Stop and review any authorization denial; do not automatically add
+  permissions. Follow organization approval policy and rotate before expiry. Never
+  grant Administration write, expand the tag creation bypass list, or change
+  the separate no-bypass update/deletion rule. A GitHub App installation token
+  would require separately approved rule and downstream actor-policy changes;
+  it is not a drop-in replacement under the current admin-only contract.
+
+Read-only inspection on 2026-10-09 confirmed `desktop-release` exists with allowed
+branch `main` and allowed tags `nebula-v3.*`. Its returned protection rules
+contain only the branch policy: no required reviewers or wait timer conflict
+with the schedule. No environment policy changes are required by this fix.
 
 - `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for the
   AppImage updater signature.

@@ -1,7 +1,8 @@
 """Publish a verified stable Linux release for new commits on main.
 
-The scheduled workflow runs this with a short-lived GitHub Actions token. A
-failed gate leaves its immutable tag or draft for a release manager to inspect.
+The protected admin credential creates tags and dispatches gated workflows.
+Publication uses GITHUB_TOKEN so the driver owns the updater dispatch. A failed
+gate leaves its immutable tag or draft for a release manager to inspect.
 """
 
 from __future__ import annotations
@@ -24,15 +25,71 @@ WAIT_SECONDS = 3 * 60 * 60
 CONSERVATIVE_AREAS = ("desktop-interface", "mobile-layout", "core-api")
 
 
-def run(*args: str, check: bool = True) -> str:
-    result = subprocess.run(args, text=True, capture_output=True, check=False)
+def child_env(*, release_admin: bool = False) -> dict[str, str]:
+    """Keep the privileged token out of ordinary child processes and Git config."""
+    env = dict(os.environ)
+    token = env.pop("NEBULA_RELEASE_TOKEN", "")
+    if release_admin:
+        if not token:
+            raise RuntimeError("Protected release credential is required")
+        env["GH_TOKEN"] = token
+    return env
+
+
+def run(*args: str, check: bool = True, release_admin: bool = False) -> str:
+    result = subprocess.run(
+        args,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=child_env(release_admin=release_admin),
+    )
     if check and result.returncode:
         raise RuntimeError(f"{' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
 
-def gh_json(endpoint: str) -> object:
-    return json.loads(run("gh", "api", endpoint))
+def gh_json(endpoint: str, *, release_admin: bool = False) -> object:
+    return json.loads(run("gh", "api", endpoint, release_admin=release_admin))
+
+
+def require_release_admin() -> None:
+    """Validate the authenticated principal, not the schedule's displayed actor."""
+    if not os.environ.get("GH_TOKEN") or not os.environ.get("NEBULA_RELEASE_TOKEN"):
+        raise RuntimeError(
+            "Protected release and GITHUB_TOKEN publication credentials are required"
+        )
+    try:
+        actor = gh_json("user", release_admin=True)["login"]
+        permission = gh_json(
+            f"repos/{REPOSITORY}/collaborators/{actor}/permission",
+            release_admin=True,
+        )
+    except (RuntimeError, KeyError, TypeError) as error:
+        raise RuntimeError(
+            "Cannot verify the protected release credential's repository-admin identity"
+        ) from error
+    if permission.get("permission") != "admin":
+        raise RuntimeError(
+            "The protected release credential must belong to a repository admin"
+        )
+    print(f"Release credential: verified repository admin {actor}", flush=True)
+
+
+def publish_release(tag: str) -> None:
+    """Suppress a second release-event updater run; explicitly dispatch it below."""
+    if not os.environ.get("GH_TOKEN"):
+        raise RuntimeError("GITHUB_TOKEN publication credential is required")
+    run(
+        "gh",
+        "release",
+        "edit",
+        tag,
+        "--repo",
+        REPOSITORY,
+        "--draft=false",
+        "--prerelease=false",
+    )
 
 
 def published_release() -> dict:
@@ -119,6 +176,7 @@ def preflight_impact(baseline: str, candidate: str) -> tuple[str, str]:
             text=True,
             capture_output=True,
             check=False,
+            env=child_env(),
         )
         if result.returncode == 0:
             return "", "Daily stable release: automatic impacted selection."
@@ -138,7 +196,9 @@ def preflight_impact(baseline: str, candidate: str) -> tuple[str, str]:
             )
         selection, review_reason = conservative_coverage(plan)
         args.extend(("--selection", selection, "--review-reason", review_reason))
-        result = subprocess.run(args, text=True, capture_output=True, check=False)
+        result = subprocess.run(
+            args, text=True, capture_output=True, check=False, env=child_env()
+        )
         accepted = json.loads(output.read_text())
         if (
             result.returncode
@@ -243,7 +303,9 @@ def verify_assets(run_id: int, version: str) -> None:
         ]
         if not checksum.is_file() or any(not path.is_file() for path in required):
             raise RuntimeError("Missing required Linux artifact or checksum manifest")
-        subprocess.run(["sha256sum", "-c", checksum.name], cwd=root, check=True)
+        subprocess.run(
+            ["sha256sum", "-c", checksum.name], cwd=root, check=True, env=child_env()
+        )
         for path in required:
             run("gh", "attestation", "verify", str(path), "--repo", REPOSITORY)
 
@@ -278,6 +340,7 @@ def main() -> None:
         return
     run("git", "merge-base", "--is-ancestor", previous_source, MAIN_SHA)
     green_main()
+    require_release_admin()
     selection, review_reason = preflight_impact(previous_source, MAIN_SHA)
     run("gh", "attestation", "verify", "--help")
 
@@ -297,7 +360,9 @@ def main() -> None:
     )
     run("git", "checkout", "-B", "daily-release", MAIN_SHA)
     if subprocess.run(
-        ["git", "merge-base", "--is-ancestor", previous_tag, "HEAD"], check=False
+        ["git", "merge-base", "--is-ancestor", previous_tag, "HEAD"],
+        check=False,
+        env=child_env(),
     ).returncode:
         # Retain previous release ancestry while taking the exact current main tree.
         run(
@@ -339,10 +404,25 @@ def main() -> None:
         "ui/package-lock.json",
         str(notes),
     )
-    run("git", "commit", "-m", f"Prepare Nebula {version} stable release")
+    # This release-only commit never changes main. Its admin-authenticated push
+    # must not launch a second preparation without the validated selection.
+    # workflow_dispatch is unaffected; all release gates still run below.
+    run("git", "commit", "-m", f"Prepare Nebula {version} stable release [skip ci]")
     release_commit = run("git", "rev-parse", "HEAD")
+    if run("git", "diff", "--name-only", MAIN_SHA, "HEAD", "--", ".github/workflows"):
+        raise RuntimeError("Release-only commit unexpectedly changes workflows")
     run("git", "tag", "-a", tag, "-m", f"Nebula {version}")
-    run("git", "push", "origin", f"refs/tags/{tag}")
+    run(
+        "git",
+        "-c",
+        "credential.helper=",
+        "-c",
+        "credential.helper=!gh auth git-credential",
+        "push",
+        "origin",
+        f"refs/tags/{tag}",
+        release_admin=True,
+    )
     print(f"Created {tag} at {release_commit} from main {MAIN_SHA}", flush=True)
 
     preparation_started = datetime.now(timezone.utc).replace(microsecond=0)
@@ -364,7 +444,7 @@ def main() -> None:
     ]
     if selection:
         dispatch.extend(("-f", f"selection={selection}"))
-    run(*dispatch)
+    run(*dispatch, release_admin=True)
     preparation_id = wait_for_workflow(
         "nebula3-release.yml", tag, release_commit, preparation_started
     )
@@ -386,6 +466,7 @@ def main() -> None:
         f"preparation_run_id={preparation_id}",
         "-f",
         "create_draft=true",
+        release_admin=True,
     )
     wait_for_workflow(
         "nebula3-release-finalize.yml", tag, release_commit, finalize_started
@@ -407,16 +488,7 @@ def main() -> None:
     if published_release()["tag_name"] != previous_tag:
         raise RuntimeError("Another Nebula release was published during preparation")
     updater_started = datetime.now(timezone.utc).replace(microsecond=0)
-    run(
-        "gh",
-        "release",
-        "edit",
-        tag,
-        "--repo",
-        REPOSITORY,
-        "--draft=false",
-        "--prerelease=false",
-    )
+    publish_release(tag)
     updater_commit = gh_json(f"repos/{REPOSITORY}/commits/main")["sha"]
     run(
         "gh",
@@ -429,6 +501,7 @@ def main() -> None:
         "main",
         "-f",
         f"release_tag={tag}",
+        release_admin=True,
     )
     wait_for_workflow(
         "publish-updater-manifest.yml", "main", updater_commit, updater_started

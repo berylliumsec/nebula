@@ -1,35 +1,25 @@
 {
-  "change_digest": "e25cb7669726de349382cb903d074181612ac971566a6c47d26f1cd51ba301f8",
-  "reviewed_by": "Codex focused loading feedback review on 2026-10-09",
-  "reason": "Notes initial readiness and loading feedback changed; Files, Activity, and lazy Code/Terminal feedback share the new surface. Select affected component behavior and Notes entry/edit geometry across desktop, mobile Chromium/WebKit, plus durable save/reload on temporary real Core.",
-  "exclusions": "No Python or native source changed; their suites are excluded. Unrelated assistant, provider, harness, and browser journeys and all full suites are excluded. Physical devices unavailable.",
-  "python": [],
-  "frontend": [
-    "ui/src/components/NotesPanel.test.tsx",
-    "ui/src/components/WorkspacePanel.test.tsx",
-    "ui/src/components/ExecutionHistory.test.tsx"
+  "change_digest": "37e2e5891603cccc41dccc08580d73d6c06878c9b28c8df570536b03450b2bc5",
+  "reviewed_by": "Codex focused release engineering review, 2026-10-09",
+  "reason": "Correct daily release credential identity and limit its exposure to identity checks, tag push, and three authenticated dispatches. The 105 collected tests cover initiator/admin guards, missing/inaccessible/non-admin credentials, token removal from ordinary children, immutable existing state, uncertain command failures and unsuccessful runs at each stage, unchanged selected coverage and full-suite guards, and diff-bound selection. Existing selectors execute in disposable Git repositories; all GitHub writes remain mocked.",
+  "exclusions": "Release orchestration only. Python 3.12 tests bounded to these three files and two minutes, with all GitHub writes mocked. No UI, native, Core, package, signing, smoke or offensive code changes. Frontend/native/Playwright execution and all full suites are excluded. Protected GitHub end-to-end publication requires separate approval and remains unverified.",
+  "python": [
+    "tests/test_daily_stable_release.py",
+    "tests/test_playwright_impact.py",
+    "tests/test_test_selection.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:notes-screen-fit/desktop",
-    "entry:notes-screen-fit/compact",
-    "entry:notes-screen-fit/mobile-chromium-small",
-    "entry:notes-screen-fit/mobile-chromium",
-    "entry:notes-screen-fit/mobile-chromium-wide",
-    "entry:notes-screen-fit/mobile-webkit-small",
-    "entry:notes-screen-fit/mobile-webkit",
-    "entry:notes-screen-fit/mobile-webkit-wide",
-    "entry:notes-typing/real-core"
-  ],
+  "playwright": [],
   "expected_tests": {
-    "python": 0,
-    "frontend": 27,
+    "python": 105,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
-  "python_node": false
+  "python_node": true
 }
