@@ -28,6 +28,7 @@ export function startHarnessActivityPolling<T extends {busy: boolean}>(options: 
       busy = value.busy || options.activeTurn;
       options.onValue(value);
     } catch (error) {
+      // diagnostic-expected: the caller's onError records the failure and shows recovery.
       if (!stopped && !controller.signal.aborted && !visibility.hidden) options.onError(error);
     } finally {
       reading = false;

@@ -1,5 +1,5 @@
 {
-  "change_digest": "f1c22fa9ee6a5f995b29d350fe0b2ea074eed6add16f145a4c47237179cb29de",
+  "change_digest": "74b32a1bae876f0c84bffdcfd5af3767d90719945afbf3b80ff8963fb2e729ee",
   "reviewed_by": "Codex scoped assistant responsiveness review on 2026-10-09",
   "reason": "Stream Markdown and harness polling are changed; current main already indexes and virtualizes transcript rows and pages history. Exercise exact code safety, serialized harness polling, streamed rendering, long history, hidden-tab recovery, and production LAN durable conversation journeys across the affected desktop/mobile profiles.",
   "exclusions": "No Python or native source changed; their suites are excluded. Other UI journeys and full suites are unrelated. Real Core runs use temporary data directories and the production ui/dist bundle; physical devices are unavailable.",
