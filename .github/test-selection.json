@@ -16,8 +16,8 @@
   "frontend": ["ui/src/diagnostics/DiagnosticErrorNotice.test.tsx"],
   "native": [],
   "playwright": [
-    "diagnostic-error-dismiss/desktop",
-    "diagnostic-error-dismiss/mobile-chromium-small",
-    "diagnostic-error-dismiss/mobile-webkit"
+    "entry:diagnostic-error-dismiss/desktop",
+    "entry:diagnostic-error-dismiss/mobile-chromium-small",
+    "entry:diagnostic-error-dismiss/mobile-webkit"
   ]
 }
