@@ -9,6 +9,7 @@ import { homedir, networkInterfaces, tmpdir } from "node:os";
 import path from "node:path";
 import { expect, request as playwrightRequest, test, type Page, type TestInfo } from "@playwright/test";
 import {startApprovalCore} from "./fixtures/approval-core";
+import {OwnedCleanupError, withOwnedCleanup} from "./fixtures/owned-cleanup";
 
 interface RealCore {
   process: ChildProcessWithoutNullStreams;
@@ -17,16 +18,71 @@ interface RealCore {
   token: string;
 }
 
+test("assistant upgrade owned cleanup preserves primary errors and reports every secondary failure", async () => {
+  for (const primary of [Object.freeze(new Error("body failed")), undefined, null, "body failed"]) {
+    const order: string[] = [];
+    const reports: OwnedCleanupError[] = [];
+    const first = new Error("API disposal failed");
+    const second = new Error("server disposal failed");
+    const result = withOwnedCleanup(async () => {throw primary;}, [
+      {name: "API", dispose: () => {order.push("API"); throw first;}},
+      {name: "server", dispose: async () => {order.push("server"); throw second;}},
+      {name: "process", dispose: () => {order.push("process");}},
+    ], error => reports.push(error));
+    await result.then(() => {throw new Error("Expected original failure");}, error => expect(error).toBe(primary));
+    expect(order).toEqual(["API", "server", "process"]);
+    expect(reports).toHaveLength(1);
+    expect(reports[0].failures).toEqual([{name: "API", error: first}, {name: "server", error: second}]);
+    expect(reports[0].errors.map(error => error.cause)).toEqual([first, second]);
+  }
+  const primary = new Error("original failure");
+  await expect(withOwnedCleanup(async () => {throw primary;}, [{name: "API", dispose: () => {throw new Error("secondary");}}], () => {throw new Error("reporter failed");})).rejects.toBe(primary);
+  await expect(withOwnedCleanup(async () => "result", [{name: "closed", dispose: async () => undefined}])).resolves.toBe("result");
+});
+
+for (const bodyFails of [false, true]) {
+  test(`assistant upgrade owned cleanup exits its inert process after disposal errors (${bodyFails ? "primary failure" : "cleanup failure"})`, async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "nebula-playwright-real-core-"));
+    // This child only waits; it has no Core, provider, command, or security-tool runtime.
+    const child = spawn(process.execPath, ["-e", 'process.stdout.write("ready\\n"); setInterval(() => {}, 1000);']);
+    const server = createServer((_request, response) => response.end("inert"));
+    const api = await playwrightRequest.newContext();
+    const primary = new Error("original body failure");
+    const disposal = new Error("injected API disposal failure");
+    const reports: OwnedCleanupError[] = [];
+    const outcome = withOwnedCleanup(async () => {
+      await new Promise<void>((resolve, reject) => {child.stdout.once("data", () => resolve()); child.once("error", reject);});
+      await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+      await writeFile(path.join(dataDir, "owned.txt"), "Only this fixture owns this directory.");
+      if (bodyFails) throw primary;
+    }, [
+      {name: "API context", dispose: async () => {await api.dispose(); throw disposal;}},
+      {name: "inert HTTP server", dispose: () => stopLocalModelStub({origin: "", requests: [], server, fail: false})},
+      {name: "inert process and directory", dispose: () => stopRealCore({process: child, dataDir, origin: "", token: ""})},
+    ], error => reports.push(error));
+    if (bodyFails) {
+      await expect(outcome).rejects.toBe(primary);
+      expect(reports[0].failures).toEqual([{name: "API context", error: disposal}]);
+    } else {
+      await expect(outcome).rejects.toMatchObject({name: "OwnedCleanupError", failures: [{name: "API context", error: disposal}]});
+      expect(reports).toEqual([]);
+    }
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+    expect(server.listening).toBe(false);
+    if (process.env.NEBULA_TEST_KEEP_DATA !== "1") expect(existsSync(dataDir)).toBe(false);
+  });
+}
+
 test("assistant upgrade approval fixture reclaims its data after stop and failed startup", async () => {
   test.setTimeout(60_000);
   const core = await startApprovalCore(localNetworkIpv4(), "single");
-  try {
+  await withOwnedCleanup(async () => {
     const marker = path.join(core.dataDir, "restart-marker.txt");
     await writeFile(marker, "Only this fixture owns its data.");
     await core.restart();
     expect(await readFile(marker, "utf8")).toBe("Only this fixture owns its data.");
     expect((await core.api.get("health")).ok()).toBe(true);
-  } finally {await core.stop();}
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
   if (process.env.NEBULA_TEST_KEEP_DATA !== "1") expect(existsSync(core.dataDir)).toBe(false);
   const before = new Set(await readdir(tmpdir()));
   await expect(startApprovalCore(localNetworkIpv4(), "invalid-startup-fixture")).rejects.toThrow();
@@ -39,7 +95,7 @@ test("notes typing production LAN saves and reloads the latest draft", async ({ 
   test.setTimeout(60_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projects[0].id);
     const url = `${core.origin}/?view=notes#token=${encodeURIComponent(core.token)}`;
@@ -62,10 +118,10 @@ test("notes typing production LAN saves and reloads the latest draft", async ({ 
     await expect(page.getByRole("button", { name: /LAN typing check/ })).toBeVisible();
     await page.goto(url);
     await expect(page.getByRole("textbox", { name: "Note body" })).toHaveValue("First line and latest text");
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 /**
@@ -166,7 +222,9 @@ async function startRealCore(options: { bindHost?: string; browserHost?: string;
       clearTimeout(timeout);
       reject(new Error(`Real Core exited with ${code}.\n${output}`));
     });
-  });
+  }).catch(error => withOwnedCleanup(async () => {throw error;}, [
+    {name: "failed Core startup", dispose: () => stopRealCore({process: child, dataDir, origin: "", token}, {keepData: Boolean(options.dataDir)})},
+  ]));
   return { process: child, dataDir, origin, token };
 }
 
@@ -180,17 +238,28 @@ function localNetworkIpv4(): string {
 }
 
 async function stopRealCore(core: RealCore, options: { keepData?: boolean } = {}): Promise<void> {
-  if (core.process.exitCode === null) {
-    core.process.kill("SIGTERM");
-    await Promise.race([
-      new Promise<void>((resolve) => core.process.once("exit", () => resolve())),
-      new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
-    ]);
-    if (core.process.exitCode === null) core.process.kill("SIGKILL");
-  }
-  if (!options.keepData && process.env.NEBULA_TEST_KEEP_DATA !== "1" && path.basename(core.dataDir).startsWith("nebula-playwright-real-core-")) {
-    await rm(core.dataDir, { recursive: true, force: true });
-  }
+  await withOwnedCleanup(async () => undefined, [
+    {name: "Core process", dispose: async () => {
+      const child = core.process;
+      const exited = () => child.exitCode !== null || child.signalCode !== null;
+      if (exited()) return;
+      const wait = (signal: NodeJS.Signals) => new Promise<void>((resolve, reject) => {
+        const done = () => {clearTimeout(timeout); resolve();};
+        const timeout = setTimeout(() => {child.off("exit", done); reject(new Error(`Owned Core process did not exit after ${signal}`));}, 5_000);
+        child.once("exit", done);
+        child.kill(signal);
+      });
+      try {await wait("SIGTERM");} catch (error) {
+        if (exited()) return;
+        await wait("SIGKILL");
+      }
+    }},
+    {name: "Core data", dispose: async () => {
+      if (!options.keepData && process.env.NEBULA_TEST_KEEP_DATA !== "1" && path.basename(core.dataDir).startsWith("nebula-playwright-real-core-")) {
+        await rm(core.dataDir, {recursive: true, force: true});
+      }
+    }},
+  ]);
 }
 
 interface LocalModelStub {
@@ -349,7 +418,7 @@ test("assistant upgrade OpenRouter policy persists through production LAN reload
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const created = await api.post("providers", { data: {
       name: "OpenRouter policy",
       provider_type: "openrouter",
@@ -393,17 +462,17 @@ test("assistant upgrade OpenRouter policy persists through production LAN reload
     dialog = page.getByRole("dialog", { name: "Edit OpenRouter policy" });
     await expect(dialog.getByRole("checkbox", { name: /Require zero data retention/ })).toBeChecked();
     await expect(dialog.getByLabel("Allowed upstream providers")).toContainText("Relace");
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("work hub project board keeps check-ins after refresh and agent access revocation", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
-  try {
+  await withOwnedCleanup(async () => {
     const projectResponse = await api.post("engagements", { data: { name: "Documentation portal" } });
     expect(projectResponse.ok(), await projectResponse.text()).toBe(true);
     const project = await projectResponse.json() as { id: string };
@@ -472,10 +541,10 @@ test("work hub project board keeps check-ins after refresh and agent access revo
     expect(accessibility.violations).toEqual([]);
     await testInfo.attach("work-hub", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), projectId: project.id, itemId }), contentType: "application/json" });
     await page.screenshot({ path: testInfo.outputPath("work-hub.png"), animations: "disabled" });
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade real Core retains editable goal skills through source loss", async ({ page }) => {
@@ -486,7 +555,7 @@ test("assistant upgrade real Core retains editable goal skills through source lo
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     const projectId = projects[0]?.id;
     expect(projectId).toBeTruthy();
@@ -614,11 +683,11 @@ test("assistant upgrade real Core retains editable goal skills through source lo
         resources: [{ path: rulePath, relative_path: "../../../.agents/rules/accuracy.md" }],
       }],
     });
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade real Core creates a goal before the first turn and pauses it on stop", async ({ page }) => {
@@ -629,7 +698,7 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     const projectId = projects[0]?.id;
     expect(projectId).toBeTruthy();
@@ -790,11 +859,11 @@ test("assistant upgrade real Core creates a goal before the first turn and pause
     expect(savedSession?.metadata.reasoning_effort).toBe("high");
     expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
     expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 async function writeProjectHook(
@@ -834,7 +903,7 @@ test("assistant upgrade real Core provider selections survive reload and restart
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     const projectId = projects[0]?.id;
     expect(projectId).toBeTruthy();
@@ -1043,11 +1112,11 @@ test("assistant upgrade real Core provider selections survive reload and restart
     })).toBe(true);
     await page.reload();
     await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Model guidance after start-hook feedback", { timeout: 20_000 });
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade interactive guides create real hook files and resume from Core progress", async ({ page }, testInfo) => {
@@ -1059,7 +1128,7 @@ test("assistant upgrade interactive guides create real hook files and resume fro
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     const projectId = projects[0]?.id;
     expect(projectId).toBeTruthy();
@@ -1155,11 +1224,11 @@ test("assistant upgrade interactive guides create real hook files and resume fro
     await page.getByRole("button", { name: "Finish", exact: true }).click();
     await expect.poll(async () => ((await (await api.get("guides/progress")).json()) as Array<{ status: string }>)[0]?.status).toBe("completed");
     await testInfo.attach("interactive-guides-evidence", { body: JSON.stringify({ origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize() }), contentType: "application/json" });
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 async function runAssistantGuideTour(page: Page, testInfo: TestInfo, selectedGuides?: string[]) {
@@ -1170,7 +1239,7 @@ async function runAssistantGuideTour(page: Page, testInfo: TestInfo, selectedGui
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const providerResponse = await api.post("providers", { data: {
       name: "Guide tour",
       provider_type: "vllm",
@@ -1238,6 +1307,20 @@ async function runAssistantGuideTour(page: Page, testInfo: TestInfo, selectedGui
         if (testInfo.project.name.includes("real-desktop")) {
           expect(await card.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(0);
         }
+        if (title === "Run the assistant’s commands beside the chat" && await card.getByRole("heading", {name: "Open the terminal", exact: true}).isVisible()) {
+          const phone = (page.viewportSize()?.width ?? 1440) < 768;
+          const target = phone ? page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Terminal", exact: true}) : page.getByRole("button", {name: "Show terminal", exact: true});
+          await expect(target).toBeVisible();
+          await expect(target).toHaveAttribute("data-guide", "terminal-toggle");
+          const bounds = await target.boundingBox();
+          expect(bounds).not.toBeNull();
+          expect(bounds!.height).toBeGreaterThanOrEqual(phone ? 44 : 28);
+          await expect.poll(async () => {
+            const spotlight = await page.locator(".guide-spotlight").boundingBox();
+            return Boolean(spotlight && Math.abs(spotlight.x - (bounds!.x - 6)) < 1 && Math.abs(spotlight.y - (bounds!.y - 6)) < 1);
+          }).toBe(true);
+          if (phone) await expect(card).toContainText("On a phone, choose Terminal in the bottom navigation. Choose Chat to return to your conversation.");
+        }
         const finish = card.getByRole("button", { name: "Finish", exact: true });
         if (await finish.isVisible()) { await finish.click(); break; }
         await card.getByRole("button", { name: "Next", exact: true }).click();
@@ -1254,17 +1337,30 @@ async function runAssistantGuideTour(page: Page, testInfo: TestInfo, selectedGui
     }).toBe(guides.length);
     const progress = await (await api.get("guides/progress")).json() as Array<{ guide_id: string; status: string }>;
     expect(progress.filter(item => item.status === "completed")).toHaveLength(guides.length);
+    if (selectedGuides?.length === 1 && selectedGuides[0] === "Run the assistant’s commands beside the chat") {
+      await page.reload();
+      await expect(coreReady(page)).toBeVisible({timeout: 20_000});
+      await (await guideEntry(page)).click();
+      const hub = page.getByRole("dialog", {name: "Guides"});
+      await expect(hub).toContainText(`1 of`);
+      await expect(hub.getByRole("button", {name: /^Run the assistant’s commands beside the chat/})).toContainText("Done");
+    }
     await testInfo.attach("guide-tour-evidence", { body: JSON.stringify({ origin: core.origin, build: "production", project: testInfo.project.name, reached }), contentType: "application/json" });
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 }
 
 test("assistant upgrade interactive guides reach every assistant control on real Core", async ({page}, testInfo) => {
   test.setTimeout(300_000);
   await runAssistantGuideTour(page, testInfo);
+});
+
+test("assistant upgrade terminal guide highlights existing controls on production LAN", async ({page}, testInfo) => {
+  test.setTimeout(90_000);
+  await runAssistantGuideTour(page, testInfo, ["Run the assistant’s commands beside the chat"]);
 });
 
 test("assistant upgrade goal guide opens its controls on production LAN", async ({page}, testInfo) => {
@@ -1281,7 +1377,7 @@ test("production mission defaults to unlimited duration through real Core", asyn
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const engagementsResponse = await api.get("engagements");
     expect(engagementsResponse.ok()).toBe(true);
     const engagements = await engagementsResponse.json() as Array<{ id: string }>;
@@ -1332,11 +1428,11 @@ test("production mission defaults to unlimited duration through real Core", asyn
       return run ? { status: run.status, duration: run.budget.max_duration_seconds } : undefined;
     }, { timeout: 20_000 }).toEqual({ status: "complete", duration: null });
     await expect(page.getByRole("navigation", { name: "Mission history" }).getByText("Unlimited production mission")).toBeVisible();
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade production LAN delegated Mission opens its durable supervisor chat", async ({ page }, testInfo) => {
@@ -1347,7 +1443,7 @@ test("assistant upgrade production LAN delegated Mission opens its durable super
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const engagements = await (await api.get("engagements")).json() as Array<{ id: string }>;
     const projectId = engagements[0]?.id;
     expect(projectId).toBeTruthy();
@@ -1393,11 +1489,11 @@ test("assistant upgrade production LAN delegated Mission opens its durable super
     await page.getByRole("button", { name: "Open supervisor chat" }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("chat");
     await testInfo.attach("delegated-mission", { body: JSON.stringify({ origin: core.origin, build: "production", project: testInfo.project.name, chat: new URL(page.url()).searchParams.get("session"), accessibilityViolations: accessibility.violations.length }), contentType: "application/json" });
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade conversation switching restores durable Core history promptly", async ({ page }, testInfo) => {
@@ -1411,7 +1507,7 @@ test("assistant upgrade conversation switching restores durable Core history pro
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const engagements = await (await api.get("engagements")).json() as Array<{id: string}>;
     const projectId = engagements[0]?.id;
     expect(projectId).toBeTruthy();
@@ -1521,11 +1617,11 @@ test("assistant upgrade conversation switching restores durable Core history pro
     const screenshotPath = testInfo.outputPath("chat-cache-visible-result.png");
     await page.screenshot({path: screenshotPath});
     await testInfo.attach("chat-cache-visible-result", {path: screenshotPath, contentType: "image/png"});
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade linked reply opens a durable workspace file from production LAN Core", async ({ page }, testInfo) => {
@@ -1533,7 +1629,7 @@ test("assistant upgrade linked reply opens a durable workspace file from product
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const modelStub = await startLocalModelStub({ responseContent: "[Open file](/workspace/notes/review.md#L2) · [Open site](https://example.test/review)" });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     const projectId = projects[0]?.id;
     expect(projectId).toBeTruthy();
@@ -1568,11 +1664,11 @@ test("assistant upgrade linked reply opens a durable workspace file from product
     await page.reload();
     await expect(page.locator(".code-editor-panel")).toContainText("second line");
     await testInfo.attach("linked-file-lan", { body: await page.screenshot(), contentType: "image/png" });
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("production assistant preserves exact research context and relaunch-safe drafts through real Core", async ({ page }) => {
@@ -1584,7 +1680,7 @@ test("production assistant preserves exact research context and relaunch-safe dr
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const engagementsResponse = await api.get("engagements");
     expect(engagementsResponse.ok()).toBe(true);
     const engagements = await engagementsResponse.json() as Array<{ id: string }>;
@@ -1748,11 +1844,11 @@ test("production assistant preserves exact research context and relaunch-safe dr
     expect(transcript).toContain(selectedContext);
     expect(transcript).toContain(selectedContextHash);
     expect(new URL(page.url()).hostname).toBe(lanAddress);
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-    await stopLocalModelStub(modelStub);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+  ]);
 });
 
 test("assistant upgrade provider request breakdown survives a production LAN chat reload", async ({ page }) => {
@@ -1764,7 +1860,7 @@ test("assistant upgrade provider request breakdown survives a production LAN cha
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const engagementsResponse = await api.get("engagements");
     expect(engagementsResponse.ok()).toBe(true);
     const engagements = await engagementsResponse.json() as Array<{ id: string }>;
@@ -1821,11 +1917,11 @@ test("assistant upgrade provider request breakdown survives a production LAN cha
     await page.getByRole("button", { name: /Open context details/ }).click();
     await expect(inspector.getByText("Last provider request")).toBeVisible();
     expect(new URL(page.url()).hostname).toBe(lanAddress);
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade running tool details survive a production LAN chat reload", async ({ page }, testInfo) => {
@@ -1861,7 +1957,7 @@ test("assistant upgrade running tool details survive a production LAN chat reloa
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const pending = await api.get("chat/sessions/running-tool-session/pending-turn");
     expect(pending.ok(), await pending.text()).toBe(true);
     expect((await pending.json() as { tool_calls: Array<{ status: string; capability: string }> }).tool_calls).toMatchObject([
@@ -1894,10 +1990,10 @@ test("assistant upgrade running tool details survive a production LAN chat reloa
     await inspect();
     expect(new URL(page.url()).hostname).toBe(lanAddress);
     await testInfo.attach("running-tool-production-lan", { body: JSON.stringify({ origin: core.origin, build: "ui/dist production", viewport: page.viewportSize(), workflow: "durable pending tool calls, independent expansion, reload" }), contentType: "application/json" });
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("production assistant work survives a project switch through real Core", async ({ page }) => {
@@ -1909,7 +2005,7 @@ test("production assistant work survives a project switch through real Core", as
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const projectsResponse = await api.get("engagements");
     expect(projectsResponse.ok()).toBe(true);
     const projects = await projectsResponse.json() as Array<{ id: string; name: string }>;
@@ -1964,11 +2060,11 @@ test("production assistant work survives a project switch through real Core", as
     await expect(page.locator(".chat-message.assistant .assistant-markdown strong")).toHaveText("Core is continuing in Project A", { timeout: 20_000 });
     await expect(page.locator(".chat-message.assistant .assistant-markdown")).toContainText("and finished after the viewer detached.");
     expect(new URL(page.url()).hostname).toBe(lanAddress);
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("production LAN mission ledger survives failure, retry, restart recovery, and relaunch through real Core", async ({ page }) => {
@@ -1980,7 +2076,7 @@ test("production LAN mission ledger survives failure, retry, restart recovery, a
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const engagementsResponse = await api.get("engagements");
     expect(engagementsResponse.ok()).toBe(true);
     const engagements = await engagementsResponse.json() as Array<{ id: string }>;
@@ -2088,11 +2184,11 @@ test("production LAN mission ledger survives failure, retry, restart recovery, a
     await expect(ledger.getByText(/actions?$/)).toBeVisible();
     await expect(page.getByText("item upsert", { exact: false })).toHaveCount(0);
     expect(new URL(page.url()).hostname).toBe(lanAddress);
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-    await stopLocalModelStub(modelStub);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+  ]);
 });
 
 test("real Core Browser shows durable scope and an honest device-browser handoff", async ({ page }) => {
@@ -2103,7 +2199,7 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const engagementsResponse = await api.get("engagements");
     expect(engagementsResponse.ok()).toBe(true);
     const engagements = await engagementsResponse.json() as Array<{ id: string }>;
@@ -2184,10 +2280,10 @@ test("real Core Browser shows durable scope and an honest device-browser handoff
     await page.getByRole("button", { name: "Repeater", exact: true }).click();
     await expect(page.getByText("Durable account request", { exact: true })).toBeVisible();
     expect(new URL(page.url()).hostname).toBe(lanAddress);
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("stabilization real Core device-browser handoff opens an isolated local tab without a false failure", async ({page}, testInfo) => {
@@ -2201,7 +2297,7 @@ test("stabilization real Core device-browser handoff opens an isolated local tab
   const url = `http://127.0.0.1:${(fixture.address() as AddressInfo).port}/fixture`;
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-  try {
+  await withOwnedCleanup(async () => {
     const project = (await (await api.get("engagements")).json())[0];
     const scope = await (await api.get(`engagements/${project.id}/scope`)).json();
     const saved = await api.put(`engagements/${project.id}/scope`, {data: {
@@ -2255,10 +2351,11 @@ test("stabilization real Core device-browser handoff opens an isolated local tab
     expect(addBox!.y).toBeGreaterThanOrEqual(0);
     expect(addBox!.y + addBox!.height).toBeLessThanOrEqual(390);
     await testInfo.attach("device-browser-short-window", {body: await page.screenshot(), contentType: "image/png"});
-  } finally {
-    await api.dispose(); await stopRealCore(core);
-    await new Promise<void>((resolve, reject) => fixture.close(error => error ? reject(error) : resolve()));
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "HTTP fixture", dispose: () => new Promise<void>((resolve, reject) => fixture.close(error => error ? reject(error) : resolve()))},
+  ]);
 });
 
 test("assistant upgrade real Core persists network scope changed through universal settings search", async ({ page }) => {
@@ -2269,7 +2366,7 @@ test("assistant upgrade real Core persists network scope changed through univers
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     await page.goto(`${core.origin}/findings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Findings", exact: true })).toBeVisible({ timeout: 20_000 });
     await page.getByRole("button", { name: "Search pages, actions, and settings" }).click();
@@ -2311,10 +2408,10 @@ test("assistant upgrade real Core persists network scope changed through univers
     await expect(lens.getByLabel("Allowed domains")).toHaveValue("www.google.com");
     await expect(lens.getByLabel("Allowed domains")).toBeDisabled();
     expect(new URL(page.url()).hostname).toBe(lanAddress);
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("production LAN handoff survives reload without persisting unsent bytes", async ({ page }) => {
@@ -2325,7 +2422,7 @@ test("production LAN handoff survives reload without persisting unsent bytes", a
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const engagementsResponse = await api.get("engagements");
     expect(engagementsResponse.ok()).toBe(true);
     const engagements = await engagementsResponse.json() as Array<{ id: string }>;
@@ -2372,10 +2469,10 @@ test("production LAN handoff survives reload without persisting unsent bytes", a
     const refreshedText = await refreshedResponse.text();
     expect(refreshedText).not.toContain(unsentBytes);
     expect(JSON.parse(refreshedText)).toMatchObject({ recovery: "resume_origin" });
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("a paired browser can revoke itself without a stale authentication error", async ({ page }) => {
@@ -2385,7 +2482,7 @@ test("a paired browser can revoke itself without a stale authentication error", 
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const deviceName = "Real Core paired browser";
     const pairingResponse = await api.post("auth/pairings", { data: { name: deviceName } });
     expect(pairingResponse.ok(), await pairingResponse.text()).toBe(true);
@@ -2409,10 +2506,10 @@ test("a paired browser can revoke itself without a stale authentication error", 
     expect(devicesResponse.ok()).toBe(true);
     const devices = await devicesResponse.json() as Array<{ name: string }>;
     expect(devices.some((device) => device.name === deviceName)).toBe(false);
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade focused work surfaces retain real Core project context", async ({ page }, testInfo) => {
@@ -2422,7 +2519,7 @@ test("assistant upgrade focused work surfaces retain real Core project context",
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const response = await api.get("engagements");
     expect(response.ok(), await response.text()).toBe(true);
     const projects = await response.json() as Array<{ id: string }>;
@@ -2447,10 +2544,10 @@ test("assistant upgrade focused work surfaces retain real Core project context",
       await expect(page.locator(content)).toBeVisible();
       await expect(page.locator(".sessions-page.workbench-focus")).toHaveCount(0);
     }
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade mobile Code keeps its controls readable and saves to authoritative real-Core state", async ({ page }) => {
@@ -2471,7 +2568,7 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     await page.setViewportSize({ width: 390, height: 844 });
     const engagementsResponse = await api.get("engagements");
     expect(engagementsResponse.ok()).toBe(true);
@@ -2689,10 +2786,10 @@ test("assistant upgrade mobile Code keeps its controls readable and saves to aut
     await expect(page.getByRole("textbox", { name: "File path" })).toHaveValue("hot-exit-notes.txt");
     await expect(page.getByRole("textbox", { name: "Code editor" })).toContainText("exact unsaved λ research draft");
     await expect(page.getByText(/^21 open · 19 unsaved · recovery on$/)).toHaveText("21 open · 19 unsaved · recovery on");
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("project execution mode uses production Code, real Git changes, and reviewed unrestricted commands", async ({ page }) => {
@@ -2707,7 +2804,7 @@ test("project execution mode uses production Code, real Git changes, and reviewe
     const result = spawnSync("git", ["-C", projectFolder, ...gitArguments], { encoding: "utf8" });
     expect(result.status, result.stderr).toBe(0);
   };
-  try {
+  await withOwnedCleanup(async () => {
     git("init", "-b", "research");
     git("config", "user.name", "Nebula Acceptance");
     git("config", "user.email", "nebula@example.invalid");
@@ -2760,13 +2857,11 @@ test("project execution mode uses production Code, real Git changes, and reviewe
     await page.getByRole("tab", { name: "Changes" }).click();
     await expect(page.getByText(/Stage, commit, branch, pull, and push remain in Nebula Terminal/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Open Terminal" })).toBeVisible();
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-    if (path.basename(projectFolder).startsWith("nebula-source-control-project-")) {
-      await rm(projectFolder, { recursive: true, force: true });
-    }
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "owned project folder", dispose: async () => { if (path.basename(projectFolder).startsWith("nebula-source-control-project-")) await rm(projectFolder, {recursive: true, force: true}); }},
+  ]);
 });
 
 test("production Code quick-open works from a non-loopback LAN origin", async ({ page }) => {
@@ -2781,7 +2876,7 @@ test("production Code quick-open works from a non-loopback LAN origin", async ({
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     await mkdir(path.join(projectFolder, "reports"));
     await writeFile(path.join(projectFolder, "lan-proof.py"), "print('lan production proof')\n");
     await writeFile(path.join(projectFolder, "reports", "note.txt"), "Search reaches the report.\n");
@@ -2818,11 +2913,11 @@ test("production Code quick-open works from a non-loopback LAN origin", async ({
     await filesQuickOpen.getByRole("textbox", {name: "Find a workspace file"}).fill("note.txt");
     await filesQuickOpen.getByRole("option", {name: /reports\/note\.txt/}).click();
     await expect(page.getByText("Search reaches the report.")).toBeVisible();
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-    await rm(projectFolder, {recursive: true, force: true});
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "owned project folder", dispose: () => rm(projectFolder, {recursive: true, force: true})},
+  ]);
 });
 
 test("real Core persists a project folder chosen through the host browser", async ({ page }) => {
@@ -2839,7 +2934,7 @@ test("real Core persists a project folder chosen through the host browser", asyn
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible({ timeout: 20_000 });
     if (lanAddress) expect(new URL(page.url()).hostname).toBe(lanAddress);
@@ -2883,13 +2978,11 @@ test("real Core persists a project folder chosen through the host browser", asyn
 
     await page.goto(`${core.origin}/settings#token=${encodeURIComponent(core.token)}`);
     await expect(page.getByRole("button", { name: "Switch project" })).toContainText("Linked Folder Acceptance", { timeout: 20_000 });
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-    if (path.basename(folderParent).startsWith(".nebula-folder-picker-")) {
-      await rm(folderParent, { recursive: true, force: true });
-    }
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "owned folder picker root", dispose: async () => { if (path.basename(folderParent).startsWith(".nebula-folder-picker-")) await rm(folderParent, {recursive: true, force: true}); }},
+  ]);
 });
 
 test("clean real Core completes reviewed work and exposes every recovery state", async ({ page }) => {
@@ -2900,7 +2993,7 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const bootstrapEngagementsResponse = await api.get("engagements");
     expect(bootstrapEngagementsResponse.ok()).toBe(true);
     const bootstrapEngagements = await bootstrapEngagementsResponse.json() as Array<{ id: string }>;
@@ -3098,10 +3191,10 @@ test("clean real Core completes reviewed work and exposes every recovery state",
     await expect(page.getByText("Browser session expired", { exact: true })).toBeVisible();
     await expect(page.getByText(/relaunch the interface with/)).toContainText("nebula-core ui");
     await expect(page.getByRole("button", { name: "Try again" })).toHaveCount(0);
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade project creation switches canonical project and isolates chats", async ({ page }) => {
@@ -3109,7 +3202,7 @@ test("assistant upgrade project creation switches canonical project and isolates
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const stub = await startLocalModelStub({ streamDelayMs: 50 });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     const provider = await (await api.post("providers", { data: { name: "Project navigation acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: { local_only: true, residency: [], permits_sensitive_data: false }, metadata: { default_model: "security-model" } } })).json() as { id: string };
     const response = await api.post("chat/completions", { data: { backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{ role: "user", content: "Old project conversation" }], include_knowledge: false, stream: false } });
@@ -3154,11 +3247,11 @@ test("assistant upgrade project creation switches canonical project and isolates
     }).toBe(1);
     const oldChats = await (await api.get(`chat-sessions?engagement_id=${projects[0].id}`)).json() as Array<{ id: string }>;
     expect(oldChats.map(chat => chat.id)).toEqual([oldChat.session_id]);
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(stub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade edits a sent message in place on real Core", async ({ page }, testInfo) => {
@@ -3166,7 +3259,7 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
   const core = await startRealCore();
   const stub = await startLocalModelStub({streamDelayMs: 20});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
     const providerResponse = await api.post("providers", {data: {
       name: "Edit in place model", provider_type: "vllm", endpoint: `${stub.origin}/v1`,
@@ -3236,7 +3329,11 @@ test("assistant upgrade edits a sent message in place on real Core", async ({ pa
     expect(resent.length).toBeGreaterThan(0);
     expect(resent.every(request => !JSON.stringify(request.messages).includes("Any update on the certificate?"))).toBe(true);
     await testInfo.attach("real-core-edit-in-place", {body: await page.screenshot(), contentType: "image/png"});
-  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+  ]);
 });
 
 test("assistant upgrade real Core keeps queued controls reachable and durable", async ({page}, testInfo) => {
@@ -3244,7 +3341,7 @@ test("assistant upgrade real Core keeps queued controls reachable and durable", 
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const stub = await startLocalModelStub();
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
     const provider = await (await api.post("providers", {data: {name: "Queue acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}})).json() as {id: string};
     const response = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Start a durable conversation"}], include_knowledge: false, stream: false}});
@@ -3281,7 +3378,11 @@ test("assistant upgrade real Core keeps queued controls reachable and durable", 
     expect(durable.items).toEqual([expect.objectContaining({status: "cancelled", request_digest: expect.stringMatching(/^[0-9a-f]{64}$/)})]);
     expect(durable.items[0].request).toBeUndefined();
     await testInfo.attach("queue-controls-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId: chat.session_id}), contentType: "application/json"});
-  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+  ]);
 });
 
 test("assistant upgrade foundation production LAN reads durable conversation", async ({ page }, testInfo) => {
@@ -3291,7 +3392,7 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const stub = await startLocalModelStub({streamDelayMs: 250});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
     const provider = await (await api.post("providers", {data: {name: "Assistant acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}})).json() as {id: string};
     const response = await api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Hello"}], include_knowledge: false, stream: false}});
@@ -3407,7 +3508,11 @@ test("assistant upgrade foundation production LAN reads durable conversation", a
     await expect(operator).toHaveCount(1);
     await expect(operator.first()).toContainText("Hello");
     await testInfo.attach("production-lan-chat", {body: await page.screenshot(), contentType: "image/png"});
-  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+  ]);
 });
 
 test("assistant upgrade side chat inherits Core history and replies independently after reload", async ({page}, testInfo) => {
@@ -3415,7 +3520,7 @@ test("assistant upgrade side chat inherits Core history and replies independentl
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const stub = await startLocalModelStub({streamDelayMs: 20});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
     const providerResponse = await api.post("providers", {data: {name: "Side chat acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}});
     expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
@@ -3502,7 +3607,11 @@ test("assistant upgrade side chat inherits Core history and replies independentl
     expect((await api.get(`chat-sessions/${sideId}`)).status()).toBe(404);
     await expect(page.locator(`.session-select[data-session-id="${sideId}"]`)).toHaveCount(0);
     await testInfo.attach("side-chat-real-core", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), parentId: parent.session_id, sideId}), contentType: "application/json"});
-  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+  ]);
 });
 
 test("assistant upgrade side chat opens during a running Core turn with its saved question", async ({page}, testInfo) => {
@@ -3510,7 +3619,7 @@ test("assistant upgrade side chat opens during a running Core turn with its save
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const stub = await startLocalModelStub({streamDelayMs: 60_000, delayedMessage: "Question sent while the main turn runs", matchingDelayMs: 60_000});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
     const providerResponse = await api.post("providers", {data: {name: "Active side chat", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}});
     expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
@@ -3579,7 +3688,11 @@ test("assistant upgrade side chat opens during a running Core turn with its save
     await expect(side).toBeVisible({timeout: 20_000});
     await expect(side.getByRole("button", {name: "Inherited history · 3 messages"})).toBeVisible();
     await testInfo.attach("active-side-chat-real-core", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), parentId: parent.session_id, sideId}), contentType: "application/json"});
-  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+  ]);
 });
 
 test("assistant upgrade large side chat opens from a recent page on real Core", async ({page}, testInfo) => {
@@ -3587,7 +3700,7 @@ test("assistant upgrade large side chat opens from a recent page on real Core", 
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const stub = await startLocalModelStub();
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
     const providerResponse = await api.post("providers", {data: {name: "Large side chat", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}});
     expect(providerResponse.ok(), await providerResponse.text()).toBe(true);
@@ -3661,7 +3774,11 @@ with store.transaction() as transaction:
     expect(profile.mountedRows).toBe(0);
     console.info(`LARGE_SIDE_CHAT_PROFILE ${JSON.stringify({openMs: profile.openMs, switchMs: profile.switchMs, longestTaskMs: Math.max(0, ...profile.longTasks.map(item => item.duration)), requestCount: profile.requests.length, forkMs: profile.requests.find(item => item.name.endsWith("/fork"))?.durationMs, sideMessageMs: profile.requests.find(item => item.name.includes("/messages") && item.startMs > 0)?.durationMs, mountedRows: profile.mountedRows})}`);
     await testInfo.attach("large-side-chat-profile.json", {body: JSON.stringify({origin: core.origin, build: "production", project: testInfo.project.name, ...profile}, null, 2), contentType: "application/json"});
-  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+  ]);
 });
 
 test("assistant upgrade production LAN names an active durable conversation", async () => {
@@ -3669,7 +3786,7 @@ test("assistant upgrade production LAN names an active durable conversation", as
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const stub = await startLocalModelStub({streamDelayMs: 3_000});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
     const provider = await (await api.post("providers", {data: {name: "Early naming acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}})).json() as {id: string};
     const completion = api.post("chat/completions", {data: {backend: "provider", provider_id: provider.id, model: "security-model", engagement_id: projects[0].id, messages: [{role: "user", content: "Investigate expired HTTPS certificate rotation"}], include_knowledge: false, stream: true}});
@@ -3688,7 +3805,11 @@ test("assistant upgrade production LAN names an active durable conversation", as
 
     const response = await completion;
     expect(response.ok(), await response.text()).toBe(true);
-  } finally { await api.dispose(); await stopRealCore(core); await stopLocalModelStub(stub); }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+  ]);
 });
 
 for (const decision of ["Approve", "Reject"] as const) {
@@ -3708,7 +3829,7 @@ for (const decision of ["Approve", "Reject"] as const) {
     processHandle.stdout.on("data", chunk => {logs += chunk.toString();});
     processHandle.stderr.on("data", chunk => {logs += chunk.toString();});
     const api = await playwrightRequest.newContext({baseURL: `${origin}/api/v1/`, extraHTTPHeaders: {Authorization: "Bearer stabilization-fixture"}});
-    try {
+    await withOwnedCleanup(async () => {
       await expect.poll(async () => {
         if (processHandle.exitCode !== null) throw new Error(logs);
         try {return (await api.get("health")).ok();} catch {return false;}
@@ -3752,17 +3873,17 @@ for (const decision of ["Approve", "Reject"] as const) {
       await expect(page.locator(".chat-message.assistant .assistant-markdown")).toContainText(answer);
       await testInfo.attach("real-core-approval", {body: JSON.stringify({origin, state, runtime: "inert adapter; real Core/persistence/UI"}), contentType: "application/json"});
       await testInfo.attach("real-core-approval-screen", {body: await page.screenshot(), contentType: "image/png"});
-    } finally {
-      await api.dispose();
-      await stopRealCore({process: processHandle, dataDir, origin, token: "stabilization-fixture"});
-    }
+    }, [
+      {name: "API context", dispose: () => api.dispose()},
+      {name: "Core fixture", dispose: () => stopRealCore({process: processHandle, dataDir, origin, token: "stabilization-fixture"})},
+    ]);
   });
 }
 
 test("stabilization real Core outage retains the conversation and exposes reconnect", async ({page}, testInfo) => {
   test.setTimeout(70_000);
   const core = await startApprovalCore(localNetworkIpv4(), "single");
-  try {
+  await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
     const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Core outage acceptance"}})).json();
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
@@ -3799,7 +3920,7 @@ test("stabilization real Core outage retains the conversation and exposes reconn
     expect(durable.pending).toEqual([]);
     expect(await core.receipts()).toEqual([]);
     await testInfo.attach("core-outage-recovered", {body: JSON.stringify({origin: core.origin, durable}), contentType: "application/json"});
-  } finally {await core.stop();}
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
 for (const scenario of ["stop", "double_click", "lost_response", "disconnect", "two_requests", "restart_waiting", "adapter_exit", "crash_after_record", "crash_after_delivery", "crash_after_receipt", "crash_after_progress", "late_response_switch"] as const) {
@@ -3808,7 +3929,7 @@ for (const scenario of ["stop", "double_click", "lost_response", "disconnect", "
     const fixtureMode = ["two_requests", "adapter_exit", "crash_after_record", "crash_after_delivery", "crash_after_receipt", "crash_after_progress"].includes(scenario) ? scenario : "single";
     const core = await startApprovalCore(localNetworkIpv4(), fixtureMode);
     const api = core.api;
-    try {
+    await withOwnedCleanup(async () => {
       expect((await api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
       const pairResponse = await api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Approval failure acceptance"}});
       expect(pairResponse.ok()).toBe(true);
@@ -3930,7 +4051,10 @@ for (const scenario of ["stop", "double_click", "lost_response", "disconnect", "
       if (expected === "complete") await expect(page.locator(".chat-message.assistant .assistant-markdown")).toHaveCount(1);
       await testInfo.attach("approval-failure-durable", {body: JSON.stringify({origin: core.origin, scenario, initial, saved, receipts, dataDir: core.dataDir}), contentType: "application/json"});
       await testInfo.attach("approval-failure-screen", {body: await page.screenshot(), contentType: "image/png"});
-    } finally {await page.context().setOffline(false); await core.stop();}
+    }, [
+      {name: "browser online state", dispose: () => page.context().setOffline(false)},
+      {name: "Core fixture", dispose: () => core.stop()},
+    ]);
   });
 }
 
@@ -3951,7 +4075,7 @@ for (const runtime of [
     const configuration = JSON.parse(configured.stdout);
     const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
     const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-    try {
+    await withOwnedCleanup(async () => {
       const response = await api.post("harnesses", {data: {...configuration, name: `Assistant acceptance ${runtime.name}`, enabled: true, privacy: {local_only: false, permits_sensitive_data: true}}});
       expect(response.ok(), await response.text()).toBe(true);
       const profile = await response.json() as {id: string};
@@ -3978,7 +4102,10 @@ for (const runtime of [
       await expect(page.locator(".chat-evidence").last()).toContainText("interpretation");
       await testInfo.attach("native-runtime-build", {body: JSON.stringify({runtime: runtime.name, model, origin: core.origin, session, health: await health.json(), assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
       await testInfo.attach("native-runtime-chat", {body: await page.screenshot(), contentType: "image/png"});
-    } finally {await api.dispose(); await stopRealCore(core);}
+    }, [
+      {name: "API context", dispose: () => api.dispose()},
+      {name: "Core fixture", dispose: () => stopRealCore(core)},
+    ]);
   });
 }
 
@@ -3987,7 +4114,7 @@ test("assistant upgrade production LAN enables durable knowledge automatically",
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const stub = await startLocalModelStub({streamDelayMs: 50});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{id: string}>;
     const project = projects[0];
     const providerResponse = await api.post("providers", {data: {name: "Automatic knowledge acceptance", provider_type: "vllm", endpoint: `${stub.origin}/v1`, enabled: true, is_local: true, model_allowlist: ["security-model"], privacy: {local_only: true, residency: [], permits_sensitive_data: false}, metadata: {default_model: "security-model"}}});
@@ -4013,11 +4140,11 @@ test("assistant upgrade production LAN enables durable knowledge automatically",
     await page.getByRole("button", {name: "Send message", exact: true}).click();
     expect((await completion).postDataJSON()).toMatchObject({include_knowledge: true, allow_cloud_knowledge: false});
     await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Core is continuing in Project A", {timeout: 20_000});
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(stub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade deployed local service retains operator workflow", async ({page}, testInfo) => {
@@ -4027,7 +4154,7 @@ test("assistant upgrade deployed local service retains operator workflow", async
   test.setTimeout(180_000);
   const token = (await readFile(tokenFile!, "utf8")).trim();
   const api = await playwrightRequest.newContext({baseURL: `${origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${token}`}});
-  try {
+  await withOwnedCleanup(async () => {
     const profiles = await (await api.get("harnesses")).json() as {id: string; kind: string}[];
     const profile = profiles.find(item => item.kind === "codex_app_server"); expect(profile).toBeTruthy();
     await page.goto(`${origin}/?view=chat#token=${encodeURIComponent(token)}`);
@@ -4073,14 +4200,16 @@ test("assistant upgrade deployed local service retains operator workflow", async
     await page.getByRole("button", {name: "Close details"}).click();
     await testInfo.attach("deployed-build", {body: JSON.stringify({origin, session, assets: await page.locator("script[src]").evaluateAll(nodes=>nodes.map(node=>node.getAttribute("src")))}), contentType: "application/json"});
     await testInfo.attach("deployed-chat", {body: await page.screenshot(), contentType: "image/png"});
-  } finally {await api.dispose();}
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+  ]);
 });
 
 test("project switcher search selects a Core project after production LAN reload", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
-  try {
+  await withOwnedCleanup(async () => {
     const create = await api.post("engagements", { data: { name: "Alpha Project" } });
     expect(create.ok(), await create.text()).toBe(true);
     const target = await create.json() as { id: string };
@@ -4109,10 +4238,10 @@ test("project switcher search selects a Core project after production LAN reload
     await expect(switcher.getByRole("textbox", { name: "Search projects" })).toHaveValue("");
     await expect(switcher.getByText("Alpha Project")).toBeVisible();
     await testInfo.attach("project-search-production-lan", { body: JSON.stringify({ origin: core.origin, build: "ui/dist production", project: testInfo.project.name, viewport: page.viewportSize(), targetId: target.id }), contentType: "application/json" });
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("project removal archives, retries, restores and clears the last selection on production LAN", async ({ page }, testInfo) => {
@@ -4123,7 +4252,7 @@ test("project removal archives, retries, restores and clears the last selection 
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const stub = await startLocalModelStub();
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string; name: string; scope_policy_id: string }>;
     const project = projects[0];
     const folder = path.join(core.dataDir, "retained-project");
@@ -4232,18 +4361,18 @@ test("project removal archives, retries, restores and clears the last selection 
     const scopes = await (await api.get(`engagements/${project.id}/scope`)).json();
     expect(scopes).toBeTruthy();
     await testInfo.attach("project-removal-production-evidence", { body: JSON.stringify({ origin: core.origin, build: "production", project: testInfo.project.name, viewport: page.viewportSize(), retainedFiles: true }), contentType: "application/json" });
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(stub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(stub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("stabilization real Core preserves note drafts and reuses saved notes in reports", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as {id: string}[];
     const project = projects[0];
     const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name: "Output acceptance"}});
@@ -4319,7 +4448,10 @@ test("stabilization real Core preserves note drafts and reuses saved notes in re
     await expect(page.getByLabel("Note body", {exact: true})).toHaveValue(/Ready to Saved/);
     await testInfo.attach("saved-output-lineage", {body: JSON.stringify({origin: core.origin, notes, reports}), contentType: "application/json"});
     await testInfo.attach("note-retention", {body: await page.screenshot(), contentType: "image/png"});
-  } finally {await api.dispose(); await stopRealCore(core);}
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("stabilization real Core Library makes uploads visible and retains originals through removal", async ({page}, testInfo) => {
@@ -4328,7 +4460,7 @@ test("stabilization real Core Library makes uploads visible and retains original
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
   const filename = "mechanism-fixture.md";
   const content = Buffer.from("# Local mechanism fixture\n\nThe local button changes Ready to Saved. This document is synthetic and no script executes.\n");
-  try {
+  await withOwnedCleanup(async () => {
     const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name: "Library acceptance"}});
     expect(pairing.ok()).toBe(true);
     const pair = await pairing.json();
@@ -4387,7 +4519,10 @@ test("stabilization real Core Library makes uploads visible and retains original
     expect(await retained.body()).toEqual(content);
     await testInfo.attach("library-durable-item", {body: JSON.stringify({origin: core.origin, item, original_retained: true, index_removed: true}), contentType: "application/json"});
     await testInfo.attach("library-removed", {body: await page.screenshot(), contentType: "image/png"});
-  } finally {await api.dispose(); await stopRealCore(core);}
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 for (const area of ["asset", "evidence", "finding"] as const) {
@@ -4399,7 +4534,7 @@ for (const area of ["asset", "evidence", "finding"] as const) {
     const bytes = Buffer.from("Local fixture observation only. No external target or script execution.\n");
     const collection = area === "evidence" ? "evidence" : `${area}s`;
     const endpoint = area === "evidence" ? "evidence/upload" : collection;
-    try {
+    await withOwnedCleanup(async () => {
       const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name: "Resource acceptance"}});
       const pair = await pairing.json();
       await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
@@ -4502,7 +4637,10 @@ for (const area of ["asset", "evidence", "finding"] as const) {
       }
       await testInfo.attach("resource-durable", {body: JSON.stringify({origin: core.origin, area, durable}), contentType: "application/json"});
       await testInfo.attach("resource-inspector", {body: await page.screenshot(), contentType: "image/png"});
-    } finally {await api.dispose(); await stopRealCore(core);}
+    }, [
+      {name: "API context", dispose: () => api.dispose()},
+      {name: "Core fixture", dispose: () => stopRealCore(core)},
+    ]);
   });
 }
 
@@ -4511,7 +4649,7 @@ test("stabilization real Core finding drafts stay bound to their record through 
   const core = await startRealCore({bindHost: "0.0.0.0", browserHost: localNetworkIpv4()});
   const api = await playwrightRequest.newContext({baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: {Authorization: `Bearer ${core.token}`}});
   let releaseSave = () => {};
-  try {
+  await withOwnedCleanup(async () => {
     const project = (await (await api.get("engagements")).json())[0];
     const records = [];
     for (const title of ["Synthetic first observation", "Synthetic second observation"]) {
@@ -4581,7 +4719,11 @@ test("stabilization real Core finding drafts stay bound to their record through 
     await expect(save).toBeDisabled();
     await testInfo.attach("finding-draft-authority", {body: JSON.stringify({origin: core.origin, first, second}), contentType: "application/json"});
     await testInfo.attach("finding-draft-saved", {body: await page.screenshot(), contentType: "image/png"});
-  } finally {releaseSave(); await api.dispose(); await stopRealCore(core);}
+  }, [
+    {name: "pending save", dispose: () => releaseSave()},
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 for (const runtime of ["provider", "harness"] as const) {
@@ -4599,7 +4741,7 @@ for (const runtime of ["provider", "harness"] as const) {
       if (!await link.isVisible()) await page.getByRole("button", {name: "Show sidebar", exact: true}).click({timeout: 10_000});
       await link.click({timeout: 10_000});
     };
-    try {
+    await withOwnedCleanup(async () => {
       const fixture = path.join(core.dataDir, "stabilization_acp.py");
       if (runtime === "harness") await writeFile(fixture, await readFile(path.resolve(import.meta.dirname, "../../scripts/fixtures/stabilization_acp.py")), {mode: 0o700});
       const pairing = await api.post(core.origin.replace(new URL(core.origin).hostname, "127.0.0.1") + "/api/v1/auth/pairings", {data: {name}});
@@ -4718,7 +4860,11 @@ for (const runtime of ["provider", "harness"] as const) {
           expect(JSON.stringify(request.messages)).not.toContain("Disposable unsent");
         }
       }
-    } finally {await api.dispose(); await stopRealCore(core); if (stub) await stopLocalModelStub(stub);}
+    }, [
+      {name: "API context", dispose: () => api.dispose()},
+      {name: "Core fixture", dispose: () => stopRealCore(core)},
+      {name: "model stub", dispose: () => stub ? stopLocalModelStub(stub) : undefined},
+    ]);
   });
 }
 
@@ -4729,7 +4875,7 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
   const backup = await mkdtemp(path.join(tmpdir(), "nebula-host-mode-backup-"));
   await writeFile(path.join(backup, "marker.txt"), "HOST_MODE_BACKUP_MARKER");
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
-  try {
+  await withOwnedCleanup(async () => {
     let failPolicyLoad = true;
     await page.route("**/automation-policy", route => {
       if (route.request().method() === "GET" && failPolicyLoad) {
@@ -4860,11 +5006,11 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
     await expect(page.getByRole("button", {name: "Close setting", exact: true})).toBeFocused();
     await info.attach("policy-scope-and-frozen-revision", {body: JSON.stringify({origin: core.origin, policy, receipts}), contentType: "application/json"});
     await info.attach("policy-scope-screen", {body: await page.screenshot(), contentType: "image/png"});
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-    await rm(backup, { recursive: true, force: true });
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "owned backup", dispose: () => rm(backup, {recursive: true, force: true})},
+  ]);
 });
 
 const reliabilityTest = test.extend({serviceWorkers: "block"});
@@ -4872,7 +5018,7 @@ const reliabilityTest = test.extend({serviceWorkers: "block"});
 reliabilityTest("assistant upgrade new chat reuses saved Assistant settings after reload", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
-  try {
+  await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
     const projects = await (await core.api.get("engagements")).json() as Array<{id: string}>;
     const projectId = projects[0]?.id;
@@ -4911,13 +5057,13 @@ reliabilityTest("assistant upgrade new chat reuses saved Assistant settings afte
     await expect(settings.getByRole("combobox", {name: "Harness reasoning effort"})).toHaveValue("high");
     await expect(settings.getByRole("checkbox", {name: /Agent messaging/})).toBeChecked();
     await testInfo.attach("assistant-defaults-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), projectId}), contentType: "application/json"});
-  } finally {await core.stop();}
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
 reliabilityTest("assistant upgrade Daybreak selection persists across Codex chat refresh", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "daybreak");
-  try {
+  await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
     const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Daybreak acceptance"}})).json();
     await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
@@ -4968,12 +5114,12 @@ reliabilityTest("assistant upgrade Daybreak selection persists across Codex chat
     await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
     await expect(settings.getByRole("combobox", {name: "Codex cyber access"})).toHaveValue("");
     await testInfo.attach("codex-daybreak-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), chatId}), contentType: "application/json"});
-  } finally {await core.stop();}
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 reliabilityTest("stabilization real Core keeps the Subagents choice across refresh", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
-  try {
+  await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
     const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Subagents settings acceptance"}})).json();
     await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
@@ -5012,14 +5158,14 @@ reliabilityTest("stabilization real Core keeps the Subagents choice across refre
     await page.getByRole("button", {name: "Assistant settings", exact: true}).click();
     await expect(page.getByRole("checkbox", {name: /Provider subagents/})).not.toBeChecked();
     await testInfo.attach("subagents-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId}), contentType: "application/json"});
-  } finally {await core.stop();}
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
 reliabilityTest("stabilization real Core repairs and completes a stranded restart subagent", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const modelStub = await startLocalModelStub({responseContent: "Recovered child report.", streamDelayMs: 0});
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await core.api.get("engagements")).json() as Array<{id: string}>;
     const projectId = projects[0]?.id;
     expect(projectId).toBeTruthy();
@@ -5116,16 +5262,16 @@ reliabilityTest("stabilization real Core repairs and completes a stranded restar
     await expect(recoveredMessage.getByText("Recovered child report.", {exact: true}).first()).toBeVisible();
     await testInfo.attach("subagent-restart-recovery", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId: parent.session_id, modelRequests: modelStub.requests.length}), contentType: "application/json"});
     await testInfo.attach("subagent-restart-recovery-screen", {body: await page.screenshot(), contentType: "image/png"});
-  } finally {
-    await core.stop();
-    await stopLocalModelStub(modelStub);
-  }
+  }, [
+    {name: "Core fixture", dispose: () => core.stop()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+  ]);
 });
 
 reliabilityTest("assistant upgrade real Core nests durable subagent conversations", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "sidebar");
-  try {
+  await withOwnedCleanup(async () => {
     const listed = await (await core.api.get("chat-sessions")).json() as Array<{id: string; parent_session_id?: string; metadata: Record<string, unknown>}>;
     expect(listed.find(item => item.id === "sidebar-child")).toMatchObject({parent_session_id: "sidebar-parent", metadata: {subagent_id: "fixture-subagent"}});
     const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Sidebar hierarchy acceptance"}})).json();
@@ -5147,13 +5293,13 @@ reliabilityTest("assistant upgrade real Core nests durable subagent conversation
     await expect(sidebar.locator('[data-session-id="sidebar-child"]')).toBeVisible();
     await testInfo.attach("subagent-sidebar-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId: "sidebar-child"}), contentType: "application/json"});
     await testInfo.attach("subagent-sidebar-screen", {body: await page.screenshot(), contentType: "image/png"});
-  } finally {await core.stop();}
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
 reliabilityTest("assistant upgrade conversation bulk delete clears rows already absent from real Core", async ({page}, testInfo) => {
   test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
-  try {
+  await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
     const pairing = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Conversation delete reconciliation"}})).json();
     await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
@@ -5200,14 +5346,14 @@ reliabilityTest("assistant upgrade conversation bulk delete clears rows already 
     if (await reopen.isVisible()) await reopen.click();
     await expect(page.getByRole("complementary", {name: "Conversations"}).getByText("0 saved", {exact: true})).toBeVisible();
     await testInfo.attach("conversation-delete-real-core", {body: JSON.stringify({origin: core.origin, build: "production", viewport: page.viewportSize(), deletedSessionIds: sessionIds}), contentType: "application/json"});
-  } finally {await core.stop();}
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
 reliabilityTest("assistant upgrade reliability settings and quiet activity survive refresh", async ({page}, testInfo) => {
   test.setTimeout(90_000);
   page.setDefaultTimeout(10_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
-  try {
+  await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
     const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Assistant settings acceptance"}})).json();
     await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
@@ -5263,13 +5409,13 @@ reliabilityTest("assistant upgrade reliability settings and quiet activity survi
     await expect(page.getByRole("heading", {name: "Approval fixture"})).toBeVisible();
     await testInfo.attach("assistant-reliability", {body: JSON.stringify({origin: core.origin, project: testInfo.project.name, viewport: page.viewportSize(), chatId, runtime: "inert adapter; real Core, durable storage, production assets"}), contentType: "application/json"});
     await testInfo.attach("assistant-reliability-screen", {body: await page.screenshot(), contentType: "image/png"});
-  } finally {await core.stop();}
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
 reliabilityTest("assistant upgrade account homes persist and switch without losing chat", async ({page}, info) => {
   test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
-  try {
+  await withOwnedCleanup(async () => {
     const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Account homes"}})).json();
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Account homes acceptance");
@@ -5362,7 +5508,7 @@ reliabilityTest("assistant upgrade account homes persist and switch without losi
     await writeFile(info.outputPath("account-home-evidence.json"), evidence);
     await info.attach("account-home-evidence", {body: evidence, contentType: "application/json"});
     await info.attach("account-home-screen", {body: await page.screenshot(), contentType: "image/png"});
-  } finally {await core.stop();}
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
 reliabilityTest("mcp import previews, saves, trusts, probes, and updates servers from a JSON file", async ({page}, info) => {
@@ -5394,7 +5540,7 @@ reliabilityTest("mcp import previews, saves, trusts, probes, and updates servers
     }
     await page.screenshot({path: info.outputPath(`mcp-import-${label}.png`)});
   };
-  try {
+  await withOwnedCleanup(async () => {
     const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "MCP import"}})).json();
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("MCP import acceptance");
@@ -5500,13 +5646,13 @@ reliabilityTest("mcp import previews, saves, trusts, probes, and updates servers
     expect(servers.find((item) => item.name === "fixture2")).toMatchObject({enabled: true, trusted_stdio: true, default_approval: "ask"});
     await page.screenshot({path: info.outputPath("mcp-import-after-update.png")});
     await info.attach("mcp-import", {body: JSON.stringify({origin: core.origin, project: info.project.name, viewport: page.viewportSize(), runtime: "real Core, LAN origin, production assets, stdio fixture probe"}), contentType: "application/json"});
-  } finally {await core.stop();}
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
 reliabilityTest("assistant upgrade native commands retain thinking and replies across Core restart", async ({page}, info) => {
   test.setTimeout(120_000);
   const core = await startApprovalCore(localNetworkIpv4(), "commands");
-  try {
+  await withOwnedCleanup(async () => {
     const profile = await core.api.post("harnesses", {data: {name: "Codex command fixture", kind: "codex_app_server", executable: "/bin/true", default_model: "fixture", enabled: true, privacy: {local_only: true, permits_sensitive_data: true}}});
     expect(profile.ok(), await profile.text()).toBe(true);
     const codex = await profile.json();
@@ -5584,7 +5730,7 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       await info.attach(`native-command-${id}`, {body: await page.screenshot({path: info.outputPath(`native-command-${id}.png`)}), contentType: "image/png"});
     }
     await info.attach("native-command-evidence", {body: JSON.stringify({origin: core.origin, project: info.project.name, viewport: page.viewportSize(), peer: "inert native protocol peer; real Core, production adapters, persistence and UI"}), contentType: "application/json"});
-  } finally {await core.stop();}
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
 test("assistant upgrade popup forks history and discards on real Core", async ({ page }, testInfo) => {
@@ -5592,7 +5738,7 @@ test("assistant upgrade popup forks history and discards on real Core", async ({
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const modelStub = await startLocalModelStub({ streamDelayMs: 20 });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json();
     const projectId = projects[0].id;
     const providerResponse = await api.post("providers", { data: {
@@ -5687,15 +5833,17 @@ test("assistant upgrade popup forks history and discards on real Core", async ({
     await expect(page.getByRole("dialog", { name: "Ask Nebula", exact: true })).toHaveCount(0);
     expect(await (await api.get(`chat/sessions/${sourceId}/messages`)).json()).toEqual(originalHistory);
     await testInfo.attach("popup-origin", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), runtime: "real Core with local model stub", branchDeleted: branch.id }), contentType: "application/json" });
-  } finally {
-    await api.dispose(); await stopLocalModelStub(modelStub); await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 reliabilityTest("assistant upgrade popup isolates a harness session on real Core", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   const core = await startApprovalCore(localNetworkIpv4(), "settings");
-  try {
+  await withOwnedCleanup(async () => {
     expect((await core.api.post("harnesses/inert-fixture/health")).ok()).toBe(true);
     const pairing = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, { data: { name: "Harness popup acceptance" } })).json();
     await page.goto(`${core.origin}/?view=chat#pair=${encodeURIComponent(pairing.secret)}&code=${encodeURIComponent(pairing.confirmation_code)}`);
@@ -5750,7 +5898,7 @@ reliabilityTest("assistant upgrade popup isolates a harness session on real Core
     expect(await (await core.api.get(`chat/sessions/${sourceId}/messages`)).json()).toEqual(history);
     expect(new URL(page.url()).searchParams.get("session")).toBe(sourceId);
     await testInfo.attach("harness-popup-origin", { body: JSON.stringify({ origin: core.origin, build: "production", runtime: "real Core with inert harness adapter", source: sourceId, branchDeleted: branch.id }), contentType: "application/json" });
-  } finally { await core.stop(); }
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
 test("assistant upgrade live OpenRouter Flash operator clickthrough", async ({ page }, testInfo) => {
@@ -5765,7 +5913,7 @@ test("assistant upgrade live OpenRouter Flash operator clickthrough", async ({ p
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
   const model = "deepseek/deepseek-v4-flash";
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     const projectId = projects[0]?.id;
     expect(projectId).toBeTruthy();
@@ -5869,10 +6017,10 @@ test("assistant upgrade live OpenRouter Flash operator clickthrough", async ({ p
     await expect(page.getByRole("heading", { name: "Working context" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Open context details/ })).toBeVisible();
     expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("tool suggestions real Core stores a TypeSafe key and the project opt-in", async ({ page }) => {
@@ -5896,7 +6044,7 @@ test("tool suggestions real Core stores a TypeSafe key and the project opt-in", 
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const projectId = ((await (await api.get("engagements")).json()) as Array<{ id: string }>)[0]?.id;
     expect(projectId).toBeTruthy();
     const scope = await (await api.get(`engagements/${projectId}/scope`)).json() as { revision: number };
@@ -5943,13 +6091,12 @@ test("tool suggestions real Core stores a TypeSafe key and the project opt-in", 
     await page.getByRole("link", { name: "Advanced settings", exact: true }).click();
     await page.locator("details.settings-group > summary", { hasText: "Project Policy" }).click();
     await expect(page.getByRole("checkbox", { name: /Suggest tools with TypeSafe Jev/ })).toBeChecked();
-  } finally {
-    await api.dispose();
-    await stopRealCore(core);
-    await new Promise<void>((resolve) => jev.close(() => resolve()));
-    if (previous.base === undefined) delete process.env.TYPESAFE_BASE_URL; else process.env.TYPESAFE_BASE_URL = previous.base;
-    if (previous.key !== undefined) process.env.TYPESAFE_API_KEY = previous.key;
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+    {name: "HTTP fixture", dispose: () => new Promise<void>((resolve) => jev.close(() => resolve()))},
+    {name: "existing environment restoration", dispose: () => { if (previous.base === undefined) delete process.env.TYPESAFE_BASE_URL; else process.env.TYPESAFE_BASE_URL = previous.base; if (previous.key !== undefined) process.env.TYPESAFE_API_KEY = previous.key; }},
+  ]);
 });
 
 reliabilityTest("ssh environments list config hosts, enable, test, edit, and survive reload", async ({page}, info) => {
@@ -5968,7 +6115,7 @@ reliabilityTest("ssh environments list config hosts, enable, test, edit, and sur
     }
     await page.screenshot({path: info.outputPath(`ssh-environments-${label}.png`), fullPage: true});
   };
-  try {
+  await withOwnedCleanup(async () => {
     const pair = await (await core.api.post(`http://127.0.0.1:${core.port}/api/v1/auth/pairings`, {data: {name: "Environments"}})).json();
     await page.goto(`${core.origin}/#pair=${encodeURIComponent(pair.secret)}&code=${encodeURIComponent(pair.confirmation_code)}`);
     await page.getByLabel("Device name").fill("Environments acceptance");
@@ -6036,9 +6183,7 @@ reliabilityTest("ssh environments list config hosts, enable, test, edit, and sur
     await expect(section.getByText(/2 hosts · 1 enabled/)).toBeVisible();
     await section.getByRole("switch", {name: "Use pi-one from Nebula"}).click();
     await expect(section.getByText(/2 hosts · 0 enabled/)).toBeVisible();
-  } finally {
-    await core.stop();
-  }
+  }, [{name: "Core fixture", dispose: () => core.stop()}]);
 });
 
 /** A model that delegates one check to a subagent, then answers from its report. */
@@ -6136,7 +6281,7 @@ test("assistant upgrade real Core follows goal turns Core starts while the viewe
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     const projectId = projects[0]?.id;
     expect(projectId).toBeTruthy();
@@ -6190,11 +6335,11 @@ test("assistant upgrade real Core follows goal turns Core starts while the viewe
     await expect(page.locator(".chat-message.assistant")).toHaveCount(saved.length, { timeout: 20_000 });
     await testInfo.attach("core-started-goal-turns", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, goalAnswers: goalAnswers.length }), contentType: "application/json" });
     await page.screenshot({ path: testInfo.outputPath("core-started-goal-turns.png") });
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade real Core shows the live queue position while provider capacity is full", async ({ page }, testInfo) => {
@@ -6206,7 +6351,7 @@ test("assistant upgrade real Core shows the live queue position while provider c
     baseURL: `${core.origin}/api/v1/`,
     extraHTTPHeaders: { Authorization: `Bearer ${core.token}` },
   });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     const projectId = projects[0]?.id;
     expect(projectId).toBeTruthy();
@@ -6282,11 +6427,11 @@ test("assistant upgrade real Core shows the live queue position while provider c
     expect(new URL(page.url()).hostname).toBe(localNetworkIpv4());
     await page.reload();
     await expect(answers).toHaveCount(2, { timeout: 20_000 });
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });
 
 test("assistant upgrade real Core keeps a subagent wait attached and follows the resumed answer", async ({ page }, testInfo) => {
@@ -6299,7 +6444,7 @@ test("assistant upgrade real Core keeps a subagent wait attached and follows the
   });
   const followRequests: string[] = [];
   page.on("response", response => { if (/\/chat\/turns\/[^/]+\/events/.test(response.url())) followRequests.push(`${response.status()} ${new URL(response.url()).search}`); });
-  try {
+  await withOwnedCleanup(async () => {
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     const projectId = projects[0]?.id;
     expect(projectId).toBeTruthy();
@@ -6379,9 +6524,9 @@ test("assistant upgrade real Core keeps a subagent wait attached and follows the
     await expect(reloadedReply.getByRole("region", { name: "Progress updates" })).toContainText("I am delegating the banner check.");
     await testInfo.attach("subagent-wait-followed", { body: JSON.stringify({ origin: core.origin, build: "production", viewport: page.viewportSize(), sessionId, followRequests }), contentType: "application/json" });
     await page.screenshot({ path: testInfo.outputPath("subagent-wait-followed.png") });
-  } finally {
-    await api.dispose();
-    await stopLocalModelStub(modelStub);
-    await stopRealCore(core);
-  }
+  }, [
+    {name: "API context", dispose: () => api.dispose()},
+    {name: "model stub", dispose: () => stopLocalModelStub(modelStub)},
+    {name: "Core fixture", dispose: () => stopRealCore(core)},
+  ]);
 });

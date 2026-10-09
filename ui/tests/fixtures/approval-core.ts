@@ -5,6 +5,7 @@ import type {AddressInfo} from "node:net";
 import {tmpdir} from "node:os";
 import path from "node:path";
 import {expect, request} from "@playwright/test";
+import {withOwnedCleanup} from "./owned-cleanup";
 
 /** Fixed inert peer only. Restart preserves this test's DB and receipt log. */
 export async function startApprovalCore(host: string, scenario: string) {
@@ -36,14 +37,16 @@ export async function startApprovalCore(host: string, scenario: string) {
       await exited;
     }
   };
-  const stop = async () => {
-    try {await kill();} finally {
-      try {await api.dispose();} finally {
-        if (process.env.NEBULA_TEST_KEEP_DATA !== "1") await rm(dataDir, {recursive: true, force: true});
-      }
-    }
-  };
-  try {await launch();} catch (error) {await stop(); throw error;}
+  const stop = () => withOwnedCleanup(async () => undefined, [
+    {name: "approval fixture process", dispose: kill},
+    {name: "approval fixture API context", dispose: () => api.dispose()},
+    {name: "approval fixture data", dispose: async () => {
+      if (process.env.NEBULA_TEST_KEEP_DATA !== "1") await rm(dataDir, {recursive: true, force: true});
+    }},
+  ]);
+  try {await launch();} catch (error) {
+    await withOwnedCleanup(async () => {throw error;}, [{name: "failed approval fixture startup", dispose: stop}]);
+  }
   return {origin, port, dataDir, api,
     exited: () => processHandle.exitCode !== null || processHandle.signalCode !== null,
     logs: () => logs,

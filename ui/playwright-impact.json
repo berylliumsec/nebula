@@ -48,6 +48,72 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "release-owned-cleanup": [
+      {
+        "area": "release-owned-cleanup",
+        "project": "assistant-real-desktop",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "owned cleanup|approval fixture reclaims|terminal guide highlights",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-owned-cleanup",
+        "project": "assistant-real-compact",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "terminal guide highlights",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-owned-cleanup",
+        "project": "assistant-real-chromium-320",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "terminal guide highlights",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-owned-cleanup",
+        "project": "assistant-real-chromium-390",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "terminal guide highlights",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-owned-cleanup",
+        "project": "assistant-real-chromium-430",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "terminal guide highlights",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-owned-cleanup",
+        "project": "assistant-real-webkit-320",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "terminal guide highlights",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-owned-cleanup",
+        "project": "assistant-real-webkit-390",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "terminal guide highlights",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-owned-cleanup",
+        "project": "assistant-real-webkit-430",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "terminal guide highlights",
+        "runtime": "real-core",
+        "shard": "1/1"
+      }
+    ],
     "release-core-ui-harness": [
       {
         "area": "release-core-ui-harness",

@@ -1,23 +1,27 @@
 {
-  "change_digest": "f0e5f499033cc2e00a6cf0ef2033779ca8b2b68d0e7abfe762c71299783875e3",
-  "reviewed_by": "Codex benign UI/test infrastructure review, 2026-10-09",
-  "reason": "Repair existing goal guide entry by opening its collapsed editor, with component interaction and production-LAN tours. Tests reach existing mobile Guides via More. Derive guide target size from viewport, preserving44px phones/28pxdesktop. Correct stale All destinations radio, current Python intelligence button, nested transcript and named project-removal confirmation selectors. Preserve all original behavior/persistence/performance/explicit-consent/no-replay assertions; assert bypass_permissions=false for All destinations. Cleanup only approval fixture owned mkdtemp roots on stop/startup failure; restart DB/receipts and explicit debug retention preserved. No Corebackend/security/rules/credentials/publication changes. Streaming diagnosis confirmed direct routing answer completes before old delayed SSE fixture path; speculative stub correction withdrawn and affected unresolved streaming gates left intact. Desktop retains the entire original11-guide tour. Focused phone goal-guide regressions reuse the exact reachability/persistence assertions; the unrelated complete phone tour retains its failure on the hidden desktop terminal-toggle target and is reported as a remaining blocker. The focused WebKit tour waits for Core to commit the queued guide Finish save before checking the exact unchanged completed-guide count. Large-history phone journeys open the existing Conversations drawer and Conversation actions menu rather than using desktop-only controls. CI WebKit retry evidence showed atomic fill text absent before Send/scope save; use ordinary sequential keyboard entry and assert exact composer/domain text before continuing, retaining all original final assertions.",
-  "exclusions": "13 guide component cases and20named production-LAN browser cases; desktop, AndroidChromium390, iPhoneWebKit390, desktopalias. <=10min chunks. Code test opens review without starting commands; inert peer restart/fixture cleanup only. No full suites, Kali/security-tool runtime, offensive functionality, new skip, forceclick or relaxed assertion. Streaming/goal/queue gates, exact128probe-budget gate, durable crash_after_progress and runnerresource failures remain intact and require separate bounded review; no claim of complete release readiness. Physical devices unavailable.",
+  "change_digest": "36f8d70c0d7f4021987bc1e08857a6e9406f2048d6ec0ae5690f47a9ace3a4de",
+  "reviewed_by": "Codex benign fixture/UI review, 2026-10-09",
+  "reason": "Fix confirmed sequential disposal cascade with shared explicit owned-resource teardown: every resource attempted in original order, primary body/startup error retained, named secondary errors reported, cleanup-only failure remains failing. Mechanical wrappers preserve original assertions and runtime semantics. Core stop waits for owned process termination before owned directory removal, failed startup cleanup preserves restart data. Inert regressions inject disposal failures and verify child exit, closed listener and removed owned root. Phone Terminal navigation shares the existing terminal-toggle anchor; visible-anchor selection already exists. Guide text accurately explains phone navigation, committed regression verifies exact visible spotlight geometry, touch target, unchanged conversation and durable completion after refresh across permanent profiles.",
+  "exclusions": "No full suites, Python/native code or tests, security-tool runtime, offensive/agent behavior, provider/probe contract changes, credential/rules changes, new skips or relaxed gates. Only 14 component cases and 12 selected Playwright cases; inert Node child, fixed inert Python peer, production Core plain-text guide fixture. All original remaining streaming/probe/durability assertions remain unchanged. Physical devices and manual CUA unavailable; emulation evidence is partial verification.",
   "python": [],
   "frontend": [
     "ui/src/guides/guides.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:release-core-ui-harness/assistant-real-desktop",
-    "entry:release-core-ui-harness/assistant-real-chromium-390",
-    "entry:release-core-ui-harness/assistant-real-webkit-390",
-    "entry:release-core-ui-alias/real-core"
+    "entry:release-owned-cleanup/assistant-real-desktop",
+    "entry:release-owned-cleanup/assistant-real-compact",
+    "entry:release-owned-cleanup/assistant-real-chromium-320",
+    "entry:release-owned-cleanup/assistant-real-chromium-390",
+    "entry:release-owned-cleanup/assistant-real-chromium-430",
+    "entry:release-owned-cleanup/assistant-real-webkit-320",
+    "entry:release-owned-cleanup/assistant-real-webkit-390",
+    "entry:release-owned-cleanup/assistant-real-webkit-430"
   ],
   "expected_tests": {
     "python": 0,
-    "frontend": 13,
+    "frontend": 14,
     "native": 0,
-    "playwright": 20
+    "playwright": 12
   }
 }
