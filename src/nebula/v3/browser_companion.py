@@ -424,7 +424,9 @@ class BrowserCompanion:
         return session
 
     async def open(
-        self, project_id: str, conversation_id: str | None = None,
+        self,
+        project_id: str,
+        conversation_id: str | None = None,
         draft_id: str | None = None,
     ) -> dict[str, Any]:
         async with self._locks.setdefault(project_id, asyncio.Lock()):
@@ -437,23 +439,59 @@ class BrowserCompanion:
             sessions = self.store.find_entities(
                 BrowserSession, {}, engagement_id=project_id
             )
-            companions = [item for item in sessions if item.metadata.get("browser_companion_version") == 1]
-            session = next((item for item in companions if conversation_id and item.metadata.get("conversation_id") == conversation_id), None)
+            companions = [
+                item
+                for item in sessions
+                if item.metadata.get("browser_companion_version") == 1
+            ]
+            session = next(
+                (
+                    item
+                    for item in companions
+                    if conversation_id
+                    and item.metadata.get("conversation_id") == conversation_id
+                ),
+                None,
+            )
             if session is None and draft_id:
-                session = next((item for item in companions if item.metadata.get("draft_id") == draft_id and not item.metadata.get("conversation_id")), None)
+                session = next(
+                    (
+                        item
+                        for item in companions
+                        if item.metadata.get("draft_id") == draft_id
+                        and not item.metadata.get("conversation_id")
+                    ),
+                    None,
+                )
             if session is None and not conversation_id and not draft_id:
-                session = next((item for item in companions if not item.metadata.get("conversation_id") and not item.metadata.get("draft_id")), None)
+                session = next(
+                    (
+                        item
+                        for item in companions
+                        if not item.metadata.get("conversation_id")
+                        and not item.metadata.get("draft_id")
+                    ),
+                    None,
+                )
             if session is None:
                 identity = BrowserIdentity(
                     engagement_id=project_id,
                     name="Assistant browser",
-                    metadata={"browser_companion_version": 1, "conversation_id": conversation_id, "draft_id": draft_id},
+                    metadata={
+                        "browser_companion_version": 1,
+                        "conversation_id": conversation_id,
+                        "draft_id": draft_id,
+                    },
                 )
                 session = BrowserSession(
                     engagement_id=project_id,
                     identity_id=identity.id,
                     name="Assistant browser",
-                    metadata={"browser_companion_version": 1, "conversation_id": conversation_id, "draft_id": draft_id},
+                    metadata={
+                        "browser_companion_version": 1,
+                        "conversation_id": conversation_id,
+                        "draft_id": draft_id,
+                    },
                 )
                 self.store.create_many([identity, session])
             elif conversation_id and not session.metadata.get("conversation_id"):

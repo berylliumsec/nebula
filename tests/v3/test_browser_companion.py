@@ -66,7 +66,17 @@ def test_binding_rejects_other_project_and_survives_store_reopen(tmp_path):
 
 def test_open_scopes_browser_sessions_to_chat_and_promotes_draft(tmp_path, monkeypatch):
     store, project, _, _, service = setup(tmp_path)
-    chats = [store.create(ChatSession(engagement_id=project.id, title=f"Chat {index}", model="fixture", provider_profile_id="provider")) for index in range(3)]
+    chats = [
+        store.create(
+            ChatSession(
+                engagement_id=project.id,
+                title=f"Chat {index}",
+                model="fixture",
+                provider_profile_id="provider",
+            )
+        )
+        for index in range(3)
+    ]
 
     class Adapter:
         async def ensure_identity(self, identity_id):
@@ -85,12 +95,21 @@ def test_open_scopes_browser_sessions_to_chat_and_promotes_draft(tmp_path, monke
         first = await service.open(project.id, chats[0].id)
         second = await service.open(project.id, chats[1].id)
         assert first["session_id"] != second["session_id"]
-        assert (await service.open(project.id, chats[0].id))["session_id"] == first["session_id"]
+        assert (await service.open(project.id, chats[0].id))["session_id"] == first[
+            "session_id"
+        ]
         draft = await service.open(project.id, draft_id="draft-chat-three")
         promoted = await service.open(project.id, chats[2].id, "draft-chat-three")
         assert promoted["session_id"] == draft["session_id"]
-        assert store.get(BrowserSession, promoted["session_id"]).metadata["conversation_id"] == chats[2].id
-        assert (await service.open(project.id, chats[2].id))["session_id"] == promoted["session_id"]
+        assert (
+            store.get(BrowserSession, promoted["session_id"]).metadata[
+                "conversation_id"
+            ]
+            == chats[2].id
+        )
+        assert (await service.open(project.id, chats[2].id))["session_id"] == promoted[
+            "session_id"
+        ]
 
     asyncio.run(run())
 

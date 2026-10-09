@@ -1,5 +1,5 @@
 {
-  "change_digest": "3d1853b0d7097d758bbf303ea34cb0bae5f1754cbe2bca34ab7760e040a5536b",
+  "change_digest": "accf63f7016028f1fd46c713809063f5e688f1f62d286fb13715f08cf3ccd949",
   "reviewed_by": "Codex focused diff review for chat companions and imported Work summaries",
   "reason": "The operator opens Code, Browser, Notes, Terminal, and the existing Side chat from the chat toolbar; companions start at an even split, resize, expand within Assistant, and restore per-chat state. File clicks open Code, Dark uses a navy palette, and Work summary/import survives refresh. Component and Python cases cover state and policy; mocked desktop/mobile browser profiles cover layout and controls; disposable real Core covers persistence and LAN origin.",
   "exclusions": "No native code changes; native tests omitted. No unrelated UI, backend, or full suites. Mobile Chromium and WebKit are emulated; physical-device evidence is unavailable.",

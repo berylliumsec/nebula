@@ -12297,7 +12297,9 @@ def create_app(
         draft_id: str | None = Query(default=None, max_length=200),
     ) -> dict[str, Any]:
         try:
-            return await browser_companion.open(engagement_id, conversation_id, draft_id)
+            return await browser_companion.open(
+                engagement_id, conversation_id, draft_id
+            )
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
