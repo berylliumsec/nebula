@@ -1,8 +1,8 @@
 {
-  "change_digest": "29bfc218442507cae334ce6c6ac7d81956fa4cb0585c27361e7221201648ac56",
+  "change_digest": "5c27a2933d07d02b46f01aad07bad9cb4815ec36d48493c1b546af80036d5164",
   "reviewed_by": "Codex focused release engineering review, 2026-10-09",
-  "reason": "Correct the installation-token parser after the approved live release rejected GitHub stateless tokens. 168 collected tests cover legacy 40-character and modern 520-character opaque token masking, both operation permissions, revocation on success/scope failure/command failure, opaque RFC 6750 Bearer syntax, whitespace/control injection and malformed value rejection without logging/use, existing exact App/installation/bot/single-repository scope and lifetime gates, admin actor gates, release phase sequencing and immutable-state safeguards, and focused test-selection guards.",
-  "exclusions": "Only scripts/release_app.py token character parsing and its unit regressions change. Python 3.12, three individual release/selection files, maximum two minutes. All tokens/keys/signing/GitHub mutations mocked; no actual credentials or network, product backend/UI/Core/native/browser/package/signing/smoke suites or full suites. Live publication remains blocked until this ordinary code correction is reviewed and merged.",
+  "reason": "Accept the one coverage receipt in either root or nested GitHub artifact layout observed in approved live preparation run 37952895660. 173 collected release tests cover root/nested receipt acceptance with exact baseline/candidate/requested selection, rejected missing baseline or missing/ambiguous receipts, immutable retry safeguards, release phase/gate failures, and existing App scope/masking/revocation and test-selection guards. No product journey or coverage gate changes.",
+  "exclusions": "Release receipt consumption only. Python 3.12, three individual release/selection files, maximum two minutes. All GitHub mutations and credentials are mocked. No UI/backend/Core/native/browser/package/signing/smoke or full suites. The ongoing live release retains its product coverage gate and will stop on failures; product/UI defects are outside this release-engineering change.",
   "python": [
     "tests/test_release_app.py",
     "tests/test_daily_stable_release.py",
@@ -12,7 +12,7 @@
   "native": [],
   "playwright": [],
   "expected_tests": {
-    "python": 168,
+    "python": 173,
     "frontend": 0,
     "native": 0,
     "playwright": 0

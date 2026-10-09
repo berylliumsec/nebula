@@ -66,10 +66,16 @@ def test_main_requires_successful_push_ci() -> None:
         daily.green_main()
 
 
-def test_impact_receipt_rejects_missing_baseline() -> None:
+@pytest.mark.parametrize(
+    "relative_path",
+    ["playwright-impact-plan.json", "nebula/nebula/playwright-impact-plan.json"],
+)
+def test_impact_receipt_rejects_missing_baseline(relative_path) -> None:
     def fake_download(*args: str, **_kwargs: object) -> str:
         directory = Path(args[args.index("--dir") + 1])
-        (directory / "playwright-impact-plan.json").write_text(
+        receipt = directory / relative_path
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_text(
             json.dumps(
                 {
                     "coverage_review_required": False,
@@ -83,6 +89,52 @@ def test_impact_receipt_rejects_missing_baseline() -> None:
     with (
         patch.object(daily, "run", side_effect=fake_download),
         pytest.raises(RuntimeError, match="accepted baseline"),
+    ):
+        daily.verify_impact_receipt(123, "nebula-v3.0.0", "a" * 40, "b" * 40)
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    ["playwright-impact-plan.json", "nebula/nebula/playwright-impact-plan.json"],
+)
+def test_impact_receipt_accepts_one_valid_root_or_nested_plan(relative_path, capsys):
+    def download(*args, **_kwargs):
+        directory = Path(args[args.index("--dir") + 1])
+        receipt = directory / relative_path
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_text(
+            json.dumps(
+                {
+                    "coverage_review_required": False,
+                    "baseline_sha": "a" * 40,
+                    "candidate_sha": "b" * 40,
+                    "requested_selection": ["area:core-api"],
+                    "include": [{"project": "real-core"}],
+                }
+            )
+        )
+        return ""
+
+    with patch.object(daily, "run", side_effect=download):
+        daily.verify_impact_receipt(
+            123, "nebula-v3.0.0", "a" * 40, "b" * 40, "area:core-api"
+        )
+    assert "1 selected matrix entries" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_impact_receipt_rejects_missing_or_ambiguous_plans(count):
+    def download(*args, **_kwargs):
+        directory = Path(args[args.index("--dir") + 1])
+        for index in range(count):
+            receipt = directory / str(index) / "playwright-impact-plan.json"
+            receipt.parent.mkdir()
+            receipt.write_text("{}")
+        return ""
+
+    with (
+        patch.object(daily, "run", side_effect=download),
+        pytest.raises(RuntimeError, match="exactly one coverage receipt"),
     ):
         daily.verify_impact_receipt(123, "nebula-v3.0.0", "a" * 40, "b" * 40)
 

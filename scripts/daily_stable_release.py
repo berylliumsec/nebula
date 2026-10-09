@@ -253,7 +253,12 @@ def verify_impact_receipt(
             "--dir",
             directory,
         )
-        plan = json.loads(Path(directory, "playwright-impact-plan.json").read_text())
+        receipts = list(Path(directory).rglob("playwright-impact-plan.json"))
+        if len(receipts) != 1 or not receipts[0].is_file() or receipts[0].is_symlink():
+            raise RuntimeError(
+                "Release impact artifact must contain exactly one coverage receipt"
+            )
+        plan = json.loads(receipts[0].read_text())
         if (
             plan["coverage_review_required"]
             or plan["baseline_sha"] != baseline
