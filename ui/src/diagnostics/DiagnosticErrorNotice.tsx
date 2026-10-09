@@ -1,4 +1,5 @@
-import { ShieldAlert } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ShieldAlert, X } from "lucide-react";
 import { diagnosticErrorPresentation } from "./logger";
 
 const referencePattern = /\s*Reference:\s*((?:err|req)_[A-Za-z0-9._:-]+?)\.?\s*$/i;
@@ -35,6 +36,8 @@ export function DiagnosticErrorNotice({
   className,
   compact = false,
 }: DiagnosticErrorNoticeProps) {
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => setDismissed(false), [error]);
   const value = error && typeof error === "object" ? error as Record<string, unknown> : undefined;
   const rawMessage = error instanceof Error
     ? error.message
@@ -63,8 +66,15 @@ export function DiagnosticErrorNotice({
   const headlineLimit = compact ? 180 : 500;
   const detailLimit = compact ? 240 : 500;
 
+  if (dismissed) return null;
+
+  function dismissFromNotice(event: React.MouseEvent) {
+    if ((event.target as HTMLElement).closest("a, button") || window.getSelection()?.toString()) return;
+    setDismissed(true);
+  }
+
   return (
-    <Root className={classes} role="alert" data-error-reference={reference}>
+    <Root className={classes} role="alert" data-error-reference={reference} onClick={dismissFromNotice}>
       <ShieldAlert size={16} />
       <span>
         <strong>{title ?? boundedReason(rawMessage, fallback, headlineLimit)}</strong>
@@ -81,6 +91,7 @@ export function DiagnosticErrorNotice({
         <small>Reference: {reference ?? "pending local diagnostic"}{reasonCode ? ` · ${humanize(reasonCode)}` : code ? ` · ${code}` : ""}</small>
       </span>
       <a href={href}>{recoveryAction ?? "View diagnostics"}</a>
+      <button className="diagnostic-error-dismiss" type="button" aria-label="Dismiss error" title="Dismiss error" onClick={() => setDismissed(true)}><X size={16} aria-hidden="true" /></button>
     </Root>
   );
 }

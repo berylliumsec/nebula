@@ -1877,15 +1877,20 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
   border-radius: var(--radius-panel);
   background: color-mix(in srgb, var(--red) 7%, var(--surface-raised));
 }
+.diagnostic-error-notice { cursor: pointer; }
+.diagnostic-error-notice .diagnostic-error-dismiss { flex: 0 0 44px; display: grid; place-items: center; width: 44px; height: 44px; margin: -10px -12px -10px 0; padding: 0; border: 0; border-radius: 8px; color: var(--muted); background: transparent; cursor: pointer; }
+.diagnostic-error-notice .diagnostic-error-dismiss:hover { color: var(--text-strong); background: var(--surface-raised); }
+.diagnostic-error-notice .diagnostic-error-dismiss:focus-visible { outline: 2px solid var(--blue); outline-offset: -3px; }
 .diagnostic-error-notice > span,
 .diagnostics-health > span { display: grid; min-width: 0; flex: 1; gap: 3px; }
 .diagnostic-error-notice small,
 .diagnostics-health small { color: var(--muted); }
 .diagnostic-error-notice a { color: var(--blue); font-size: 12px; white-space: nowrap; }
-.diagnostic-error-notice.compact { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr); padding: 8px 10px; font-size: 12px; overflow-wrap: anywhere; }
+.diagnostic-error-notice.compact { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr) 44px; padding: 8px 10px; font-size: 12px; overflow-wrap: anywhere; }
 .diagnostic-error-notice.compact > svg { flex: 0 0 auto; }
 .diagnostic-error-notice.compact small { font-size: 11px; }
 .diagnostic-error-notice.compact > a { grid-column: 2; justify-self: start; white-space: normal; }
+.diagnostic-error-notice.compact > .diagnostic-error-dismiss { grid-column: 3; grid-row: 1 / span 2; margin: -8px -10px -8px 0; }
 .inline-validation-notice { display: flex; min-width: 0; max-width: 100%; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 9px 11px; border: 1px solid color-mix(in srgb, var(--orange) 40%, var(--border-soft)); border-radius: 8px; color: var(--text-strong); background: color-mix(in srgb, var(--orange) 9%, var(--surface-raised)); font-size: 12px; }
 .inline-validation-notice > svg { flex: 0 0 auto; color: var(--orange); }
 .inline-validation-notice > span { min-width: 0; overflow-wrap: anywhere; }
