@@ -19,6 +19,6 @@ export function ChatWorkspaceDrawer({children, tab, onTab, onClose, onWidthChang
     onWidthChange,
     storageKey: "nebula.session-inspector.width",
   });
-  const content = <><header><strong id={id}>Conversation details</strong><IconAction icon={X} label="Close details" onClick={onClose} /></header><nav aria-label="Conversation detail views">{(["context", "results", "subagents"] as const).map(item => <button className="button quiet" aria-current={tab === item ? "page" : undefined} key={item} onClick={() => onTab(item)}>{item === "context" ? "Context" : item === "results" ? "Results" : "Subagents"}</button>)}</nav>{children}</>;
+  const content = <><header role="presentation"><strong id={id}>Conversation details</strong><IconAction icon={X} label="Close details" onClick={onClose} /></header><nav aria-label="Conversation detail views">{(["context", "results", "subagents"] as const).map(item => <button className="button quiet" aria-current={tab === item ? "page" : undefined} key={item} onClick={() => onTab(item)}>{item === "context" ? "Context" : item === "results" ? "Results" : "Subagents"}</button>)}</nav>{children}</>;
   return mobile || overlay ? createPortal(<ModalSurface as="section" className="session-inspector assistant-drawer" labelledBy={id} onClose={onClose}>{content}</ModalSurface>, document.body) : <aside ref={(element) => { size.panelRef.current = element; }} className="session-inspector assistant-drawer" aria-label="Session inspector" style={size.panelStyle}>{size.resizeHandle}{content}</aside>;
 }

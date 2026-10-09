@@ -48,6 +48,110 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "release-ui-visual-baselines": [
+      {
+        "area": "release-ui-visual-baselines",
+        "project": "desktop",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "critical workspaces remain visually stable|Zero Dark preserves the project desktop hierarchy|Zero Dark preserves the appearance selector|tool follow-up runtime lives in Settings and its Workbench toggles persist",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-ui-visual-baselines",
+        "project": "compact",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "critical workspaces remain visually stable|Light preserves each critical workspace hierarchy",
+        "runtime": "mock",
+        "shard": "1/1"
+      }
+    ],
+    "release-ui-workspace-audit": [
+      {
+        "area": "release-ui-workspace-audit",
+        "project": "mobile-webkit-small",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "stabilization audit every primary workspace view",
+        "runtime": "mock",
+        "shard": "1/1"
+      }
+    ],
+    "release-ui-ledger-persistence": [
+      {
+        "area": "release-ui-ledger-persistence",
+        "project": "assistant-real-desktop",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "assistant upgrade native commands retain thinking and replies across Core restart",
+        "runtime": "real-core",
+        "shard": "1/1"
+      }
+    ],
+    "release-ui-correctness": [
+      {
+        "area": "release-ui-correctness",
+        "project": "desktop",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "conversation switching between projects|native assistant tools use the shared activity ledger|assistant follow-up queue delegates|an idle resumed harness|stabilization completed harness output|code editor keeps its caret|automated accessibility checks in dark mode|compact Workbench header icons|stabilization goal mode|working context panel|stabilization project sections remain reachable",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-ui-correctness",
+        "project": "compact",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "conversation switching between projects|native assistant tools use the shared activity ledger|assistant follow-up queue delegates|stabilization completed harness output|code editor keeps its caret|automated accessibility checks in dark mode|compact Workbench header icons|stabilization goal mode|working context panel|stabilization project sections remain reachable",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-ui-correctness",
+        "project": "mobile-chromium-small",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "conversation switching between projects|native assistant tools use the shared activity ledger|assistant follow-up queue delegates|stabilization completed harness output|code editor keeps its caret|automated accessibility checks in dark mode|compact Workbench header icons|stabilization goal mode|working context panel|stabilization project sections remain reachable",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-ui-correctness",
+        "project": "mobile-chromium-ledger-390",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "conversation switching between projects|native assistant tools use the shared activity ledger|assistant follow-up queue delegates|stabilization completed harness output|code editor keeps its caret|automated accessibility checks in dark mode|compact Workbench header icons|stabilization goal mode|working context panel|stabilization project sections remain reachable",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-ui-correctness",
+        "project": "mobile-chromium-wide",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "conversation switching between projects|native assistant tools use the shared activity ledger|assistant follow-up queue delegates|stabilization completed harness output|code editor keeps its caret|automated accessibility checks in dark mode|compact Workbench header icons|stabilization goal mode|working context panel|stabilization project sections remain reachable",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-ui-correctness",
+        "project": "mobile-webkit-small",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "conversation switching between projects|native assistant tools use the shared activity ledger|assistant follow-up queue delegates|stabilization completed harness output|code editor keeps its caret|automated accessibility checks in dark mode|compact Workbench header icons|stabilization goal mode|working context panel|stabilization project sections remain reachable",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-ui-correctness",
+        "project": "mobile-webkit",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "conversation switching between projects|native assistant tools use the shared activity ledger|assistant follow-up queue delegates|stabilization completed harness output|code editor keeps its caret|automated accessibility checks in dark mode|compact Workbench header icons|stabilization goal mode|working context panel|stabilization project sections remain reachable",
+        "runtime": "mock",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-ui-correctness",
+        "project": "mobile-webkit-wide",
+        "test_match": "tests/interface.spec.ts",
+        "grep": "conversation switching between projects|native assistant tools use the shared activity ledger|assistant follow-up queue delegates|stabilization completed harness output|code editor keeps its caret|automated accessibility checks in dark mode|compact Workbench header icons|stabilization goal mode|working context panel|stabilization project sections remain reachable",
+        "runtime": "mock",
+        "shard": "1/1"
+      }
+    ],
     "projects-navigation": [
       {"area":"projects-navigation","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization Projects is the sole Work navigation destination","runtime":"mock","shard":"1/1"},
       {"area":"projects-navigation","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"stabilization Projects is the sole Work navigation destination","runtime":"mock","shard":"1/1"},

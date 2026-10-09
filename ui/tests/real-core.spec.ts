@@ -4777,6 +4777,17 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
     await page.getByRole("button", {name: "Save scope"}).click();
     const bypassDialog = page.getByRole("dialog", {name: "Bypass Nebula permissions for this Project?"});
     await expect(bypassDialog).toBeVisible();
+    const confirmBypass = bypassDialog.getByRole("button", {name: "Allow all"});
+    // A preceding save notice and the Settings lens must never own this hit.
+    expect(await confirmBypass.evaluate(button => {
+      const box = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      return hit === button || Boolean(hit && button.contains(hit));
+    })).toBe(true);
+    await bypassDialog.getByRole("button", {name: "Cancel", exact: true}).click();
+    expect(await (await api.get(`engagements/${projectId}/scope`)).json()).toMatchObject({bypass_permissions: false});
+    await page.getByRole("button", {name: "Save scope"}).click();
+    await expect(bypassDialog).toBeVisible();
     await bypassDialog.getByRole("button", {name: "Allow all"}).click();
     await expect(page.getByRole("status").filter({hasText: "Network scope updated"})).toBeVisible();
     expect(await (await api.get(`engagements/${projectId}/scope`)).json()).toMatchObject({bypass_permissions: true});
@@ -5462,7 +5473,7 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       const goalReply = goalMessage.locator(".assistant-markdown").filter({hasText: "Goal work completed."});
       await expect(goalReply).toHaveText("Goal work completed.", {timeout: 20_000});
       await expect(goalReply).not.toHaveClass(/streaming/, {timeout: 20_000});
-      await goalMessage.getByRole("button", {name: /Inspect saved work|Show activity/}).click();
+      await goalMessage.getByRole("button", {name: /Inspect saved work|Show activity|View work/}).click();
       await expect(goalMessage.locator(".activity-ledger-audit .harness-reasoning-summary")).toContainText("Retained thinking from the native peer.");
       if (id === "inert-fixture") {
         await composer.fill("/vendor");
@@ -5490,8 +5501,13 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       await core.restart();
       await page.reload();
       await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Input tokens: 12", {timeout: 20_000});
+      // Reload follows the latest turn; older virtualized rows must be reached
+      // through the transcript scroll owner before inspecting their saved work.
+      await page.locator(".chat-scroll").hover();
+      await page.mouse.wheel(0, -10_000);
       const retainedGoal = page.locator(".chat-message.assistant").filter({hasText: "Goal work completed."}).last();
-      await retainedGoal.getByRole("button", {name: /Inspect saved work|Show activity/}).click();
+      await expect(retainedGoal).toBeVisible();
+      await retainedGoal.getByRole("button", {name: /Inspect saved work|Show activity|View work/}).click();
       const retainedThinking = retainedGoal.locator(".activity-ledger-audit .harness-reasoning-summary");
       await expect(retainedThinking).toContainText("Retained thinking from the native peer.");
       await composer.fill("/goal status");
@@ -5499,6 +5515,15 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       await expect(page.locator(".chat-message.assistant .assistant-markdown").last()).toContainText("Goal: Clock", {timeout: 20_000});
       const entries = (await readFile(path.join(core.dataDir, "command-requests.jsonl"), "utf8")).trim().split("\n").map(line => JSON.parse(line));
       expect(entries.some(row => row.method === (id === codex.id ? "account/usage/read" : "_x.ai/session/usage"))).toBe(true);
+      await page.locator(".chat-scroll").hover();
+      await page.mouse.wheel(0, -10_000);
+      await expect(retainedGoal).toBeVisible();
+      // Moving to the new turn can unmount this older virtual row. Reopen its
+      // transient disclosure when reading it again, then verify the saved text.
+      if (!await retainedThinking.isVisible()) {
+        await retainedGoal.getByRole("button", {name: /Inspect saved work|Show activity|View work/}).click();
+      }
+      await expect(retainedThinking).toContainText("Retained thinking from the native peer.");
       await retainedThinking.scrollIntoViewIfNeeded();
       await info.attach(`native-command-${id}`, {body: await page.screenshot({path: info.outputPath(`native-command-${id}.png`)}), contentType: "image/png"});
     }

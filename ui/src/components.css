@@ -315,6 +315,9 @@ textarea { border-radius: var(--radius-control); }
 .session-layout.chat.inspector-open .session-inspector { display: block; }
 .chat-scroll { padding: 30px max(24px, calc((100% - var(--chat-reading-track)) / 2)); }
 .chat-message { width: 100%; max-width: var(--chat-reading-track); margin-inline: auto; margin-bottom: 28px; grid-template-columns: minmax(0, 1fr); }
+/* Expanded transcript work uses the transcript's scroll owner. A second bounded
+   audit viewport traps wheels/touch and splits long completed output. */
+.chat-message .activity-ledger-audit { max-height: none; overflow-y: visible; }
 .chat-message.render-contained { content-visibility: auto; contain-intrinsic-size: auto var(--chat-message-intrinsic-size, 240px); }
 /* content-visibility clips a row's paint to its own box. An operator row
    floats its time and actions outside the bubble, so it stays unclipped. */

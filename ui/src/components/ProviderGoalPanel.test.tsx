@@ -165,7 +165,7 @@ it.each(["draft", "running"] as const)("edits goal content while %s", async stat
     stepBudget: 5,
   }));
   expect(onChange).toHaveBeenCalledWith(updated);
-  expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument());
 });
 
 it("keeps an edit draft when Core reports a newer goal revision", async () => {

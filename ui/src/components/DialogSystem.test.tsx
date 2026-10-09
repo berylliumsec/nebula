@@ -69,6 +69,25 @@ describe("ModalSurface", () => {
 
 
 describe("confirmation standing consent", () => {
+  it("places confirmation outside the application stacking context and returns focus on cancel", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    const { container } = render(<DialogProvider>
+      <div className="settings-lens"><ConfirmationHarness onConfirm={onConfirm} /></div>
+    </DialogProvider>);
+    const trigger = screen.getByRole("button", { name: "Ask" });
+    await user.click(trigger);
+    const dialog = await screen.findByRole("dialog", { name: "Share redacted tool results?" });
+    expect(container.contains(dialog)).toBe(false);
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Allow this turn" })).toHaveFocus());
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Answer")).toHaveTextContent("declined");
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(trigger).toHaveFocus();
+  });
+
   it("reports the checked box only when the operator confirms", async () => {
     const user = userEvent.setup();
     const onConfirm = vi.fn();

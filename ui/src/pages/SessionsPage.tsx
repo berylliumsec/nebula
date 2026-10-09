@@ -728,6 +728,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
     }
   }
   const activityNode = message.role === "assistant" && activityLedger ? <ActivityLedger
+        key="activity-ledger"
         compact
         latestUpdate={latestHarnessCommentary}
         progress={progressContent ? {

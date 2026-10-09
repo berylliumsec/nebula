@@ -68,9 +68,9 @@
   --focus: #8fc5ff;
   --on-accent: #071827;
   --on-danger: #180405;
-  --action-primary: color-mix(in srgb, var(--blue) 58%, var(--surface-raised));
-  --action-primary-hover: color-mix(in srgb, var(--blue) 60%, var(--surface-raised));
-  --action-primary-pressed: color-mix(in srgb, var(--blue) 52%, var(--surface-raised));
+  --action-primary: color-mix(in srgb, var(--blue) 50%, var(--surface-raised));
+  --action-primary-hover: color-mix(in srgb, var(--blue) 52%, var(--surface-raised));
+  --action-primary-pressed: color-mix(in srgb, var(--blue) 46%, var(--surface-raised));
   --action-primary-text: #f4f8fc;
   --overlay-scrim: rgb(0 0 0 / 42%);
   --brand-start: #4f9df7;

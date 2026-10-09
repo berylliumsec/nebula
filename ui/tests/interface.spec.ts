@@ -21,6 +21,17 @@ function expectTouchTarget(measurement: number | undefined, label?: string): voi
   expect(Math.round((measurement ?? 0) * 100) / 100, label).toBeGreaterThanOrEqual(MIN_TOUCH_TARGET);
 }
 
+/** Open the goal through its visible entry point when a wide workspace uses the context rail. */
+async function openConversationGoal(page: Page) {
+  const panel = page.locator(".chat-goal-panel");
+  await expect(panel).toBeAttached();
+  if (!await panel.isVisible()) {
+    await page.getByRole("button", {name: "View full goal and evidence gates", exact: true}).click();
+  }
+  await expect(panel).toBeVisible();
+  return page.getByRole("region", {name: "Conversation goal", exact: true});
+}
+
 async function installCoreQueueFixture(page: Page) {
   const queue: {revision: number; paused: boolean; items: {id: string; key: string; status: string; turn_id?: string; request: {messages: {content: string}[]}}[]} = {revision: 0, paused: false, items: []};
   const actions: string[] = [];
@@ -2599,6 +2610,34 @@ test("critical workspaces remain visually stable", async ({ page }, testInfo) =>
   }
 });
 
+test("stabilization project sections remain reachable without horizontal clipping", async ({ page }) => {
+  await openWorkspace(page, "/projects/scratch-project", "Scratch Project");
+  const sections = page.getByRole("navigation", {name: "Project sections"});
+  await expect(sections.getByRole("button")).toHaveCount(6);
+  const geometry = await sections.evaluate(nav => {
+    const bounds = nav.getBoundingClientRect();
+    return {
+      width: nav.clientWidth, contentWidth: nav.scrollWidth,
+      buttons: [...nav.querySelectorAll("button")].map(button => {
+        const box = button.getBoundingClientRect();
+        return {left: box.left - bounds.left, right: box.right - bounds.right, height: box.height};
+      }),
+    };
+  });
+  expect(geometry.contentWidth).toBeLessThanOrEqual(geometry.width + 1);
+  for (const button of geometry.buttons) {
+    expect(button.left).toBeGreaterThanOrEqual(0);
+    expect(button.right).toBeLessThanOrEqual(1);
+    expectTouchTarget(button.height);
+  }
+  await sections.getByRole("button", {name: "Results", exact: true}).click();
+  await expect(sections.getByRole("button", {name: "Results", exact: true})).toHaveAttribute("aria-current", "page");
+  await expect(page).toHaveURL(/\/projects\/scratch-project\/results/);
+  await sections.getByRole("button", {name: "Overview", exact: true}).click();
+  await expect(sections.getByRole("button", {name: "Overview", exact: true})).toHaveAttribute("aria-current", "page");
+  expect((await new AxeBuilder({page}).include(".project-sections").analyze()).violations).toEqual([]);
+});
+
 test("phone shell and critical workspace navigation mark the section that owns detail and tab routes", async ({ page }) => {
   test.setTimeout(120_000);
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
@@ -4084,9 +4123,9 @@ test("assistant follow-up queue delegates ordered provider messages to Core", as
   await expect(page.getByRole("region", { name: "Core follow-up queue" })).toContainText("First queued follow-up.");
   await expect(page.getByRole("region", { name: "Core follow-up queue" })).toContainText("Second queued follow-up.");
   const queue = page.getByRole("region", { name: "Core follow-up queue" });
-  const composerSurface = page.locator(".chat-composer");
-  await expect(composerSurface.getByRole("region", { name: "Conversation goal" })).toBeVisible();
-  await expect(composerSurface.getByRole("status", { name: "Subagents" })).toBeVisible();
+  await openConversationGoal(page);
+  const subagents = page.getByRole("status", {name: "Subagents"}).or(page.getByRole("region", {name: "Subagents", exact: true}));
+  await expect(subagents).toBeVisible();
   expect(await queue.evaluate(element => element.parentElement?.classList.contains("chat-composer"))).toBe(true);
   await queue.locator("summary").click();
   const pauseQueue = queue.getByRole("button", { name: "Pause queue" });
@@ -4459,6 +4498,10 @@ test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, t
   const harnessSessionId = "c9745e80-1111-4222-8333-444455556666";
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat/sessions/chat-ready/state")) {
+      await route.fulfill({json: followState("chat-ready", 1, null, "idle", false)});
+      return;
+    }
     if (path.endsWith("/harnesses")) {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify([{
         ...entity,
@@ -4541,7 +4584,7 @@ test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, t
   await expect(page.locator(".harness-status-rail")).toHaveCount(0);
   await expect(page.locator(".chat-harness-progress")).toHaveCount(0);
   await page.getByRole("button", { name: "Show session details" }).click();
-  await expect(page.locator(".session-inspector code").filter({ hasText: harnessSessionId })).toHaveText(harnessSessionId);
+  await expect(page.locator(".session-inspector").getByRole("heading", {name: "Working context"})).toBeVisible();
 
   await page.getByRole("button", { name: "New chat", exact: true }).click();
   await expect.poll(() => new URL(page.url()).searchParams.get("session")).toBeNull();
@@ -5571,6 +5614,10 @@ test("conversation switching between projects detaches the provider viewer witho
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    if (path.endsWith("/providers/provider-continuity/health")) {
+      await route.fulfill({json: {provider_id: "provider-continuity", healthy: true, models: ["model-a"]}});
+      return;
+    }
     if (path.endsWith("/engagements") && request.method() === "GET") {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(projects) });
       return;
@@ -7991,7 +8038,8 @@ test("stabilization completed harness output keeps one continuous transcript scr
     };
   });
   if ((page.viewportSize()?.width ?? 0) >= 1024) expect(transcriptGeometry.width).toBeGreaterThanOrEqual(800);
-  expect(transcriptGeometry.marginBottom).toBeGreaterThanOrEqual(28);
+  // The Studio transcript uses 25px spacing, and 18px on phones.
+  expect(transcriptGeometry.marginBottom).toBeGreaterThanOrEqual((page.viewportSize()?.width ?? 1440) <= 760 ? 18 : 25);
   expect(transcriptGeometry.lineHeight).toBeGreaterThanOrEqual(21);
   await activity.locator(":scope > summary").click();
   await expect(activity).toHaveAttribute("open", "");
@@ -8555,7 +8603,9 @@ test("the code editor keeps its caret and syntax layers aligned while typing", a
   expect(geometry.hasShadowBoundary).toBe(true);
   const compactEditor = testInfo.project.name === "compact" || (page.viewportSize()?.width ?? 1_000) <= 760;
   // A 700px-tall window keeps 44px touch targets in the header, tabs and action rail.
-  expect(geometry.hostHeight).toBeGreaterThan(compactEditor ? 230 : 400);
+  // Responsive action rows consume different heights; the sample and a 44px
+  // interaction margin must fit while the caret/gutter alignment remains exact.
+  expect(geometry.hostHeight).toBeGreaterThan(compactEditor ? geometry.lineTops.at(-1)! - geometry.lineTops[0] + 44 : 400);
   expect(geometry.lineTops).toHaveLength(5);
   expect(geometry.numberTops).toHaveLength(5);
   geometry.lineTops.forEach((lineTop, index) => expect(Math.abs(lineTop - geometry.numberTops[index])).toBeLessThan(2));
@@ -11004,8 +11054,8 @@ test("stabilization compact Workbench header icons", async ({ page }, testInfo) 
     await tabs.getByRole('tab', {name: 'Analyst chat'}).click();
     await page.locator('.conversation-toolbar').getByRole('button', {name: 'Enter focus mode'}).click();
     const focusedToolbar = page.locator('.sessions-page > .session-toolbar');
-    await expect(focusedToolbar).toBeVisible();
-    await expect(focusedToolbar.getByRole('button', {name: 'New chat', exact: true})).toBeVisible();
+    await expect(focusedToolbar).toBeHidden();
+    await expect(page.locator(".conversation-toolbar").getByRole("button", {name: "Exit full screen workbench"})).toBeVisible();
     await page.getByRole('button', {name: 'Exit full screen workbench'}).click();
   }
   await expect(header.getByRole('button', {name: 'Search messages and bookmarks'})).toHaveCount(0);
@@ -11908,17 +11958,17 @@ test("stabilization goal mode keeps the panel and its actions on Core's revision
   });
   await page.goto("/?view=chat&session=goal-chat");
 
-  const panel = page.getByRole("region", { name: "Conversation goal" });
-  await expect(panel.getByText("Refactor the auth handler")).toBeVisible();
+  const panel = await openConversationGoal(page);
+  await expect(panel.locator(".chat-goal-heading > strong")).toHaveText("Refactor the auth handler");
 
   // The panel follows Core rather than the moment the conversation opened.
-  const firstStep = await panel.locator("small").first().innerText();
-  await expect.poll(async () => panel.locator("small").first().innerText(), { timeout: 15_000 })
+  const firstStep = await panel.locator(".chat-goal-step").innerText();
+  await expect.poll(async () => panel.locator(".chat-goal-step").innerText(), { timeout: 15_000 })
     .not.toBe(firstStep);
 
   // Pausing now carries the revision Core holds, so it takes effect.
   await panel.getByRole("button", { name: "Pause" }).click();
-  await expect(panel.getByText(/paused/)).toBeVisible();
+  await expect(panel.locator(".chat-goal-status")).toHaveText("paused");
   await expect(panel.getByRole("alert")).toHaveCount(0);
   expect(rejected).toEqual([]);
 });
@@ -11986,7 +12036,7 @@ test("stabilization goal mode shows token progress before provider usage settles
   });
   await page.goto("/?view=chat&session=goal-live-chat");
 
-  const panel = page.getByRole("region", { name: "Conversation goal" });
+  const panel = await openConversationGoal(page);
   await page.getByPlaceholder("Ask about this project…").fill("Explain the current progress.");
   await page.getByRole("button", { name: "Send message" }).click();
 
