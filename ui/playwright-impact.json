@@ -48,6 +48,76 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "release-inert-provider-ui": [
+      {
+        "area": "release-inert-provider-ui",
+        "project": "assistant-real-desktop",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "production LAN enables durable knowledge automatically|popup forks history and discards|shows the live queue position",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-inert-provider-ui",
+        "project": "assistant-real-chromium-390",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "production LAN enables durable knowledge automatically|popup forks history and discards|shows the live queue position",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-inert-provider-ui",
+        "project": "assistant-real-webkit-390",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "production LAN enables durable knowledge automatically|popup forks history and discards|shows the live queue position",
+        "runtime": "real-core",
+        "shard": "1/1"
+      }
+    ],
+    "release-inert-diagnosis": [
+      {
+        "area": "release-inert-diagnosis",
+        "project": "real-core",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "stabilization real Core (evidence|finding) creation survives failure|stabilization real Core keeps the Subagents choice across refresh|assistant upgrade Daybreak selection persists",
+        "runtime": "real-core",
+        "shard": "1/1"
+      }
+    ],
+    "release-inert-crash-boundaries": [
+      {
+        "area": "release-inert-crash-boundaries",
+        "project": "assistant-real-desktop",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "stabilization failure crash_after_(record|delivery|receipt|progress)",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-inert-crash-boundaries",
+        "project": "real-core",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "stabilization failure crash_after_progress",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-inert-crash-boundaries",
+        "project": "assistant-real-chromium-390",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "stabilization failure crash_after_progress",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-inert-crash-boundaries",
+        "project": "assistant-real-webkit-390",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "stabilization failure crash_after_progress",
+        "runtime": "real-core",
+        "shard": "1/1"
+      }
+    ],
     "release-owned-cleanup": [
       {
         "area": "release-owned-cleanup",

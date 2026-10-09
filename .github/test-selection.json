@@ -1,27 +1,28 @@
 {
-  "change_digest": "36f8d70c0d7f4021987bc1e08857a6e9406f2048d6ec0ae5690f47a9ace3a4de",
-  "reviewed_by": "Codex benign fixture/UI review, 2026-10-09",
-  "reason": "Fix confirmed sequential disposal cascade with shared explicit owned-resource teardown: every resource attempted in original order, primary body/startup error retained, named secondary errors reported, cleanup-only failure remains failing. Mechanical wrappers preserve original assertions and runtime semantics. Core stop waits for owned process termination before owned directory removal, failed startup cleanup preserves restart data. Inert regressions inject disposal failures and verify child exit, closed listener and removed owned root. Phone Terminal navigation shares the existing terminal-toggle anchor; visible-anchor selection already exists. Guide text accurately explains phone navigation, committed regression verifies exact visible spotlight geometry, touch target, unchanged conversation and durable completion after refresh across permanent profiles.",
-  "exclusions": "No full suites, Python/native code or tests, security-tool runtime, offensive/agent behavior, provider/probe contract changes, credential/rules changes, new skips or relaxed gates. Only 14 component cases and 12 selected Playwright cases; inert Node child, fixed inert Python peer, production Core plain-text guide fixture. All original remaining streaming/probe/durability assertions remain unchanged. Physical devices and manual CUA unavailable; emulation evidence is partial verification.",
-  "python": [],
-  "frontend": [
-    "ui/src/guides/guides.test.tsx"
+  "change_digest": "bc6a21834d122e78098d08bfb76ec0bcddb295ea6320026788ed603206f235f1",
+  "reviewed_by": "Codex bounded inert fixture contract review, 2026-10-09",
+  "reason": "Four resource-masked evidence, finding, saved Subagents choice and Daybreak handoff cases pass unchanged in isolated baseline runs. Correct crash_after_progress only in its inert executable: Core asynchronously coalesces yielded deltas before durable commit, so the fixture now reads the real ledger for its exact delta after the delivered continuation boundary, fsyncs an owned proof, then exits before completion. It never writes Core progress or decision state. Preserve original observed-progress, receipt identity/count, recovery and no-replay assertions; add exact durable-sequence and no-completion proof. Two Python regressions exercise the real coalescer/store and wrong/missing progress timeout. Verify all four crash boundaries on desktop and progress in the desktop alias plus permanent Chromium/WebKit 390px projects. Use the existing mobile coreShell entry helper. Canonical routing-prose behavior accepts valid JSON text directly without a second synthesis (chat.py and test_routing_prose_answer.py). Knowledge and popup inert fixtures now supply their already expected full answer on that path; preserve all privacy, history, draft, failure, retry and discard assertions. Hold the queue fixture\u2019s exact blocker request until its unchanged position-1 assertion and screenshot. Match exact operator text before Core\u2019s documented retrieved-reference heading, confirmed by captured requests, instead of assuming provider stream=true; retain client stream=true, answer counts, no false waiting, no failure and reload checks. Release the owned capacity barrier on teardown. Verify those three journeys in desktop Chromium and emulated Chromium/WebKit 390px. Re-run one unchanged delegated-wait UI case with a localhost peer returning fixed reports only. No executable tools, external targets or production orchestration changes.",
+  "exclusions": "No full suites, security-runtime installation, external targets, real credentials, real model calls, executable security work, production provider/probe/agent changes, repository security changes or weakened assertions. Exactly two inert Python cases and 21 named production-LAN browser cases, serial owned fixture resources. Frontend/native selections are empty because product source is unchanged. Project-switch/goal partial-final-text and exact 128-token probe assertions remain untouched pending explicit contract decisions. Local Python excludes an unrelated incompatible pytest-qt plugin; the repository scope guard stays active. Physical/manual CUA is unavailable.",
+  "python": [
+    "tests/v3/test_inert_fixture_crash_barrier.py"
   ],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:release-owned-cleanup/assistant-real-desktop",
-    "entry:release-owned-cleanup/assistant-real-compact",
-    "entry:release-owned-cleanup/assistant-real-chromium-320",
-    "entry:release-owned-cleanup/assistant-real-chromium-390",
-    "entry:release-owned-cleanup/assistant-real-chromium-430",
-    "entry:release-owned-cleanup/assistant-real-webkit-320",
-    "entry:release-owned-cleanup/assistant-real-webkit-390",
-    "entry:release-owned-cleanup/assistant-real-webkit-430"
+    "entry:release-inert-diagnosis/real-core",
+    "entry:release-inert-crash-boundaries/assistant-real-desktop",
+    "entry:release-inert-crash-boundaries/real-core",
+    "entry:release-inert-crash-boundaries/assistant-real-chromium-390",
+    "entry:release-inert-crash-boundaries/assistant-real-webkit-390",
+    "entry:release-inert-provider-ui/assistant-real-desktop",
+    "entry:release-inert-provider-ui/assistant-real-chromium-390",
+    "entry:release-inert-provider-ui/assistant-real-webkit-390",
+    "entry:conversation-progress/assistant-real-desktop"
   ],
   "expected_tests": {
-    "python": 0,
-    "frontend": 14,
+    "python": 2,
+    "frontend": 0,
     "native": 0,
-    "playwright": 12
+    "playwright": 21
   }
 }
