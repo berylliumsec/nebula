@@ -5517,6 +5517,13 @@ reliabilityTest("assistant upgrade native commands retain thinking and replies a
       expect(entries.some(row => row.method === (id === codex.id ? "account/usage/read" : "_x.ai/session/usage"))).toBe(true);
       await page.locator(".chat-scroll").hover();
       await page.mouse.wheel(0, -10_000);
+      await expect(retainedGoal).toBeVisible();
+      // Moving to the new turn can unmount this older virtual row. Reopen its
+      // transient disclosure when reading it again, then verify the saved text.
+      if (!await retainedThinking.isVisible()) {
+        await retainedGoal.getByRole("button", {name: /Inspect saved work|Show activity|View work/}).click();
+      }
+      await expect(retainedThinking).toContainText("Retained thinking from the native peer.");
       await retainedThinking.scrollIntoViewIfNeeded();
       await info.attach(`native-command-${id}`, {body: await page.screenshot({path: info.outputPath(`native-command-${id}.png`)}), contentType: "image/png"});
     }
