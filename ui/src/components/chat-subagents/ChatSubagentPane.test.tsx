@@ -6,7 +6,7 @@ import type { ChatSubagentView } from "../../api/types";
 import { ChatSubagentPane } from "./ChatSubagentPane";
 import { ChatSubagentAttention } from "./ChatSubagentAttention";
 import { ChatSubagentRail } from "./ChatSubagentRail";
-import { ChatSubagentResultCard } from "./ChatSubagentResultCard";
+import { ChatSubagentPostedResult, ChatSubagentResultCard } from "./ChatSubagentResultCard";
 import { compactTokens, elapsedLabel, subagentSummary } from "./useChatSubagents";
 
 vi.mock("../../diagnostics", () => ({ logCaughtDiagnostic: vi.fn() }));
@@ -196,8 +196,35 @@ describe("the subagents an operator can see and act on", () => {
       onOpenConversation={vi.fn()}
       subagent={subagent({ status: "failed", finishedAt: "x", result: "", error: "The provider ended the turn." })}
     />);
-    expect(screen.getByText("Subagent stopped")).toBeInTheDocument();
+    expect(screen.getByText("Subagent failed")).toBeInTheDocument();
     expect(screen.getByText("The provider ended the turn.")).toBeInTheDocument();
+  });
+
+  it("keeps a posted failure compact while preserving every saved detail", async () => {
+    const user = userEvent.setup();
+    const detail = "temporary task clones must be finished or handed off: /home/agent/a /home/agent/b";
+    render(<ChatSubagentResultCard
+      onOpenConversation={vi.fn()}
+      subagent={subagent({ status: "failed", finishedAt: "x", error: "Repository lifecycle completion blocked" })}
+      postedContent={`Subagent failed: Prepare copy probe\n\nError: Repository lifecycle completion blocked\n${detail}\n\nLast step: message_parent(complete)`}
+    />);
+    expect(screen.getByText("Subagent failed")).toBeInTheDocument();
+    expect(screen.queryByText(detail, { exact: false })).not.toBeInTheDocument();
+    const reveal = screen.getByRole("button", { name: "Show full result" });
+    expect(reveal).toHaveAttribute("aria-expanded", "false");
+    await user.click(reveal);
+    expect(screen.getByText(/Last step: message_parent\(complete\)/)).toBeInTheDocument();
+    expect(screen.getByText(detail, { exact: false })).toBeInTheDocument();
+  });
+
+  it("keeps an older result collapsed after a later child round supersedes it", async () => {
+    const user = userEvent.setup();
+    render(<ChatSubagentPostedResult content={"Subagent interrupted: Restart investigator\n\nError: Core shut down during the turn."} />);
+    const disclosure = screen.getByText("Subagent interrupted: Restart investigator");
+    expect(disclosure.closest("details")).not.toHaveAttribute("open");
+    await user.click(disclosure);
+    expect(disclosure.closest("details")).toHaveAttribute("open");
+    expect(screen.getByText("Error: Core shut down during the turn.")).toBeVisible();
   });
 
   it("names the provider model a harness chat delegates to", () => {
