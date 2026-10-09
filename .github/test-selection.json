@@ -1,23 +1,33 @@
 {
-  "change_digest": "4d37aaa10f30b5fc05b013e82ee997bbcd8a7aabf455dd0d1688ce2f4f18bd6b",
-  "reviewed_by": "Codex focused review of diagnostic notice dismissal",
-  "reason": "The shared diagnostics notice gains transient dismissal while preserving its diagnostics link. Six collected component tests cover its rendering and interaction, and the existing oversized activity journey exercises the notice in desktop Chromium, 320 px mobile Chromium, and mobile WebKit.",
-  "exclusions": "No Core or native code changed. The dismissal is local React presentation state, so no real-Core mutation or persistence test is selected. Unrelated UI journeys and full suites are excluded. Physical-device testing is unavailable.",
+  "change_digest": "4f574f4a7cfaaf98ae17616de17c92b17e1197bc4fc0550daba9f64257285985",
+  "reviewed_by": "Codex focused review for compact posted subagent failures",
+  "reason": "Linked and superseded subagent result messages render once through collapsed disclosures, with complete saved details available on demand. Sixteen component cases cover presentation and controls. Eight mocked browser projects cover answer order, disclosure, refresh, accessibility, and responsive presentation; one real-Core browser case covers superseded results after restart on a production LAN origin.",
+  "exclusions": "No backend, Python, or native behavior changed. Unrelated UI journeys and full suites are excluded. Physical-device testing is unavailable; the mobile Chromium and WebKit projects use emulation.",
   "expected_tests": {
     "python": 0,
-    "frontend": 6,
+    "frontend": 16,
     "native": 0,
-    "playwright": 3
+    "playwright": 9
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false,
   "python": [],
-  "frontend": ["ui/src/diagnostics/DiagnosticErrorNotice.test.tsx"],
+  "frontend": [
+    "ui/src/components/chat-subagents/ChatSubagentPane.test.tsx"
+  ],
   "native": [],
   "playwright": [
-    "entry:diagnostic-error-dismiss/desktop",
-    "entry:diagnostic-error-dismiss/mobile-chromium-small",
-    "entry:diagnostic-error-dismiss/mobile-webkit"
+    "chat-subagent-result-collapse/desktop",
+    "chat-subagent-result-collapse/compact",
+    "chat-subagent-result-collapse/mobile-chromium-small",
+    "chat-subagent-result-collapse/mobile-chromium-ledger-390",
+    "chat-subagent-result-collapse/mobile-chromium-wide",
+    "chat-subagent-result-collapse/mobile-webkit-small",
+    "chat-subagent-result-collapse/mobile-webkit",
+    "chat-subagent-result-collapse/mobile-webkit-wide",
+    "chat-subagent-result-real-core/real-core"
   ]
 }

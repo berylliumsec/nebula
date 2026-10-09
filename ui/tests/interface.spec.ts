@@ -12243,6 +12243,57 @@ const delegated = [
   },
 ];
 
+reloadTest("assistant upgrade posted subagent failures stay collapsed after the answer", async ({ page }) => {
+  const sessionId = "subagent-failure-chat";
+  const failure = "Error: required native hook did not complete: " + "unfinished task lease; ".repeat(25);
+  const posted = `Subagent failed: Check image copy\n\n${failure}\n\nLast step: message_parent(complete)`;
+  await installReasoningProvider(page);
+  await page.route("**/api/v1/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions") && route.request().method() === "GET") {
+      await route.fulfill({ json: [{ ...entity, id: sessionId, engagement_id: "scratch-project", title: "Image copy check", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: { message_count: 3 } }] });
+    } else if (path.endsWith(`/chat/sessions/${sessionId}/messages`)) {
+      await route.fulfill({ json: [
+        { ...entity, id: "parent-answer", engagement_id: "scratch-project", session_id: sessionId, sequence: 1, role: "assistant", content: "I could not verify the historical bug.", citations: [], metadata: {} },
+        { ...entity, id: "child-failure", engagement_id: "scratch-project", session_id: sessionId, sequence: 2, role: "assistant", content: posted, citations: [], metadata: { kind: "subagent_result" } },
+        { ...entity, id: "child-older-failure", engagement_id: "scratch-project", session_id: sessionId, sequence: 3, role: "assistant", content: "Subagent interrupted: Earlier attempt\n\nError: Older attempt stopped with an unfinished lease.", citations: [], metadata: { kind: "subagent_result" } },
+      ] });
+    } else if (path.endsWith(`/chat/sessions/${sessionId}/subagents`)) {
+      await route.fulfill({ json: { session_id: sessionId, subagents: [{
+        ...delegated[0], id: "failed-child", name: "Check image copy", status: "failed",
+        parent_session_id: sessionId, finished_at: entity.updated_at,
+        result: "", error: failure, result_message_id: "child-failure",
+      }] } });
+    } else if (path.endsWith(`/chat/sessions/${sessionId}/pending-turn`)) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await page.goto(`/?view=chat&session=${sessionId}`);
+  const answer = page.locator(".chat-message.assistant").filter({ hasText: "I could not verify the historical bug." });
+  const failureMessage = page.locator("#chat-message-child-failure");
+  const olderFailure = page.locator("#chat-message-child-older-failure");
+  await expect(answer).toBeVisible({ timeout: 15_000 });
+  await expect(failureMessage.getByText("Subagent failed")).toBeVisible();
+  await expect(failureMessage.getByText("Last step: message_parent(complete)")).toHaveCount(0);
+  expect((await failureMessage.locator(".chat-subagent-result p").textContent())?.length).toBeLessThanOrEqual(161);
+  await expect(failureMessage.locator(".chat-subagent-result p")).toContainText("required native hook");
+  await expect(olderFailure.getByText("Subagent interrupted: Earlier attempt")).toBeVisible();
+  await expect(olderFailure.getByText("Error: Older attempt stopped with an unfinished lease.")).not.toBeVisible();
+  const reveal = failureMessage.getByRole("button", { name: "Show full result" });
+  await reveal.focus();
+  await page.keyboard.press("Enter");
+  await expect(failureMessage.getByText("Last step: message_parent(complete)")).toBeVisible();
+  await failureMessage.getByRole("button", { name: "Show less" }).click();
+  await olderFailure.locator(".chat-subagent-posted > summary").click();
+  await expect(olderFailure.getByText("Error: Older attempt stopped with an unfinished lease.")).toBeVisible();
+  await page.reload();
+  await expect(failureMessage.getByRole("button", { name: "Show full result" })).toBeVisible();
+  await expect(failureMessage.getByText("Last step: message_parent(complete)")).toHaveCount(0);
+  await expect(olderFailure.getByText("Error: Older attempt stopped with an unfinished lease.")).not.toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).include("#chat-message-child-failure").analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 reloadTest("stabilization an operator allows delegation and acts on a waiting subagent", async ({ page }) => {
   const decisions: unknown[] = [];
   let savedSession = { ...entity, id: "subagent-chat", engagement_id: "scratch-project", title: "Assess staging API auth", backend: "provider", provider_profile_id: "provider-a", model: "model-a", metadata: {} as Record<string, unknown> };
