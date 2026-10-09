@@ -20,8 +20,8 @@ interface Action { operator_requested?: boolean; id: string; status: string; exp
 
 const BROWSER_RESTART_NOTICE = "The browser restarted. Your conversation is saved, but the previous live tabs were lost. Resume assistant control and ask the Assistant to reopen the page.";
 
-export function ManagedAssistantBrowser({ api, projectId, active, conversationId, onConversation, onContext, onImage, imageSupported, onControlChange, actionContainer, controlsOpen = true }: {
-  api: ApiClient; projectId: string; active: boolean; conversationId?: string;
+export function ManagedAssistantBrowser({ api, projectId, active, conversationId, draftId, onConversation, onContext, onImage, imageSupported, onControlChange, actionContainer, controlsOpen = true }: {
+  api: ApiClient; projectId: string; active: boolean; conversationId?: string; draftId?: string;
   onConversation: (id: string) => void; onContext: (request: NebulaDraftRequest) => void;
   onImage: (file: File) => void; imageSupported: boolean;
   onControlChange?: (enabled: boolean) => void;
@@ -72,7 +72,10 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
   const open = useCallback(async () => {
     setBusy(true); setError("");
     try {
-      const next = await request<Session>(`engagements/${encodeURIComponent(projectId)}/browser-companion`);
+      const scope = new URLSearchParams();
+      if (conversationId) scope.set("conversation_id", conversationId);
+      if (draftId) scope.set("draft_id", draftId);
+      const next = await request<Session>(`engagements/${encodeURIComponent(projectId)}/browser-companion${scope.size ? `?${scope}` : ""}`);
       if (!mounted.current) return;
       const selected = next.tabs.find(tab => tab.id === next.active_tab_id) ?? next.tabs[0];
       setSession(next); setTabs(next.tabs); setTabId(selected?.id ?? ""); setAddress(selected?.url === "about:blank" ? "" : selected?.url ?? "");
@@ -80,7 +83,7 @@ export function ManagedAssistantBrowser({ api, projectId, active, conversationId
       if (!conversationRef.current && next.conversation_id) onConversationRef.current(next.conversation_id);
     } catch (caught) { if (mounted.current) logCaughtDiagnosticFailure(caught); }
     finally { if (mounted.current) setBusy(false); }
-  }, [projectId, request]);
+  }, [conversationId, draftId, projectId, request]);
   useEffect(() => { mounted.current = true; if (active && !session) void open(); return () => { mounted.current = false; }; }, [open, active, session]);
   useEffect(() => {
     if (!session || !conversationId) return;

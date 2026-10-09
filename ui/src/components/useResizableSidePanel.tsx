@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 
 interface ResizableSidePanelOptions {
   defaultWidth: number;
+  defaultWidthRatio?: number;
   enabled?: boolean;
   label: string;
   maxWidth: number;
@@ -25,6 +26,7 @@ function storedWidth(key: string, fallback: number): number {
 /** Shared pointer- and keyboard-accessible sizing behavior for operator side panels. */
 export function useResizableSidePanel({
   defaultWidth,
+  defaultWidthRatio,
   enabled = true,
   label,
   maxWidth,
@@ -37,6 +39,10 @@ export function useResizableSidePanel({
   const panelRef = useRef<HTMLElement | null>(null);
   const drag = useRef<{ pointerId: number; startWidth: number; startX: number } | undefined>(undefined);
   const [width, setWidth] = useState(() => storedWidth(storageKey, defaultWidth));
+  const [userSized, setUserSized] = useState(() => {
+    try { return globalThis.localStorage?.getItem(storageKey) !== null; }
+    catch { return false; }
+  });
   const [, setViewportRevision] = useState(0);
 
   const bounds = useCallback(() => {
@@ -52,24 +58,27 @@ export function useResizableSidePanel({
     setWidth(Math.round(Math.max(min, Math.min(max, next))));
   }, [bounds]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!enabled) return;
-    resizeTo(width);
     const update = () => {
-      resizeTo(width);
+      const available = panelRef.current?.parentElement?.clientWidth;
+      resizeTo(defaultWidthRatio && !userSized && available ? available * defaultWidthRatio : width);
       setViewportRevision((value) => value + 1);
     };
+    update();
     globalThis.addEventListener("resize", update);
     return () => globalThis.removeEventListener("resize", update);
-  }, [enabled, resizeTo, width]);
+  }, [defaultWidthRatio, enabled, resizeTo, userSized, width]);
 
   useEffect(() => {
     if (!enabled) return;
+    if (defaultWidthRatio && !userSized) return;
     try { globalThis.localStorage?.setItem(storageKey, String(width)); } catch { /* diagnostic-expected: device-local preferences may be unavailable. */ }
-  }, [enabled, storageKey, width]);
+  }, [defaultWidthRatio, enabled, storageKey, userSized, width]);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (!enabled || event.button !== 0) return;
+    setUserSized(true);
     drag.current = { pointerId: event.pointerId, startWidth: width, startX: event.clientX };
     event.currentTarget.focus();
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -101,7 +110,13 @@ export function useResizableSidePanel({
     aria-valuemin={min}
     aria-valuenow={effectiveWidth}
     className={`side-panel-resize-handle panel-${side}`}
-    onDoubleClick={() => resizeTo(defaultWidth)}
+    onDoubleClick={() => {
+      if (defaultWidthRatio) {
+        setUserSized(false);
+        try { globalThis.localStorage?.removeItem(storageKey); } catch { /* Device-local preference is optional. */ }
+        resizeTo((panelRef.current?.parentElement?.clientWidth ?? defaultWidth * 2) * defaultWidthRatio);
+      } else resizeTo(defaultWidth);
+    }}
     onKeyDown={(event) => {
       const step = event.shiftKey ? 80 : 24;
       if (event.key === "ArrowLeft") resizeTo(effectiveWidth + (side === "right" ? step : -step));
@@ -109,6 +124,7 @@ export function useResizableSidePanel({
       else if (event.key === "Home") resizeTo(min);
       else if (event.key === "End") resizeTo(max);
       else return;
+      setUserSized(true);
       event.preventDefault();
     }}
     onPointerCancel={endPointer}
@@ -118,7 +134,7 @@ export function useResizableSidePanel({
     onPointerUp={endPointer}
     role="separator"
     tabIndex={0}
-    title="Drag to resize. Use Left and Right arrow keys when focused; double-click to reset."
+    aria-description="Drag to resize. Use Left and Right arrow keys when focused; double-click to reset."
   /> : null;
 
   return { panelRef, panelStyle, resizeHandle, width: effectiveWidth };

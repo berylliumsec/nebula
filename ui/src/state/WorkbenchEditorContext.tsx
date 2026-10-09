@@ -38,6 +38,7 @@ interface WorkbenchEditorContextValue {
   retryPersistence(): void;
   sessionFor(engagementId: string): WorkbenchEditorSession;
   updateSession(engagementId: string, update: (session: WorkbenchEditorSession) => WorkbenchEditorSession): void;
+  adoptSession(from: string, to: string): void;
 }
 
 const EMPTY_SESSION: WorkbenchEditorSession = { buffers: [] };
@@ -125,8 +126,19 @@ export function WorkbenchEditorProvider({ children }: PropsWithChildren) {
       return next === previous ? current : { ...current, [engagementId]: next };
     });
   }, []);
-  const value = useMemo(() => ({ persistenceError, persistenceState, retryPersistence, sessionFor, updateSession }), [persistenceError, persistenceState, retryPersistence, sessionFor, updateSession]);
+  const adoptSession = useCallback((from: string, to: string) => setSessions(current => {
+    if (from === to || !current[from] || current[to]) return current;
+    const { [from]: moved, ...rest } = current;
+    return { ...rest, [to]: moved };
+  }), []);
+  const value = useMemo(() => ({ persistenceError, persistenceState, retryPersistence, sessionFor, updateSession, adoptSession }), [persistenceError, persistenceState, retryPersistence, sessionFor, updateSession, adoptSession]);
   return <WorkbenchEditorContext.Provider value={value}>{children}</WorkbenchEditorContext.Provider>;
+}
+
+export function useAdoptWorkbenchEditorSession() {
+  const context = useContext(WorkbenchEditorContext);
+  if (!context) throw new Error("useAdoptWorkbenchEditorSession must be used inside WorkbenchEditorProvider.");
+  return context.adoptSession;
 }
 
 export function useWorkbenchEditor(engagementId: string) {

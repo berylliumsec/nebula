@@ -20,7 +20,8 @@ interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 const STORAGE_KEY = "nebula.theme";
-const DEFAULT_PREFERENCE: ThemePreference = "studio-dark";
+const DEFAULT_PREFERENCE: ThemePreference = "dark";
+
 
 function normalizePreference(value: string | null): ThemePreference | undefined {
   if (value === "light" || value === "dark" || value === "zero-light" || value === "zero-dark" || value === "studio-dark") return value;

@@ -41,6 +41,8 @@ interface CodeEditorPanelProps {
   active: boolean;
   api: ApiClient;
   engagementId: string;
+  /** Device-local editor tabs and unsaved buffers belong to this conversation. */
+  editorSessionKey?: string;
   workspacePath?: string;
   providers?: ProviderHealth[];
   harnesses?: HarnessProfile[];
@@ -99,13 +101,14 @@ function nextUntitledPath(directory: string, entries: WorkspaceEntry[], buffers:
   return directory ? `${directory}/${name}` : name;
 }
 
-export function CodeEditorPanel({ active, api, engagementId, workspacePath, providers = [], harnesses = [], onRun, onOpenTerminal, onCreateFindingDraft, onUseWithAssistant, initialWorkspaceSearch, initialOpenPath, initialOpenLine, initialOpenRequest }: CodeEditorPanelProps) {
+export function CodeEditorPanel({ active, api, engagementId, editorSessionKey, workspacePath, providers = [], harnesses = [], onRun, onOpenTerminal, onCreateFindingDraft, onUseWithAssistant, initialWorkspaceSearch, initialOpenPath, initialOpenLine, initialOpenRequest }: CodeEditorPanelProps) {
+
   const sidebarSize = useEditorSidebarWidth();
   const confirm = useConfirmation();
   const chrome = useOptionalChrome();
   const openPalette = chrome?.openPalette;
   const setContextualCommands = chrome?.setContextualCommands;
-  const { buffer, buffers, activateBuffer, closeBuffer, closeSplit, focusPane, persistenceError, persistenceState, primaryBuffer, retryPersistence, secondaryBuffer, setBuffer, splitEditor, updateBuffer: updateBufferById, updateBuffers } = useWorkbenchEditor(engagementId);
+  const { buffer, buffers, activateBuffer, closeBuffer, closeSplit, focusPane, persistenceError, persistenceState, primaryBuffer, retryPersistence, secondaryBuffer, setBuffer, splitEditor, updateBuffer: updateBufferById, updateBuffers } = useWorkbenchEditor(editorSessionKey ?? engagementId);
   const { preferences, savePreferences } = useEditorPreferences();
   const [directory, setDirectory] = useState("");
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);

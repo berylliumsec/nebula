@@ -49,7 +49,7 @@
 /* Chat focus uses the full viewport for one conversation. Keep temporary panes
    mounted so leaving focus restores them with their current state. */
 .sessions-page.chat-focus.full-screen { width: 100%; max-width: none; padding: 0; background: var(--canvas); }
-.sessions-page.chat-focus > .session-toolbar { display: none; }
+.sessions-page.chat-focus > .session-toolbar { display: flex; }
 .sessions-page.chat-focus > .session-layout.chat,
 .sessions-page.chat-focus > .session-layout.chat.conversation-panel-open,
 .sessions-page.chat-focus > .session-layout.chat.inspector-open {
@@ -76,7 +76,7 @@
 .sessions-page.chat-focus .conversation-toolbar .session-conversations-toggle,
 .sessions-page.chat-focus .conversation-toolbar .session-toolbar-actions > :not(.workbench-full-screen-toggle),
 .sessions-page.chat-focus .mobile-conversation-header > :is(.mobile-drawer-toggle, .mobile-new-chat) { display: none !important; }
-.sessions-page.chat-focus .conversation-toolbar .workbench-full-screen-toggle { display: inline-flex; width: 44px; height: 44px; flex: 0 0 44px; }
+.sessions-page.chat-focus .mobile-conversation-header .workbench-full-screen-toggle { display: none !important; }
 .sessions-page.chat-focus .chat-studio { grid-template-columns: minmax(0, 1fr) !important; }
 .sessions-page.chat-focus .chat-studio-rail { display: none !important; }
 .sessions-page.chat-focus .chat-studio .chat-scroll { --chat-reading-track: 920px; }
@@ -332,6 +332,7 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 .chat-goal-objective :is(p, ul, ol) { margin: 0; }
 .chat-goal-objective :is(ul, ol) { padding-left: 20px; }
 .chat-goal-objective strong { color: var(--text-strong); }
+
 .chat-goal-form { display: grid; gap: 8px; }
 .chat-goal-form label { display: grid; gap: 4px; }
 .chat-goal-form fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 4px; min-width: 0; }
@@ -351,6 +352,7 @@ body:has(.dialog-backdrop) > .chat-settings-floating {
 .chat-goal-outcomes .button:hover:not(:disabled), .chat-goal-utilities .button:hover:not(:disabled) { color: var(--text-strong); }
 @media (max-width: 1100px) { .chat-goal-panel:not(.empty) > header { flex-wrap: wrap; } .chat-goal-panel > header small { width: 100%; padding-left: 42px; flex-wrap: wrap; white-space: normal; } }
 @media (max-width: 430px) { .chat-goal-limits { grid-template-columns: 1fr; } .chat-goal-actions { justify-content: flex-start; gap: 8px; } .chat-goal-actions .button, .chat-goal-objective > summary { min-height: 44px; } .chat-goal-outcomes { border: 0; padding-right: 0; } .chat-goal-utilities { width: 100%; } .chat-goal-toggle { width: 44px; height: 44px; } .chat-goal-panel > header small { padding-left: 54px; } }
+
 
 /* A goal is optional: without one, the panel is a compact chip, not a full row. */
 .chat-goal-panel.empty:not(:has(.chat-goal-form)) { display: flex; padding: 0; border: 0; background: transparent; }

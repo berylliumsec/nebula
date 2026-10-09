@@ -22,6 +22,7 @@ interface WorkspacePanelProps {
   }) => void;
   onOpenTerminal?: () => void;
   onOpenActivity?: () => void;
+  onOpenInEditor?: (path: string) => void;
 }
 
 function sizeLabel(value: number): string {
@@ -30,7 +31,7 @@ function sizeLabel(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
-export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAssistant, onOpenTerminal, onOpenActivity }: WorkspacePanelProps) {
+export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAssistant, onOpenTerminal, onOpenActivity, onOpenInEditor }: WorkspacePanelProps) {
   const confirm = useConfirmation();
   const [path, setPath] = useState("");
   const [entries, setEntries] = useState<WorkspaceEntry[]>([]);
@@ -358,7 +359,8 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
           {nextOffset !== undefined && <button className="button quiet" type="button" disabled={loading} onClick={() => void load(nextOffset)}>Load more</button>}
         </section>
         <section className={`workspace-file-preview${selected?.kind === "file" ? "" : " is-empty"}`}>
-          {selected?.kind === "symlink" ? <div className="empty-state"><Link2 size={22} /><strong>Inert symbolic link</strong><p>Nebula will not follow, preview, download, or preserve this entry.</p></div> : selected?.kind === "file" ? <><header><div><h3>{selected.name}</h3><p>{selected.path}{selected.size >= 0 ? ` · ${sizeLabel(selected.size)}` : ""}</p></div><div><IconAction icon={Download} label="Download" title="Download file" onClick={() => void download()} />{preview && onUseWithAssistant && <button className="button secondary" type="button" onClick={() => onUseWithAssistant({ text: preview.text, sourceKind: "workspace_file", sourceId: selected.path, sourceLabel: selected.name, truncated: preview.truncated })}><MessageSquareText size={13} /> Use with Assistant</button>}<button className="button primary" type="button" onClick={() => void promote()}><FileCheck2 size={13} /> Preserve as Evidence</button></div></header>{preview ? <><pre data-selection-source-kind="workspace_file" data-selection-source-id={selected.path} data-selection-source-label={selected.name}>{preview.text}</pre>{preview.truncated && <p>Preview stops at 256 KiB. Download or preserve uses exact full bytes.</p>}</> : <div className="empty-state compact"><File size={21} /><strong>No plain-text preview</strong><p>The file may be binary, non-UTF-8, or still loading.</p></div>}</> : <div className="empty-state"><Folder size={23} /><strong>Select a workspace file</strong><p>Preview is read-only and bounded to 256 KiB.</p></div>}
+          {selected?.kind === "symlink" ? <div className="empty-state"><Link2 size={22} /><strong>Inert symbolic link</strong><p>Nebula will not follow, preview, download, or preserve this entry.</p></div> : selected?.kind === "file" ? <><header><div><h3>{selected.name}</h3><p>{selected.path}{selected.size >= 0 ? ` · ${sizeLabel(selected.size)}` : ""}</p></div><div>{onOpenInEditor && <button className="button secondary" type="button" onClick={() => onOpenInEditor(selected.path)}>Open in Code</button>}<IconAction icon={Download} label="Download" title="Download file" onClick={() => void download()} />{preview && onUseWithAssistant && <button className="button secondary" type="button" onClick={() => onUseWithAssistant({ text: preview.text, sourceKind: "workspace_file", sourceId: selected.path, sourceLabel: selected.name, truncated: preview.truncated })}><MessageSquareText size={13} /> Use with Assistant</button>}<button className="button primary" type="button" onClick={() => void promote()}><FileCheck2 size={13} /> Preserve as Evidence</button></div></header>{preview ? <><pre data-selection-source-kind="workspace_file" data-selection-source-id={selected.path} data-selection-source-label={selected.name}>{preview.text}</pre>{preview.truncated && <p>Preview stops at 256 KiB. Download or preserve uses exact full bytes.</p>}</> : <div className="empty-state compact"><File size={21} /><strong>No plain-text preview</strong><p>The file may be binary, non-UTF-8, or still loading.</p></div>}</> : <div className="empty-state"><Folder size={23} /><strong>Select a workspace file</strong><p>Preview is read-only and bounded to 256 KiB.</p></div>}
+
         </section>
       </div>
       {resetStatus?.reasonCode === "linked_workspace" ? <p className="workspace-reset-summary">Linked folder · bulk reset is unavailable.</p> : <details className="workspace-reset-disclosure" key={engagementId}>
