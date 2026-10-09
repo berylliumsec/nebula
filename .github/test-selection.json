@@ -1,25 +1,43 @@
 {
-  "change_digest": "5c27a2933d07d02b46f01aad07bad9cb4815ec36d48493c1b546af80036d5164",
-  "reviewed_by": "Codex focused release engineering review, 2026-10-09",
-  "reason": "Accept the one coverage receipt in either root or nested GitHub artifact layout observed in approved live preparation run 37952895660. 173 collected release tests cover root/nested receipt acceptance with exact baseline/candidate/requested selection, rejected missing baseline or missing/ambiguous receipts, immutable retry safeguards, release phase/gate failures, and existing App scope/masking/revocation and test-selection guards. No product journey or coverage gate changes.",
-  "exclusions": "Release receipt consumption only. Python 3.12, three individual release/selection files, maximum two minutes. All GitHub mutations and credentials are mocked. No UI/backend/Core/native/browser/package/signing/smoke or full suites. The ongoing live release retains its product coverage gate and will stop on failures; product/UI defects are outside this release-engineering change.",
-  "python": [
-    "tests/test_release_app.py",
-    "tests/test_daily_stable_release.py",
-    "tests/test_test_selection.py"
+  "change_digest": "ff588d18e8bdec8778a5dc743bcf5b349009317627e1880079ef8847a69e3920",
+  "reviewed_by": "Codex scoped benign UI review, 2026-10-09",
+  "reason": "Fix confirmation stacking and passive notification hit-testing, preserve the ledger instance through completion, remove the modal banner landmark, and restore dark primary contrast. Reproduce the twelve failed UI contracts with faithful provider/session-state fixtures and visible goal/focus entry points. Existing explicit permission consent tests and isolated real-Core frozen-policy fixture guard unchanged authorization. Production bundle used for browser probes. Follow-up review adds one transcript audit scroll-owner style; native-tool completion regression already proves ledger continuity. Fixture updates preserve session identity via URL and visible context instead of removed opaque IDs. No backend behavior changed. The eight policy profiles additionally exercise cancellation without a scope mutation and center-point hit-testing above a prior save notification. Six individually reviewed Linux visual baselines track already merged project progress/navigation, palette/icon and Studio Dark option changes; CI retains exact image comparison. Added Project sections wrapping and an eight-profile reachability/a11y regression address the 320px audit overflow without weakening its assertions.",
+  "exclusions": "56 component cases in six files. 72 collected named mock UI contracts on eight permanent desktop/compact/mobile profiles (desktop-only idle journey excluded elsewhere), 8 isolated real-Core policy profiles, 6 selected Linux visual contracts and 1 existing WebKit320 workspace overflow audit. No full suites or new skip/force-click/relaxed security gates. Production bundle; two browser workers; <=8 minutes per targeted chunk, <=5 minutes real-Core/audit. Physical device unavailable. Linux visual equality requires CI; locally inspected image evidence does not substitute.",
+  "python": [],
+  "frontend": [
+    "ui/src/components/DialogSystem.test.tsx",
+    "ui/src/components/SettingsLens.test.tsx",
+    "ui/src/components/ActivityLedger.test.tsx",
+    "ui/src/components/ProviderGoalPanel.test.tsx",
+    "ui/src/components/EngagementPolicyWebSearch.test.tsx",
+    "ui/src/components/SettingsSaveFeedback.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": [],
-  "expected_tests": {
-    "python": 173,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 0
-  },
-  "python_versions": [
-    "3.12"
+  "playwright": [
+    "release-ui-correctness/desktop",
+    "release-ui-correctness/compact",
+    "release-ui-correctness/mobile-chromium-small",
+    "release-ui-correctness/mobile-chromium-ledger-390",
+    "release-ui-correctness/mobile-chromium-wide",
+    "release-ui-correctness/mobile-webkit-small",
+    "release-ui-correctness/mobile-webkit",
+    "release-ui-correctness/mobile-webkit-wide",
+    "project-runtime-policy/assistant-real-desktop",
+    "project-runtime-policy/assistant-real-compact",
+    "project-runtime-policy/assistant-real-chromium-320",
+    "project-runtime-policy/assistant-real-chromium-390",
+    "project-runtime-policy/assistant-real-chromium-430",
+    "project-runtime-policy/assistant-real-webkit-320",
+    "project-runtime-policy/assistant-real-webkit-390",
+    "project-runtime-policy/assistant-real-webkit-430",
+    "release-ui-visual-baselines/desktop",
+    "release-ui-visual-baselines/compact",
+    "release-ui-workspace-audit/mobile-webkit-small"
   ],
-  "python_browser": false,
-  "python_node": true
+  "expected_tests": {
+    "python": 0,
+    "frontend": 56,
+    "native": 0,
+    "playwright": 87
+  }
 }

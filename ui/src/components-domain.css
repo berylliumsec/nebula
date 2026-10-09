@@ -248,6 +248,7 @@
 .operator-profile-list p { overflow: hidden; margin: 0; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .operator-active { display: flex; align-items: center; gap: 4px; color: var(--green); font-size: 11px; }
 .dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 24px; background: color-mix(in srgb, var(--canvas) 68%, transparent); backdrop-filter: blur(4px); }
+.dialog-backdrop:has(> .confirmation-dialog) { z-index: 1400; }
 .provider-dialog { width: min(520px, 100%); display: grid; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-panel); background: var(--surface); box-shadow: none; }
 .provider-dialog header, .provider-dialog footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .provider-dialog header h2 { margin: 3px 0 0; }

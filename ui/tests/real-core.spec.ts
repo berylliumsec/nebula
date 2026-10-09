@@ -4777,6 +4777,17 @@ test("stabilization real Core runtime policy explains approvals and preserves fr
     await page.getByRole("button", {name: "Save scope"}).click();
     const bypassDialog = page.getByRole("dialog", {name: "Bypass Nebula permissions for this Project?"});
     await expect(bypassDialog).toBeVisible();
+    const confirmBypass = bypassDialog.getByRole("button", {name: "Allow all"});
+    // A preceding save notice and the Settings lens must never own this hit.
+    expect(await confirmBypass.evaluate(button => {
+      const box = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+      return hit === button || Boolean(hit && button.contains(hit));
+    })).toBe(true);
+    await bypassDialog.getByRole("button", {name: "Cancel", exact: true}).click();
+    expect(await (await api.get(`engagements/${projectId}/scope`)).json()).toMatchObject({bypass_permissions: false});
+    await page.getByRole("button", {name: "Save scope"}).click();
+    await expect(bypassDialog).toBeVisible();
     await bypassDialog.getByRole("button", {name: "Allow all"}).click();
     await expect(page.getByRole("status").filter({hasText: "Network scope updated"})).toBeVisible();
     expect(await (await api.get(`engagements/${projectId}/scope`)).json()).toMatchObject({bypass_permissions: true});

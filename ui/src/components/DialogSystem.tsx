@@ -12,6 +12,7 @@ import {
   useState,
 } from "react";
 import { AlertTriangle, X } from "lucide-react";
+import { createPortal } from "react-dom";
 
 const FOCUSABLE = [
   "button:not([disabled])",
@@ -198,47 +199,48 @@ export function DialogProvider({ children }: PropsWithChildren) {
       <DialogRegistrationContext.Provider value={registerDialog}>
         <DialogOpenContext.Provider value={Boolean(pending) || registeredDialogs > 0}>
           {children}
-          {pending && (
-          <ModalSurface labelledBy="confirmation-title" className="confirmation-dialog" onClose={() => finish(false)}>
-            <header role="presentation">
-              <span className={`confirmation-icon ${pending.options.tone ?? "default"}`} aria-hidden="true">
-                <AlertTriangle size={20} />
-              </span>
-              <div>
-                <h2 id="confirmation-title">{pending.options.title}</h2>
-                <div className="confirmation-message">{pending.options.message}</div>
-              </div>
-              <button className="icon-button subtle" type="button" aria-label="Close" onClick={() => finish(false)}>
-                <X size={17} />
-              </button>
-            </header>
-            {pending.options.remember && (
-              <label className="confirmation-remember">
-                <input
-                  type="checkbox"
-                  checked={remembered}
-                  onChange={(event) => setRemembered(event.target.checked)}
-                />
-                <span>
-                  <strong>{pending.options.remember.label}</strong>
-                  {pending.options.remember.hint && <small>{pending.options.remember.hint}</small>}
+          {pending && createPortal(
+            <ModalSurface labelledBy="confirmation-title" className="confirmation-dialog" onClose={() => finish(false)}>
+              <header role="presentation">
+                <span className={`confirmation-icon ${pending.options.tone ?? "default"}`} aria-hidden="true">
+                  <AlertTriangle size={20} />
                 </span>
-              </label>
-            )}
-            <footer>
-              <button className="button secondary" type="button" onClick={() => finish(false)}>
-                {pending.options.cancelLabel ?? "Cancel"}
-              </button>
-              <button
-                className={`button ${pending.options.tone === "danger" ? "danger" : "primary"}`}
-                type="button"
-                data-autofocus
-                onClick={() => finish(true)}
-              >
-                {pending.options.confirmLabel ?? "Continue"}
-              </button>
-            </footer>
-          </ModalSurface>
+                <div>
+                  <h2 id="confirmation-title">{pending.options.title}</h2>
+                  <div className="confirmation-message">{pending.options.message}</div>
+                </div>
+                <button className="icon-button subtle" type="button" aria-label="Close" onClick={() => finish(false)}>
+                  <X size={17} />
+                </button>
+              </header>
+              {pending.options.remember && (
+                <label className="confirmation-remember">
+                  <input
+                    type="checkbox"
+                    checked={remembered}
+                    onChange={(event) => setRemembered(event.target.checked)}
+                  />
+                  <span>
+                    <strong>{pending.options.remember.label}</strong>
+                    {pending.options.remember.hint && <small>{pending.options.remember.hint}</small>}
+                  </span>
+                </label>
+              )}
+              <footer>
+                <button className="button secondary" type="button" onClick={() => finish(false)}>
+                  {pending.options.cancelLabel ?? "Cancel"}
+                </button>
+                <button
+                  className={`button ${pending.options.tone === "danger" ? "danger" : "primary"}`}
+                  type="button"
+                  data-autofocus
+                  onClick={() => finish(true)}
+                >
+                  {pending.options.confirmLabel ?? "Continue"}
+                </button>
+              </footer>
+            </ModalSurface>,
+            document.body,
           )}
         </DialogOpenContext.Provider>
       </DialogRegistrationContext.Provider>

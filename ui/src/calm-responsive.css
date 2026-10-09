@@ -23,6 +23,7 @@
 
 @media (max-width: 760px) {
   :root { --top-height: 52px; }
+  .project-sections { flex-wrap: wrap; overflow-x: visible; }
   .sessions-page:not(.full-screen) > .session-toolbar { display: none; }
   .app-shell,
   .app-shell.with-activity,
