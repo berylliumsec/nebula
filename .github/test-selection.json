@@ -1,19 +1,18 @@
 {
-  "change_digest": "3d97c7007cddb508f09c01ba715d045942b451fe36d5f2a435e67127c1ca122a",
+  "change_digest": "29bfc218442507cae334ce6c6ac7d81956fa4cb0585c27361e7221201648ac56",
   "reviewed_by": "Codex focused release engineering review, 2026-10-09",
-  "reason": "Adapt daily release orchestration to a dedicated short-lived GitHub App. The 179 collected tests cover exact App/installation/bot identities, approved installation permissions, owner and single-repository/one-permission scopes, fresh token lifetimes and revocation on success/failure/denial, key isolation, temporary-file cleanup, API error redaction and blocked credential redirects, executable downstream actor gates for the exact App versus unrelated bots/users and unauthorized App/human reruns; daily initiator and rerun admin checks before key access, initiator admin and immutable-tag guards, existing CI/coverage/artifact/finalization gates, and focused selection/full-suite safeguards. All GitHub writes, credentials and signing are mocked; shell actor checks use a fake local gh.",
-  "exclusions": "Release engineering only. Python 3.12 bounded to four named files and two minutes; no network requests, real keys or credentials, publishing workflows, repository-rule changes, product runtime, UI/native/Core/package/signing/smoke execution or full suites. Actual RSA signing and protected end-to-end release remain unverified pending separately approved App setup and publication.",
+  "reason": "Correct the installation-token parser after the approved live release rejected GitHub stateless tokens. 168 collected tests cover legacy 40-character and modern 520-character opaque token masking, both operation permissions, revocation on success/scope failure/command failure, opaque RFC 6750 Bearer syntax, whitespace/control injection and malformed value rejection without logging/use, existing exact App/installation/bot/single-repository scope and lifetime gates, admin actor gates, release phase sequencing and immutable-state safeguards, and focused test-selection guards.",
+  "exclusions": "Only scripts/release_app.py token character parsing and its unit regressions change. Python 3.12, three individual release/selection files, maximum two minutes. All tokens/keys/signing/GitHub mutations mocked; no actual credentials or network, product backend/UI/Core/native/browser/package/signing/smoke suites or full suites. Live publication remains blocked until this ordinary code correction is reviewed and merged.",
   "python": [
-    "tests/test_daily_stable_release.py",
     "tests/test_release_app.py",
-    "tests/test_playwright_impact.py",
+    "tests/test_daily_stable_release.py",
     "tests/test_test_selection.py"
   ],
   "frontend": [],
   "native": [],
   "playwright": [],
   "expected_tests": {
-    "python": 179,
+    "python": 168,
     "frontend": 0,
     "native": 0,
     "playwright": 0
