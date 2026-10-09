@@ -24,6 +24,7 @@ from nebula.v3.domain import (
     HarnessModelOptions,
     HarnessRuntimeOption,
     ProviderProfile,
+    OperationEvent,
     ToolCall,
 )
 from nebula.v3.environments import SshEnvironmentService
@@ -40,6 +41,28 @@ from nebula.v3.harnesses import (
 from nebula.v3.ssh_environments import SshProbeResult
 from nebula.v3.storage import NebulaStore
 from nebula.v3.setup import bootstrap_scratch_project
+
+
+async def wait_for_committed_progress(
+    store: NebulaStore,
+    turn_id: str,
+    after_sequence: int,
+    delta: str,
+    *,
+    timeout: float = 5.0,
+) -> OperationEvent:
+    """Read the real ledger barrier; never manufacture progress for the fixture."""
+    async with asyncio.timeout(timeout):
+        while True:
+            events = store.replay_operation_events(
+                turn_id,
+                after_sequence=after_sequence,
+                event_types=["harness.message_delta"],
+            )
+            for event in events:
+                if event.payload.get("delta") == delta:
+                    return event
+            await asyncio.sleep(0.01)
 
 
 class InertConnection(HarnessConnection):
@@ -152,6 +175,41 @@ class InertConnection(HarnessConnection):
         )
         yield HarnessEvent(type="message_delta", delta=answer)
         if self.runtime.scenario == "crash_after_progress":
+            # The runtime reads ahead while coalescing deltas. A yielded fragment
+            # is not committed progress yet; crash only after the named boundary.
+            turn = self.runtime._active_gateway_turn(self.request.session.id)
+            continuations = [
+                approval.continuation
+                for approval in self.runtime.store.list_entities(Approval)
+                if approval.continuation
+                and approval.continuation.harness_turn_id == turn.id
+                and approval.continuation.status == "delivered"
+            ]
+            if not continuations or any(
+                continuation.progress_after_sequence is None
+                for continuation in continuations
+            ):
+                raise RuntimeError("Inert fixture has no delivered progress boundary")
+            after_sequence = max(
+                continuation.progress_after_sequence for continuation in continuations
+            )
+            progress = await wait_for_committed_progress(
+                self.runtime.store, turn.id, after_sequence, answer
+            )
+            checkpoint = {
+                "harness_turn_id": turn.id,
+                "after_sequence": after_sequence,
+                "progress_sequence": progress.sequence,
+                "event_type": progress.event_type,
+                "delta": progress.payload["delta"],
+                "completed_events": len(self.runtime.store.replay_operation_events(
+                    turn.id, event_types=["harness.completed"]
+                )),
+            }
+            with (self.runtime.fixture_root / "progress-checkpoint.json").open("w") as proof:
+                json.dump(checkpoint, proof)
+                proof.flush()
+                os.fsync(proof.fileno())
             os._exit(84)
         yield HarnessEvent(type="completed", message=answer)
 
