@@ -1,5 +1,5 @@
 {
-  "change_digest": "0d161d8708b9ece589bfa69ff425c53f0ef2534fce42a12701c67d66ad2544a2",
+  "change_digest": "4d37aaa10f30b5fc05b013e82ee997bbcd8a7aabf455dd0d1688ce2f4f18bd6b",
   "reviewed_by": "Codex focused review of diagnostic notice dismissal",
   "reason": "The shared diagnostics notice gains transient dismissal while preserving its diagnostics link. Six collected component tests cover its rendering and interaction, and the existing oversized activity journey exercises the notice in desktop Chromium, 320 px mobile Chromium, and mobile WebKit.",
   "exclusions": "No Core or native code changed. The dismissal is local React presentation state, so no real-Core mutation or persistence test is selected. Unrelated UI journeys and full suites are excluded. Physical-device testing is unavailable.",
