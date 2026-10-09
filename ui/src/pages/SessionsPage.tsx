@@ -31,7 +31,7 @@ import { EnvironmentTargetPicker, environmentIdsForTarget, type EnvironmentTarge
 import { sshApprovalTarget, type SshApprovalTarget } from "../sshTools";
 import { ChatResults } from "../components/ChatResults";
 import { ProjectSnapshotPanel } from "../components/structured-result";
-import { ChatSubagentAttention, ChatSubagentPane, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentEffortField, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
+import { ChatSubagentAttention, ChatSubagentPane, ChatSubagentPostedResult, ChatSubagentRail, ChatSubagentResultCard, HarnessSubagentSettings, SubagentEffortField, SubagentLimitField, subagentLimitLabel, useChatSubagents } from "../components/chat-subagents";
 import { useChatNavigation } from "./useChatNavigation";
 import { hasRecentPendingTitle, reconcileListedSessions } from "./chatSessionList";
 import { sideChatForConversation } from "./sideChatSelection";
@@ -786,7 +786,7 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
           ? () => shared.api!.getChatMessageReasoning(shared.sessionId, message.id)
           : undefined}
       />}
-      {displayContent && (editing
+      {displayContent && !subagentResult && message.metadata?.kind !== "subagent_result" && (editing
           ? <form className="chat-message-edit" onSubmit={event => {event.preventDefault(); void actions.resendEditedMessage();}}>
             <textarea
               aria-label="Edit message"
@@ -813,8 +813,10 @@ const ChatTranscriptRow = memo(function ChatTranscriptRow({
           : <AssistantMarkdown content={displayContent} messageId={message.id} durable={message.role !== "user" && message.durable && message.state === "complete"} streaming={message.state === "streaming"} runnableLanguages={message.role === "user" ? NO_RUNNABLE_LANGUAGES : shared.runnableLanguages} onRun={actions.setRunCandidate} onRunInTerminal={actions.runInTerminal} workspacePath={shared.workspacePath} onOpenFile={actions.openLinkedFile} onOpenWebLink={actions.openLinkedWebPage} blockOrdinalOffset={answerBlockOrdinalOffset} />)}
       {message.id && subagentResult && <ChatSubagentResultCard
         subagent={subagentResult}
+        postedContent={message.content}
         onOpenConversation={id => void actions.selectSession(id)}
       />}
+      {!subagentResult && message.metadata?.kind === "subagent_result" && <ChatSubagentPostedResult content={message.content} />}
       {message.role === "assistant" && message.state === "complete" && !message.content && message.reasoning && <small className="muted" role="status">The model spent this turn thinking and returned no answer. Its thinking is above.</small>}
       {shared.api && message.contentBlocks?.filter((block) => block.type === "image").map((block, index) => <AuthenticatedChatImage api={shared.api!} block={block} key={`${block.artifactId ?? "image"}-${index}`} />)}
       {historicalState === "failed" && historicalError && <div className="harness-activity-load-error"><DiagnosticErrorNotice error={historicalError} fallback="Saved work details could not be loaded; the answer remains available." compact /><button className="button quiet" type="button" onClick={() => void actions.loadHistoricalHarnessActivity(message)}>Retry work details</button></div>}
