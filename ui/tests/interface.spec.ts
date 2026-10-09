@@ -7442,6 +7442,13 @@ test("oversized harness activity fails compactly without blocking mobile chat", 
   expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
   const accessibility = await new AxeBuilder({ page }).include(".diagnostic-error-notice.compact").analyze();
   expect(accessibility.violations).toEqual([]);
+  const dismiss = notice.getByRole("button", { name: "Dismiss error" });
+  const dismissBounds = await dismiss.boundingBox();
+  expect(dismissBounds?.width).toBeGreaterThanOrEqual(44);
+  expect(dismissBounds?.height).toBeGreaterThanOrEqual(44);
+  await notice.locator("strong").click();
+  await expect(notice).toBeHidden();
+  await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
 });
 
 test("stabilization studio conversation keeps context and thinking readable", async ({ page }, testInfo) => {
