@@ -238,7 +238,8 @@ export const guideCatalog: GuideDefinition[] = [
         ],
         route: context => workbench(context, { view: "chat" }),
         target: "goal-panel",
-        targetMissing: "Goals appear above the message box in a saved provider conversation. Send a first message with a provider model.",
+        action: "open-goal-editor",
+        targetMissing: "Choose a provider model to add a goal to this conversation.",
         requiresProject: true,
       },
       {

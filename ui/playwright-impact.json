@@ -48,6 +48,42 @@
     {"name": "remaining-core", "fallback": true, "patterns": ["src/nebula/v3/**"], "areas": ["core-api"]}
   ],
   "areas": {
+    "release-core-ui-harness": [
+      {
+        "area": "release-core-ui-harness",
+        "project": "assistant-real-desktop",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "interactive guides create|interactive guides reach|large side chat opens|project removal archives|persists network scope changed|native commands retain thinking|approval fixture reclaims its data",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-core-ui-harness",
+        "project": "assistant-real-chromium-390",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "interactive guides create|goal guide opens|large side chat opens|project removal archives|persists network scope changed",
+        "runtime": "real-core",
+        "shard": "1/1"
+      },
+      {
+        "area": "release-core-ui-harness",
+        "project": "assistant-real-webkit-390",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "interactive guides create|goal guide opens|large side chat opens|project removal archives|persists network scope changed",
+        "runtime": "real-core",
+        "shard": "1/1"
+      }
+    ],
+    "release-core-ui-alias": [
+      {
+        "area": "release-core-ui-alias",
+        "project": "real-core",
+        "test_match": "tests/real-core.spec.ts",
+        "grep": "interactive guides create|project execution mode uses production Code|conversation switching restores durable Core history promptly",
+        "runtime": "real-core",
+        "shard": "1/1"
+      }
+    ],
     "release-ui-visual-baselines": [
       {
         "area": "release-ui-visual-baselines",

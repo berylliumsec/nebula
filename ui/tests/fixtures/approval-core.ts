@@ -1,5 +1,5 @@
 import {spawn, spawnSync, type ChildProcessWithoutNullStreams} from "node:child_process";
-import {mkdtemp, readFile} from "node:fs/promises";
+import {mkdtemp, readFile, rm} from "node:fs/promises";
 import {createServer} from "node:http";
 import type {AddressInfo} from "node:net";
 import {tmpdir} from "node:os";
@@ -36,13 +36,20 @@ export async function startApprovalCore(host: string, scenario: string) {
       await exited;
     }
   };
-  try {await launch();} catch (error) {await kill(); await api.dispose(); throw error;}
+  const stop = async () => {
+    try {await kill();} finally {
+      try {await api.dispose();} finally {
+        if (process.env.NEBULA_TEST_KEEP_DATA !== "1") await rm(dataDir, {recursive: true, force: true});
+      }
+    }
+  };
+  try {await launch();} catch (error) {await stop(); throw error;}
   return {origin, port, dataDir, api,
     exited: () => processHandle.exitCode !== null || processHandle.signalCode !== null,
     logs: () => logs,
     disconnect: kill,
     restart: async () => {await kill(); await launch();},
-    stop: async () => {await kill(); await api.dispose();},
+    stop,
     receipts: async (): Promise<{approval_id: string; turn_id: string; allowed: boolean}[]> => {
       try {return (await readFile(path.join(dataDir, "receipts.jsonl"), "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));}
       catch (error) {if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error;}

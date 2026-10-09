@@ -1090,6 +1090,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const { openSetting } = useChrome();
   const compact = useCompactLayout();
   const [studioGoalOpen, setStudioGoalOpen] = useState(false);
+  useGuideAction("open-goal-editor", () => setStudioGoalOpen(true));
   const {
     assistantDraftNotice,
     assistantDrafts,

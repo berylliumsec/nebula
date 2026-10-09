@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 /** Transient panels a guide may open. Pages own the state; guides only ask. */
-export type GuideAction = "open-assistant-settings" | "open-palette";
+export type GuideAction = "open-assistant-settings" | "open-palette" | "open-goal-editor";
 
 const GUIDE_ACTION_EVENT = "nebula:guide-action";
 
