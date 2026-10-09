@@ -86,7 +86,7 @@ def app(monkeypatch):
             assert len(data["permissions"]) == 1
             state["issued"] += 1
             return {
-                "token": f"ghs_fixture_{state['issued']}",
+                "token": state.get("token", f"ghs_fixture_{state['issued']}"),
                 "permissions": state.get(
                     "token_permissions", {**data["permissions"], "metadata": "read"}
                 ),
@@ -113,6 +113,68 @@ def test_each_operation_mints_and_revokes_fresh_single_permission_token(
             assert token == f"ghs_fixture_{count}"
         assert app["calls"][-1][:3] == ("DELETE", "installation/token", token)
     assert app["issued"] == 2
+
+
+@pytest.mark.parametrize("permission", ["contents", "actions"])
+@pytest.mark.parametrize(
+    "token",
+    [
+        "ghs_" + "a" * 36,
+        "ghs_123_" + "a_-" * 60 + "." + "b_-" * 95 + "." + "c_d-e" * 9,
+        "opaque~credential+with/padding==",
+    ],
+    ids=["legacy-40", "stateless-520", "bearer-syntax"],
+)
+def test_opaque_legacy_and_stateless_tokens_keep_scope_mask_and_revocation(
+    app, monkeypatch, capsys, permission, token
+):
+    app["token"] = token
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    with release_app.installation_token(permission) as credential:
+        assert credential == token
+        assert app["calls"][-1][:2] == ("GET", "installation/repositories")
+    assert capsys.readouterr().out == f"::add-mask::{token}\n"
+    assert app["calls"][-1][:3] == ("DELETE", "installation/token", token)
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        None,
+        123,
+        True,
+        [],
+        "",
+        "bad token",
+        "bad\ntoken",
+        "bad\rtoken",
+        "bad\ttoken",
+        "bad\x00token",
+        "bad\x1ftoken",
+        "bad\x7ftoken",
+        "bad\u00a0token",
+        "not=a=b",
+    ],
+)
+def test_malformed_token_is_rejected_without_use_or_logging(app, capsys, token):
+    app["token"] = token
+    with pytest.raises(RuntimeError, match="Invalid installation token response"):
+        with release_app.installation_token("contents"):
+            pytest.fail("must not yield")
+    assert app["calls"][-1][1].endswith("access_tokens")
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("failure", ["scope", "command"])
+def test_stateless_token_is_revoked_on_scope_or_operation_failure(app, failure):
+    app["token"] = "ghs_123_a-b_c.d-e_f.g-h_i"
+    if failure == "scope":
+        app["repositories"]["total_count"] = 2
+    with pytest.raises(RuntimeError):
+        with release_app.installation_token("contents"):
+            assert failure == "command"
+            raise RuntimeError("uncertain tag push")
+    assert app["calls"][-1][:3] == ("DELETE", "installation/token", app["token"])
 
 
 @pytest.mark.parametrize(

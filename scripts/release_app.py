@@ -154,7 +154,11 @@ def installation_token(permission: str):
         },
     )
     token = response.get("token", "")
-    if not re.fullmatch(r"[A-Za-z0-9_]+", token):
+    # Treat the credential as opaque, without assuming a prefix, length or JWT
+    # layout. RFC 6750 section 2.1 defines this Bearer header syntax; rejecting
+    # whitespace/control characters also keeps masking commands safe. The API
+    # scope checks below remain authoritative.
+    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9._~+/-]+=*", token):
         raise RuntimeError("Invalid installation token response")
     if os.environ.get("GITHUB_ACTIONS") == "true":
         print(f"::add-mask::{token}", flush=True)
