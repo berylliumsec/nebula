@@ -7,6 +7,7 @@ import { useConfirmation } from "./DialogSystem";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { WorkspaceEntryContextMenu, type WorkspaceEntryMenuState } from "./WorkspaceEntryContextMenu";
 import { EditorWorkspaceSearch } from "./EditorWorkspaceSearch";
+import { LoadingSurface } from "./SurfacePrimitives";
 
 interface WorkspacePanelProps {
   api: ApiClient;
@@ -37,7 +38,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
   const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState<WorkspaceEntry>();
   const [preview, setPreview] = useState<WorkspacePreview>();
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [resetName, setResetName] = useState("");
@@ -340,7 +341,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
         <section
           className={`workspace-entry-list workspace-drop-zone${dragActive ? " dragging" : ""}`}
           aria-label="Workspace entries"
-          aria-busy={Boolean(uploading)}
+          aria-busy={loading || Boolean(uploading)}
           onDragEnter={(event) => { event.preventDefault(); setDragActive(true); }}
           onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; setDragActive(true); }}
           onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragActive(false); }}
@@ -352,6 +353,7 @@ export function WorkspacePanel({ api, engagementId, engagementName, onUseWithAss
             <button type="button" title={entry.path} className={selected?.path === entry.path ? "active" : undefined} disabled={entry.kind === "other"} onContextMenu={(event) => { event.preventDefault(); setEntryMenu({ entry, x: event.clientX, y: event.clientY }); }} onClick={() => void openEntry(entry)}>{entry.kind === "directory" ? <Folder size={16} /> : entry.kind === "symlink" ? <Link2 size={16} /> : <File size={16} />}<span><strong>{entry.name}</strong><small>{entry.kind} · {sizeLabel(entry.size)} · {new Date(entry.modifiedAt).toLocaleString()}</small></span></button>
             <IconAction icon={EllipsisVertical} label={`Actions for ${entry.name}`} title="File actions" aria-haspopup="menu" aria-expanded={entryMenu?.entry.path === entry.path} onClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); setEntryMenu({ entry, x: rect.right - 242, y: rect.bottom + 4 }); }} />
           </div>)}
+          {loading && !entries.length && <LoadingSurface label="Loading files" />}
           {!entries.length && !loading && <div className="empty-state compact"><Folder size={21} /><strong>Workspace is empty</strong><p>Files created by reviewed executions persist here until reset.</p></div>}
           {nextOffset !== undefined && <button className="button quiet" type="button" disabled={loading} onClick={() => void load(nextOffset)}>Load more</button>}
         </section>

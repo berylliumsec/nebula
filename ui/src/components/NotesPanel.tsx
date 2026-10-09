@@ -1,5 +1,5 @@
 import { IconAction } from "./IconAction";
-import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, MessageSquareQuote, NotebookPen, Plus, RefreshCw, Save, Sparkles, Trash2 } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type {
@@ -15,7 +15,7 @@ import { AIWritingDialog } from "./AIWritingDialog";
 import type { SelectionActionDraft } from "./selection";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { aiRuntimeOptions } from "./aiRuntimes";
-import { StandardEmptyState } from "./SurfacePrimitives";
+import { LoadingSurface, StandardEmptyState } from "./SurfacePrimitives";
 
 interface LinkOption {
   id: string;
@@ -78,10 +78,9 @@ export function NotesPanel({
   onAskNebula,
 }: NotesPanelProps) {
   const confirm = useConfirmation();
-  const deferredInitialNotes = useDeferredValue(initialNotes, initialNotes.length ? [] : initialNotes);
-  const cachedNotesReady = initialNotesReady && deferredInitialNotes === initialNotes;
+  const cachedNotesReady = initialNotesReady;
   const [notes, setNotes] = useState<ObservationSummary[]>(() => cachedNotesReady
-    ? deferredInitialNotes.filter((note) => note.engagementId === engagementId && (note.observationType === "note" || note.observationType === "ai_tool_note"))
+    ? initialNotes.filter((note) => note.engagementId === engagementId && (note.observationType === "note" || note.observationType === "ai_tool_note"))
     : []);
   const [selectedId, setSelectedId] = useState<string | undefined>(() => notes[0]?.id);
   const [creating, setCreating] = useState(false);
@@ -164,11 +163,11 @@ export function NotesPanel({
 
   useEffect(() => {
     if (!cachedNotesReady) return;
-    const next = deferredInitialNotes.filter((note) => note.engagementId === engagementId && (note.observationType === "note" || note.observationType === "ai_tool_note"));
+    const next = initialNotes.filter((note) => note.engagementId === engagementId && (note.observationType === "note" || note.observationType === "ai_tool_note"));
     setNotes(next);
     setSelectedId((current) => creatingRef.current || (current && next.some((note) => note.id === current)) ? current : next[0]?.id);
     setLoading(false);
-  }, [cachedNotesReady, deferredInitialNotes, engagementId]);
+  }, [cachedNotesReady, initialNotes, engagementId]);
 
   useEffect(() => {
     if (creating || initialDraft) {
@@ -244,6 +243,7 @@ export function NotesPanel({
   }, [createNote, engagementId, initialDraft, onInitialDraftConsumed]);
 
   const startNote = () => {
+    creatingRef.current = true;
     setCreating(true);
     setSelectedId(undefined);
     setDraft(blank);
@@ -343,8 +343,8 @@ export function NotesPanel({
             <button className="button quiet square" type="button" aria-label="Create note" onClick={startNote}><Plus size={15} /></button>
           </div>
         </header>
-        {notes.map((note) => <button type="button" className={note.id === selectedId ? "active" : undefined} key={note.id} onClick={() => { setCreating(false); setSelectedId(note.id); }}><strong>{note.title}</strong><small>{note.observationType === "ai_tool_note" ? "AI-generated · " : ""}{new Date(note.updatedAt).toLocaleString()}</small></button>)}
-        {loading && <p className="notes-load-status" role="status">{notes.length ? "Refreshing notes…" : "Loading saved notes…"}</p>}
+        {notes.map((note) => <button type="button" className={note.id === selectedId ? "active" : undefined} key={note.id} onClick={() => { creatingRef.current = false; setCreating(false); setSelectedId(note.id); }}><strong>{note.title}</strong><small>{note.observationType === "ai_tool_note" ? "AI-generated · " : ""}{new Date(note.updatedAt).toLocaleString()}</small></button>)}
+        {loading && notes.length > 0 && <p className="notes-load-status" role="status">Refreshing notes…</p>}
         {!notes.length && !loading && <p>No notes yet.</p>}
       </aside>
       <section className={`note-editor${creating || selected ? "" : " is-empty"}`} aria-label={creating ? "New note" : selected ? `Edit ${selected.title}` : "Note editor"}>
@@ -367,7 +367,10 @@ export function NotesPanel({
             {evidenceOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.evidenceIds.includes(option.id)} onChange={() => toggleLink("evidenceIds", option.id)} /> {option.label}</label>)}
             {assetOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.assetIds.includes(option.id)} onChange={() => toggleLink("assetIds", option.id)} /> {option.label}</label>)}
           </details>}
-        </> : <StandardEmptyState className="note-empty-state" icon={<NotebookPen size={24} aria-hidden="true" />} title={loading ? "Loading saved notes" : "Start a project note"} explanation={loading ? "You can start a new note while they load." : "Capture working thoughts in Markdown. Preserve exact files and screenshots as Evidence."} primaryAction={<button className="button primary" type="button" onClick={startNote}><Plus size={14} /> New note</button>} />}
+        </> : <div className="note-initial-state">
+          {loading ? <LoadingSurface label="Loading saved notes" /> : <StandardEmptyState className="note-empty-state" icon={<NotebookPen size={24} aria-hidden="true" />} title="Start a project note" explanation="Capture working thoughts in Markdown. Preserve exact files and screenshots as Evidence." />}
+          <button className="button primary" type="button" onClick={startNote}><Plus size={14} /> New note</button>
+        </div>}
       </section>
       {writingOpen && <AIWritingDialog
         api={api}

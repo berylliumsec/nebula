@@ -8746,7 +8746,7 @@ test("phone shell project notes fill the Workbench writing area", async ({ page 
       const workspace = panel.closest(".session-workspace")!.getBoundingClientRect();
       const note = panel.getBoundingClientRect();
       const editor = panel.querySelector(".note-editor")!.getBoundingClientRect();
-      const empty = panel.querySelector(".note-empty-state")!.getBoundingClientRect();
+      const empty = panel.querySelector(".note-initial-state")!.getBoundingClientRect();
       return {
         pageGap: page.bottom - layout.bottom,
         panelGap: workspace.bottom - note.bottom,

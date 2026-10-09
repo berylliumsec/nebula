@@ -1708,6 +1708,15 @@ button.harness-status-summary:focus-visible { outline: 2px solid var(--focus); o
 @media (prefers-reduced-motion: reduce) { .chat-context-attachment-actions button:first-child svg { transition: none; } }
 
 .notes-panel { display: grid; min-height: 590px; grid-template-columns: 220px minmax(0, 1fr); overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-control); background: var(--surface); }
+.loading-surface { display: grid; align-content: start; gap: 14px; width: 100%; min-height: 190px; padding: 24px; color: var(--muted); }
+.loading-surface-title { font-size: 12px; font-weight: var(--weight-semibold); }
+.loading-surface-line, .loading-surface-block { display: block; height: 12px; border-radius: 6px; background: color-mix(in srgb, var(--border) 65%, var(--surface)); animation: loading-surface-pulse 1.6s ease-in-out infinite alternate; }
+.loading-surface-line.short { width: 58%; }
+.loading-surface-block { height: 100px; margin-top: 8px; }
+.note-initial-state { display: grid; justify-items: start; align-content: start; width: 100%; }
+.note-initial-state .button { margin: 0 24px 24px; }
+@keyframes loading-surface-pulse { to { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .loading-surface-line, .loading-surface-block { animation: none; } }
 .notes-list { overflow-y: auto; border-right: 1px solid var(--border-soft); background: var(--surface-muted); }
 .notes-list > header { display: flex; min-height: 48px; align-items: center; justify-content: space-between; padding: 8px 10px 8px 13px; border-bottom: 1px solid var(--border-soft); }
 .notes-list > header > div { display: flex; gap: 3px; }.notes-list > header strong { font-size: 12px; }
