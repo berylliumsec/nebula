@@ -1,9 +1,24 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { DiagnosticErrorNotice } from "./DiagnosticErrorNotice";
 import { rememberDiagnosticErrorPresentation } from "./logger";
 
 describe("DiagnosticErrorNotice", () => {
+  it("dismisses on a notice click or close control while preserving the diagnostics link and later errors", () => {
+    const { rerender } = render(<DiagnosticErrorNotice error="First failure" />);
+    const diagnosticsLink = screen.getByRole("link", { name: "View diagnostics" });
+    diagnosticsLink.addEventListener("click", (event) => event.preventDefault());
+    fireEvent.click(diagnosticsLink);
+    expect(screen.getByRole("alert")).toBeVisible();
+    fireEvent.click(screen.getByText("First failure"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    rerender(<DiagnosticErrorNotice error="Second failure" compact />);
+    expect(screen.getByText("Second failure")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("shows a structured safe reason, retryability, code, and correlated diagnostics link", () => {
     const error = Object.assign(new Error("The report renderer was unavailable."), {
       errorId: "err_report_123",

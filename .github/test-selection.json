@@ -1,25 +1,23 @@
 {
-  "change_digest": "ed998ccc83cf4e209311a311133885789ea55d1959775ea24fe8c43addc9d262",
-  "reviewed_by": "Codex established contract reconciliation, 2026-10-09",
-  "reason": "Documentation NEBULA3.md188-195 and existing budget tests conclusively require2048 for unknown-limit inert profile with model/operator/window bounds. Correct exact128 expectation to exact2048, retaining nonce-only tool declaration, no unsent draft and <=1request. Read-only existing units verify operator768/smallwindow/unknown2048. Progress presentation docs distinguish active status from completed final text; canonical routing prose and goal-answer units accept one JSON answer, while synthesis recovery unit excludes incomplete control frames. Replace obsolete partial-final-text checkpoints with stricter active UI and actual Core-running state while holding a fixed inert reply; release only after viewer detaches or goal viewer attaches. Preserve exact final text, project ownership, >=2goal continuations, paused status, answer counts/no duplicates/no failures and reload persistence. No production behavior changes. Six existing inert Python cases and three UI journeys across desktop1440, emulated AndroidChromium390 and iPhoneWebKit390. Prefix the existing project-switch test with assistant upgrade so permanent assistant/mobile projects collect it; all original final ownership and text outcomes remain. Phone fixtures use existing More/Settings/project-picker controls and close the initial setup sheet before switching. Center the short virtualized goal transcript before retaining the exact all-answer counts, including the seed, before and after reload; no count assertions removed.",
-  "exclusions": "No full suites, security tools/runtime execution, real models or external targets, production provider/probe/agent changes, weakened privacy/limit/ownership/durability assertions, security rules/credentials or release publishing. Frontend/native empty: no product source changed. Physical/manual unavailable. Build-only packaging is separate from this selection.",
-  "python": [
-    "tests/v3/test_inference_timeouts_probe_budget.py::test_capability_probe_budget_is_bounded_by_the_model_limits",
-    "tests/v3/test_routing_prose_answer.py::test_glm_prose_reply_on_the_first_routing_step_is_the_answer",
-    "tests/v3/test_routing_prose_answer.py::test_goal_turn_answered_by_routing_is_charged_once_and_completes",
-    "tests/v3/test_chat_final_synthesis_recovery.py::test_final_synthesis_recovers_from_a_nameless_tool_call_fragment"
-  ],
-  "frontend": [],
+  "change_digest": "4d37aaa10f30b5fc05b013e82ee997bbcd8a7aabf455dd0d1688ce2f4f18bd6b",
+  "reviewed_by": "Codex focused review of diagnostic notice dismissal",
+  "reason": "The shared diagnostics notice gains transient dismissal while preserving its diagnostics link. Six collected component tests cover its rendering and interaction, and the existing oversized activity journey exercises the notice in desktop Chromium, 320 px mobile Chromium, and mobile WebKit.",
+  "exclusions": "No Core or native code changed. The dismissal is local React presentation state, so no real-Core mutation or persistence test is selected. Unrelated UI journeys and full suites are excluded. Physical-device testing is unavailable.",
+  "expected_tests": {
+    "python": 0,
+    "frontend": 6,
+    "native": 0,
+    "playwright": 3
+  },
+  "python_versions": ["3.12"],
+  "python_browser": false,
+  "python_node": false,
+  "python": [],
+  "frontend": ["ui/src/diagnostics/DiagnosticErrorNotice.test.tsx"],
   "native": [],
   "playwright": [
-    "entry:release-contract-ui/assistant-real-desktop",
-    "entry:release-contract-ui/assistant-real-chromium-390",
-    "entry:release-contract-ui/assistant-real-webkit-390"
-  ],
-  "expected_tests": {
-    "python": 6,
-    "frontend": 0,
-    "native": 0,
-    "playwright": 9
-  }
+    "entry:diagnostic-error-dismiss/desktop",
+    "entry:diagnostic-error-dismiss/mobile-chromium-small",
+    "entry:diagnostic-error-dismiss/mobile-webkit"
+  ]
 }
