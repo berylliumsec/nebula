@@ -146,6 +146,25 @@ describe("GuideProvider", () => {
     expect(await screen.findByRole("dialog", { name: "How it is used" })).toBeInTheDocument();
   });
 
+  it("highlights the visible phone terminal anchor while retaining the conversation", async () => {
+    const user = userEvent.setup();
+    const desktop = document.createElement("button");
+    const phone = document.createElement("button");
+    desktop.dataset.guide = phone.dataset.guide = "terminal-toggle";
+    vi.spyOn(desktop, "getBoundingClientRect").mockReturnValue({width: 0, height: 0} as DOMRect);
+    vi.spyOn(phone, "getBoundingClientRect").mockReturnValue({top: 780, left: 70, width: 60, height: 44} as DOMRect);
+    document.body.append(desktop, phone);
+    try {
+      renderGuides();
+      await user.click(screen.getByRole("button", {name: "Open hub"}));
+      await user.click(within(await screen.findByRole("dialog", {name: "Guides"})).getByRole("button", {name: /^Run the assistant’s commands beside the chat/}));
+      const card = await screen.findByRole("dialog", {name: "Open the terminal"});
+      expect(card).toHaveTextContent("On a phone, choose Terminal in the bottom navigation. Choose Chat to return to your conversation.");
+      await waitFor(() => expect(document.querySelector(".guide-spotlight")).toHaveStyle({top: "774px", left: "64px", width: "72px", height: "56px"}));
+      expect(screen.getByLabelText("location")).toHaveTextContent("session=s1");
+    } finally {desktop.remove(); phone.remove();}
+  });
+
   it("creates starter files, opens them in Code, and confirms Core discovered the hook", async () => {
     workspace.api.listGuideProgress.mockResolvedValue([progress("lifecycle-hooks", 1, 3)]);
     workspace.api.createGuideStarterFiles.mockResolvedValue({ kind: "hook", paths: [".agents/hooks/audit/hook.json", ".agents/hooks/audit/run.sh"] });

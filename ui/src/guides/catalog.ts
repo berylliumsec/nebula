@@ -126,15 +126,16 @@ export const guideCatalog: GuideDefinition[] = [
     keywords: "terminal side shell run in terminal command code block split",
     steps: [
       {
-        title: "Open the terminal beside the chat",
+        title: "Open the terminal",
         body: [
-          "This opens the same live shell as the Terminal tab next to the conversation. Drag the divider to resize it; double-click the divider to reset its width.",
+          "On a desktop, open the terminal beside the chat. Drag the divider to resize it; double-click the divider to reset its width.",
+          "On a phone, choose Terminal in the bottom navigation. Choose Chat to return to your conversation.",
         ],
         route: context => workbench(context, { view: "chat" }),
         target: "terminal-toggle",
         requiresProject: true,
         check: () => onScreen("#chat-side-terminal")
-          ? { state: "done", message: "Terminal open beside the chat." }
+          ? { state: "done", message: "Terminal is open." }
           : { state: "waiting", message: "Waiting for the terminal to open…" },
       },
       {
