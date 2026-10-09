@@ -1,7 +1,8 @@
 """Publish a verified stable Linux release for new commits on main.
 
-The scheduled workflow runs this with a short-lived GitHub Actions token. A
-failed gate leaves its immutable tag or draft for a release manager to inspect.
+The protected admin credential creates tags and dispatches gated workflows.
+Publication uses GITHUB_TOKEN so the driver owns the updater dispatch. A failed
+gate leaves its immutable tag or draft for a release manager to inspect.
 """
 
 from __future__ import annotations
@@ -24,8 +25,8 @@ WAIT_SECONDS = 3 * 60 * 60
 CONSERVATIVE_AREAS = ("desktop-interface", "mobile-layout", "core-api")
 
 
-def run(*args: str, check: bool = True) -> str:
-    result = subprocess.run(args, text=True, capture_output=True, check=False)
+def run(*args: str, check: bool = True, env: dict[str, str] | None = None) -> str:
+    result = subprocess.run(args, text=True, capture_output=True, check=False, env=env)
     if check and result.returncode:
         raise RuntimeError(f"{' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
@@ -33,6 +34,44 @@ def run(*args: str, check: bool = True) -> str:
 
 def gh_json(endpoint: str) -> object:
     return json.loads(run("gh", "api", endpoint))
+
+
+def require_release_admin() -> None:
+    """Validate the authenticated principal, not the schedule's displayed actor."""
+    if not os.environ.get("GH_TOKEN") or not os.environ.get("NEBULA_PUBLISH_TOKEN"):
+        raise RuntimeError(
+            "Protected release and GITHUB_TOKEN publication credentials are required"
+        )
+    try:
+        actor = gh_json("user")["login"]
+        permission = gh_json(f"repos/{REPOSITORY}/collaborators/{actor}/permission")
+    except (RuntimeError, KeyError, TypeError) as error:
+        raise RuntimeError(
+            "Cannot verify the protected release credential's repository-admin identity"
+        ) from error
+    if permission.get("permission") != "admin":
+        raise RuntimeError(
+            "The protected release credential must belong to a repository admin"
+        )
+    print(f"Release credential: verified repository admin {actor}", flush=True)
+
+
+def publish_release(tag: str) -> None:
+    """Suppress a second release-event updater run; explicitly dispatch it below."""
+    token = os.environ.get("NEBULA_PUBLISH_TOKEN")
+    if not token:
+        raise RuntimeError("GITHUB_TOKEN publication credential is required")
+    run(
+        "gh",
+        "release",
+        "edit",
+        tag,
+        "--repo",
+        REPOSITORY,
+        "--draft=false",
+        "--prerelease=false",
+        env={**os.environ, "GH_TOKEN": token},
+    )
 
 
 def published_release() -> dict:
@@ -278,6 +317,7 @@ def main() -> None:
         return
     run("git", "merge-base", "--is-ancestor", previous_source, MAIN_SHA)
     green_main()
+    require_release_admin()
     selection, review_reason = preflight_impact(previous_source, MAIN_SHA)
     run("gh", "attestation", "verify", "--help")
 
@@ -339,7 +379,10 @@ def main() -> None:
         "ui/package-lock.json",
         str(notes),
     )
-    run("git", "commit", "-m", f"Prepare Nebula {version} stable release")
+    # This release-only commit never changes main. Its admin-authenticated push
+    # must not launch a second preparation without the validated selection.
+    # workflow_dispatch is unaffected; all release gates still run below.
+    run("git", "commit", "-m", f"Prepare Nebula {version} stable release [skip ci]")
     release_commit = run("git", "rev-parse", "HEAD")
     run("git", "tag", "-a", tag, "-m", f"Nebula {version}")
     run("git", "push", "origin", f"refs/tags/{tag}")
@@ -407,16 +450,7 @@ def main() -> None:
     if published_release()["tag_name"] != previous_tag:
         raise RuntimeError("Another Nebula release was published during preparation")
     updater_started = datetime.now(timezone.utc).replace(microsecond=0)
-    run(
-        "gh",
-        "release",
-        "edit",
-        tag,
-        "--repo",
-        REPOSITORY,
-        "--draft=false",
-        "--prerelease=false",
-    )
+    publish_release(tag)
     updater_commit = gh_json(f"repos/{REPOSITORY}/commits/main")["sha"]
     run(
         "gh",

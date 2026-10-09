@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 SPEC = importlib.util.spec_from_file_location(
     "daily_stable_release",
@@ -308,12 +309,22 @@ def release_driver(tmp_path, monkeypatch):
     Path("docs/releases").mkdir(parents=True)
     monkeypatch.setattr(daily, "REPOSITORY", "example/nebula")
     monkeypatch.setattr(daily, "MAIN_SHA", "b" * 40)
+    monkeypatch.setenv("GH_TOKEN", "fixture-admin-token")
+    monkeypatch.setenv("NEBULA_PUBLISH_TOKEN", "fixture-actions-token")
     previous = {"tag_name": "nebula-v3.0.0-beta.3"}
     commands = []
-    state = {"source": "a" * 40, "ci": "success", "advanced": False}
+    state = {
+        "source": "a" * 40,
+        "ci": "success",
+        "advanced": False,
+        "permission": "admin",
+    }
+    publication_envs = []
 
     def run(*args, **_kwargs):
         commands.append(args)
+        if args[:3] == ("gh", "release", "edit"):
+            publication_envs.append(_kwargs.get("env"))
         if args == ("git", "rev-parse", "HEAD"):
             return (
                 "c" * 40
@@ -333,6 +344,10 @@ def release_driver(tmp_path, monkeypatch):
         return ""
 
     def api(endpoint):
+        if endpoint == "user":
+            return {"login": "release-admin"}
+        if endpoint == "repos/example/nebula/collaborators/release-admin/permission":
+            return {"permission": state["permission"]}
         if "ci.yml/runs" in endpoint:
             return {
                 "workflow_runs": [
@@ -371,6 +386,7 @@ def release_driver(tmp_path, monkeypatch):
             wait=wait,
             receipt=receipt,
             assets=assets,
+            publication_envs=publication_envs,
         )
 
 
@@ -420,6 +436,113 @@ def test_coverage_validation_failure_stops_before_tagging(release_driver):
     with pytest.raises(RuntimeError, match="Cannot resolve daily coverage"):
         daily.main()
     assert_no_release_mutations(release_driver)
+
+
+@pytest.mark.parametrize("credential", ["GH_TOKEN", "NEBULA_PUBLISH_TOKEN"])
+def test_missing_credential_stops_before_coverage_and_tagging(
+    release_driver,
+    monkeypatch,
+    credential,
+):
+    monkeypatch.delenv(credential)
+    with pytest.raises(RuntimeError, match="credentials are required"):
+        daily.main()
+    release_driver.preflight.assert_not_called()
+    assert_no_release_mutations(release_driver)
+
+
+@pytest.mark.parametrize("permission", ["write", "maintain", "read", None])
+def test_non_admin_credential_stops_before_coverage_and_tagging(
+    release_driver,
+    permission,
+):
+    release_driver.state["permission"] = permission
+    with pytest.raises(RuntimeError, match="must belong to a repository admin"):
+        daily.main()
+    release_driver.preflight.assert_not_called()
+    assert_no_release_mutations(release_driver)
+
+
+def test_inaccessible_token_identity_fails_closed(release_driver):
+    with patch.object(daily, "gh_json", side_effect=RuntimeError("HTTP 403")):
+        with pytest.raises(RuntimeError, match="Cannot verify"):
+            daily.require_release_admin()
+    assert_no_release_mutations(release_driver)
+
+
+def test_single_explicit_release_path_preserves_every_gate(release_driver):
+    daily.main()
+    commands = release_driver.commands
+    commit = next(command for command in commands if command[:2] == ("git", "commit"))
+    assert commit[-1].endswith("[skip ci]")
+    dispatches = [
+        command for command in commands if command[:3] == ("gh", "workflow", "run")
+    ]
+    assert [command[3] for command in dispatches] == [
+        "nebula3-release.yml",
+        "nebula3-release-finalize.yml",
+        "publish-updater-manifest.yml",
+    ]
+    assert all("--ref" in command for command in dispatches)
+    release_driver.wait.assert_any_call(
+        "nebula3-release.yml",
+        "nebula-v3.0.0",
+        "c" * 40,
+        release_driver.wait.call_args_list[0].args[3],
+    )
+    release_driver.receipt.assert_called_once()
+    release_driver.assets.assert_called_once()
+    assert len(release_driver.publication_envs) == 1
+    assert release_driver.publication_envs[0]["GH_TOKEN"] == "fixture-actions-token"
+    publication = next(
+        command for command in commands if command[:3] == ("gh", "release", "edit")
+    )
+    assert commands.index(publication) > commands.index(dispatches[1])
+    assert commands.index(publication) < commands.index(dispatches[2])
+
+
+def test_missing_publication_token_cannot_fall_back_to_admin_token(monkeypatch):
+    monkeypatch.delenv("NEBULA_PUBLISH_TOKEN", raising=False)
+    with patch.object(daily, "run") as run:
+        with pytest.raises(RuntimeError, match="publication credential is required"):
+            daily.publish_release("nebula-v3.0.0")
+    run.assert_not_called()
+
+
+def test_workflow_checks_initiator_before_exposing_one_admin_credential():
+    workflow = yaml.safe_load(
+        (
+            Path(__file__).resolve().parents[1]
+            / ".github/workflows/daily-stable-release.yml"
+        ).read_text()
+    )
+    jobs = workflow["jobs"]
+    assert jobs["release"]["needs"] == "validate-admin"
+    assert jobs["release"]["environment"] == "desktop-release"
+    guard = jobs["validate-admin"]
+    assert guard["permissions"] == {"contents": "read"}
+    step = guard["steps"][0]
+    assert step["env"] == {
+        "GH_TOKEN": "${{ github.token }}",
+        "RELEASE_ACTOR": "${{ github.actor }}",
+    }
+    assert 'test "$permission" = admin' in step["run"]
+    steps = jobs["release"]["steps"]
+    checkout = next(
+        step for step in steps if step.get("uses", "").startswith("actions/checkout@")
+    )
+    driver = next(
+        step
+        for step in steps
+        if step.get("run") == "python scripts/daily_stable_release.py"
+    )
+    assert (
+        checkout["with"]["token"]
+        == driver["env"]["GH_TOKEN"]
+        == "${{ secrets.NEBULA_RELEASE_TOKEN }}"
+    )
+    assert driver["env"]["NEBULA_PUBLISH_TOKEN"] == "${{ github.token }}"
+    assert workflow["permissions"]["actions"] == "read"
 
 
 def test_daily_dispatch_carries_conservative_selection_and_checks_artifacts(

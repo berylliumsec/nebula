@@ -1,35 +1,25 @@
 {
-  "change_digest": "e25cb7669726de349382cb903d074181612ac971566a6c47d26f1cd51ba301f8",
-  "reviewed_by": "Codex focused loading feedback review on 2026-10-09",
-  "reason": "Notes initial readiness and loading feedback changed; Files, Activity, and lazy Code/Terminal feedback share the new surface. Select affected component behavior and Notes entry/edit geometry across desktop, mobile Chromium/WebKit, plus durable save/reload on temporary real Core.",
-  "exclusions": "No Python or native source changed; their suites are excluded. Unrelated assistant, provider, harness, and browser journeys and all full suites are excluded. Physical devices unavailable.",
-  "python": [],
-  "frontend": [
-    "ui/src/components/NotesPanel.test.tsx",
-    "ui/src/components/WorkspacePanel.test.tsx",
-    "ui/src/components/ExecutionHistory.test.tsx"
+  "change_digest": "e3c2dced92a5c06dfadb7471edb3bf61bfabf430cc280bc382d7758589f722b5",
+  "reviewed_by": "Codex focused release engineering review, 2026-10-09",
+  "reason": "Correct daily release credential identity and avoid duplicate event-triggered preparation/updater runs. The 93 collected tests exercise absent/inaccessible/non-admin credentials, initiator admin guard before protected credentials, authenticated dispatch/publication separation, explicit required release stages, no-change and CI gates, receipt/artifact failures, real selectors in disposable Git repositories, and unchanged full-suite/selection guards.",
+  "exclusions": "Release orchestration only. Python 3.12 tests bounded to these three files and two minutes, with all GitHub writes mocked. No UI, native, Core, package, signing, smoke or offensive code changes. Frontend/native/Playwright execution and all full suites are excluded. Protected GitHub end-to-end publication requires separate approval and remains unverified.",
+  "python": [
+    "tests/test_daily_stable_release.py",
+    "tests/test_playwright_impact.py",
+    "tests/test_test_selection.py"
   ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:notes-screen-fit/desktop",
-    "entry:notes-screen-fit/compact",
-    "entry:notes-screen-fit/mobile-chromium-small",
-    "entry:notes-screen-fit/mobile-chromium",
-    "entry:notes-screen-fit/mobile-chromium-wide",
-    "entry:notes-screen-fit/mobile-webkit-small",
-    "entry:notes-screen-fit/mobile-webkit",
-    "entry:notes-screen-fit/mobile-webkit-wide",
-    "entry:notes-typing/real-core"
-  ],
+  "playwright": [],
   "expected_tests": {
-    "python": 0,
-    "frontend": 27,
+    "python": 93,
+    "frontend": 0,
     "native": 0,
-    "playwright": 9
+    "playwright": 0
   },
   "python_versions": [
     "3.12"
   ],
   "python_browser": false,
-  "python_node": false
+  "python_node": true
 }
