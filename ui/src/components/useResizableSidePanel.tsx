@@ -41,7 +41,7 @@ export function useResizableSidePanel({
   const [width, setWidth] = useState(() => storedWidth(storageKey, defaultWidth));
   const [userSized, setUserSized] = useState(() => {
     try { return globalThis.localStorage?.getItem(storageKey) !== null; }
-    catch { return false; }
+    catch { /* diagnostic-expected: device-local sizing preferences may be unavailable. */ return false; }
   });
   const [, setViewportRevision] = useState(0);
 
@@ -113,7 +113,7 @@ export function useResizableSidePanel({
     onDoubleClick={() => {
       if (defaultWidthRatio) {
         setUserSized(false);
-        try { globalThis.localStorage?.removeItem(storageKey); } catch { /* Device-local preference is optional. */ }
+        try { globalThis.localStorage?.removeItem(storageKey); } catch { /* diagnostic-expected: device-local sizing preferences may be unavailable. */ }
         resizeTo((panelRef.current?.parentElement?.clientWidth ?? defaultWidth * 2) * defaultWidthRatio);
       } else resizeTo(defaultWidth);
     }}

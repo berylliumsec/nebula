@@ -222,26 +222,26 @@ const chatCompanionModeKey = (id: string) => `nebula.chat-companion-expanded:${i
 function storedCompanionExpanded(id: string): boolean {
   if (!id) return false;
   try { return localStorage.getItem(chatCompanionModeKey(id)) === "true"; }
-  catch { return false; }
+  catch { /* diagnostic-expected: device-local panel preferences may be unavailable. */ return false; }
 }
 function rememberCompanionExpanded(id: string, expanded: boolean) {
   if (!id) return;
   try { localStorage.setItem(chatCompanionModeKey(id), String(expanded)); }
-  catch { /* Device-local panel preference is optional. */ }
+  catch { /* diagnostic-expected: device-local panel preferences may be unavailable. */ }
 }
 function storedChatSide(id: string): ChatSide | undefined {
   if (!id) return undefined;
   try {
     const value = localStorage.getItem(chatSideStorageKey(id));
     return value === "code" || value === "browser" || value === "notes" ? value : undefined;
-  } catch { return undefined; }
+  } catch { /* diagnostic-expected: device-local panel preferences may be unavailable. */ return undefined; }
 }
 function rememberChatSide(id: string, side?: ChatSide) {
   if (!id) return;
   try {
     if (side) localStorage.setItem(chatSideStorageKey(id), side);
     else localStorage.removeItem(chatSideStorageKey(id));
-  } catch { /* Device-local panel preference is optional. */ }
+  } catch { /* diagnostic-expected: device-local panel preferences may be unavailable. */ }
 }
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
 const sessionViews = new Set<string>(["chat", "code", "terminal", "browser", "missions", "activity", "workspace", "notes"] satisfies SessionView[]);
