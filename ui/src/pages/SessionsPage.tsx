@@ -19,6 +19,8 @@ import { isPendingRequest, pendingApprovalId, useSessionState } from "./useSessi
 import { RefreshCw } from "lucide-react";
 import { ChatEvidence } from "../components/ChatEvidence";
 import { useChatQueue } from "./useChatQueue";
+import { newEditorBufferId, useAdoptWorkbenchEditorSession } from "../state/WorkbenchEditorContext";
+import { adoptNotePanelState } from "../components/NotesPanel";
 import { ChatQueuePanel } from "../components/ChatQueuePanel";
 import { estimateTokensFromBytes, ProviderGoalPanel, utf8Length, type ProviderGoalDraft } from "../components/ProviderGoalPanel";
 import { ProviderGoalChildren } from "../components/ProviderGoalChildren";
@@ -66,6 +68,7 @@ import {
   Download,
   FileClock,
   Files,
+  Target,
   FolderOpen,
   Globe2,
   Gauge,
@@ -213,6 +216,33 @@ import { chatTranscriptFilename, formatChatTranscript } from "./chatTranscriptEx
 import { currentAgentTurnIndex, followsChatBottom, type ChatScrollGeometry } from "./chatScrollPosition";
 
 const CHAT_TERMINAL_OPEN_KEY = "nebula.chat-terminal.open";
+type ChatSide = "code" | "browser" | "notes";
+const chatSideStorageKey = (id: string) => `nebula.chat-side:${id}`;
+const chatCompanionModeKey = (id: string) => `nebula.chat-companion-expanded:${id}`;
+function storedCompanionExpanded(id: string): boolean {
+  if (!id) return false;
+  try { return localStorage.getItem(chatCompanionModeKey(id)) === "true"; }
+  catch { return false; }
+}
+function rememberCompanionExpanded(id: string, expanded: boolean) {
+  if (!id) return;
+  try { localStorage.setItem(chatCompanionModeKey(id), String(expanded)); }
+  catch { /* Device-local panel preference is optional. */ }
+}
+function storedChatSide(id: string): ChatSide | undefined {
+  if (!id) return undefined;
+  try {
+    const value = localStorage.getItem(chatSideStorageKey(id));
+    return value === "code" || value === "browser" || value === "notes" ? value : undefined;
+  } catch { return undefined; }
+}
+function rememberChatSide(id: string, side?: ChatSide) {
+  if (!id) return;
+  try {
+    if (side) localStorage.setItem(chatSideStorageKey(id), side);
+    else localStorage.removeItem(chatSideStorageKey(id));
+  } catch { /* Device-local panel preference is optional. */ }
+}
 type SessionView = "chat" | "code" | "terminal" | "browser" | "missions" | "activity" | "workspace" | "notes";
 const sessionViews = new Set<string>(["chat", "code", "terminal", "browser", "missions", "activity", "workspace", "notes"] satisfies SessionView[]);
 const screenFitViews = new Set<SessionView>(["terminal", "code", "workspace", "browser", "notes"]);
@@ -987,6 +1017,9 @@ interface WorkbenchLayoutParts {
   chatTerminalVisible: boolean;
   chatTerminalStacked: boolean;
   sideChatSplit: ReturnType<typeof useResizableSplitPane>;
+  sideSize: ReturnType<typeof useResizableSidePanel>;
+  chatSideVisible: boolean;
+  sideBrowserVisible: boolean;
   chatTerminalSize: ReturnType<typeof useResizableSidePanel>;
   conversationPanelSize: ReturnType<typeof useResizableSidePanel>;
   conversationPanelWidth: number | undefined;
@@ -995,10 +1028,12 @@ interface WorkbenchLayoutParts {
 }
 
 /** Only the Workbench owns layout observers and persistent panel preferences. */
-function WorkbenchLayout({ view, chatTerminalOpen, sideChatId, compact, hasWorkspace, conversationPanelOpen, sessionInspectorOpen, children }: {
+function WorkbenchLayout({ view, chatTerminalOpen, sideChatId, sideView, companionExpanded, compact, hasWorkspace, conversationPanelOpen, sessionInspectorOpen, children }: {
   view: SessionView;
   chatTerminalOpen: boolean;
   sideChatId: string;
+  sideView?: ChatSide;
+  companionExpanded: boolean;
   compact: boolean;
   hasWorkspace: boolean;
   conversationPanelOpen: boolean;
@@ -1017,16 +1052,24 @@ function WorkbenchLayout({ view, chatTerminalOpen, sideChatId, compact, hasWorks
     document.querySelector<HTMLElement>(`.session-tabs button[aria-selected="true"]`)
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [view]);
-  const chatTerminalVisible = view === "chat" && chatTerminalOpen && !sideChatId && !compact && hasWorkspace;
+  const chatTerminalVisible = view === "chat" && chatTerminalOpen && !sideChatId && !sideView && !compact && hasWorkspace;
+  const chatSideVisible = view === "chat" && Boolean(sideView) && !sideChatId && !compact && hasWorkspace && !chatTerminalVisible;
+  const sideBrowserVisible = chatSideVisible && sideView === "browser";
+  const sideSize = useResizableSidePanel({
+    defaultWidth: 500, defaultWidthRatio: 0.5,
+    enabled: chatSideVisible && !chatTerminalStacked && !companionExpanded,
+    label: `Resize ${sideView ?? "companion"} panel`, maxWidth: 1100,
+    minPrimaryWidth: 320, minWidth: 320, storageKey: "nebula.chat-companion.width-v2",
+  });
   const sideChatSplit = useResizableSplitPane("nebula.side-chat.ratio", Boolean(sideChatId) && view === "chat");
   const chatTerminalSize = useResizableSidePanel({
-    defaultWidth: 520,
-    enabled: chatTerminalVisible && !chatTerminalStacked,
+    defaultWidth: 500, defaultWidthRatio: 0.5,
+    enabled: chatTerminalVisible && !chatTerminalStacked && !companionExpanded,
     label: "Resize terminal",
     maxWidth: 960,
-    minPrimaryWidth: 420,
-    minWidth: 360,
-    storageKey: "nebula.chat-side-terminal.width",
+    minPrimaryWidth: 320,
+    minWidth: 320,
+    storageKey: "nebula.chat-side-terminal.width-v2",
   });
   const [conversationPanelWidth, setConversationPanelWidth] = useState<number>();
   const [sessionInspectorWidth, setSessionInspectorWidth] = useState<number>();
@@ -1048,7 +1091,7 @@ function WorkbenchLayout({ view, chatTerminalOpen, sideChatId, compact, hasWorks
     "--conversation-panel-width": `${conversationPanelWidth ?? 280}px`,
     "--session-inspector-width": `${sessionInspectorWidth ?? 280}px`,
   } as CSSProperties;
-  return children({chatTerminalVisible, chatTerminalStacked, sideChatSplit, chatTerminalSize, conversationPanelSize, conversationPanelWidth, setSessionInspectorWidth, sessionLayoutStyle});
+  return children({chatTerminalVisible, chatTerminalStacked, sideChatSplit, sideSize, chatSideVisible, sideBrowserVisible, chatTerminalSize, conversationPanelSize, conversationPanelWidth, setSessionInspectorWidth, sessionLayoutStyle});
 }
 
 function WorkbenchGuideAction({ onOpen, assistantSettingsOpen, view, refreshCatalog }: { onOpen: () => void; assistantSettingsOpen: boolean; view: SessionView; refreshCatalog: () => void }) {
@@ -1118,6 +1161,11 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const [lastRequestedView, setLastRequestedView] = useState<SessionView>(requestedView ?? "terminal");
   if (requestedView && requestedView !== lastRequestedView) setLastRequestedView(requestedView);
   const view = embeddedSideChat ? "chat" : requestedView ?? lastRequestedView;
+  const [draftEditorKey, setDraftEditorKey] = useState(() => newEditorBufferId());
+  const adoptEditorSession = useAdoptWorkbenchEditorSession();
+  const sideView = (["code", "browser", "notes"] as const).find(candidate => candidate === searchParams.get("side"));
+  const companionExpanded = (sideView !== undefined || chatTerminalOpen) && searchParams.get("companion") === "full";
+
   const updateSearchParams = useCallback((update: (params: URLSearchParams) => void, options?: NavigateOptions) => {
     const params = latestSearchParams();
     update(params);
@@ -1130,6 +1178,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     params.set("view", (sessionViewFromParam(params.get("view")) ?? view) === "browser" ? "browser" : "chat");
     params.delete(embeddedSideChat ? "sideChat" : "session");
     if (!embeddedSideChat) params.delete("sideChat");
+    params.delete("side");
+    params.delete("companion");
+    params.delete("openFile");
+
   }, { replace: true });
   const consumedSelectionHandoff = useRef<string | null>(null);
   const clearSubmittedContext = () => {
@@ -1140,7 +1192,23 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     // Stream callbacks outlive the render that submitted the message. Preserve
     // newer navigation and cleared handoffs instead of restoring that old URL.
     updateSearchParams(params => {
+      const previousId = params.get("session") ?? "";
+      if (!embeddedSideChat && !previousId) {
+        adoptEditorSession(draftEditorKey, id);
+        if (engagement) adoptNotePanelState(`${engagement.id}:${draftEditorKey}`, `${engagement.id}:${id}`);
+        if (params.get("side")) rememberChatSide(id, params.get("side") as ChatSide);
+        if (params.get("companion") === "full") rememberCompanionExpanded(id, true);
+      }
+      if (!embeddedSideChat) {
+        const nextSide = storedChatSide(id);
+        if (nextSide) params.set("side", nextSide);
+        else params.delete("side");
+        if (nextSide && storedCompanionExpanded(id)) params.set("companion", "full");
+        else params.delete("companion");
+        if (previousId !== id) params.delete("openFile");
+      }
       if (!preserveSurface && !embeddedSideChat) params.set("view", params.get("view") === "browser" ? "browser" : "chat");
+
       if (params.get("handoff") === consumedSelectionHandoff.current) params.delete("handoff");
       if (!embeddedSideChat && params.get("session") !== id) params.delete("sideChat");
       params.set(embeddedSideChat ? "sideChat" : "session", id);
@@ -1220,6 +1288,26 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     });
   };
   const conversationMenuRef = useRef<HTMLDetailsElement>(null);
+  const setSideView = useCallback((next?: ChatSide) => {
+    updateSearchParams(params => {
+      rememberChatSide(params.get("session") ?? "", next);
+      rememberCompanionExpanded(params.get("session") ?? "", false);
+      if (next) params.set("side", next);
+      else params.delete("side");
+      params.delete("companion");
+      params.set("view", "chat");
+    }, { replace: true });
+    if (next) setChatTerminalOpen(false);
+  }, [updateSearchParams, setChatTerminalOpen]);
+  const setCompanionExpanded = useCallback((expanded: boolean) => {
+    updateSearchParams(params => {
+      rememberCompanionExpanded(params.get("session") ?? "", expanded);
+      if (expanded) params.set("companion", "full");
+      else params.delete("companion");
+      params.set("view", "chat");
+    }, { replace: true });
+  }, [updateSearchParams]);
+
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const activeEngagementIdRef = useRef(engagement?.id);
   activeEngagementIdRef.current = engagement?.id;
@@ -2731,6 +2819,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   };
 
   const newConversation = () => {
+    setDraftEditorKey(newEditorBufferId());
     setResolvedApproval(undefined);
     // URL navigation and state updates are committed on separate React turns.
     // Suppress the old URL session during that gap so it cannot immediately
@@ -5739,6 +5828,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
     close: () => { void closeSideChat(); },
     showConversations: () => setMobileListOpen(true),
     unavailable: unavailableSideChat,
+
   });
   const collapseBrowserAssistant = () => {
     setBrowserAssistantOpen(false);
@@ -5756,43 +5846,46 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   const transcriptSearchAction = <button ref={transcriptSearchButtonRef} type="button" className="icon-button subtle transcript-search-toggle" data-guide="transcript-search" aria-label="Search messages and bookmarks" title="Search messages and bookmarks" aria-expanded={transcriptSearchOpen} aria-controls={transcriptSearchOpen ? "assistant-transcript-search" : undefined} onClick={() => setTranscriptSearchOpen(open => !open)}><Search size={18} aria-hidden="true" /></button>;
 
   const toolAssistanceAction = api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} />;
+  const [chatToolsOpen, setChatToolsOpen] = useState(false);
+  const chatToolsRef = useRef<HTMLDivElement>(null);
+  const chatToolsButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!chatToolsOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!chatToolsRef.current?.contains(event.target as Node)) setChatToolsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [chatToolsOpen]);
+  useEffect(() => { setChatToolsOpen(false); }, [sessionId, view]);
   const focusAction = <button className="icon-button subtle workbench-full-screen-toggle" type="button"
-            aria-label={fullScreen ? "Exit full screen workbench" : "Enter focus mode"}
+            aria-label={fullScreen ? "Exit focus mode" : "Enter focus mode"}
             title={fullScreen ? "Exit focus mode" : "Enter focus mode"}
             aria-pressed={fullScreen} onClick={() => setFullScreen((value) => !value)}>
-            {fullScreen ? <Minimize2 size={18} aria-hidden="true" /> : <Maximize2 size={18} aria-hidden="true" />}
+            <Target size={18} aria-hidden="true" />
           </button>;
   const conversationTitle = sessions.find(session => session.id === sessionId)?.title
     ?? (loadingHistory ? "Loading conversation…" : conversationOpen ? "New conversation" : "No conversation open");
   const studioRailAvailable = Boolean(sessionId && !fullScreen && !embeddedSideChat && !sideChatId
-    && !chatTerminalOpen && !sessionInspectorOpen);
+    && !chatTerminalOpen && !sessionInspectorOpen && !sideView);
   const conversationActions = (
         <div className="session-toolbar-actions" role="toolbar" aria-label="Conversation actions">
           {view === "chat" && conversationOpen && transcriptSearchAction}
-          {toolAssistanceAction}
-          {view === "chat" && api && engagement && <button className="icon-button subtle" type="button"
-            data-guide="terminal-toggle"
-            aria-label={chatTerminalOpen ? "Hide terminal" : "Show terminal"}
-            title={chatTerminalOpen ? "Hide terminal" : "Show terminal beside the chat"}
-            aria-pressed={chatTerminalOpen}
-            aria-controls="chat-side-terminal"
-            onClick={() => setChatTerminalOpen(!chatTerminalOpen)}><SquareTerminal size={18} aria-hidden="true" /></button>}
-          {view === "chat" && !embeddedSideChat && <button ref={sideChatButtonRef} className="icon-button subtle" type="button"
-            aria-label={sideChatId ? "Close side chat" : "Open side chat"}
-            title={sideChatId ? "Close and discard this side chat" : "Open a side chat for this conversation"}
-            aria-expanded={Boolean(sideChatId)}
-            aria-controls="workbench-side-chat"
-            disabled={sideChatBusy || (!sideChatId && (!api || !sessionId))}
-            onClick={() => void openSideChat()}>{sideChatBusy ? <LoaderCircle className="spin" size={18} aria-hidden="true" /> : <MessageSquarePlus size={18} aria-hidden="true" />}</button>}
-          {view === "chat" && <button className="icon-button subtle" type="button"
-            aria-label={sessionInspectorOpen ? "Hide session details" : "Show session details"}
-            title={sessionInspectorOpen ? "Hide session details" : "Show session details"}
-            aria-expanded={sessionInspectorOpen}
-            onClick={() => setSessionInspectorOpen((open) => {
-              localStorage.setItem("nebula.session-inspector.open", String(!open));
-              return !open;
-            })}><PanelRight size={18} aria-hidden="true" /></button>}
-          {focusAction}
+          {view === "chat" ? <div className="chat-tools-menu" ref={chatToolsRef}>
+            <button ref={chatToolsButtonRef} className="icon-button subtle" type="button" aria-label="Chat tools" title="Chat tools" aria-expanded={chatToolsOpen} aria-controls="chat-tools-panel" onClick={() => setChatToolsOpen(open => !open)}><LayoutGrid size={18} aria-hidden="true" /></button>
+            {chatToolsOpen && <div className="chat-tools-panel" id="chat-tools-panel" role="group" aria-label="Chat tools" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setChatToolsOpen(false); chatToolsButtonRef.current?.focus(); } }}>
+              {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} triggerVariant="menu" />}
+              <button className="workbench-menu-item" type="button" aria-pressed={Boolean(sideChatId)} disabled={sideChatBusy || (!sideChatId && (!api || !sessionId))} onClick={() => { void openSideChat(); setChatToolsOpen(false); }}><GitFork size={17} aria-hidden="true" /><span><strong>Side chat</strong><small>{sideChatId ? "Close side chat" : "Open beside chat"}</small></span></button>
+              {api && engagement && <button className="workbench-menu-item" type="button" data-guide="terminal-toggle" aria-pressed={chatTerminalOpen && !sideView} onClick={() => { setSideView(undefined); setChatTerminalOpen(!chatTerminalOpen); setChatToolsOpen(false); }}><SquareTerminal size={17} aria-hidden="true" /><span><strong>Terminal</strong><small>{chatTerminalOpen && !sideView ? "Hide side terminal" : "Open beside chat"}</small></span></button>}
+              {api && engagement && ([
+                { id: "code", label: "Code editor", icon: Braces },
+                { id: "browser", label: "Browser", icon: Globe2 },
+                { id: "notes", label: "Notes", icon: NotebookPen },
+              ] as const).map(({ id, label, icon: Icon }) => <button className="workbench-menu-item" type="button" key={id} aria-pressed={sideView === id} onClick={() => { compact ? setView(id) : setSideView(sideView === id ? undefined : id); setChatToolsOpen(false); }}><Icon size={17} aria-hidden="true" /><span><strong>{label}</strong><small>{sideView === id ? "Hide from chat" : "Open beside chat"}</small></span></button>)}
+              <button className="workbench-menu-item" type="button" aria-pressed={sessionInspectorOpen} onClick={() => { setSessionInspectorOpen(open => !open); setChatToolsOpen(false); }}><PanelRight size={17} aria-hidden="true" /><span><strong>Chat details</strong><small>{sessionInspectorOpen ? "Hide details" : "Show context and results"}</small></span></button>
+            </div>}
+          </div> : toolAssistanceAction}
+
         </div>
   );
 
@@ -6132,11 +6225,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           { id: "missions", label: "Missions", ariaLabel: "Autonomous missions", iconOnly: true, icon: <Bot size={18} /> },
           { id: "activity", label: "Activity", ariaLabel: "Activity history", iconOnly: true, icon: <History size={18} /> },
         ] as const} />
-        {view !== "chat" && <div className="session-toolbar-actions">
-          {view === "missions" && <NewMissionButton className="icon-button subtle toolbar-icon-action" showSetupGuidance={false} />}
-          {toolAssistanceAction}
+        <div className="session-toolbar-actions">
+          {view !== "chat" && <>{view === "missions" && <NewMissionButton className="icon-button subtle toolbar-icon-action" showSetupGuidance={false} />}{toolAssistanceAction}</>}
           {focusAction}
-        </div>}
+        </div>
       </Toolbar>
   );
 
@@ -6160,8 +6252,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
   }
 
   return (
-    <WorkbenchLayout view={view} chatTerminalOpen={chatTerminalOpen} sideChatId={sideChatId} compact={compact} hasWorkspace={Boolean(api && engagement)} conversationPanelOpen={conversationPanelOpen} sessionInspectorOpen={sessionInspectorOpen}>
-      {({chatTerminalVisible, chatTerminalStacked, sideChatSplit, chatTerminalSize, conversationPanelSize, conversationPanelWidth, setSessionInspectorWidth, sessionLayoutStyle}) => <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}${fullScreen && focusedWorkbenchViews.has(view) ? " workbench-focus" : ""}${fullScreen && view === "chat" ? " chat-focus" : ""}`}>
+    <WorkbenchLayout view={view} chatTerminalOpen={chatTerminalOpen} sideChatId={sideChatId} sideView={sideView} companionExpanded={companionExpanded} compact={compact} hasWorkspace={Boolean(api && engagement)} conversationPanelOpen={conversationPanelOpen} sessionInspectorOpen={sessionInspectorOpen}>
+      {({chatTerminalVisible, chatTerminalStacked, sideChatSplit, sideSize, chatSideVisible, sideBrowserVisible, chatTerminalSize, conversationPanelSize, conversationPanelWidth, setSessionInspectorWidth, sessionLayoutStyle}) => <div className={`page sessions-page${view === "chat" ? " chat-active" : ""}${screenFitViews.has(view) ? " screen-fit" : ""}${fullScreen ? " full-screen" : ""}${fullScreen && focusedWorkbenchViews.has(view) ? " workbench-focus" : ""}${fullScreen && view === "chat" ? " chat-focus" : ""}`}>
       <WorkbenchGuideAction onOpen={() => setAssistantSettingsOpen(true)} assistantSettingsOpen={assistantSettingsOpen} view={view} refreshCatalog={refreshProjectCatalog} />
       <PageHeader
         title="Workbench"
@@ -6171,6 +6263,7 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
         trailingActions={fullScreen ? undefined : newChatAction}
       />
       {fullScreen && workbenchToolbar}
+      {compact && !fullScreen && view !== "chat" && <div className="mobile-workbench-focus"><strong>{({ terminal: "Terminal", code: "Code editor", browser: "Browser", workspace: "Files", notes: "Notes", missions: "Missions", activity: "Activity" } as const)[view]}</strong>{focusAction}</div>}
 
       <div className={`session-layout ${view}${mobileListOpen ? " mobile-list-open" : ""}${view === "chat" && conversationPanelOpen ? " conversation-panel-open" : ""}${view === "chat" && sideChatId ? " side-chat-active" : ""}${view === "chat" && sessionInspectorOpen ? " inspector-open" : ""}`} style={sessionLayoutStyle}>
         {view === "chat" && mobileListOpen && <button className="mobile-drawer-scrim" type="button" aria-label="Close conversations" onClick={() => setMobileListOpen(false)} />}
@@ -6245,7 +6338,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           </nav>
           {compact && mobileListOpen && <MobileDrawerFooter onNavigate={() => setMobileListOpen(false)} />}
         </aside>}
-        <section ref={(element) => { sideChatSplit.containerRef.current = element; }} className={`session-workspace${chatTerminalVisible ? ` chat-terminal-open${chatTerminalStacked ? " stacked" : ""}` : ""}${sideChatId && view === "chat" ? " side-chat-open" : ""}`} style={sideChatSplit.style}>
+        <section ref={(element) => { sideChatSplit.containerRef.current = element; }} className={`session-workspace${chatTerminalVisible ? ` chat-terminal-open${chatTerminalStacked ? " stacked" : ""}${companionExpanded ? " expanded" : ""}` : ""}${sideChatId && view === "chat" ? " side-chat-open" : ""}${chatSideVisible ? ` chat-companion-open${chatTerminalStacked ? " stacked" : ""}${companionExpanded ? " expanded" : ""}` : ""}`} style={sideChatSplit.style}>
+
           {compact && (view === "activity" || view === "workspace" || view === "notes" || view === "missions") && <header className="mobile-view-header"><h2>{({ activity: "Activity", workspace: "Files", notes: "Notes", missions: "Missions" } as const)[view]}</h2></header>}
           {view === "chat" && compact && <header className="conversation-toolbar mobile-conversation-header">
             <button className="icon-button subtle mobile-drawer-toggle" type="button" aria-label="Open conversations" title="Open conversations" aria-expanded={mobileListOpen} aria-controls="workbench-conversations" onClick={() => { setMobileMoreOpen(false); setMobileListOpen(true); }}><PanelLeft size={20} aria-hidden="true" /></button>
@@ -6253,16 +6347,21 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               <strong>{conversationTitle}</strong>
               <small><span>{assistantSource}{runtimeConfiguration ? ` · ${runtimeConfiguration}` : ""}</span><ChevronDown size={13} aria-hidden="true" /></small>
             </button>
-            {fullScreen ? focusAction : <div className="mobile-conversation-menu" ref={mobileConversationMenuRef}>
+            <div className="mobile-conversation-menu" ref={mobileConversationMenuRef}>
               <button ref={mobileConversationActionsRef} className="icon-button subtle" type="button" aria-label="Conversation actions" title="Conversation actions" aria-haspopup="menu" aria-expanded={mobileConversationMenuOpen} aria-controls={mobileConversationMenuOpen ? "mobile-conversation-actions" : undefined} onClick={() => setMobileConversationMenuOpen((open) => !open)}><MoreHorizontal size={20} aria-hidden="true" /></button>
               {mobileConversationMenuOpen && <div className="mobile-conversation-menu-panel" id="mobile-conversation-actions" role="menu" aria-label="Conversation actions">
                 {conversationOpen && <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setTranscriptSearchOpen(true); }}><Search size={17} aria-hidden="true" /><span><strong>Search messages</strong><small>Messages and bookmarks</small></span></button>}
                 <button className="workbench-menu-item" type="button" role="menuitem" disabled={sideChatBusy || (!sideChatId && (!api || !sessionId))} onClick={() => { setMobileConversationMenuOpen(false); void openSideChat(); }}><MessageSquarePlus size={17} aria-hidden="true" /><span><strong>{sideChatId ? "Close side chat" : "Open side chat"}</strong><small>{sideChatId ? "Discard this side chat" : "Keep a side chat with this conversation"}</small></span></button>
                 <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setSessionInspectorOpen(true); }}><PanelRight size={17} aria-hidden="true" /><span><strong>Session details</strong><small>Context and results</small></span></button>
+                {api && engagement && <>
+                  <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setView("code"); }}><Braces size={17} aria-hidden="true" /><span><strong>Code editor</strong><small>Browse and edit project files</small></span></button>
+                  <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setView("browser"); }}><Globe2 size={17} aria-hidden="true" /><span><strong>Browser</strong><small>Open the project browser</small></span></button>
+                  <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setView("notes"); }}><NotebookPen size={17} aria-hidden="true" /><span><strong>Notes</strong><small>Open project notes</small></span></button>
+                </>}
                 {api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} triggerVariant="menu" />}
-                <button className="workbench-menu-item" type="button" role="menuitem" onClick={() => { setMobileConversationMenuOpen(false); setFullScreen(true); }}><Maximize2 size={17} aria-hidden="true" /><span><strong>Focus mode</strong><small>Hide navigation</small></span></button>
               </div>}
-            </div>}
+            </div>
+            {focusAction}
             <button className="icon-button subtle mobile-new-chat" type="button" aria-label="New chat" title="New chat" disabled={!engagement} onClick={newConversation}><SquarePen size={20} aria-hidden="true" /></button>
           </header>}
           {view === "chat" && !compact && <header className="conversation-toolbar">
@@ -6282,27 +6381,31 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
           </header>}
 
           {api && engagement && <div ref={(element) => { chatTerminalSize.panelRef.current = element; }} id="chat-side-terminal" aria-label={chatTerminalVisible ? "Terminal beside chat" : undefined} role={chatTerminalVisible ? "region" : undefined} style={chatTerminalVisible ? chatTerminalSize.panelStyle : undefined} className={`persistent-terminal integrated-browser-layout${terminalAssistantOpen && view === "terminal" ? " assistant-open" : ""}${chatTerminalVisible ? " chat-side-terminal" : ""}`} hidden={view !== "terminal" && !chatTerminalVisible}>
-            {chatTerminalVisible && chatTerminalSize.resizeHandle}
-            <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar terminal-companion-toolbar"><div ref={setTerminalToolbarHost} className="terminal-toolbar-host" />{chatTerminalVisible ? <><button className="button quiet managed-browser-icon" type="button" aria-label="Open Terminal tab" title="Open the full Terminal tab" onClick={() => setView("terminal")}><Maximize2 size={16} aria-hidden="true" /></button><button className="button quiet managed-browser-icon" type="button" aria-label="Hide terminal" title="Hide terminal" onClick={() => setChatTerminalOpen(false)}><X size={16} aria-hidden="true" /></button></> : <button className={`button quiet managed-browser-icon${compact ? " mobile-ask-button" : ""}`} type="button" aria-label={compact ? "Ask Assistant" : "Assistant"} title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}>{compact ? <><Sparkles size={15} aria-hidden="true" /><span>Ask</span></> : <PanelRight size={18} aria-hidden="true" />}</button>}</header>
+            {chatTerminalVisible && !companionExpanded && chatTerminalSize.resizeHandle}
+            <div className="integrated-browser-page terminal-companion-page"><header className="browser-workspace-toolbar terminal-companion-toolbar"><div ref={setTerminalToolbarHost} className="terminal-toolbar-host" />{chatTerminalVisible ? <><button className="button quiet managed-browser-icon" type="button" aria-label={companionExpanded ? "Return Terminal to side" : "Expand Terminal in chat"} title={companionExpanded ? "Return Terminal to side" : "Expand Terminal in chat"} aria-expanded={companionExpanded} onClick={() => setCompanionExpanded(!companionExpanded)}>{companionExpanded ? <Minimize2 size={16} aria-hidden="true" /> : <Maximize2 size={16} aria-hidden="true" />}</button><button className="button quiet managed-browser-icon" type="button" aria-label="Hide terminal" title="Hide terminal" onClick={() => { setCompanionExpanded(false); setChatTerminalOpen(false); }}><X size={16} aria-hidden="true" /></button></> : <button className={`button quiet managed-browser-icon${compact ? " mobile-ask-button" : ""}`} type="button" aria-label={compact ? "Ask Assistant" : "Assistant"} title="Toggle Assistant" aria-expanded={terminalAssistantOpen} aria-controls="terminal-assistant-panel" onClick={() => setTerminalAssistantOpen(open => !open)}>{compact ? <><Sparkles size={15} aria-hidden="true" /><span>Ask</span></> : <PanelRight size={18} aria-hidden="true" />}</button>}</header>
             <Suspense fallback={<LoadingSurface label="Loading terminal" />}><ContainerTerminalPanel toolbarHost={terminalToolbarHost} active={view === "terminal" || chatTerminalVisible} api={api} capturedBy={activeOperator?.id} engagementId={engagement.id} engagementName={engagement.name} onUploadEvidence={uploadEvidence} setupTerminalStatus={setupStatus?.terminal.status} setupTerminalDetail={setupStatus?.terminal.detail} commandRequest={terminalCommandRequest} onCommandAccepted={(id) => setTerminalCommandRequest(current => current?.id === id ? undefined : current)} /></Suspense></div>
             {view === "terminal" && terminalAssistantOpen && <BrowserAssistantPanel panelId="terminal-assistant-panel" label="Terminal Assistant" onActionContainer={() => undefined} header={<><strong>Assistant</strong>{transcriptSearchAction}<button className="button quiet managed-browser-icon" type="button" aria-label="New conversation" title="New conversation" disabled={sending || Boolean(pendingResponse)} onClick={newConversation}><Plus size={18} aria-hidden="true" /></button><button className="button quiet" type="button" aria-label="Collapse terminal Assistant" title="Collapse Assistant" onClick={() => setTerminalAssistantOpen(false)}><X size={16} /></button></>}>
               {assistantPanel}
             </BrowserAssistantPanel>}
           </div>}
-          {api && engagement && <div className="persistent-code-editor" hidden={view !== "code"}>
-            <Suspense fallback={<LoadingSurface label="Loading code editor" />}><CodeEditorPanel active={view === "code"} api={api} engagementId={engagement.id} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} initialOpenPath={searchParams.get("openFile") ?? undefined} initialOpenLine={Number(searchParams.get("openLine")) || undefined} initialOpenRequest={searchParams.get("openFileRequest") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => setView("terminal")} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={requestNebulaDraft} /></Suspense>
+          {api && engagement && <div ref={(element) => { sideSize.panelRef.current = element; }} id="chat-side-code" role={chatSideVisible && sideView === "code" ? "region" : undefined} aria-label={chatSideVisible && sideView === "code" ? "Code beside chat" : undefined} className={`persistent-code-editor${chatSideVisible && sideView === "code" ? " chat-companion-panel" : ""}`} style={chatSideVisible && sideView === "code" ? sideSize.panelStyle : undefined} hidden={view !== "code" && !(chatSideVisible && sideView === "code")}>
+            {chatSideVisible && sideView === "code" && <header className="chat-companion-header">{!companionExpanded && sideSize.resizeHandle}<strong>Code editor</strong><button className="icon-button subtle" type="button" aria-label={companionExpanded ? "Return Code editor to side" : "Expand Code editor in chat"} title={companionExpanded ? "Return Code editor to side" : "Expand Code editor in chat"} onClick={() => setCompanionExpanded(!companionExpanded)}>{companionExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button className="icon-button subtle" type="button" aria-label="Hide Code editor" title="Hide Code editor" onClick={() => setSideView(undefined)}><X size={16} /></button></header>}
+            <Suspense fallback={<LoadingSurface label="Loading code editor" />}><CodeEditorPanel key={sessionId || draftEditorKey} active={view === "code" || (chatSideVisible && sideView === "code")} api={api} engagementId={engagement.id} editorSessionKey={sessionId || draftEditorKey} workspacePath={engagement.workspacePath} providers={providers} harnesses={harnesses} initialWorkspaceSearch={searchParams.get("workspaceSearch") ?? undefined} initialOpenPath={searchParams.get("openFile") ?? undefined} initialOpenLine={Number(searchParams.get("openLine")) || undefined} initialOpenRequest={searchParams.get("openFileRequest") ?? undefined} onRun={setRunCandidate} onOpenTerminal={() => setView("terminal")} onCreateFindingDraft={requestFindingDraft} onUseWithAssistant={requestNebulaDraft} /></Suspense>
+
           </div>}
-          {api && engagement && <div className={`persistent-browser integrated-browser-layout${browserAssistantOpen ? " assistant-open" : ""}`} hidden={view !== "browser"}>
+          {api && engagement && <div ref={(element) => { if (sideView === "browser") sideSize.panelRef.current = element; }} id="chat-side-browser" role={chatSideVisible && sideView === "browser" ? "region" : undefined} aria-label={chatSideVisible && sideView === "browser" ? "Browser beside chat" : undefined} className={`persistent-browser integrated-browser-layout${browserAssistantOpen && view === "browser" ? " assistant-open" : ""}${chatSideVisible && sideView === "browser" ? " chat-companion-panel" : ""}`} style={chatSideVisible && sideView === "browser" ? sideSize.panelStyle : undefined} hidden={view !== "browser" && !(chatSideVisible && sideView === "browser")}>
+            {chatSideVisible && sideView === "browser" && <header className="chat-companion-header">{!companionExpanded && sideSize.resizeHandle}<strong>Browser</strong><button className="icon-button subtle" type="button" aria-label={companionExpanded ? "Return Browser to side" : "Expand Browser in chat"} title={companionExpanded ? "Return Browser to side" : "Expand Browser in chat"} onClick={() => setCompanionExpanded(!companionExpanded)}>{companionExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button className="icon-button subtle" type="button" aria-label="Hide Browser" title="Hide Browser" onClick={() => setSideView(undefined)}><X size={16} /></button></header>}
             <div className="integrated-browser-page">
-            <header className="browser-workspace-toolbar">{browserEngine === "managed" && <button className="button quiet managed-browser-icon" type="button" aria-label={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} title={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} aria-expanded={browserControlsOpen} aria-controls="managed-browser-controls" onClick={() => setBrowserControlsOpen(open => !open)}><Settings2 size={18} aria-hidden="true" /></button>}<button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={browserAssistantOpen} aria-controls="browser-assistant-panel" onClick={() => setBrowserAssistantOpen((open) => !open)}><PanelRight size={18} aria-hidden="true" /></button>
-            <label><Globe2 size={16} aria-hidden="true" /><select aria-label="Browser engine" value={browserEngine} onChange={event => setBrowserEngine(event.target.value as "managed" | "native")}><option value="managed">Assistant browser</option><option value="native">Native browser</option></select></label></header>
-            {browserEngine === "managed" ? <ManagedAssistantBrowser key={engagement.id} api={api} projectId={engagement.id} active={view === "browser"} controlsOpen={browserControlsOpen}
+            <header className="browser-workspace-toolbar">{(browserEngine === "managed" || sideBrowserVisible) && <button className="button quiet managed-browser-icon" type="button" aria-label={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} title={browserControlsOpen ? "Hide browser controls" : "Show browser controls"} aria-expanded={browserControlsOpen} aria-controls="managed-browser-controls" onClick={() => setBrowserControlsOpen(open => !open)}><Settings2 size={18} aria-hidden="true" /></button>}<button className="button quiet managed-browser-icon" type="button" aria-label="Assistant" title="Toggle Assistant" aria-expanded={browserAssistantOpen} aria-controls="browser-assistant-panel" onClick={() => setBrowserAssistantOpen((open) => !open)}><PanelRight size={18} aria-hidden="true" /></button>
+            {!sideBrowserVisible && <label><Globe2 size={16} aria-hidden="true" /><select aria-label="Browser engine" value={browserEngine} onChange={event => setBrowserEngine(event.target.value as "managed" | "native")}><option value="managed">Assistant browser</option><option value="native">Native browser</option></select></label>}</header>
+            {(browserEngine === "managed" || sideBrowserVisible) ? <ManagedAssistantBrowser key={`${engagement.id}:${sessionId || draftEditorKey}`} api={api} projectId={engagement.id} draftId={draftEditorKey} active={view === "browser" || (chatSideVisible && sideView === "browser")} controlsOpen={browserControlsOpen}
               conversationId={sessionId || undefined} onConversation={(id) => void openAttachedChat(id)}
               onContext={(request) => { setBrowserAssistantOpen(true); requestChatContext(request, "browser"); }}
               actionContainer={browserActionContainer} onControlChange={setBrowserControlEnabled} imageSupported={imageInputEnabled} onImage={(file) => { setBrowserAssistantOpen(true); void attachImageFiles([file]); }} /> : <WorkbenchBrowser
-              active={view === "browser"}
+              active={view === "browser" || (chatSideVisible && sideView === "browser")}
               initialOpenUrl={searchParams.get("openUrl") ?? undefined}
               initialOpenRequest={searchParams.get("openUrlRequest") ?? undefined}
+
               api={api}
               operatorId={activeOperator?.id}
               projectId={engagement.id}
@@ -6322,6 +6425,28 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               {assistantPanel}
             </BrowserAssistantPanel>}
           </div>}
+          {api && engagement && (view === "notes" || (chatSideVisible && sideView === "notes")) && <div ref={(element) => { if (sideView === "notes") sideSize.panelRef.current = element; }} id="chat-side-notes" role={chatSideVisible && sideView === "notes" ? "region" : undefined} aria-label={chatSideVisible && sideView === "notes" ? "Notes beside chat" : undefined} className={`persistent-notes${chatSideVisible && sideView === "notes" ? " chat-companion-panel" : ""}`} style={chatSideVisible && sideView === "notes" ? sideSize.panelStyle : undefined} hidden={view !== "notes" && !(chatSideVisible && sideView === "notes")}>
+            {chatSideVisible && sideView === "notes" && <header className="chat-companion-header">{!companionExpanded && sideSize.resizeHandle}<strong>Notes</strong><button className="icon-button subtle" type="button" aria-label={companionExpanded ? "Return Notes to side" : "Expand Notes in chat"} title={companionExpanded ? "Return Notes to side" : "Expand Notes in chat"} onClick={() => setCompanionExpanded(!companionExpanded)}>{companionExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}</button><button className="icon-button subtle" type="button" aria-label="Hide Notes" title="Hide Notes" onClick={() => setSideView(undefined)}><X size={16} /></button></header>}
+            <NotesPanel
+              key={`${engagement.id}:${sessionId || draftEditorKey}`}
+              panelSessionKey={`${engagement.id}:${sessionId || draftEditorKey}`}
+
+              api={api}
+              engagementId={engagement.id}
+              initialNotes={observations}
+              initialNotesReady={resourceStatus.notes.state === "ready" || resourceStatus.notes.state === "empty"}
+              evidenceOptions={evidence.map((item) => ({ id: item.id, label: item.title }))}
+              assetOptions={assets.map((item) => ({ id: item.id, label: item.displayName }))}
+              providers={providers}
+              harnesses={harnesses}
+              initialDraft={view === "notes" || (chatSideVisible && sideView === "notes") ? noteDraft : undefined}
+              onInitialDraftConsumed={clearNoteDraft}
+              createObservation={createObservation}
+              updateObservation={updateObservation}
+              deleteObservation={deleteObservation}
+              onAskNebula={requestNebulaDraft}
+            />
+          </div>}
           {(view === "terminal" || view === "code") && (!api || !engagement) ? (
             <div className="empty-state"><FolderOpen size={24} /><strong>Preparing your project</strong><p>Terminal and Code become available as soon as Nebula finishes creating or loading a project.</p></div>
           ) : view === "terminal" || view === "code" || (view === "browser" && engagement) ? null : view === "missions" && api && engagement ? (
@@ -6333,26 +6458,8 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
               <TerminalCommandHistoryPanel api={api} engagementId={engagement.id} />
             </div>
           ) : view === "workspace" && api && engagement ? (
-            <WorkspacePanel api={api} engagementId={engagement.id} engagementName={engagement.name} onUseWithAssistant={requestNebulaDraft} onOpenTerminal={() => setView("terminal")} onOpenActivity={() => setView("activity")} />
-          ) : view === "notes" && api && engagement ? (
-            <NotesPanel
-              key={engagement.id}
-              api={api}
-              engagementId={engagement.id}
-              initialNotes={observations}
-              initialNotesReady={resourceStatus.notes.state === "ready" || resourceStatus.notes.state === "empty"}
-              evidenceOptions={evidence.map((item) => ({ id: item.id, label: item.title }))}
-              assetOptions={assets.map((item) => ({ id: item.id, label: item.displayName }))}
-              providers={providers}
-              harnesses={harnesses}
-              initialDraft={noteDraft}
-              onInitialDraftConsumed={clearNoteDraft}
-              createObservation={createObservation}
-              updateObservation={updateObservation}
-              deleteObservation={deleteObservation}
-              onAskNebula={requestNebulaDraft}
-            />
-          ) : view !== "chat" ? (
+            <WorkspacePanel api={api} engagementId={engagement.id} engagementName={engagement.name} onUseWithAssistant={requestNebulaDraft} onOpenTerminal={() => setView("terminal")} onOpenActivity={() => setView("activity")} onOpenInEditor={(path) => updateSearchParams(params => { params.set("openFile", path); params.set("view", compact ? "code" : "chat"); params.delete("companion"); if (!compact) { params.set("side", "code"); rememberChatSide(params.get("session") ?? "", "code"); rememberCompanionExpanded(params.get("session") ?? "", false); } }, { replace: true })} />
+          ) : view === "notes" && api && engagement ? null : view !== "chat" ? (
             <div className="empty-state"><FolderOpen size={24} /><strong>Select a project</strong><p>Terminal, execution history, and workspace files are project-scoped.</p></div>
           ) : !conversationOpen ? (
             <div className="empty-state chat-empty-state"><MessageSquare size={24} /><strong>No conversation open</strong><p>Select a saved conversation or start a new chat when you are ready.</p><button className="button primary" type="button" disabled={!engagement} onClick={newConversation}><Plus size={15} /> Start new chat</button></div>
