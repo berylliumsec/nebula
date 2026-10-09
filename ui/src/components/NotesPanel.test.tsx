@@ -37,7 +37,7 @@ describe("NotesPanel", () => {
       initialNotesReady
     /></DialogProvider>);
 
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue(note.body));
+    expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue(note.body);
     expect(screen.getByRole("button", { name: /Initial note/ })).toHaveClass("active");
     expect(listObservations).not.toHaveBeenCalled();
   });
@@ -48,7 +48,9 @@ describe("NotesPanel", () => {
     const listObservations = vi.fn().mockReturnValue(new Promise((resolve) => { resolveNotes = resolve; }));
     renderPanel({ listObservations });
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Loading saved notes…");
+    expect(await screen.findByRole("status")).toHaveTextContent("Loading saved notes");
+    expect(screen.getByRole("status", { name: "Loading saved notes" })).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "Note body" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "New note" }));
     await user.type(screen.getByRole("textbox", { name: "Note body" }), "Draft during load");
     resolveNotes({ items: [note], total: 1 });

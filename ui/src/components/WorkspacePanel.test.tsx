@@ -30,6 +30,15 @@ function listing() {
 }
 
 describe("WorkspacePanel uploads", () => {
+  it("shows a file placeholder until the first listing resolves", async () => {
+    let resolveListing!: (value: ReturnType<typeof listing>) => void;
+    renderPanel({ listWorkspace: vi.fn().mockReturnValue(new Promise((resolve) => { resolveListing = resolve; })) });
+    expect(screen.getByRole("status", { name: "Loading files" })).toBeVisible();
+    expect(screen.queryByText("Workspace is empty")).not.toBeInTheDocument();
+    resolveListing(listing());
+    expect(await screen.findByText("Workspace is empty")).toBeVisible();
+  });
+
   it("searches folders and opens a matching file in Files", async () => {
     const user = userEvent.setup();
     const listWorkspace = vi.fn().mockResolvedValue(listing());

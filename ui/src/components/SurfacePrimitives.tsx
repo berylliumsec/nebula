@@ -1,6 +1,16 @@
 import { useEffect, useRef, type HTMLAttributes, type KeyboardEvent, type ReactNode } from "react";
 import { AlertCircle, AlertTriangle, CircleAlert, Info, LoaderCircle, X } from "lucide-react";
 
+/** Stable, quiet placeholder for a surface whose first content is still loading. */
+export function LoadingSurface({ label, className = "" }: { label: string; className?: string }) {
+  return <div className={`loading-surface ${className}`.trim()} role="status" aria-label={label}>
+    <span className="loading-surface-title">{label}</span>
+    <span className="loading-surface-line" aria-hidden="true" />
+    <span className="loading-surface-line short" aria-hidden="true" />
+    <span className="loading-surface-block" aria-hidden="true" />
+  </div>;
+}
+
 export type StatusTone = "neutral" | "informational" | "success" | "warning" | "danger";
 
 interface StatusChipProps {

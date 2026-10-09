@@ -1,44 +1,31 @@
 {
-  "change_digest": "74b32a1bae876f0c84bffdcfd5af3767d90719945afbf3b80ff8963fb2e729ee",
-  "reviewed_by": "Codex scoped assistant responsiveness review on 2026-10-09",
-  "reason": "Stream Markdown and harness polling are changed; current main already indexes and virtualizes transcript rows and pages history. Exercise exact code safety, serialized harness polling, streamed rendering, long history, hidden-tab recovery, and production LAN durable conversation journeys across the affected desktop/mobile profiles.",
-  "exclusions": "No Python or native source changed; their suites are excluded. Other UI journeys and full suites are unrelated. Real Core runs use temporary data directories and the production ui/dist bundle; physical devices are unavailable.",
+  "change_digest": "e25cb7669726de349382cb903d074181612ac971566a6c47d26f1cd51ba301f8",
+  "reviewed_by": "Codex focused loading feedback review on 2026-10-09",
+  "reason": "Notes initial readiness and loading feedback changed; Files, Activity, and lazy Code/Terminal feedback share the new surface. Select affected component behavior and Notes entry/edit geometry across desktop, mobile Chromium/WebKit, plus durable save/reload on temporary real Core.",
+  "exclusions": "No Python or native source changed; their suites are excluded. Unrelated assistant, provider, harness, and browser journeys and all full suites are excluded. Physical devices unavailable.",
   "python": [],
   "frontend": [
-    "ui/src/components/assistantMarkdown.test.tsx",
-    "ui/src/pages/chatRenderGroups.test.ts",
-    "ui/src/pages/harnessActivityPolling.test.ts"
+    "ui/src/components/NotesPanel.test.tsx",
+    "ui/src/components/WorkspacePanel.test.tsx",
+    "ui/src/components/ExecutionHistory.test.tsx"
   ],
   "native": [],
   "playwright": [
-    "entry:chat-history-performance/desktop",
-    "entry:chat-history-performance/compact",
-    "entry:chat-history-performance/mobile-chromium-small",
-    "entry:chat-history-performance/mobile-chromium-ledger-390",
-    "entry:chat-history-performance/mobile-chromium-wide",
-    "entry:chat-history-performance/mobile-webkit-small",
-    "entry:chat-history-performance/mobile-webkit",
-    "entry:chat-history-performance/mobile-webkit-wide",
-    "entry:chat-stream-render-performance/desktop",
-    "entry:chat-stream-render-performance/compact",
-    "entry:chat-stream-render-performance/mobile-chromium-small",
-    "entry:chat-stream-render-performance/mobile-chromium-ledger-390",
-    "entry:chat-stream-render-performance/mobile-chromium-wide",
-    "entry:chat-stream-render-performance/mobile-webkit-small",
-    "entry:chat-stream-render-performance/mobile-webkit",
-    "entry:chat-stream-render-performance/mobile-webkit-wide",
-    "entry:chat-idle-polling/desktop",
-    "entry:chat-idle-polling/mobile-chromium-ledger-390",
-    "entry:chat-idle-polling/mobile-webkit",
-    "entry:durable-conversation-core/assistant-real-desktop",
-    "entry:durable-conversation-core/assistant-real-chromium-390",
-    "entry:durable-conversation-core/assistant-real-webkit-390"
+    "entry:notes-screen-fit/desktop",
+    "entry:notes-screen-fit/compact",
+    "entry:notes-screen-fit/mobile-chromium-small",
+    "entry:notes-screen-fit/mobile-chromium",
+    "entry:notes-screen-fit/mobile-chromium-wide",
+    "entry:notes-screen-fit/mobile-webkit-small",
+    "entry:notes-screen-fit/mobile-webkit",
+    "entry:notes-screen-fit/mobile-webkit-wide",
+    "entry:notes-typing/real-core"
   ],
   "expected_tests": {
     "python": 0,
-    "frontend": 13,
+    "frontend": 27,
     "native": 0,
-    "playwright": 22
+    "playwright": 9
   },
   "python_versions": [
     "3.12"

@@ -65,6 +65,15 @@ afterEach(() => {
 });
 
 describe("ExecutionHistory active updates", () => {
+  it("shows a placeholder before the first activity response", async () => {
+    let resolveExecutions!: (value: { items: OperatorExecution[]; total: number }) => void;
+    renderHistory({ listExecutions: vi.fn().mockReturnValue(new Promise((resolve) => { resolveExecutions = resolve; })) });
+    expect(screen.getByRole("status", { name: "Loading activity" })).toBeVisible();
+    expect(screen.queryByText("No executions match")).not.toBeInTheDocument();
+    await act(async () => resolveExecutions({ items: [], total: 0 }));
+    expect(screen.getByText("No executions match")).toBeVisible();
+  });
+
   it("labels unrestricted execution history without an empty target", async () => {
     renderHistory({
       listExecutions: vi.fn().mockResolvedValue({ items: [unrestricted], total: 1 }),

@@ -1,12 +1,13 @@
 import { IconAction } from "./IconAction";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Ban, Clipboard, FileClock, LoaderCircle, MessageSquare, NotebookPen, Play, RefreshCw } from "lucide-react";
+import { Ban, Clipboard, FileClock, MessageSquare, NotebookPen, Play, RefreshCw } from "lucide-react";
 import type { ApiClient } from "../api/client";
 import type { HarnessProfile, OperatorExecution, ProviderHealth } from "../api/types";
 import type { FencedRunCandidate } from "./AssistantMarkdown";
 import { ExecutionInsightDialog } from "./ExecutionInsightDialog";
 import { DiagnosticErrorNotice, logCaughtDiagnostic } from "../diagnostics";
 import { InlineValidationNotice } from "./InlineValidationNotice";
+import { LoadingSurface } from "./SurfacePrimitives";
 
 interface ExecutionHistoryProps {
   api: ApiClient;
@@ -36,7 +37,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
   const [stdout, setStdout] = useState("");
   const [stderr, setStderr] = useState("");
@@ -212,7 +213,7 @@ export function ExecutionHistory({ api, engagementId, refreshKey = 0, onRerun, p
       {pollingPaused && <div className="workspace-notice" role="status"><strong>Updates paused.</strong> Nebula could not refresh active executions. Existing records are still available. <button className="button quiet" type="button" onClick={() => void load()}>Retry updates</button></div>}
       <div className="execution-history-layout">
         <aside className={items.length ? undefined : "is-empty"} aria-label="Execution records">
-          {loading && !items.length ? <div className="empty-state compact"><LoaderCircle className="spin" size={20} /><strong>Loading executions…</strong></div> : items.length ? items.map((execution) => (
+          {loading && !items.length ? <LoadingSurface label="Loading activity" /> : items.length ? items.map((execution) => (
             <button type="button" className={execution.id === selectedId ? "active" : undefined} onClick={() => setSelectedId(execution.id)} key={execution.id}>
               <span className={`execution-status ${execution.status}`} />
               <span><strong>{execution.language} · {execution.status.replaceAll("_", " ")}</strong><small>{new Date(execution.queuedAt).toLocaleString()} · {execution.operatorId}</small><code>{execution.sourcePreview.slice(0, 90) || execution.sourceSha256.slice(0, 16)}</code></span>
