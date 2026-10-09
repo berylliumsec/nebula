@@ -20,14 +20,14 @@
   ],
   "native": [],
   "playwright": [
-    "chat-subagent-result-collapse/desktop",
-    "chat-subagent-result-collapse/compact",
-    "chat-subagent-result-collapse/mobile-chromium-small",
-    "chat-subagent-result-collapse/mobile-chromium-ledger-390",
-    "chat-subagent-result-collapse/mobile-chromium-wide",
-    "chat-subagent-result-collapse/mobile-webkit-small",
-    "chat-subagent-result-collapse/mobile-webkit",
-    "chat-subagent-result-collapse/mobile-webkit-wide",
-    "chat-subagent-result-real-core/real-core"
+    "entry:chat-subagent-result-collapse/desktop",
+    "entry:chat-subagent-result-collapse/compact",
+    "entry:chat-subagent-result-collapse/mobile-chromium-small",
+    "entry:chat-subagent-result-collapse/mobile-chromium-ledger-390",
+    "entry:chat-subagent-result-collapse/mobile-chromium-wide",
+    "entry:chat-subagent-result-collapse/mobile-webkit-small",
+    "entry:chat-subagent-result-collapse/mobile-webkit",
+    "entry:chat-subagent-result-collapse/mobile-webkit-wide",
+    "entry:chat-subagent-result-real-core/real-core"
   ]
 }
