@@ -274,3 +274,20 @@ def test_catalog_exposes_stable_choices_for_agents_and_humans():
     assert "assistant" in catalog["areas"]
     assert "mobile-webkit" in catalog["projects"]
     assert "themes/mobile-webkit" in catalog["entries"]
+
+
+def test_unfiltered_real_core_catalog_entries_require_disposable_runtime():
+    # These entries include cold image preparation. Core alone skips disk
+    # reclamation, rootless Podman and official-image digest pinning.
+    for selector in (
+        "entry:core-api/real-core",
+        "entry:desktop-shell/real-core",
+        "entry:full/real-core",
+    ):
+        entries = selected_entries(MANIFEST, [selector])
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["project"] == "real-core"
+        assert entry["test_match"] == "tests/real-core.spec.ts"
+        assert not entry.get("grep")
+        assert entry["runtime"] == "real-core-sandbox"

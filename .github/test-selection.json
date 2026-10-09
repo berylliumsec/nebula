@@ -1,28 +1,20 @@
 {
-  "change_digest": "0b07343078f92bca6b1927fae7272d74aacfa11a793e61f6aa3f8b4528e8686a",
-  "reviewed_by": "Codex bounded inert fixture contract review, 2026-10-09",
-  "reason": "Four resource-masked evidence, finding, saved Subagents choice and Daybreak handoff cases pass unchanged in isolated baseline runs. Correct crash_after_progress only in its inert executable: Core asynchronously coalesces yielded deltas before durable commit, so the fixture now reads the real ledger for its exact delta after the delivered continuation boundary, fsyncs an owned proof, then exits before completion. It never writes Core progress or decision state. Preserve original observed-progress, receipt identity/count, recovery and no-replay assertions; add exact durable-sequence and no-completion proof. Two Python regressions exercise the real coalescer/store and wrong/missing progress timeout. Verify all four crash boundaries on desktop and progress in the desktop alias plus permanent Chromium/WebKit 390px projects. Use the existing mobile coreShell entry helper. Canonical routing-prose behavior accepts valid JSON text directly without a second synthesis (chat.py and test_routing_prose_answer.py). Knowledge and popup inert fixtures now supply their already expected full answer on that path; preserve all privacy, history, draft, failure, retry and discard assertions. Hold the queue fixture\u2019s exact blocker request until its unchanged position-1 assertion and screenshot. Match exact operator text before Core\u2019s documented retrieved-reference heading, confirmed by captured requests, instead of assuming provider stream=true; retain client stream=true, answer counts, no false waiting, no failure and reload checks. Release the owned capacity barrier on teardown. Verify those three journeys in desktop Chromium and emulated Chromium/WebKit 390px. Re-run one unchanged delegated-wait UI case with a localhost peer returning fixed reports only. No executable tools, external targets or production orchestration changes. Exact-head CI found a desktop crash-progress retry at the unchanged composer-enabled assertion: Core API recovered at 19:52:54.191 but browser health recovered at 19:52:59.121, racing its original five-second assertion deadline. useCoreConnectionMonitor.ts documents a five-second health interval and authoritative bootstrap. Add an explicit automatic desktop Core-ready precondition after forced crashes, preserving the original composer deadline, all recovery and no-replay outcomes, and mobile checks. No manual reconnect, reload or product change is introduced.",
-  "exclusions": "No full suites, security-runtime installation, external targets, real credentials, real model calls, executable security work, production provider/probe/agent changes, repository security changes or weakened assertions. Exactly two inert Python cases and 21 named production-LAN browser cases, serial owned fixture resources. Frontend/native selections are empty because product source is unchanged. Project-switch/goal partial-final-text and exact 128-token probe assertions remain untouched pending explicit contract decisions. Local Python excludes an unrelated incompatible pytest-qt plugin; the repository scope guard stays active. Physical/manual CUA is unavailable.",
+  "change_digest": "c68b17e3eb93aaf6522db6f89d21b1a419954d4db1b483c1f0ee080fb30fac3b",
+  "reviewed_by": "Codex release build infrastructure review,2026-10-09",
+  "reason": "Original release core-api selected unrestricted real-core file but labeled real-core, skipping existing rootless Podman/disk reclamation/pinned source preparation. Correct core-api and identical desktop-shell alias to real-core-sandbox; preserve test scope and gates. Regression verifies both selectors and full alias and dedup provenance. Add manual-only canonical image build verifier with Contents read only; pin official source and require rootless runtime, invoke production build phase only then image metadata. Four inert recording/mocking tests verify no prepare/admission/run, source rejects and nonrootless early stop. No actual runtime executes in tests.",
+  "exclusions": "No browser or security-runtime execution, no models/targets/prod provider/probe/agent changes or release publishing; these catalog entries are verified through planner only. Actual benign build-only manual workflow separate; no container daemon on Mac.",
   "python": [
-    "tests/v3/test_inert_fixture_crash_barrier.py"
+    "tests/test_playwright_impact.py::test_unfiltered_real_core_catalog_entries_require_disposable_runtime",
+    "tests/test_playwright_impact.py::test_identical_entries_from_multiple_areas_run_once_and_retain_provenance",
+    "tests/test_runtime_build_only.py"
   ],
   "frontend": [],
   "native": [],
-  "playwright": [
-    "entry:release-inert-diagnosis/real-core",
-    "entry:release-inert-crash-boundaries/assistant-real-desktop",
-    "entry:release-inert-crash-boundaries/real-core",
-    "entry:release-inert-crash-boundaries/assistant-real-chromium-390",
-    "entry:release-inert-crash-boundaries/assistant-real-webkit-390",
-    "entry:release-inert-provider-ui/assistant-real-desktop",
-    "entry:release-inert-provider-ui/assistant-real-chromium-390",
-    "entry:release-inert-provider-ui/assistant-real-webkit-390",
-    "entry:conversation-progress/assistant-real-desktop"
-  ],
+  "playwright": [],
   "expected_tests": {
-    "python": 2,
+    "python": 6,
     "frontend": 0,
     "native": 0,
-    "playwright": 21
+    "playwright": 0
   }
 }
