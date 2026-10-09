@@ -1,4 +1,5 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +9,7 @@ import { GuideProvider, useGuides } from "./GuideProvider";
 import { guideDestination, placeCard } from "./GuideOverlay";
 import { guideCatalog } from "./catalog";
 import { guideMatches } from "./GuidesDrawer";
+import { useGuideAction } from "./guideActions";
 
 const workspace = vi.hoisted(() => ({
   api: {
@@ -39,9 +41,15 @@ function OpenHub() {
   return <button type="button" onClick={openHub}>Open hub</button>;
 }
 
+function GoalEditor() {
+  const [open, setOpen] = useState(false);
+  useGuideAction("open-goal-editor", () => setOpen(true));
+  return open ? <section data-guide="goal-panel">Goal editor opened</section> : null;
+}
+
 function renderGuides(path = "/projects/project-1/workbench?view=chat&session=s1") {
   return render(<MemoryRouter initialEntries={[path]}>
-    <GuideProvider><OpenHub /><Location /></GuideProvider>
+    <GuideProvider><OpenHub /><Location /><GoalEditor /></GuideProvider>
   </MemoryRouter>);
 }
 
@@ -98,6 +106,15 @@ describe("GuideProvider", () => {
     workspace.api.saveGuideProgress.mockImplementation(async (guideId: string, value: { stepIndex: number; status: GuideProgress["status"]; expectedRevision: number }) =>
       progress(guideId, value.stepIndex, value.expectedRevision + 1, value.status));
     workspace.api.listNativeHooks.mockResolvedValue([]);
+  });
+
+  it("opens the hidden goal editor from the guide while retaining the saved conversation", async () => {
+    const user = userEvent.setup();
+    renderGuides();
+    await user.click(screen.getByRole("button", {name: "Open hub"}));
+    await user.click(screen.getByRole("button", {name: /Let the assistant work toward a goal\. Start/}));
+    await expect.poll(() => screen.queryByText("Goal editor opened") !== null).toBe(true);
+    expect(screen.getByLabelText("location")).toHaveTextContent("session=s1");
   });
 
   it("lists page guides first, starts one, and records each step in Core", async () => {
