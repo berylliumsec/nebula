@@ -4670,7 +4670,8 @@ test("assistant upgrade idle conversation pauses its polls in a hidden tab and k
 
   await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
   await expect(page.getByText("Saved message 11 with enough prose", { exact: false })).toBeVisible();
-  await expect(page.locator("article.chat-message")).toHaveCount(12);
+  await expect.poll(() => page.locator("article.chat-message").count()).toBeGreaterThan(0);
+  expect(await page.locator("article.chat-message").count()).toBeLessThan(12);
   // Let the first reads settle before measuring an idle minute.
   const idleFor = async (seconds: number) => {
     for (let second = 0; second < seconds; second += 1) {
@@ -4720,7 +4721,7 @@ test("assistant upgrade idle conversation pauses its polls in a hidden tab and k
   expect(hidden).toEqual([]);
   expect(report.onReturn.state).toBeGreaterThanOrEqual(1);
   expect(report.onReturn.queue).toBeGreaterThanOrEqual(1);
-  await expect(page.locator("article.chat-message")).toHaveCount(12);
+  await expect(page.getByText("Saved message 11 with enough prose", { exact: false })).toBeVisible();
   await expect(page.getByText("Response status could not sync")).toHaveCount(0);
 });
 
@@ -4777,7 +4778,8 @@ test("assistant upgrade streaming turn re-renders only its own transcript row", 
   }, sessionId);
 
   await openWorkspace(page, `/?view=chat&session=${sessionId}`, "Workbench");
-  await expect(page.locator("article.chat-message")).toHaveCount(12);
+  await expect.poll(() => page.locator("article.chat-message").count()).toBeGreaterThan(0);
+  expect(await page.locator("article.chat-message").count()).toBeLessThan(12);
   await page.waitForTimeout(500);
   const before = await readRenderCounts(page);
   await page.getByRole("textbox", { name: "Message the analyst assistant" }).fill("Stream a long answer.");
@@ -5210,13 +5212,19 @@ test("conversation switching pages long history and renders only nearby transcri
   await openWorkspace(page, `/?view=chat&session=${session.id}`, "Workbench");
   await expect.poll(() => pageRequests.length).toBeGreaterThan(0);
   expect(pageRequests[0]).toEqual({limit: 61, before: null});
-  const viewport = page.locator(".session-workspace > .chat-panel .chat-scroll");
+  const viewport = page.locator(".session-workspace > .chat-studio > .chat-panel .chat-scroll");
   await expect.poll(() => viewport.locator(".chat-message").count()).toBeLessThan(30);
   expect(reasoningReads).toBe(0);
-  await viewport.getByText("Thinking", {exact: true}).click();
+  await viewport.evaluate(element => {element.scrollTop = element.scrollHeight;});
+  const latestMessage = viewport.locator("#chat-message-paged-message-150");
+  await expect(latestMessage).toBeVisible();
+  await latestMessage.getByText("Thinking", {exact: true}).click();
   await expect(viewport.getByText("Deferred saved reasoning.")).toBeVisible();
   expect(reasoningReads).toBe(1);
-  await viewport.evaluate(element => {element.scrollTop = 0;});
+  await viewport.evaluate(element => {
+    element.dispatchEvent(new WheelEvent("wheel", {bubbles: true, deltaY: -1000}));
+    element.scrollTop = 0;
+  });
   await expect(viewport.getByRole("button", {name: "Load earlier messages"})).toBeVisible();
   await viewport.getByRole("button", {name: "Load earlier messages"}).click();
   await expect.poll(() => pageRequests.length).toBe(2);
@@ -5224,7 +5232,7 @@ test("conversation switching pages long history and renders only nearby transcri
   await expect.poll(() => viewport.locator(".chat-message").count()).toBeLessThan(30);
   const profile = await page.evaluate(() => ({
     switchMs: performance.getEntriesByName("nebula.chat_switch.authoritative", "measure").at(-1)?.duration ?? null,
-    renderedRows: document.querySelectorAll(".session-workspace > .chat-panel .chat-message").length,
+    renderedRows: document.querySelectorAll(".session-workspace > .chat-studio > .chat-panel .chat-message").length,
     domNodes: document.querySelectorAll("*").length,
     messageRequests: performance.getEntriesByType("resource")
       .filter(entry => entry.name.includes(`/chat/sessions/paged-session/messages`))
