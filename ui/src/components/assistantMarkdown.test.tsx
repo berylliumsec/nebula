@@ -5,6 +5,16 @@ import { AssistantMarkdown } from "./AssistantMarkdown";
 import { parseExactFences } from "./assistantCode";
 
 describe("exact assistant Markdown", () => {
+  it("keeps streamed text visible and only enables exact code actions after completion", async () => {
+    const onRun = vi.fn();
+    const code = "```sh\nprintf 'ready\\n'\n```";
+    const view = render(<AssistantMarkdown content={code.slice(0, 12)} streaming durable={false} messageId="stream" runnableLanguages={new Set(["sh"])} onRun={onRun} />);
+    view.rerender(<AssistantMarkdown content={code} streaming durable={false} messageId="stream" runnableLanguages={new Set(["sh"])} onRun={onRun} />);
+    await waitFor(() => expect(screen.getByText(/ready/)).toBeVisible());
+    expect(screen.queryByRole("button", {name: /run/i})).not.toBeInTheDocument();
+    view.rerender(<AssistantMarkdown content={code} durable messageId="stream" runnableLanguages={new Set(["sh"])} onRun={onRun} />);
+    expect(screen.getByRole("button", {name: /Review and run sh code/})).toBeEnabled();
+  });
   it("shows failed copying beside the control and permits a successful retry on LAN", async () => {
     const user = userEvent.setup();
     const originalClipboard = navigator.clipboard;

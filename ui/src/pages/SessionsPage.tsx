@@ -101,6 +101,7 @@ import {
 import { ApiError, type ApiClient } from "../api/client";
 import { ChatPreviewCache } from "./chatPreviewCache";
 import { groupByAssistantId } from "./chatRenderGroups";
+import { startHarnessActivityPolling } from "./harnessActivityPolling";
 import { Link, useSearchParams, type NavigateOptions } from "react-router-dom";
 import { providerModelVerification } from "../api/providerCapabilities";
 import { defaultModelRuntime, providerDefaultModel } from "../api/runtimeDefaults";
@@ -2101,28 +2102,19 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
       setHarnessActivityError(undefined);
       return;
     }
-    let active = true;
-    const controller = new AbortController();
-    const refresh = async () => {
-      try {
-        const next = await api.getHarnessSessionActivity(harnessSessionId, controller.signal);
-        if (!active) return;
+    return startHarnessActivityPolling({
+      read: signal => api.getHarnessSessionActivity(harnessSessionId, signal),
+      activeTurn: sending,
+      onValue: next => {
         setHarnessActivity((current) => isSameHarnessSessionActivity(current, next) ? current : next);
         setHarnessActivityError(undefined);
-      } catch (error) {
-        if (!active || controller.signal.aborted) return;
+      },
+      onError: error => {
         void logCaughtDiagnostic("interface.sessions_page.harness_activity", "Harness session activity could not be refreshed.", error, "sessions_page");
         setHarnessActivityError(error instanceof Error ? error.message : "Harness activity is unavailable.");
-      }
-    };
-    void refresh();
-    const interval = globalThis.setInterval(() => void refresh(), 2_000);
-    return () => {
-      active = false;
-      controller.abort();
-      globalThis.clearInterval(interval);
-    };
-  }, [api, coreState, harnessSessionId, runtimeKind]);
+      },
+    });
+  }, [api, coreState, harnessSessionId, runtimeKind, sending]);
 
   useEffect(() => {
     if (!api || !sessionId || !harnessActivity?.lastTurnId

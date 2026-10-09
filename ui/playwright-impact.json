@@ -361,6 +361,21 @@
       {"area":"chat-history-performance","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"conversation switching pages long history and renders only nearby transcript rows","runtime":"mock","shard":"1/1"},
       {"area":"chat-history-performance","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"conversation switching pages long history and renders only nearby transcript rows","runtime":"mock","shard":"1/1"}
     ],
+    "chat-stream-render-performance": [
+      {"area":"chat-stream-render-performance","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade streaming turn re-renders only its own transcript row","runtime":"mock","shard":"1/1"},
+      {"area":"chat-stream-render-performance","project":"compact","test_match":"tests/interface.spec.ts","grep":"assistant upgrade streaming turn re-renders only its own transcript row","runtime":"mock","shard":"1/1"},
+      {"area":"chat-stream-render-performance","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"assistant upgrade streaming turn re-renders only its own transcript row","runtime":"mock","shard":"1/1"},
+      {"area":"chat-stream-render-performance","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"assistant upgrade streaming turn re-renders only its own transcript row","runtime":"mock","shard":"1/1"},
+      {"area":"chat-stream-render-performance","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade streaming turn re-renders only its own transcript row","runtime":"mock","shard":"1/1"},
+      {"area":"chat-stream-render-performance","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"assistant upgrade streaming turn re-renders only its own transcript row","runtime":"mock","shard":"1/1"},
+      {"area":"chat-stream-render-performance","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade streaming turn re-renders only its own transcript row","runtime":"mock","shard":"1/1"},
+      {"area":"chat-stream-render-performance","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"assistant upgrade streaming turn re-renders only its own transcript row","runtime":"mock","shard":"1/1"}
+    ],
+    "chat-idle-polling": [
+      {"area":"chat-idle-polling","project":"desktop","test_match":"tests/interface.spec.ts","grep":"assistant upgrade idle conversation pauses its polls in a hidden tab and keeps its transcript rows still","runtime":"mock","shard":"1/1"},
+      {"area":"chat-idle-polling","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"assistant upgrade idle conversation pauses its polls in a hidden tab and keeps its transcript rows still","runtime":"mock","shard":"1/1"},
+      {"area":"chat-idle-polling","project":"mobile-webkit","test_match":"tests/interface.spec.ts","grep":"assistant upgrade idle conversation pauses its polls in a hidden tab and keeps its transcript rows still","runtime":"mock","shard":"1/1"}
+    ],
     "chat-stream-scroll": [
       {"area":"chat-stream-scroll","project":"desktop","test_match":"tests/interface.spec.ts","grep":"stabilization completed harness output keeps one continuous transcript scroll","runtime":"mock","shard":"1/1"},
       {"area":"chat-stream-scroll","project":"mobile-chromium-ledger-390","test_match":"tests/interface.spec.ts","grep":"stabilization completed harness output keeps one continuous transcript scroll","runtime":"mock","shard":"1/1"},

@@ -1,19 +1,48 @@
 {
-  "change_digest": "10f6a1770819ca7ec3bda129f14580f892f42b6e2ef798df2702bbc3fa9a56e1",
-  "reviewed_by": "Codex focused dependency review for oauthlib 4.0.0",
-  "reason": "oauthlib is indirect through requests-oauthlib and Kubernetes with no direct Nebula import. One collected packaging test triggers clean CI installation and build. Local poetry check --lock and isolated requests-oauthlib 2.0.0 OAuth1/OAuth2 client smoke checks passed.",
-  "exclusions": "No frontend or native dependency changed, so those layers and Playwright are excluded. Nebula has no direct server-side OAuth grant or JSONP token revocation path; the selected test and client smoke do not exercise those release breaking changes. Unrelated Python and full suites are excluded.",
-  "python": ["tests/v3/test_packaging.py::test_runtime_dependency_boundary_rejects_removed_stacks"],
-  "frontend": [],
+  "change_digest": "f1c22fa9ee6a5f995b29d350fe0b2ea074eed6add16f145a4c47237179cb29de",
+  "reviewed_by": "Codex scoped assistant responsiveness review on 2026-10-09",
+  "reason": "Stream Markdown and harness polling are changed; current main already indexes and virtualizes transcript rows and pages history. Exercise exact code safety, serialized harness polling, streamed rendering, long history, hidden-tab recovery, and production LAN durable conversation journeys across the affected desktop/mobile profiles.",
+  "exclusions": "No Python or native source changed; their suites are excluded. Other UI journeys and full suites are unrelated. Real Core runs use temporary data directories and the production ui/dist bundle; physical devices are unavailable.",
+  "python": [],
+  "frontend": [
+    "ui/src/components/assistantMarkdown.test.tsx",
+    "ui/src/pages/chatRenderGroups.test.ts",
+    "ui/src/pages/harnessActivityPolling.test.ts"
+  ],
   "native": [],
-  "playwright": [],
+  "playwright": [
+    "entry:chat-history-performance/desktop",
+    "entry:chat-history-performance/compact",
+    "entry:chat-history-performance/mobile-chromium-small",
+    "entry:chat-history-performance/mobile-chromium-ledger-390",
+    "entry:chat-history-performance/mobile-chromium-wide",
+    "entry:chat-history-performance/mobile-webkit-small",
+    "entry:chat-history-performance/mobile-webkit",
+    "entry:chat-history-performance/mobile-webkit-wide",
+    "entry:chat-stream-render-performance/desktop",
+    "entry:chat-stream-render-performance/compact",
+    "entry:chat-stream-render-performance/mobile-chromium-small",
+    "entry:chat-stream-render-performance/mobile-chromium-ledger-390",
+    "entry:chat-stream-render-performance/mobile-chromium-wide",
+    "entry:chat-stream-render-performance/mobile-webkit-small",
+    "entry:chat-stream-render-performance/mobile-webkit",
+    "entry:chat-stream-render-performance/mobile-webkit-wide",
+    "entry:chat-idle-polling/desktop",
+    "entry:chat-idle-polling/mobile-chromium-ledger-390",
+    "entry:chat-idle-polling/mobile-webkit",
+    "entry:durable-conversation-core/assistant-real-desktop",
+    "entry:durable-conversation-core/assistant-real-chromium-390",
+    "entry:durable-conversation-core/assistant-real-webkit-390"
+  ],
   "expected_tests": {
-    "python": 1,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 13,
     "native": 0,
-    "playwright": 0
+    "playwright": 22
   },
-  "python_versions": ["3.12"],
+  "python_versions": [
+    "3.12"
+  ],
   "python_browser": false,
   "python_node": false
 }

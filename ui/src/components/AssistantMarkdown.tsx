@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, useState, type MouseEvent } from "react";
+import { memo, useDeferredValue, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Check, Copy, Play } from "lucide-react";
 import { Highlight, themes, type Language } from "prism-react-renderer";
 import ReactMarkdown, { type Components } from "react-markdown";
@@ -201,14 +201,19 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
   onOpenWebLink,
   blockOrdinalOffset = 0,
 }: AssistantMarkdownProps) {
-  const parsed = useMemo(() => parseExactFences(content), [content]);
-  const renderable = parsed.unmatchedStart === undefined ? content : content.slice(0, parsed.unmatchedStart);
-  const unmatched = parsed.unmatchedStart === undefined ? "" : content.slice(parsed.unmatchedStart);
-  const claimed = new Set<number>();
-
-  const components: Components = {
-    pre: ({ children }) => <>{children}</>,
-    code: ({ node, className, children, ...properties }) => {
+  // Keep newly received text visible immediately while React schedules the
+  // more expensive Markdown/fence pass behind input and scroll interactions.
+  const deferredContent = useDeferredValue(content);
+  const formattedContent = streaming && content.startsWith(deferredContent) ? deferredContent : content;
+  const pendingText = streaming ? content.slice(formattedContent.length) : "";
+  const parsed = useMemo(() => parseExactFences(formattedContent), [formattedContent]);
+  const renderable = parsed.unmatchedStart === undefined ? formattedContent : formattedContent.slice(0, parsed.unmatchedStart);
+  const unmatched = parsed.unmatchedStart === undefined ? "" : formattedContent.slice(parsed.unmatchedStart);
+  const components: Components = useMemo(() => {
+    const claimed = new Set<number>();
+    return {
+      pre: ({ children }) => <>{children}</>,
+      code: ({ node, className, children, ...properties }) => {
       const offset = node?.position?.start.offset;
       let block = parsed.blocks.find((candidate) => candidate.openStart === offset);
       if (!block && className?.startsWith("language-")) {
@@ -230,28 +235,32 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
         );
       }
       return <code className={className} {...properties}>{children}</code>;
-    },
-    img: () => null,
+      },
+      img: () => null,
     // GFM task-list boxes are read-only state; name it so the box is not an
     // unlabelled control to a screen reader.
-    input: ({ node: _node, ...properties }) => properties.type === "checkbox"
+      input: ({ node: _node, ...properties }) => properties.type === "checkbox"
       ? <input {...properties} aria-label={properties.checked ? "Done" : "To do"} />
       : <input {...properties} />,
-    a: ({ node: _node, href, children, ...properties }) => {
+      a: ({ node: _node, href, children, ...properties }) => {
       const file = href && onOpenFile ? workspaceLink(href, workspacePath) : undefined;
       const safe = file ? href! : href ? safeUrl(href) : "";
       return <a {...properties} href={safe || undefined} rel="noopener noreferrer" onClick={(event) => openSafeLink(event, safe, file, onOpenFile, onOpenWebLink)}>{children}</a>;
-    },
-  };
+      },
+    };
+  }, [parsed, durable, messageId, runnableLanguages, onRun, onRunInTerminal, blockOrdinalOffset, onOpenFile, onOpenWebLink, workspacePath]);
+
+  const formattedNode = useMemo(() => renderable ? (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={(url) => onOpenFile && workspaceLink(url, workspacePath) ? url : safeUrl(url)}>
+      {renderable}
+    </ReactMarkdown>
+  ) : null, [renderable, components, onOpenFile, workspacePath]);
 
   return (
     <div className={`assistant-markdown${streaming ? " streaming" : ""}`}>
-      {renderable && (
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={(url) => onOpenFile && workspaceLink(url, workspacePath) ? url : safeUrl(url)}>
-          {renderable}
-        </ReactMarkdown>
-      )}
-      {unmatched && <pre className="assistant-inert-fence">{unmatched}</pre>}
+      {formattedNode}
+      {unmatched && <pre className="assistant-inert-fence">{unmatched}{pendingText}</pre>}
+      {!unmatched && pendingText && <span className="assistant-stream-pending">{pendingText}</span>}
     </div>
   );
 });
