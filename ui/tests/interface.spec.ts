@@ -57,7 +57,8 @@ const workspaces = [
   ["settings", "/settings", "Settings"],
 ] as const;
 
-const firstRunThemeTest = "Studio Dark is the first-run default theme";
+const firstRunThemeTest = "Dark is the first-run default theme";
+
 
 const entity = {
   created_at: "2026-07-12T10:00:00Z",
@@ -2070,7 +2071,9 @@ test("hidden terminal views stop emitting resize frames", async ({ page }, testI
 
 test(firstRunThemeTest, async ({ page }) => {
   await openWorkspace(page, "/", "Workbench");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "studio-dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  expect(await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--canvas").trim())).toBe("#0b111a");
+
   await expect(page.getByRole("region", { name: "Zero Layer context" })).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem("nebula.theme"))).toBeNull();
 });
@@ -5094,7 +5097,8 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
     await page.getByRole("button", { name: "Conversation actions" }).click();
     await page.getByRole("menuitem", { name: /Open side chat/ }).click();
   } else {
-    await page.getByRole("button", { name: "Open side chat", exact: true }).click();
+    await page.getByRole("button", { name: "Chat tools" }).click();
+    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Side chat/ }).click();
   }
   await expect(page.getByRole("alert").filter({ hasText: "Side chat temporarily unavailable" })).toBeVisible();
   await expect(page.getByRole("region", { name: "Side chat" })).toHaveCount(0);
@@ -5102,7 +5106,8 @@ test("assistant upgrade side chat toolbar inherits saved history and restores an
     await page.getByRole("button", { name: "Conversation actions" }).click();
     await page.getByRole("menuitem", { name: /Open side chat/ }).click();
   } else {
-    await page.getByRole("button", { name: "Open side chat", exact: true }).click();
+    await page.getByRole("button", { name: "Chat tools" }).click();
+    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Side chat/ }).click();
   }
   await expect.poll(() => forkPayload).toMatchObject({ through_latest: true, side_chat: true });
   expect(parentMessageLoads).toBe(parentLoadsBeforeFork);
@@ -13003,4 +13008,109 @@ test("stabilization Project Snapshot floats over chat and minimizes", async ({ p
   await view.getByRole("button", { name: "Close Project Snapshot" }).click();
   await expect(view).toBeHidden();
   await expect(opener).toBeFocused();
+});
+
+test("chat companions reveal Code, Browser, and Notes from the conversation", async ({ page }) => {
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/chat-sessions")) {
+      await route.fulfill({ json: [{ ...entity, id: "companion-chat", engagement_id: "scratch-project", title: "Companion chat", backend: "provider", metadata: {} }, { ...entity, id: "companion-chat-2", engagement_id: "scratch-project", title: "Second chat", backend: "provider", metadata: {} }, ] });
+    } else if (path.endsWith("/chat/sessions/companion-chat/messages")) {
+      await route.fulfill({ json: [{ ...entity, id: "companion-parent-message", engagement_id: "scratch-project", session_id: "companion-chat", sequence: 1, role: "assistant", content: "Parent context", citations: [], metadata: {} }] });
+    } else if (path.endsWith("/chat/sessions/companion-chat-2/messages")) {
+      await route.fulfill({ json: [] });
+    } else if (path.endsWith("/chat/sessions/companion-chat/pending-turn") || path.endsWith("/chat/sessions/companion-chat-2/pending-turn")) {
+      await route.fulfill({ json: null });
+    } else await route.fallback();
+  });
+  await openWorkspace(page, "/?view=chat&session=companion-chat", "Workbench");
+  const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
+  const enterFocus = page.getByRole("button", { name: "Enter focus mode" });
+  await expect(enterFocus).toBeVisible();
+  await enterFocus.click();
+  const exitFocus = page.getByRole("button", { name: "Exit focus mode" });
+  await expect(exitFocus).toBeVisible();
+  await expect(exitFocus.locator("svg")).toBeVisible();
+  await exitFocus.click();
+  await expect(enterFocus).toBeVisible();
+  if (mobile) {
+    await page.getByRole("button", { name: "Conversation actions" }).click();
+    await page.getByRole("menuitem", { name: /Code editor/ }).click();
+    await expect(page).toHaveURL(/view=code/);
+    await expect(page.locator(".code-editor-panel")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
+    await page.getByRole("navigation", { name: "Mobile operator navigation" }).getByRole("button", { name: "Chat" }).click();
+    await page.getByRole("button", { name: "Conversation actions" }).click();
+    await page.getByRole("menuitem", { name: /Notes/ }).click();
+    await expect(page).toHaveURL(/view=notes/);
+    await expect(page.locator(".notes-panel")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    return;
+  }
+  const chooseTool = async (name: string) => {
+    await page.getByRole("button", { name: "Chat tools" }).click();
+    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: new RegExp(name) }).click();
+  };
+  await chooseTool("Terminal");
+  const terminal = page.getByRole("region", { name: "Terminal beside chat" });
+  await expect(terminal).toBeVisible();
+  await terminal.getByRole("button", { name: "Expand Terminal in chat" }).click();
+  await expect(page).toHaveURL(/view=chat.*companion=full/);
+  await expect(page.locator(".session-workspace.chat-terminal-open.expanded")).toBeVisible();
+  await terminal.getByRole("button", { name: "Return Terminal to side" }).click();
+  await expect(page).not.toHaveURL(/companion=full/);
+  await terminal.getByRole("button", { name: "Hide terminal" }).click();
+  await expect(terminal).toHaveCount(0);
+  await chooseTool("Code editor");
+  const code = page.getByRole("region", { name: "Code beside chat" });
+  await expect(code).toBeVisible();
+  await expect(page).toHaveURL(/side=code/);
+  await expect.poll(async () => {
+    const workspace = await page.locator(".session-workspace").boundingBox();
+    const panel = await code.boundingBox();
+    return workspace && panel ? Math.abs(panel.width - workspace.width / 2) : 1_000;
+  }).toBeLessThan(24);
+  await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
+  await code.getByRole("button", { name: "Expand Code editor in chat" }).click();
+  await expect(page.locator(".session-workspace > .conversation-toolbar")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Enter focus mode" })).toBeVisible();
+  await code.getByRole("button", { name: "Return Code editor to side" }).click();
+  await expect(page.locator(".session-workspace > .conversation-toolbar")).toBeVisible();
+  const separator = code.getByRole("separator", { name: "Resize code panel" });
+  if ((page.viewportSize()?.width ?? 1440) > 1250) {
+    const before = (await code.boundingBox())!.width;
+    await separator.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect.poll(async () => (await code.boundingBox())!.width).toBeGreaterThan(before);
+  }
+  await code.getByRole("button", { name: "Hide Code editor" }).click();
+  await expect(code).toHaveCount(0);
+  await chooseTool("Browser");
+  await expect(page.getByRole("region", { name: "Browser beside chat" })).toBeVisible();
+  await chooseTool("Notes");
+  const notes = page.getByRole("region", { name: "Notes beside chat" });
+  await expect(notes).toBeVisible();
+  await expect(page.getByRole("region", { name: "Browser beside chat" })).toHaveCount(0);
+  await notes.getByRole("button", { name: "Create note" }).click();
+  await notes.getByRole("textbox", { name: "Note title" }).fill("Unsaved companion draft");
+  await notes.getByRole("button", { name: "Hide Notes" }).click();
+  await chooseTool("Notes");
+  await expect(notes.getByRole("textbox", { name: "Note title" })).toHaveValue("Unsaved companion draft");
+  const showConversations = page.getByRole("button", { name: "Show conversations" });
+  if (await showConversations.isVisible()) await showConversations.click();
+  await page.locator('.session-select[data-session-id="companion-chat-2"]').click();
+  await expect(page.getByRole("region", { name: "Notes beside chat" })).toHaveCount(0);
+  await chooseTool("Notes");
+  await expect(page.getByRole("region", { name: "Notes beside chat" }).getByRole("textbox", { name: "Note title" })).toHaveCount(0);
+  await page.locator('.session-select[data-session-id="companion-chat"]').click();
+  await expect(notes.getByRole("textbox", { name: "Note title" })).toHaveValue("Unsaved companion draft");
+  await notes.getByRole("button", { name: "Expand Notes in chat" }).click();
+  await expect(page).toHaveURL(/view=chat.*companion=full/);
+  await expect(notes).toBeVisible();
+  await expect.poll(async () => (await notes.boundingBox())!.width).toBeGreaterThan((await page.locator(".session-workspace").boundingBox())!.width - 4);
+  await notes.getByRole("button", { name: "Return Notes to side" }).click();
+  await expect(page).not.toHaveURL(/companion=full/);
+  await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
+  await expect(page.locator(".notes-panel")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
