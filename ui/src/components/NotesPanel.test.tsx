@@ -28,6 +28,86 @@ function renderPanel(api: Partial<ApiClient>, onAskNebula = vi.fn()) {
 }
 
 describe("NotesPanel", () => {
+  it("autosaves a new note after typing stops", async () => {
+    const user = userEvent.setup();
+    const createObservation = vi.fn().mockImplementation(async (request) => ({ ...note, ...request, id: "new-note" }));
+    renderPanel({ listObservations: vi.fn().mockResolvedValue({ items: [], total: 0 }), createObservation });
+    await user.click(await screen.findByRole("button", { name: "New note" }));
+    await user.type(screen.getByRole("textbox", { name: "Note title" }), "Draft");
+    await user.type(screen.getByRole("textbox", { name: "Note body" }), "Body");
+    await waitFor(() => expect(createObservation).toHaveBeenCalledWith(expect.objectContaining({ title: "Draft", body: "Body" })), { timeout: 2500 });
+    await waitFor(() => expect(screen.getByText("Saved")).toBeVisible());
+  });
+
+  it("keeps text entered while a new note is being created", async () => {
+    const user = userEvent.setup();
+    let finishCreate!: (value: ObservationSummary) => void;
+    const createObservation = vi.fn().mockImplementation(() => new Promise<ObservationSummary>((resolve) => { finishCreate = resolve; }));
+    const updateObservation = vi.fn().mockImplementation(async (_id, request) => ({ ...note, ...request, id: "new-note", revision: 2 }));
+    renderPanel({ listObservations: vi.fn().mockResolvedValue({ items: [], total: 0 }), createObservation, updateObservation });
+    await user.click(await screen.findByRole("button", { name: "New note" }));
+    await user.type(screen.getByRole("textbox", { name: "Note title" }), "Draft");
+    const body = screen.getByRole("textbox", { name: "Note body" });
+    await user.type(body, "Before");
+    await waitFor(() => expect(createObservation).toHaveBeenCalledWith(expect.objectContaining({ body: "Before" })), { timeout: 2500 });
+    await user.type(body, " after");
+    finishCreate({ ...note, id: "new-note", title: "Draft", body: "Before" });
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledWith("new-note", expect.objectContaining({ body: "Before after", expectedRevision: 1 })), { timeout: 2500 });
+    expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("Before after");
+  });
+
+  it("autosaves an existing note and keeps text typed during the save", async () => {
+    const user = userEvent.setup();
+    let finishFirst!: (value: ObservationSummary) => void;
+    const updateObservation = vi.fn()
+      .mockImplementationOnce(() => new Promise<ObservationSummary>((resolve) => { finishFirst = resolve; }))
+      .mockImplementation(async (_id, request) => ({ ...note, ...request, revision: 3 }));
+    renderPanel({ listObservations: vi.fn().mockResolvedValue({ items: [note], total: 1 }), updateObservation });
+    const body = await screen.findByRole("textbox", { name: "Note body" });
+    await waitFor(() => expect(body).toHaveValue(note.body));
+    await user.clear(body);
+    await user.type(body, "First change");
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledWith(note.id, expect.objectContaining({ body: "First change", expectedRevision: 1 })), { timeout: 2500 });
+    await user.type(body, " later");
+    finishFirst({ ...note, body: "First change", revision: 2 });
+    await waitFor(() => expect(updateObservation).toHaveBeenNthCalledWith(2, note.id, expect.objectContaining({ body: "First change later", expectedRevision: 2 })), { timeout: 2500 });
+    expect(body).toHaveValue("First change later");
+  });
+
+  it("keeps the current note selected when more text arrives during a switch save", async () => {
+    const user = userEvent.setup();
+    const second = { ...note, id: "note-2", title: "Second note", body: "Second body" };
+    let finishFirst!: (value: ObservationSummary) => void;
+    const updateObservation = vi.fn()
+      .mockImplementationOnce(() => new Promise<ObservationSummary>((resolve) => { finishFirst = resolve; }))
+      .mockImplementation(async (_id, request) => ({ ...note, ...request, revision: 3 }));
+    renderPanel({ listObservations: vi.fn().mockResolvedValue({ items: [note, second], total: 2 }), updateObservation });
+    const body = await screen.findByRole("textbox", { name: "Note body" });
+    await waitFor(() => expect(body).toHaveValue(note.body));
+    await user.clear(body);
+    await user.type(body, "First change");
+    await user.click(screen.getByRole("button", { name: /Second note/ }));
+    await user.type(body, " later");
+    finishFirst({ ...note, body: "First change", revision: 2 });
+    await waitFor(() => expect(updateObservation).toHaveBeenNthCalledWith(2, note.id, expect.objectContaining({ body: "First change later", expectedRevision: 2 })), { timeout: 2500 });
+    expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("First change later");
+    expect(screen.getByRole("button", { name: /Initial note/ })).toHaveClass("active");
+  });
+
+  it("offers retry after autosave fails", async () => {
+    const user = userEvent.setup();
+    const updateObservation = vi.fn().mockRejectedValueOnce(new Error("Save unavailable")).mockResolvedValue({ ...note, body: "Retry text", revision: 2 });
+    renderPanel({ listObservations: vi.fn().mockResolvedValue({ items: [note], total: 1 }), updateObservation });
+    const body = await screen.findByRole("textbox", { name: "Note body" });
+    await waitFor(() => expect(body).toHaveValue(note.body));
+    await user.clear(body);
+    await user.type(body, "Retry text");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Retry save" })).toBeVisible(), { timeout: 2500 });
+    await user.click(screen.getByRole("button", { name: "Retry save" }));
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledTimes(2));
+    expect(body).toHaveValue("Retry text");
+  });
+
   it("uses the loaded workspace notes without fetching them again", async () => {
     const listObservations = vi.fn();
     render(<DialogProvider><NotesPanel
@@ -54,7 +134,7 @@ describe("NotesPanel", () => {
     await user.click(screen.getByRole("button", { name: "New note" }));
     await user.type(screen.getByRole("textbox", { name: "Note body" }), "Draft during load");
     resolveNotes({ items: [note], total: 1 });
-    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Loading saved notes" })).not.toBeInTheDocument());
     expect(screen.getByRole("textbox", { name: "Note body" })).toHaveValue("Draft during load");
   });
 

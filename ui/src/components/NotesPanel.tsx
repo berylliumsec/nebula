@@ -110,6 +110,17 @@ export function NotesPanel({
     assetIds: notes[0].assetIds, metadata: notes[0].metadata,
   } : blank));
   const draftBodyRef = useRef(draft.body);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const savedSnapshotRef = useRef(JSON.stringify(draft));
+  const autosaveTimerRef = useRef<number | undefined>(undefined);
+  const saveRef = useRef<() => Promise<boolean>>(async () => false);
+  const [saveStatus, setSaveStatus] = useState<"saved" | "unsaved" | "saving" | "failed">("saved");
+  const queueAutosave = useCallback(() => {
+    window.clearTimeout(autosaveTimerRef.current);
+    setSaveStatus("unsaved");
+    autosaveTimerRef.current = window.setTimeout(() => void saveRef.current(), 700);
+  }, []);
   const [hasBody, setHasBody] = useState(Boolean(draft.body.trim()));
   const onBodyChange = useCallback((body: string) => {
     draftBodyRef.current = body;
@@ -118,10 +129,12 @@ export function NotesPanel({
       if (panel) notePanelStates.set(panelSessionKey, { ...panel, draft: { ...panel.draft, body } });
     }
     setHasBody((current) => current === Boolean(body.trim()) ? current : Boolean(body.trim()));
-  }, [panelSessionKey]);
+    queueAutosave();
+  }, [panelSessionKey, queueAutosave]);
   const [loading, setLoading] = useState(!cachedNotesReady);
 
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [error, setError] = useState<string>();
   const [writingOpen, setWritingOpen] = useState(false);
   const [deleteBlocker, setDeleteBlocker] = useState<ObservationDependencies>();
@@ -130,6 +143,12 @@ export function NotesPanel({
   const creatingRef = useRef(false);
   creatingRef.current = creating;
   const syncedNoteRef = useRef<string | undefined>(restoredPanel?.syncedNoteKey);
+  useEffect(() => () => {
+    if (autosaveTimerRef.current !== undefined) {
+      window.clearTimeout(autosaveTimerRef.current);
+      void saveRef.current();
+    }
+  }, []);
   useEffect(() => {
     if (!panelSessionKey) return;
     if (!notePanelStates.has(panelSessionKey) && notePanelStates.size >= 64) notePanelStates.delete(notePanelStates.keys().next().value!);
@@ -215,6 +234,8 @@ export function NotesPanel({
     if (syncedNoteRef.current === key) return;
     syncedNoteRef.current = key;
     draftBodyRef.current = selected.body;
+    savedSnapshotRef.current = JSON.stringify({ title: selected.title, body: selected.body, evidenceIds: selected.evidenceIds, assetIds: selected.assetIds, metadata: selected.metadata });
+    setSaveStatus("saved");
     setHasBody(Boolean(selected.body.trim()));
     setDraft({
       title: selected.title,
@@ -270,52 +291,86 @@ export function NotesPanel({
     }).finally(() => setSaving(false));
   }, [createNote, engagementId, initialDraft, onInitialDraftConsumed]);
 
-  const startNote = () => {
+  const startNote = async () => {
+    if (savingRef.current || ((saveStatus === "unsaved" || saveStatus === "failed") && !(await saveRef.current()))) return;
+    if (JSON.stringify({ ...draftRef.current, body: draftBodyRef.current }) !== savedSnapshotRef.current) return;
+    window.clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = undefined;
     creatingRef.current = true;
     setCreating(true);
     setSelectedId(undefined);
     setDraft(blank);
     draftBodyRef.current = "";
+    savedSnapshotRef.current = JSON.stringify(blank);
+    setSaveStatus("saved");
     setHasBody(false);
     setError(undefined);
   };
 
-  const save = async () => {
-    if (!draft.title.trim()) return;
+  const save = async (): Promise<boolean> => {
+    window.clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = undefined;
+    const current = draftRef.current;
+    if (!current.title.trim() || savingRef.current) return false;
+    const bodyAtSave = draftBodyRef.current;
+    const snapshot = JSON.stringify({ ...current, body: bodyAtSave });
+    if (snapshot === savedSnapshotRef.current && saveStatus !== "failed") return true;
+    savingRef.current = true;
     setSaving(true);
+    setSaveStatus("saving");
     setError(undefined);
     try {
       if (creating || !selected) {
         const created = await createNote({
           engagementId,
           observationType: "note",
-          title: draft.title,
-          body: draftBodyRef.current,
-          evidenceIds: draft.evidenceIds,
-          assetIds: draft.assetIds,
+          title: current.title,
+          body: bodyAtSave,
+          evidenceIds: current.evidenceIds,
+          assetIds: current.assetIds,
           source: "operator-note",
-          metadata: draft.metadata,
+          metadata: current.metadata,
         });
+        syncedNoteRef.current = `${created.id}:${created.revision}`;
+        setDraft((latest) => ({ ...latest, body: draftBodyRef.current }));
         setNotes((current) => [created, ...current]);
         setSelectedId(created.id);
         setCreating(false);
       } else {
         const updated = await updateNote(selected.id, {
-          title: draft.title,
-          body: draftBodyRef.current,
-          evidenceIds: draft.evidenceIds,
-          assetIds: draft.assetIds,
-          metadata: draft.metadata,
+          title: current.title,
+          body: bodyAtSave,
+          evidenceIds: current.evidenceIds,
+          assetIds: current.assetIds,
+          metadata: current.metadata,
           expectedRevision: selected.revision,
         });
+        syncedNoteRef.current = `${updated.id}:${updated.revision}`;
         setNotes((current) => current.map((item) => item.id === updated.id ? updated : item));
       }
+      savedSnapshotRef.current = snapshot;
+      if (JSON.stringify({ ...draftRef.current, body: draftBodyRef.current }) === snapshot) setSaveStatus("saved");
+      else queueAutosave();
+      return true;
     } catch (saveError) {
       void logCaughtDiagnostic("interface.notes_panel.caught_failure_02", "A handled interface operation failed.", saveError, "notes_panel");
       setError(saveError instanceof Error ? saveError.message : "Could not save the note.");
+      setSaveStatus("failed");
+      return false;
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
+  };
+  saveRef.current = save;
+
+  const selectNote = async (id: string) => {
+    if (savingRef.current) return;
+    if ((saveStatus === "unsaved" || saveStatus === "failed") && !(await save())) return;
+    if (JSON.stringify({ ...draftRef.current, body: draftBodyRef.current }) !== savedSnapshotRef.current) return;
+    creatingRef.current = false;
+    setCreating(false);
+    setSelectedId(id);
   };
 
   const remove = async () => {
@@ -359,6 +414,7 @@ export function NotesPanel({
         ? current[field].filter((value) => value !== id)
         : [...current[field], id],
     }));
+    queueAutosave();
   };
 
   return (
@@ -368,10 +424,10 @@ export function NotesPanel({
           <strong>Notes</strong>
           <div>
             <button className="button quiet square" type="button" aria-label="Refresh notes" disabled={loading} onClick={() => void load()}><RefreshCw className={loading ? "spin" : undefined} size={14} /></button>
-            <button className="button quiet square" type="button" aria-label="Create note" onClick={startNote}><Plus size={15} /></button>
+            <button className="button quiet square" type="button" aria-label="Create note" disabled={saving} onClick={() => void startNote()}><Plus size={15} /></button>
           </div>
         </header>
-        {notes.map((note) => <button type="button" className={note.id === selectedId ? "active" : undefined} key={note.id} onClick={() => { creatingRef.current = false; setCreating(false); setSelectedId(note.id); }}><strong>{note.title}</strong><small>{note.observationType === "ai_tool_note" ? "AI-generated · " : ""}{new Date(note.updatedAt).toLocaleString()}</small></button>)}
+        {notes.map((note) => <button type="button" className={note.id === selectedId ? "active" : undefined} key={note.id} disabled={saving} onClick={() => void selectNote(note.id)}><strong>{note.title}</strong><small>{note.observationType === "ai_tool_note" ? "AI-generated · " : ""}{new Date(note.updatedAt).toLocaleString()}</small></button>)}
         {loading && notes.length > 0 && <p className="notes-load-status" role="status">Refreshing notes…</p>}
         {!notes.length && !loading && <p>No notes yet.</p>}
       </aside>
@@ -380,16 +436,17 @@ export function NotesPanel({
         {deleteBlocker && <div className="callout note-dependency-blocker" role="alert"><AlertTriangle size={18} /><div><strong>This note is retained by {deleteBlocker.reports.length === 1 ? "a report" : "reports"}</strong><p>{deleteBlocker.reports.some((report) => report.status === "final") ? `Final report ${deleteBlocker.reports.filter((report) => report.status === "final").map((report) => `“${report.title}”`).join(", ")} is immutable, so Nebula retains this source note to protect its lineage.` : `Remove this note from ${deleteBlocker.reports.map((report) => `“${report.title}”`).join(", ")} before deleting it.`}</p></div><a className="button secondary" href="/reports">Open Reports</a></div>}
         {(creating || selected) ? <>
           <header>
-            <input aria-label="Note title" value={draft.title} placeholder="Note title" maxLength={500} onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} />
+            <input aria-label="Note title" value={draft.title} placeholder="Note title" maxLength={500} onChange={(event) => { setDraft((current) => ({ ...current, title: event.target.value })); queueAutosave(); }} />
             <div>
               {selected && <IconAction icon={Trash2} label="Delete" title="Delete note" onClick={() => void remove()} />}
               <button className="button quiet" type="button" disabled={!hasBody || !writingRuntimes.length} onClick={() => setWritingOpen(true)}><Sparkles size={14} /> Transform with AI</button>
               <button className="button quiet" type="button" disabled={!hasBody || !onAskNebula} onClick={() => onAskNebula?.({ text: draftBodyRef.current, sourceKind: "note", sourceId: selected?.id, sourceLabel: draft.title || "Untitled note" })}><MessageSquareQuote size={14} /> Ask Nebula</button>
-              <button className="button primary" type="button" disabled={saving || !draft.title.trim()} onClick={() => void save()}><Save size={14} /> {saving ? "Saving…" : "Save"}</button>
+              <span className="note-save-status" role="status" aria-live="polite">{saving ? "Saving…" : saveStatus === "failed" ? "Save failed" : saveStatus === "unsaved" ? "Unsaved changes" : "Saved"}</span>
+              <button className="button primary" type="button" disabled={saving || !draft.title.trim() || saveStatus === "saved"} onClick={() => void save()}><Save size={14} /> {saveStatus === "failed" ? "Retry save" : "Save"}</button>
             </div>
           </header>
           <div className="note-editor-body">
-            <NoteBodyEditor key={creating ? "new" : `${selected?.id}:${selected?.revision}`} body={draft.body} onChange={onBodyChange} />
+            <NoteBodyEditor key={creating ? "new" : selected?.id} body={draft.body} onChange={onBodyChange} />
           </div>
           {(evidenceOptions.length > 0 || assetOptions.length > 0) && <details><summary>Links · {draft.evidenceIds.length} evidence · {draft.assetIds.length} assets</summary>
             {evidenceOptions.map((option) => <label key={option.id}><input type="checkbox" checked={draft.evidenceIds.includes(option.id)} onChange={() => toggleLink("evidenceIds", option.id)} /> {option.label}</label>)}
@@ -397,7 +454,7 @@ export function NotesPanel({
           </details>}
         </> : <div className="note-initial-state">
           {loading ? <LoadingSurface label="Loading saved notes" /> : <StandardEmptyState className="note-empty-state" icon={<NotebookPen size={24} aria-hidden="true" />} title="Start a project note" explanation="Capture working thoughts in Markdown. Preserve exact files and screenshots as Evidence." />}
-          <button className="button primary" type="button" onClick={startNote}><Plus size={14} /> New note</button>
+          <button className="button primary" type="button" onClick={() => void startNote()}><Plus size={14} /> New note</button>
         </div>}
       </section>
       {writingOpen && <AIWritingDialog
@@ -414,6 +471,7 @@ export function NotesPanel({
         onClose={() => setWritingOpen(false)}
         onApply={(result) => {
           draftBodyRef.current = result.content;
+          queueAutosave();
           setHasBody(Boolean(result.content.trim()));
           setDraft((current) => ({
             ...current,

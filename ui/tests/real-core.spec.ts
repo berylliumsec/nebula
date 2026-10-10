@@ -91,11 +91,17 @@ test("assistant upgrade approval fixture reclaims its data after stop and failed
   }
 });
 
-test("notes typing production LAN saves and reloads the latest draft", async ({ page }) => {
+test("notes typing production LAN saves and reloads the latest draft", async ({ page }, testInfo) => {
   test.setTimeout(60_000);
   const core = await startRealCore({ bindHost: "0.0.0.0", browserHost: localNetworkIpv4() });
   const api = await playwrightRequest.newContext({ baseURL: `${core.origin}/api/v1/`, extraHTTPHeaders: { Authorization: `Bearer ${core.token}` } });
   await withOwnedCleanup(async () => {
+    const build = await (await page.request.get(`${core.origin}/web-build.json`)).json() as {commit: string; builtAt: string; assets: Record<string, string>};
+    const entry = Object.keys(build.assets).find((asset) => asset.startsWith("assets/index-") && asset.endsWith(".js"));
+    expect(entry).toBeTruthy();
+    const servedAsset = await (await page.request.get(`${core.origin}/${entry}`)).body();
+    expect(createHash("sha256").update(servedAsset).digest("hex")).toBe(build.assets[entry!]);
+    await testInfo.attach("notes-lan-build", {body: JSON.stringify({origin: core.origin, buildCommit: build.commit, builtAt: build.builtAt, asset: entry, assetSha256: build.assets[entry!]}), contentType: "application/json"});
     const projects = await (await api.get("engagements")).json() as Array<{ id: string }>;
     await page.addInitScript((id) => localStorage.setItem("nebula.engagement", id), projects[0].id);
     const url = `${core.origin}/?view=notes#token=${encodeURIComponent(core.token)}`;
@@ -114,10 +120,19 @@ test("notes typing production LAN saves and reloads the latest draft", async ({ 
     const body = page.getByRole("textbox", { name: "Note body" });
     await body.fill("First line");
     await body.pressSequentially(" and latest text");
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByRole("status", { name: "" }).filter({ hasText: "Saved" })).toBeVisible();
     await expect(page.getByRole("button", { name: /LAN typing check/ })).toBeVisible();
+    await page.route("**/api/v1/observations/*", async (route) => {
+      if (route.request().method() === "PATCH") await route.fulfill({status: 503, contentType: "application/json", body: JSON.stringify({detail: "Synthetic save failure"})});
+      else await route.continue();
+    });
+    await body.fill("Recovered after retry");
+    await expect(page.getByRole("button", {name: "Retry save"})).toBeVisible();
+    await page.unroute("**/api/v1/observations/*");
+    await page.getByRole("button", {name: "Retry save"}).click();
+    await expect(page.getByRole("status").filter({hasText: "Saved"})).toBeVisible();
     await page.goto(url);
-    await expect(page.getByRole("textbox", { name: "Note body" })).toHaveValue("First line and latest text");
+    await expect(page.getByRole("textbox", { name: "Note body" })).toHaveValue("Recovered after retry");
   }, [
     {name: "API context", dispose: () => api.dispose()},
     {name: "Core fixture", dispose: () => stopRealCore(core)},
