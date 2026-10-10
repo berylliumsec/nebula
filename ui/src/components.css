@@ -271,7 +271,7 @@ textarea { border-radius: var(--radius-control); }
 .status-chip.tone-informational { color: var(--blue); background: var(--blue-muted); }
 .status-chip.tone-success { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
 .status-chip.tone-warning { color: var(--orange); background: color-mix(in srgb, var(--orange) 12%, transparent); }
-.status-chip.tone-danger { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
+.status-chip.tone-danger { color: color-mix(in srgb, var(--red) 70%, var(--text)); background: color-mix(in srgb, var(--red) 12%, transparent); }
 
 .data-toolbar,
 .session-toolbar,
