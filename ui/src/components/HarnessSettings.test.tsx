@@ -287,4 +287,19 @@ describe("harness settings destructive actions", () => {
     await waitFor(() => expect(api.deleteHarness).toHaveBeenCalledWith(profile.id, profile.revision));
     expect(api.listHarnesses).toHaveBeenCalledTimes(2);
   });
+
+  it("shows a refused delete beside the Grok card and offers a retry", async () => {
+    api.deleteHarness.mockRejectedValueOnce(new Error("harnesses entity is still referenced by harness_sessions.harness_profile_id"));
+    const user = userEvent.setup();
+    render(<MemoryRouter><DialogProvider><HarnessSettings /></DialogProvider></MemoryRouter>);
+    await user.click(await screen.findByRole("button", {name: "Delete Local fixture"}));
+    await user.click(within(await screen.findByRole("dialog", {name: "Delete this harness?"})).getByRole("button", {name: "Delete harness"}));
+
+    const card = screen.getByRole("heading", {name: profile.name}).closest("article")!;
+    expect(await within(card).findByRole("alert")).toHaveTextContent("Saved conversations or missions still use this harness");
+    expect(within(card).getByRole("button", {name: "Retry delete"})).toBeVisible();
+    expect(within(card).getByRole("heading", {name: profile.name})).toBeVisible();
+    await user.click(within(card).getByRole("button", {name: "Retry delete"}));
+    expect(await screen.findByRole("dialog", {name: "Delete this harness?"})).toBeVisible();
+  });
 });

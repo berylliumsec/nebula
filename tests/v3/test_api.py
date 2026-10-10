@@ -24,6 +24,9 @@ from nebula.v3.domain import (
     ChatTurn,
     ChatTurnStatus,
     Engagement,
+    HarnessKind,
+    HarnessProfile,
+    HarnessSession,
     NativeHookExecution,
     NativeHookLateOutcome,
     ProviderProfile,
@@ -1943,6 +1946,56 @@ def test_generic_delete_skips_unreadable_rows_of_unrelated_kinds(api):
 
     assert response.status_code == 204, response.text
     assert store.count(Asset) == 0
+
+
+def test_harness_delete_checks_only_entities_that_can_reference_it(api, monkeypatch):
+    client, store, _ = api
+    harness = store.create(
+        HarnessProfile(
+            name="Disposable Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true"
+        )
+    )
+    visited = []
+    original = store.iter_readable_entities
+
+    def record(model):
+        visited.append(model.entity_kind)
+        return original(model)
+
+    monkeypatch.setattr(store, "iter_readable_entities", record)
+    response = client.delete(
+        f"/api/v1/harnesses/{harness.id}",
+        headers={**_auth(), "If-Match": str(harness.revision)},
+    )
+
+    assert response.status_code == 204, response.text
+    assert set(visited) == {"runs", "chat_sessions", "harness_sessions"}
+
+
+def test_harness_delete_preserves_profile_when_session_references_it(api):
+    client, store, _ = api
+    project = store.create(Engagement(name="Saved chat"))
+    harness = store.create(
+        HarnessProfile(
+            name="Grok with history", kind=HarnessKind.GROK_ACP, executable="/bin/true"
+        )
+    )
+    store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=harness.id,
+            model="fixture-model",
+        )
+    )
+
+    response = client.delete(
+        f"/api/v1/harnesses/{harness.id}",
+        headers={**_auth(), "If-Match": str(harness.revision)},
+    )
+
+    assert response.status_code == 409, response.text
+    assert "harness_sessions.harness_profile_id" in response.text
+    assert store.get(HarnessProfile, harness.id).id == harness.id
 
 
 def test_run_event_websocket_completes_and_closes_after_a_terminal_run(api):

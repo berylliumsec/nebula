@@ -103,13 +103,28 @@ test("stabilization deployed approval completes once and survives reconnect", as
     await info.attach("deployed-approval-reconnected", {body: await page.screenshot(), contentType: "image/png"});
   } finally {
     await page.context().setOffline(false);
-    // Preserve test evidence but remove these fixtures from normal selection.
-    for (const [collection, id, changes] of [["harnesses", harnessId, {enabled: false}], ["engagements", projectId, {status: "archived"}]] as const) {
-      if (!id) continue;
-      const current = await api.get(`${collection}/${id}`);
+    // Attach the receipt before cleanup, then remove the disposable conversation
+    // and its harness so repeated release checks do not fill Settings with Grok.
+    if (projectId && harnessId) {
+      const chatsResponse = await api.get(`chat-sessions?engagement_id=${encodeURIComponent(projectId)}&limit=1000`);
+      expect(chatsResponse.ok()).toBe(true);
+      const chats = await chatsResponse.json() as {id: string; revision: number; harness_profile_id?: string}[];
+      for (const chat of chats.filter(item => item.harness_profile_id === harnessId)) {
+        const removed = await api.delete(`chat-sessions/${chat.id}`, {headers: {"If-Match": String(chat.revision)}});
+        expect(removed.status(), `Could not remove disposable conversation ${chat.id}`).toBe(204);
+      }
+    }
+    if (harnessId) {
+      const current = await api.get(`harnesses/${harnessId}`);
       expect(current.ok()).toBe(true);
-      const response = await api.patch(`${collection}/${id}`, {data: {changes, expected_revision: (await current.json()).revision}});
-      expect(response.ok(), `Could not retire disposable ${collection} fixture`).toBe(true);
+      const removed = await api.delete(`harnesses/${harnessId}`, {headers: {"If-Match": String((await current.json()).revision)}});
+      expect(removed.status(), "Could not remove disposable Grok harness").toBe(204);
+    }
+    if (projectId) {
+      const current = await api.get(`engagements/${projectId}`);
+      expect(current.ok()).toBe(true);
+      const response = await api.patch(`engagements/${projectId}`, {data: {changes: {status: "archived"}, expected_revision: (await current.json()).revision}});
+      expect(response.ok(), "Could not retire disposable project fixture").toBe(true);
     }
     pairedDeviceId ??= (await (await api.get("auth/devices")).json()).find((device: {name: string}) => device.name === `Release browser ${projectId}`)?.id;
     if (pairedDeviceId) expect((await api.delete(`auth/devices/${pairedDeviceId}`)).ok()).toBe(true);

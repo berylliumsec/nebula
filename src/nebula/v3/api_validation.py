@@ -286,10 +286,26 @@ class ApiEntityValidator:
 
         if isinstance(target, Report) and target.status == ReportStatus.FINAL:
             raise ConflictError("a signed final report cannot be deleted")
+        # Only entities with a reference rule for this target can block its
+        # deletion. Scanning and validating every stored artifact made a small
+        # harness catalog deletion take longer than an interactive request.
+        candidate_models = (
+            ENTITY_MODELS
+            if isinstance(target, Engagement)
+            else tuple(
+                model
+                for model in ENTITY_MODELS
+                if any(
+                    rule.target is type(target)
+                    for rule in _REFERENCE_RULES.get(model, ())
+                )
+                or (isinstance(target, Advisory) and model is Correlation)
+            )
+        )
         # Rows that no longer validate are skipped (and recorded) rather than
         # failing the delete: one corrupt record of any kind used to turn every
         # generic DELETE into an internal error.
-        for model in ENTITY_MODELS:
+        for model in candidate_models:
             for candidate in self.store.iter_readable_entities(model):
                 if type(candidate) is type(target) and candidate.id == target.id:
                     continue

@@ -356,6 +356,9 @@
 .integration-card > .provider-capability-policy { margin-top: 0; }
 .integration-card > footer { margin-top: auto; }
 .integration-card-actions { display: flex; align-items: center; gap: 3px; }
+.harness-settings-card > footer { flex-wrap: wrap; gap: 4px; }
+.harness-settings-card .integration-card-actions { flex-wrap: wrap; margin-left: auto; }
+.harness-settings-card .integration-card-actions .icon-button { flex: 0 0 var(--touch-target); width: var(--touch-target); min-width: var(--touch-target); height: var(--touch-target); min-height: var(--touch-target); }
 @container integration-card (max-width: 520px) {
   .integration-card-facts { grid-template-columns: 1fr; }
   .integration-card-facts > div { border-right: 0; }
