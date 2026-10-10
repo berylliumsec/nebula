@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { ProviderHealth } from "../../api/types";
+import type { HarnessProfile, ProviderHealth } from "../../api/types";
 import { defaultSubagentChoice, HarnessSubagentSettings, subagentProviders } from "./HarnessSubagentSettings";
 
 function check(model: string, status: "verified" | "failed") {
@@ -51,10 +51,10 @@ describe("provider subagents in a harness chat", () => {
       choice={{ enabled: false, providerId: "", model: "" }}
       onChange={onChange}
     />);
-    expect(screen.getByText(/Codex can hand independent tasks to a provider model/)).toBeInTheDocument();
+    expect(screen.getByText(/Codex can hand independent tasks to a model or harness/)).toBeInTheDocument();
     expect(screen.queryByLabelText("Subagent model")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("checkbox", { name: /Provider subagents/ }));
+    await user.click(screen.getByRole("checkbox", { name: /Subagents/ }));
     expect(onChange).toHaveBeenCalledWith({ enabled: true, providerId: "openrouter", model: "deepseek/deepseek-v3.2" });
 
     rerender(<HarnessSubagentSettings
@@ -78,7 +78,7 @@ describe("provider subagents in a harness chat", () => {
     const onChange = vi.fn();
     const choice = { enabled: true, providerId: "openrouter", model: "deepseek/deepseek-v3.2" };
     const { rerender } = render(<HarnessSubagentSettings providers={[provider({})]} harnessName="Codex" choice={choice} onChange={onChange} />);
-    expect(screen.getByRole("checkbox", { name: /Delegate to the model below · no limit/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Delegate to the runtime below · no limit/ })).toBeChecked();
     const field = screen.getByRole("spinbutton", { name: "Running at once" });
     expect(field).toHaveValue(null);
     expect(field).toHaveAttribute("placeholder", "No limit");
@@ -124,5 +124,24 @@ describe("provider subagents in a harness chat", () => {
     const unchecked = provider({ id: "first", name: "First", capabilityVerifications: {} });
     expect(defaultSubagentChoice([unchecked, provider({})])).toEqual({ providerId: "openrouter", model: "deepseek/deepseek-v3.2" });
     expect(defaultSubagentChoice([])).toEqual({ providerId: "", model: "" });
+  });
+
+  it("offers an enabled harness by name and selects its advertised model", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const childHarness = {
+      id: "grok", name: "Grok", enabled: true, localOnly: true,
+      permitsSensitiveData: true, defaultModel: "grok-code", models: ["grok-code"],
+    } as HarnessProfile;
+    render(<HarnessSubagentSettings
+      providers={[provider({})]} harnesses={[childHarness]}
+      harnessName="Codex"
+      choice={{ enabled: true, providerId: "openrouter", model: "deepseek/deepseek-v3.2" }}
+      onChange={onChange}
+    />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Subagent runtime" }), "harness:grok");
+    expect(onChange).toHaveBeenCalledWith({
+      enabled: true, providerId: "", harnessId: "grok", model: "grok-code", reasoningEffort: undefined,
+    });
   });
 });

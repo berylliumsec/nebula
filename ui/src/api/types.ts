@@ -136,6 +136,7 @@ export interface AssistantDefaults {
   hookIds: string[];
   allowSubagents: boolean;
   subagentProviderId: string | null;
+  subagentHarnessId: string | null;
   subagentModel: string | null;
   maxActiveSubagents: number | null;
   subagentReasoningEffort: ReasoningEffort | null;
@@ -1837,6 +1838,8 @@ export interface ChatCompletionRequest {
   allowAgentMessaging?: boolean;
   /** Harness chats: the provider profile their subagents run on. */
   subagentProviderId?: Identifier;
+  /** Harness chats: the configured harness their subagents run on. */
+  subagentHarnessId?: Identifier;
   /** Harness chats: the provider model their subagents run on. */
   subagentModel?: string;
   /** How many subagents may run at once; absent means no limit. */
@@ -1852,6 +1855,7 @@ export interface ChatCompletionRequest {
 
 export interface PendingProviderSubagent {
   providerId: Identifier;
+  harnessId?: Identifier;
   model: string;
   /** How many subagents may run at once; absent means no limit. */
   maxActive?: number;
@@ -2301,6 +2305,7 @@ export interface ChatSessionSummary {
   allowAgentMessaging?: boolean;
   /** Harness chats: the provider model their subagents last ran on. */
   subagentProviderId?: Identifier;
+  subagentHarnessId?: Identifier;
   subagentModel?: string;
   subagentReasoningEffort?: ReasoningEffort;
   /** The operator's running-at-once subagent limit; absent means no limit. */
@@ -2641,6 +2646,7 @@ export interface ChatSessionAssistantSettingsRequest {
   allowAgentMessaging?: boolean;
   maxActiveSubagents?: number | null;
   subagentProviderId?: Identifier;
+  subagentHarnessId?: Identifier;
   subagentModel?: string;
   subagentReasoningEffort?: ReasoningEffort | null;
   expectedRevision?: number;
@@ -3553,6 +3559,7 @@ export interface ChatSubagentView {
   childTurnId?: Identifier;
   /** The provider model the child runs on. */
   providerProfileId?: Identifier;
+  harnessProfileId?: Identifier;
   model?: string;
   /** Choices the supervising agent made for this child. Missing means inherited defaults. */
   capabilities?: {

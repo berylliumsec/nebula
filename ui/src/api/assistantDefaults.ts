@@ -15,6 +15,7 @@ export function emptyAssistantDefaults(): AssistantDefaults {
     hookIds: [],
     allowSubagents: false,
     subagentProviderId: null,
+    subagentHarnessId: null,
     subagentModel: null,
     maxActiveSubagents: null,
     subagentReasoningEffort: null,

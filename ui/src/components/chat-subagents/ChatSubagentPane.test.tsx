@@ -241,7 +241,14 @@ describe("the subagents an operator can see and act on", () => {
 
   it("explains harness delegation before anything has been delegated", () => {
     render(<ChatSubagentPane {...paneProps} subagents={[]} harnessDelegation={{ harnessName: "Codex", providerName: "OpenRouter", model: "deepseek/deepseek-v3.2" }} />);
-    expect(screen.getByText(/Codex can split independent work across parallel children on deepseek\/deepseek-v3.2/)).toBeInTheDocument();
+    expect(screen.getByText(/Codex can split independent work across parallel children on OpenRouter · deepseek\/deepseek-v3.2/)).toBeInTheDocument();
+  });
+
+  it("describes a harness child's project access without promising provider-only controls", () => {
+    render(<ChatSubagentPane {...paneProps} subagents={[]}
+      harnessDelegation={{ harnessName: "Codex", providerName: "Grok", model: "grok-code", childIsHarness: true }} />);
+    expect(screen.getByText(/project access follows the selected harness and project policy/)).toBeInTheDocument();
+    expect(screen.queryByText(/supervisor can assign project tools/)).not.toBeInTheDocument();
   });
 
   it("labels a harness child's report with the model that wrote it", () => {
