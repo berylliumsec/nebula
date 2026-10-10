@@ -295,7 +295,10 @@ class ApiEntityValidator:
             else tuple(
                 model
                 for model in ENTITY_MODELS
-                if any(rule.target is type(target) for rule in _REFERENCE_RULES.get(model, ()))
+                if any(
+                    rule.target is type(target)
+                    for rule in _REFERENCE_RULES.get(model, ())
+                )
                 or (isinstance(target, Advisory) and model is Correlation)
             )
         )

@@ -1951,7 +1951,9 @@ def test_generic_delete_skips_unreadable_rows_of_unrelated_kinds(api):
 def test_harness_delete_checks_only_entities_that_can_reference_it(api, monkeypatch):
     client, store, _ = api
     harness = store.create(
-        HarnessProfile(name="Disposable Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true")
+        HarnessProfile(
+            name="Disposable Grok", kind=HarnessKind.GROK_ACP, executable="/bin/true"
+        )
     )
     visited = []
     original = store.iter_readable_entities
@@ -1974,9 +1976,17 @@ def test_harness_delete_preserves_profile_when_session_references_it(api):
     client, store, _ = api
     project = store.create(Engagement(name="Saved chat"))
     harness = store.create(
-        HarnessProfile(name="Grok with history", kind=HarnessKind.GROK_ACP, executable="/bin/true")
+        HarnessProfile(
+            name="Grok with history", kind=HarnessKind.GROK_ACP, executable="/bin/true"
+        )
     )
-    store.create(HarnessSession(engagement_id=project.id, harness_profile_id=harness.id, model="fixture-model"))
+    store.create(
+        HarnessSession(
+            engagement_id=project.id,
+            harness_profile_id=harness.id,
+            model="fixture-model",
+        )
+    )
 
     response = client.delete(
         f"/api/v1/harnesses/{harness.id}",
