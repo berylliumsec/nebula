@@ -11031,6 +11031,47 @@ test("shared actions keep Chat tools and focus controls reachable", async ({ pag
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
+
+test("stabilization Grok harness delete explains a conflict beside the card and retries", async ({ page }) => {
+  await installTruthfulCore(page);
+  const harness = {
+    ...entity, id: "grok-delete-fixture", name: "Grok release fixture", kind: "grok_acp",
+    connection_mode: "spawn", transport: "stdio", executable: "/bin/true",
+    auth_mode: "existing_session", enabled: true,
+    privacy: {local_only: true, permits_sensitive_data: false},
+    native_capabilities: {}, capabilities: {},
+  };
+  let attempts = 0;
+  await page.route("**/api/v1/harnesses**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/harnesses") && route.request().method() === "GET") {
+      return route.fulfill({json: attempts > 1 ? [] : [harness]});
+    }
+    if (path.endsWith(`/harnesses/${harness.id}`) && route.request().method() === "DELETE") {
+      attempts++;
+      return attempts === 1
+        ? route.fulfill({status: 409, json: {detail: "harnesses entity is still referenced by chat_sessions.harness_profile_id"}})
+        : route.fulfill({status: 204});
+    }
+    return route.continue();
+  });
+
+  await openWorkspace(page, "/settings#automation-settings", "Settings");
+  const card = page.locator(".provider-card").filter({has: page.getByRole("heading", {name: harness.name})});
+  const remove = card.getByRole("button", {name: `Delete ${harness.name}`});
+  await expect(remove).toBeVisible();
+  await remove.focus();
+  await expect(remove).toBeFocused();
+  expectTouchTarget((await remove.boundingBox())?.width, "Delete harness width");
+  expectTouchTarget((await remove.boundingBox())?.height, "Delete harness height");
+  await remove.click();
+  await page.getByRole("dialog", {name: "Delete this harness?"}).getByRole("button", {name: "Delete harness"}).click();
+  await expect(card.getByRole("alert")).toContainText("Saved conversations or missions still use this harness");
+  await card.getByRole("button", {name: "Retry delete"}).click();
+  await page.getByRole("dialog", {name: "Delete this harness?"}).getByRole("button", {name: "Delete harness"}).click();
+  await expect(card).toHaveCount(0);
+  expect(attempts).toBe(2);
+});
 test("stabilization compact Workbench header icons", async ({ page }, testInfo) => {
   await openWorkspace(page, "/?view=chat", "Workbench");
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
