@@ -1419,7 +1419,7 @@ class SubagentService:
             "tool_names": [] if harness_child else sorted(names),
             **(
                 {"runtime": "harness", "model": selected_setting.get("model")}
-                if harness_child
+                if harness_child and isinstance(selected_setting, dict)
                 else {}
             ),
             "mcp_servers": [
@@ -2593,6 +2593,7 @@ class SubagentService:
         if prepared is not None:
             self.chat.start_provider_turn(prepared)
         else:
+            assert self.harness_runtime is not None
             self.harness_runtime.start_chat_turn(harness_turn.id)
         self._notify()
         return record
@@ -3384,31 +3385,37 @@ class SubagentService:
                 "provider subagents need a provider and a model"
             )
         try:
-            profile = self.store.get(ProviderProfile, provider_profile_id)
+            provider_profile = self.store.get(ProviderProfile, provider_profile_id)
         except NotFoundError as exc:
             raise ChatConfigurationError(
                 f"subagent provider {provider_profile_id!r} does not exist"
             ) from exc
-        if not profile.enabled:
+        if not provider_profile.enabled:
             raise ChatConfigurationError(
-                f"subagent provider {profile.name!r} is disabled"
+                f"subagent provider {provider_profile.name!r} is disabled"
             )
-        if profile.model_allowlist and model not in profile.model_allowlist:
+        if (
+            provider_profile.model_allowlist
+            and model not in provider_profile.model_allowlist
+        ):
             raise ChatConfigurationError(
-                f"model {model!r} is not allowed by provider {profile.name!r}"
+                f"model {model!r} is not allowed by provider {provider_profile.name!r}"
             )
-        if not profile.tools_verified_for(model):
+        if not provider_profile.tools_verified_for(model):
             raise ChatConfigurationError(
                 f"subagent model {model!r} has not passed the tool check; verify it "
                 "before using it for subagents"
             )
-        provider = self.chat.provider_factory(profile)
+        provider = self.chat.provider_factory(provider_profile)
         self.chat._enforce_engagement_privacy(
             self.store.get(Engagement, engagement_id), provider
         )
-        if not provider.config.local and not profile.privacy.permits_sensitive_data:
+        if (
+            not provider.config.local
+            and not provider_profile.privacy.permits_sensitive_data
+        ):
             raise ChatPrivacyError(
-                f"provider {profile.name!r} does not permit project data, so it "
+                f"provider {provider_profile.name!r} does not permit project data, so it "
                 "cannot run subagents"
             )
         if max_active is not None and subagent_limit(max_active) is None:
@@ -3421,7 +3428,7 @@ class SubagentService:
             )
         # No key means no limit, so settings saved before limits existed match.
         return {
-            "provider_profile_id": profile.id,
+            "provider_profile_id": provider_profile.id,
             "model": model,
             **({"max_active": max_active} if max_active is not None else {}),
             **(
