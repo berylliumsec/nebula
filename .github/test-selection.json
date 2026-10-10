@@ -1,13 +1,13 @@
 {
-  "change_digest": "4f2e061833266a644355ebae57a37865b0ac0ab7ad015781b10d733beb4bc8e4",
+  "change_digest": "40cb803aeec66a8f6c724fa2b839f9f09b090795dcd7e2304cfb6169977b7f3f",
   "reviewed_by": "Codex review of failed 3.0.3 release browser journeys",
-  "reason": "The selected release jobs found stale Chat tools, Chat details, and focus-control selectors, plus guides targeting actions hidden inside closed menus. A local production check found the floating Project Snapshot covering the menu, so the selected journey minimizes the panel before opening Chat details. The 320px header also had five controls in a four-column grid. The UI opens the appropriate guide menu and gives each mobile header control its own column. The outdated Zero pixel baseline is replaced with terminal visibility and a retained screenshot artifact. Focused browser entries cover the failed layout, chat tools, header, focus, responsive shell, and all eight real-Core guide profiles; guide component tests cover routing and spotlight behavior.",
+  "reason": "The selected release jobs found stale Chat tools, Chat details, and focus-control selectors, plus guides targeting actions hidden inside closed menus. A local production check found the floating Project Snapshot covering the menu, so the selected journey minimizes the panel before opening Chat details. The 320px header also had five controls in a four-column grid. The UI opens the appropriate guide menu and gives each mobile header control its own column. The outdated Zero pixel baseline is replaced with terminal visibility and a retained screenshot artifact. The second selection adds only the observed desktop 320px/idle-harness failures, compact conversation switch, and seven real-Core lifecycle failures. One real-Core Code journey exposed a lost draft editor identity on reload, so the project-scoped identity is persisted and that same journey is rerun. Focused browser entries cover these and all eight real-Core guide profiles; guide component tests cover routing and spotlight behavior.",
   "exclusions": "No Python or native source changes, so those test layers are omitted. Other UI journeys, provider workflows, and full suites are excluded. Mobile browsers are emulated; physical-device evidence is unavailable.",
   "expected_tests": {
     "python": 0,
     "frontend": 14,
     "native": 0,
-    "playwright": 56
+    "playwright": 66
   },
   "python": [],
   "frontend": ["ui/src/guides/guides.test.tsx"],
@@ -23,6 +23,9 @@
     "area:workbench-focus",
     "area:workbench-header",
     "area:chat-tools-paths",
-    "area:zero-responsive-shell"
+    "area:zero-responsive-shell",
+    "area:release-ui-stragglers",
+    "entry:conversation-switch-performance/compact",
+    "area:release-core-lifecycle"
   ]
 }
