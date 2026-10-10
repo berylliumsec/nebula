@@ -3337,7 +3337,7 @@ test("the 320px mobile companion keeps controls visible and the composer above n
     viewportWidth: 320,
     viewportHeight: 700,
   });
-  await page.getByRole("button", { name: "Exit full screen workbench" }).click();
+  await page.getByRole("button", { name: "Exit focus mode" }).click();
 
   await page.getByRole("button", { name: "More workbench views" }).click();
   const more = page.getByRole("dialog", { name: "More" });
@@ -4589,7 +4589,7 @@ test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, t
   await expect(page.locator(".chat-composer footer")).not.toContainText("0 MCP");
   await expect(page.locator(".harness-status-rail")).toHaveCount(0);
   await expect(page.locator(".chat-harness-progress")).toHaveCount(0);
-  await page.getByRole("button", { name: "Show session details" }).click();
+  await openSessionDetails(page);
   await expect(page.locator(".session-inspector").getByRole("heading", {name: "Working context"})).toBeVisible();
 
   await page.getByRole("button", { name: "New chat", exact: true }).click();
