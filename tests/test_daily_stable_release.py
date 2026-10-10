@@ -601,7 +601,10 @@ def test_workflow_checks_initiator_before_exposing_app_key():
     )
     jobs = workflow["jobs"]
     assert jobs["release"]["needs"] == "validate-admin"
-    assert jobs["release"]["environment"] == "desktop-release"
+    assert jobs["release"]["environment"] == {
+        "name": "desktop-release",
+        "deployment": False,
+    }
     guard = jobs["validate-admin"]
     assert guard["permissions"] == {"contents": "read"}
     step = guard["steps"][0]

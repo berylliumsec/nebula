@@ -203,3 +203,47 @@ jobs:
       - name: Deploy signed update manifests
         id: deployment
         uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+
+  record-desktop-release:
+    needs: [manifest, deploy]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      deployments: write
+    # Preserve the environment gate while recording the exact release tag below.
+    environment:
+      name: desktop-release
+      deployment: false
+    steps:
+      - name: Record published desktop release after updater deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#nebula-v}"
+          release="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,isDraft,publishedAt,assets)"
+          jq -e \
+            --arg tag "$RELEASE_TAG" \
+            --arg app "Nebula-$version-linux-x86_64.AppImage" \
+            --arg deb "Nebula-$version-linux-x86_64.deb" \
+            --arg sums SHA256SUMS-linux-x64.txt \
+            '.tagName == $tag and .isDraft == false and (.publishedAt != null) and
+             ([.assets[].name] | index($app) != null and index($deb) != null and index($sums) != null)' \
+            <<<"$release" >/dev/null
+          release_commit="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
+          deployment="$(gh api -X POST "repos/$GITHUB_REPOSITORY/deployments" \
+            -f ref="$RELEASE_TAG" \
+            -f environment=desktop-release \
+            -F auto_merge=false \
+            -f description="Published $RELEASE_TAG after updater deployment")"
+          test "$(jq -r .sha <<<"$deployment")" = "$release_commit"
+          deployment_id="$(jq -r .id <<<"$deployment")"
+          release_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          state="$(gh api -X POST "repos/$GITHUB_REPOSITORY/deployments/$deployment_id/statuses" \
+            -f state=success \
+            -f environment_url="$release_url" \
+            -f log_url="$run_url" \
+            -f description="Published $RELEASE_TAG and its updater manifest" --jq .state)"
+          test "$state" = success

@@ -9,19 +9,21 @@ import pytest
 import tomli
 import yaml
 
+from scripts.build_nebula_core import (
+    macos_codesign_arguments,
+    require_runtime_imports,
+    stage_runtime_payload,
+)
 from scripts.nebula3_version import (
     VersionSyncError,
     check_versions,
     read_versions,
     set_version,
 )
-from scripts.build_nebula_core import macos_codesign_arguments
-from scripts.build_nebula_core import require_runtime_imports
-from scripts.build_nebula_core import stage_runtime_payload
 from scripts.package_audit import (
-    ArtifactAuditError,
     FORBIDDEN_MODULES,
     REQUIRED_MEMBERS,
+    ArtifactAuditError,
     inspect_installer_tree,
     validate_members,
 )
@@ -29,7 +31,6 @@ from scripts.stage_playwright_runtime import (
     PlaywrightRuntimeStageError,
     stage_playwright_runtime,
 )
-
 
 ROOT = Path(__file__).resolve().parents[2]
 CURRENT_VERSION = (ROOT / "NEBULA3_VERSION").read_text(encoding="utf-8").strip()
@@ -87,6 +88,30 @@ def test_protected_release_jobs_do_not_create_deployment_records():
             "name": "desktop-release",
             "deployment": False,
         }
+
+
+def test_desktop_release_record_follows_successful_updater_deployment_and_uses_tag():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/publish-updater-manifest.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    job = workflow["jobs"]["record-desktop-release"]
+    assert job["needs"] == ["manifest", "deploy"]
+    assert job["environment"] == {"name": "desktop-release", "deployment": False}
+    assert job["permissions"] == {"contents": "read", "deployments": "write"}
+    step = job["steps"][0]
+    assert step["env"]["RELEASE_TAG"] == (
+        "${{ github.event.release.tag_name || inputs.release_tag }}"
+    )
+    record = step["run"]
+    assert 'gh release view "$RELEASE_TAG"' in record
+    assert "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" in record
+    assert '-f ref="$RELEASE_TAG"' in record
+    assert "-F auto_merge=false" in record
+    assert "required_contexts" not in record
+    assert "-f state=success" in record
+    assert '-f environment_url="$release_url"' in record
 
 
 def test_release_entry_points_require_an_admin_before_using_release_credentials():
