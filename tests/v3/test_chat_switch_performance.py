@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Event
+import time
+from types import SimpleNamespace
 import zlib
 
 from fastapi.responses import Response, StreamingResponse
@@ -188,6 +191,52 @@ def test_blocking_history_read_does_not_block_chat_state(tmp_path, monkeypatch):
             finally:
                 release.set()
             assert slow.result(timeout=2).status_code == 200
+
+
+def test_optional_naming_database_read_does_not_block_event_loop(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    store.create(
+        ChatMessage(
+            id="naming-prompt",
+            engagement_id="project",
+            session_id="session-a",
+            sequence=1,
+            role=ChatRole.USER,
+            content="Investigate the conversation switch latency.",
+        )
+    )
+    service = ChatService(store)
+    original = service.session_messages
+
+    def slow_messages(session_id):
+        time.sleep(0.4)
+        return original(session_id)
+
+    monkeypatch.setattr(service, "session_messages", slow_messages)
+
+    class NamingProvider:
+        async def complete(self, request):
+            assert request.metadata["operation"] == "conversation_naming"
+            return SimpleNamespace(text="Responsive conversation title")
+
+    async def scenario():
+        prepared = SimpleNamespace(
+            session=store.get(ChatSession, "session-a"),
+            pending_session=None,
+            engagement_id="project",
+            resolved_model="model-a",
+            provider=NamingProvider(),
+        )
+        task = asyncio.create_task(service._name_initial_session(prepared, "Answer"))
+        started = time.monotonic()
+        await asyncio.sleep(0.05)
+        assert time.monotonic() - started < 0.25
+        await task
+        named = store.get(ChatSession, "session-a")
+        assert named.title == "Responsive conversation title"
+        assert named.metadata["initial_title_state"] == "generated"
+
+    asyncio.run(scenario())
 
 
 def test_large_chat_json_is_compressed_and_timed_but_small_and_sse_are_not(tmp_path):
