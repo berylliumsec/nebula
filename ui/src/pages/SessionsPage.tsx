@@ -5847,6 +5847,10 @@ function ConversationPane({ workbench = SIDE_WORKBENCH_STATE, embeddedSideChat =
 
   const toolAssistanceAction = api && engagement && <PostToolAssistant api={api} engagementId={engagement.id} providers={providers} harnesses={harnesses} onRun={setRunCandidate} />;
   const [chatToolsOpen, setChatToolsOpen] = useState(false);
+  useGuideAction("open-chat-tools", () => {
+    if (compact) setMobileConversationMenuOpen(true);
+    else setChatToolsOpen(true);
+  });
   const chatToolsRef = useRef<HTMLDivElement>(null);
   const chatToolsButtonRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {

@@ -128,11 +128,12 @@ export const guideCatalog: GuideDefinition[] = [
       {
         title: "Open the terminal",
         body: [
-          "On a desktop, open the terminal beside the chat. Drag the divider to resize it; double-click the divider to reset its width.",
+          "On a desktop, open Chat tools and choose Terminal beside the chat. Drag the divider to resize it; double-click the divider to reset its width.",
           "On a phone, choose Terminal in the bottom navigation. Choose Chat to return to your conversation.",
         ],
         route: context => workbench(context, { view: "chat" }),
         target: "terminal-toggle",
+        action: "open-chat-tools",
         requiresProject: true,
         check: () => onScreen("#chat-side-terminal")
           ? { state: "done", message: "Terminal is open." }
@@ -320,10 +321,11 @@ export const guideCatalog: GuideDefinition[] = [
       {
         title: "Turn on tool assistance",
         body: [
-          "After a command finishes, Suggest next steps proposes a follow-up action you review before it runs, and Take notes drafts a project note from the result. Both are off until you tick them.",
+          "Open Chat tools on a desktop or Conversation actions on a phone, then choose Tool assistance. After a command finishes, Suggest next steps proposes a follow-up action you review before it runs, and Take notes drafts a project note from the result. Both are off until you tick them.",
         ],
         route: context => workbench(context, { view: "chat" }),
         target: "tool-assistance",
+        action: "open-chat-tools",
         requiresProject: true,
       },
       {
