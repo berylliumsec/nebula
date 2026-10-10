@@ -1,5 +1,5 @@
 {
-  "change_digest": "aa927bcb8bbe630c15cc28429e0e9dc18e4adc43c608c9fb5d057d4ddb732760",
+  "change_digest": "68271fa3a20063fcfa3726eda328f5f952228e27dc5ef0bd24f34d5ca6d32d84",
   "reviewed_by": "Codex review of harness child delegation journey",
   "reason": "The Core test file covers harness-parent delegation, harness child rounds and existing provider children. Component tests cover runtime selection and request fields. Selected browser entries exercise settings, the saved choice, composer request and subagent pane in desktop Chromium, mobile Chromium and mobile WebKit; the real-Core entry checks persistence over a production LAN origin.",
   "exclusions": "Unrelated provider, mission, workspace, browser and native journeys are excluded. Python remains on the 3.12 default. Mobile browsers are emulated; physical-device evidence is unavailable. No full suite is authorized.",
