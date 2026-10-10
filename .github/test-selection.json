@@ -1,25 +1,31 @@
 {
-  "change_digest": "035952e4be7fa03019bd946d80e90bda4a08a49418158401b594626920ac72bb",
-  "reviewed_by": "Codex review of failed 3.0.1 release UI journeys",
-  "reason": "Notes must fill the desktop Workbench through its persistent wrapper. The activity audit test must verify the deliberate single transcript scroll owner and reachability of first and latest entries. The Studio theme and focus test must assert the current navy Dark palette and visible compact focus toolbar. Component tests cover ledger and notes behavior. Selected Playwright entries cover these journeys on desktop, compact, Android Chromium, and iPhone WebKit, plus focused production LAN real-Core activity reloads.",
-  "exclusions": "No Python or native source changes, so those test layers are omitted. Other UI and browser journeys, unrelated provider workflows, and full suites are excluded. Mobile browser projects are emulated; physical-device evidence is unavailable.",
+  "change_digest": "40cb803aeec66a8f6c724fa2b839f9f09b090795dcd7e2304cfb6169977b7f3f",
+  "reviewed_by": "Codex review of failed 3.0.3 release browser journeys",
+  "reason": "The selected release jobs found stale Chat tools, Chat details, and focus-control selectors, plus guides targeting actions hidden inside closed menus. A local production check found the floating Project Snapshot covering the menu, so the selected journey minimizes the panel before opening Chat details. The 320px header also had five controls in a four-column grid. The UI opens the appropriate guide menu and gives each mobile header control its own column. The outdated Zero pixel baseline is replaced with terminal visibility and a retained screenshot artifact. The second selection adds only the observed desktop 320px/idle-harness failures, compact conversation switch, and seven real-Core lifecycle failures. One real-Core Code journey exposed a lost draft editor identity on reload, so the project-scoped identity is persisted and that same journey is rerun. Focused browser entries cover these and all eight real-Core guide profiles; guide component tests cover routing and spotlight behavior.",
+  "exclusions": "No Python or native source changes, so those test layers are omitted. Other UI journeys, provider workflows, and full suites are excluded. Mobile browsers are emulated; physical-device evidence is unavailable.",
   "expected_tests": {
     "python": 0,
-    "frontend": 26,
+    "frontend": 14,
     "native": 0,
-    "playwright": 21
+    "playwright": 66
   },
   "python": [],
-  "frontend": [
-    "ui/src/components/ActivityLedger.test.tsx",
-    "ui/src/components/NotesPanel.test.tsx"
-  ],
+  "frontend": ["ui/src/guides/guides.test.tsx"],
   "native": [],
   "playwright": [
-    "area:activity-ledger",
-    "area:notes-screen-fit",
-    "area:studio-dark-vision",
-    "entry:live-tool-activity/assistant-real-desktop",
-    "entry:live-tool-activity/assistant-real-webkit-430"
+    "entry:conversation-panel-sizing/desktop",
+    "entry:conversation-panel-sizing/compact",
+    "entry:project-snapshot/desktop",
+    "entry:project-snapshot/compact",
+    "entry:editor-files-scroll/desktop",
+    "entry:editor-files-scroll/compact",
+    "area:interactive-guides",
+    "area:workbench-focus",
+    "area:workbench-header",
+    "area:chat-tools-paths",
+    "area:zero-responsive-shell",
+    "area:release-ui-stragglers",
+    "entry:conversation-switch-performance/compact",
+    "area:release-core-lifecycle"
   ]
 }

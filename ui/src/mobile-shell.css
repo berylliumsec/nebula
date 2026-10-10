@@ -32,7 +32,7 @@
 
   /* ---- Chat header: drawer · title and model · actions · new chat. */
   :root[data-theme] .mobile-conversation-header.conversation-toolbar {
-    display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px 44px; align-items: center; gap: 0;
+    display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px 44px 44px; align-items: center; gap: 0;
     min-height: 52px; padding: 2px 4px 4px; border-bottom: 1px solid transparent;
   }
   :root[data-theme] .mobile-conversation-header .icon-button { width: 44px; height: 44px; border: 0; border-radius: var(--radius-control); color: var(--text); background: transparent; }

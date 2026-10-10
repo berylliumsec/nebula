@@ -1312,7 +1312,7 @@ async function runAssistantGuideTour(page: Page, testInfo: TestInfo, selectedGui
         }
         if (title === "Run the assistant’s commands beside the chat" && await card.getByRole("heading", {name: "Open the terminal", exact: true}).isVisible()) {
           const phone = (page.viewportSize()?.width ?? 1440) < 768;
-          const target = phone ? page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Terminal", exact: true}) : page.getByRole("button", {name: "Show terminal", exact: true});
+          const target = phone ? page.getByRole("navigation", {name: "Mobile operator navigation"}).getByRole("button", {name: "Terminal", exact: true}) : page.getByRole("group", {name: "Chat tools"}).getByRole("button", {name: /Terminal/});
           await expect(target).toBeVisible();
           await expect(target).toHaveAttribute("data-guide", "terminal-toggle");
           const bounds = await target.boundingBox();
@@ -2573,9 +2573,9 @@ test("assistant upgrade focused work surfaces retain real Core project context",
       await expect(page.locator(`.sessions-page.workbench-focus.full-screen > .session-layout.${view}`)).toBeVisible();
       await expect(page.locator(content)).toBeVisible();
       await expect(page.locator(".workbench-view-tabs")).toHaveCount(0);
-      await page.getByRole("button", { name: "Exit full screen workbench" }).evaluate(button => button.blur());
+      await page.getByRole("button", { name: "Exit focus mode" }).evaluate(button => button.blur());
       await page.screenshot({ path: testInfo.outputPath(`real-core-${view}-focus.png`) });
-      await page.getByRole("button", { name: "Exit full screen workbench" }).click();
+      await page.getByRole("button", { name: "Exit focus mode" }).click();
       await expect(page.locator(content)).toBeVisible();
       await expect(page.locator(".sessions-page.workbench-focus")).toHaveCount(0);
     }
@@ -6105,7 +6105,8 @@ test("assistant upgrade live OpenRouter Flash operator clickthrough", async ({ p
     await expect(page.locator(".chat-message.assistant").last()).toContainText("GOAL_SEEN", { timeout: 90_000 });
     await expect(page.locator(".chat-message.assistant").last()).toContainText("SKILL_MARKER_FLASH");
 
-    await page.getByRole("button", { name: "Show session details" }).click();
+    await page.getByRole("button", { name: "Chat tools" }).click();
+    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Chat details/ }).click();
     await expect(page.getByRole("heading", { name: "Working context" })).toBeVisible();
     await expect(page.getByRole("button", { name: /Open context details/ })).toBeVisible();
     expect(await page.locator("body").evaluate((body) => body.scrollWidth - body.clientWidth)).toBeLessThanOrEqual(1);

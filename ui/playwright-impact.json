@@ -1601,6 +1601,37 @@
       {"area":"mobile-layout","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"},
       {"area":"mobile-layout","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","runtime":"mock","shard":"1/1"}
     ],
+    "workbench-focus": [
+      {"area":"workbench-focus","project":"desktop","test_match":"tests/interface.spec.ts","grep":"the workbench expands to the full viewport|phone shell Code Browser and Files focus leaves only the work surface","runtime":"mock","shard":"1/1"},
+      {"area":"workbench-focus","project":"compact","test_match":"tests/interface.spec.ts","grep":"the workbench expands to the full viewport|phone shell Code Browser and Files focus leaves only the work surface","runtime":"mock","shard":"1/1"},
+      {"area":"workbench-focus","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"the workbench expands to the full viewport|phone shell Code Browser and Files focus leaves only the work surface","runtime":"mock","shard":"1/1"},
+      {"area":"workbench-focus","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"the workbench expands to the full viewport|phone shell Code Browser and Files focus leaves only the work surface","runtime":"mock","shard":"1/1"},
+      {"area":"workbench-focus","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"the workbench expands to the full viewport|phone shell Code Browser and Files focus leaves only the work surface","runtime":"mock","shard":"1/1"},
+      {"area":"workbench-focus","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"the workbench expands to the full viewport|phone shell Code Browser and Files focus leaves only the work surface","runtime":"mock","shard":"1/1"}
+    ],
+    "workbench-header": [
+      {"area":"workbench-header","project":"desktop","test_match":"tests/interface.spec.ts","grep":"shared actions keep Chat tools and focus controls reachable|stabilization compact Workbench header icons","runtime":"mock","shard":"1/1"},
+      {"area":"workbench-header","project":"compact","test_match":"tests/interface.spec.ts","grep":"shared actions keep Chat tools and focus controls reachable|stabilization compact Workbench header icons","runtime":"mock","shard":"1/1"},
+      {"area":"workbench-header","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"shared actions keep Chat tools and focus controls reachable|stabilization compact Workbench header icons","runtime":"mock","shard":"1/1"},
+      {"area":"workbench-header","project":"mobile-chromium-wide","test_match":"tests/interface.spec.ts","grep":"shared actions keep Chat tools and focus controls reachable|stabilization compact Workbench header icons","runtime":"mock","shard":"1/1"},
+      {"area":"workbench-header","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"shared actions keep Chat tools and focus controls reachable|stabilization compact Workbench header icons","runtime":"mock","shard":"1/1"},
+      {"area":"workbench-header","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"shared actions keep Chat tools and focus controls reachable|stabilization compact Workbench header icons","runtime":"mock","shard":"1/1"}
+    ],
+    "chat-tools-paths": [
+      {"area":"chat-tools-paths","project":"desktop","test_match":"tests/interface.spec.ts","grep":"Assistant opens the live terminal beside the chat|Assistant session details use reloadable drawer navigation|assistant upgrade provider lifecycle hooks are selected and visible after the turn","runtime":"mock","shard":"1/1"},
+      {"area":"chat-tools-paths","project":"compact","test_match":"tests/interface.spec.ts","grep":"Assistant opens the live terminal beside the chat|Assistant session details use reloadable drawer navigation|assistant upgrade provider lifecycle hooks are selected and visible after the turn","runtime":"mock","shard":"1/1"},
+      {"area":"chat-tools-paths","project":"mobile-webkit-small","test_match":"tests/interface.spec.ts","grep":"Assistant opens the live terminal beside the chat|Assistant session details use reloadable drawer navigation|assistant upgrade provider lifecycle hooks are selected and visible after the turn","runtime":"mock","shard":"1/1"}
+    ],
+    "zero-responsive-shell": [
+      {"area":"zero-responsive-shell","project":"mobile-chromium-small","test_match":"tests/interface.spec.ts","grep":"Zero keeps one navigable panoramic shell at every breakpoint","runtime":"mock","shard":"1/1"},
+      {"area":"zero-responsive-shell","project":"mobile-webkit-wide","test_match":"tests/interface.spec.ts","grep":"Zero keeps one navigable panoramic shell at every breakpoint","runtime":"mock","shard":"1/1"}
+    ],
+    "release-ui-stragglers": [
+      {"area":"release-ui-stragglers","project":"desktop","test_match":"tests/interface.spec.ts","grep":"the 320px mobile companion keeps controls visible|an idle resumed harness keeps routine telemetry quiet","runtime":"mock","shard":"1/1"}
+    ],
+    "release-core-lifecycle": [
+      {"area":"release-core-lifecycle","project":"assistant-real-desktop","test_match":"tests/real-core.spec.ts","grep":"assistant upgrade focused work surfaces retain real Core project context|assistant upgrade mobile Code keeps its controls readable|assistant upgrade edits a sent message in place|assistant upgrade large side chat opens|stabilization real Core keeps the Subagents choice|assistant upgrade real Core shows the live queue position|assistant upgrade real Core keeps a subagent wait attached","runtime":"real-core","shard":"1/1"}
+    ],
     "project-lifecycle": [
       {"area":"project-lifecycle","project":"desktop","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},
       {"area":"project-lifecycle","project":"compact","test_match":"tests/interface.spec.ts","grep":"host folder picker remains usable as a bounded project workflow","runtime":"mock","shard":"1/1"},

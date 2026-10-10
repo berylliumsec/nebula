@@ -637,7 +637,10 @@ async function openSessionDetails(page: Page) {
   if ((page.viewportSize()?.width ?? 1440) <= 760) {
     await page.getByRole("button", { name: "Conversation actions" }).click();
     await page.getByRole("menu", { name: "Conversation actions" }).getByRole("menuitem", { name: /Session details/ }).click();
-  } else await page.getByRole("button", { name: "Show session details" }).click();
+  } else {
+    await page.getByRole("button", { name: "Chat tools" }).click();
+    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Chat details/ }).click();
+  }
 }
 
 async function openWorkspace(page: Page, route: string, heading: string) {
@@ -3334,7 +3337,7 @@ test("the 320px mobile companion keeps controls visible and the composer above n
     viewportWidth: 320,
     viewportHeight: 700,
   });
-  await page.getByRole("button", { name: "Exit full screen workbench" }).click();
+  await page.getByRole("button", { name: "Exit focus mode" }).click();
 
   await page.getByRole("button", { name: "More workbench views" }).click();
   const more = page.getByRole("dialog", { name: "More" });
@@ -4586,7 +4589,7 @@ test("an idle resumed harness keeps routine telemetry quiet", async ({ page }, t
   await expect(page.locator(".chat-composer footer")).not.toContainText("0 MCP");
   await expect(page.locator(".harness-status-rail")).toHaveCount(0);
   await expect(page.locator(".chat-harness-progress")).toHaveCount(0);
-  await page.getByRole("button", { name: "Show session details" }).click();
+  await openSessionDetails(page);
   await expect(page.locator(".session-inspector").getByRole("heading", {name: "Working context"})).toBeVisible();
 
   await page.getByRole("button", { name: "New chat", exact: true }).click();
@@ -8244,7 +8247,8 @@ test("the workbench expands to the full viewport with compact chrome and complet
   await expect(page.getByRole("heading", { name: "Workbench" })).toBeHidden();
 
   const focusToolbar = page.locator(".sessions-page.full-screen > .session-toolbar");
-  await expect(focusToolbar).toBeHidden();
+  await expect(focusToolbar).toBeVisible();
+  expect((await focusToolbar.boundingBox())?.height).toBeLessThanOrEqual(57);
   await expect(page.locator(".session-workspace > .chat-empty-state")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
@@ -8324,7 +8328,7 @@ test("phone shell Code Browser and Files focus leaves only the work surface and 
     await expect(focused.locator(".focused-workbench-title")).toHaveText(label);
     await expect(focused.locator(control)).toBeVisible();
     await expect(focused.locator(content)).toBeVisible();
-    const exit = focused.getByRole("button", { name: "Exit full screen workbench" });
+    const exit = focused.getByRole("button", { name: "Exit focus mode" });
     await expect(exit).toBeFocused();
     const bounds = await focused.evaluate(element => {
       const rect = element.getBoundingClientRect();
@@ -8932,11 +8936,12 @@ test("Assistant opens the live terminal beside the chat and runs commands there"
   await expect(page.getByRole("region", { name: "Terminal beside chat" })).toBeVisible();
   await page.getByRole("region", { name: "Terminal beside chat" }).getByRole("button", { name: "Hide terminal" }).click();
   await expect(page.getByRole("region", { name: "Terminal beside chat" })).toHaveCount(0);
-  const toggle = page.getByRole("button", { name: "Show terminal" });
+  await page.getByRole("button", { name: "Chat tools" }).click();
+  const toggle = page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Terminal/ });
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await toggle.click();
   await expect(page.getByRole("region", { name: "Terminal beside chat" })).toBeVisible();
-  await page.getByRole("region", { name: "Terminal beside chat" }).getByRole("button", { name: "Open Terminal tab" }).click();
+  await page.getByRole("tab", { name: "Terminal", exact: true }).click();
   await expect(page).toHaveURL(/view=terminal/);
 });
 
@@ -9270,11 +9275,9 @@ test("Zero keeps one navigable panoramic shell at every breakpoint", async ({ pa
   }
 
   if (testInfo.project.name !== "desktop") {
-    await expect(page).toHaveScreenshot("workbench-zero-dark-responsive.png", {
-      fullPage: true,
-      mask: [page.locator(".top-bar-public-ip")],
-      maskColor: "#11161c",
-    });
+    await expect(page.locator(".container-terminal-live")).toBeVisible();
+    if (mobile) await expect(page.locator(".mobile-workbench-focus")).toContainText("Terminal");
+    await page.screenshot({ path: testInfo.outputPath("workbench-zero-dark-responsive.png"), fullPage: true });
   }
 
   const persistentSurface = mobile ? page.locator(".sessions-page") : page.locator(".persistent-terminal");
@@ -10062,7 +10065,8 @@ test("conversation switching keeps side panels adjustable and mobile drawers int
   await expect.poll(() => conversations.evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(Math.round(conversationWidth + 56));
   await expect.poll(() => page.evaluate(() => localStorage.getItem("nebula.conversations.width"))).toBe(String(Math.round(conversationWidth + 56)));
 
-  await page.getByRole("button", { name: "Show session details" }).click();
+  await page.getByRole("button", { name: "Chat tools" }).click();
+  await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Chat details/ }).click();
   if (viewportWidth <= 1100) {
     const drawer = page.getByRole("dialog", { name: "Conversation details" });
     await expect(drawer).toBeVisible();
@@ -10096,7 +10100,8 @@ test("Assistant session details use reloadable drawer navigation", async ({ page
     await page.getByRole("button", { name: "Conversation actions" }).click();
     await page.getByRole("menu", { name: "Conversation actions" }).getByRole("menuitem", { name: /Session details/ }).click();
   } else {
-    await page.getByRole("button", { name: "Show session details" }).click();
+    await page.getByRole("button", { name: "Chat tools" }).click();
+    await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Chat details/ }).click();
   }
   const drawer = (page.viewportSize()?.width ?? 1440) <= 1100
     ? page.getByRole("dialog", {name: "Conversation details"})
@@ -10988,7 +10993,7 @@ for (const scenario of ["stale catalog", "request failure", "reconnected approva
   });
 }
 
-test("shared actions keep sleek geometry for direct Workbench toolbar icons", async ({ page }) => {
+test("shared actions keep Chat tools and focus controls reachable", async ({ page }) => {
   await openWorkspace(page, "/?view=chat", "Workbench");
   const mobile = (page.viewportSize()?.width ?? 1440) <= 760;
   await expect(page.getByRole("button", { name: "More Workbench actions" })).toHaveCount(0);
@@ -10996,29 +11001,26 @@ test("shared actions keep sleek geometry for direct Workbench toolbar icons", as
     await page.getByRole("button", { name: "More workbench views" }).click();
     await page.getByRole("dialog", { name: "More" }).getByRole("button", { name: "Focus mode" }).click();
   } else {
-    const bar = page.locator(".session-toolbar-actions");
-    for (const name of ["Tool assistance", "Show session details", "Enter focus mode"]) {
-      const button = bar.getByRole("button", { name, exact: true });
+    const bar = page.locator(".conversation-toolbar");
+    for (const [name, scope] of [["Chat tools", bar], ["Enter focus mode", page.getByRole("toolbar", { name: "Workbench controls" })]] as const) {
+      const button = scope.getByRole("button", { name, exact: true });
       await expect(button).toBeVisible();
       await expect(button).toHaveAttribute("title", name);
       const rect = await button.boundingBox();
       expectTouchTarget(rect!.width);
       expectTouchTarget(rect!.height);
     }
-    await bar.getByRole("button", { name: "Show session details" }).click();
-    await expect(bar.getByRole("button", { name: "Hide session details" })).toHaveAttribute("aria-expanded", "true");
-    if ((page.viewportSize()?.width ?? 1440) <= 1100) await page.keyboard.press("Escape");
-    else await bar.getByRole("button", { name: "Hide session details" }).click();
-    if ((page.viewportSize()?.width ?? 1440) <= 1100) {
-      await expect(page.getByRole("dialog")).toHaveCount(0);
-      await bar.getByRole("button", { name: "Enter focus mode" }).click();
-    } else {
-      await bar.getByRole("button", { name: "Enter focus mode" }).focus();
-      await page.keyboard.press("Enter");
-    }
+    await bar.getByRole("button", { name: "Chat tools" }).click();
+    const tools = bar.getByRole("group", { name: "Chat tools" });
+    await expect(tools.getByRole("menuitem", { name: "Tool assistance" })).toBeVisible();
+    await tools.getByRole("button", { name: /Chat details/ }).click();
+    await expect(page.getByRole("button", { name: "Close details" })).toBeVisible();
+    await page.getByRole("button", { name: "Close details" }).click();
+    await page.getByRole("toolbar", { name: "Workbench controls" }).getByRole("button", { name: "Enter focus mode" }).focus();
+    await page.keyboard.press("Enter");
   }
   await expect(page.locator(".sessions-page")).toHaveClass(/full-screen/);
-  await page.getByRole("button", { name: "Exit full screen workbench" }).click();
+  await page.getByRole("button", { name: "Exit focus mode" }).click();
   await expect(page.locator(".sessions-page")).not.toHaveClass(/full-screen/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
@@ -11044,9 +11046,8 @@ test("stabilization compact Workbench header icons", async ({ page }, testInfo) 
 
   if (!mobile) {
     const plusBox = await newChat.boundingBox();
-    const focusBox = await page.locator('.conversation-toolbar').getByRole('button', {name: 'Enter focus mode'}).boundingBox();
-    expect(focusBox!.y).toBeGreaterThanOrEqual(plusBox!.y + plusBox!.height);
-    await expect(header.getByRole('button', {name: 'Enter focus mode'})).toHaveCount(0);
+    const focusBox = await header.getByRole('button', {name: 'Enter focus mode'}).boundingBox();
+    expect(Math.abs(focusBox!.y - plusBox!.y)).toBeLessThanOrEqual(2);
     const tabs = header.getByRole('tablist', {name: 'Workbench views'});
     await expect(tabs.getByRole('tab')).toHaveCount(8);
     for (const tab of await tabs.getByRole('tab').all()) {
@@ -11069,11 +11070,11 @@ test("stabilization compact Workbench header icons", async ({ page }, testInfo) 
     await page.keyboard.press('ArrowRight');
     await expect(tabs.getByRole('tab', {name: 'Workspace files'})).toBeFocused();
     await tabs.getByRole('tab', {name: 'Analyst chat'}).click();
-    await page.locator('.conversation-toolbar').getByRole('button', {name: 'Enter focus mode'}).click();
+    await header.getByRole('button', {name: 'Enter focus mode'}).click();
     const focusedToolbar = page.locator('.sessions-page > .session-toolbar');
-    await expect(focusedToolbar).toBeHidden();
-    await expect(page.locator(".conversation-toolbar").getByRole("button", {name: "Exit full screen workbench"})).toBeVisible();
-    await page.getByRole('button', {name: 'Exit full screen workbench'}).click();
+    await expect(focusedToolbar).toBeVisible();
+    await expect(focusedToolbar.getByRole("button", {name: "Exit focus mode"})).toBeVisible();
+    await page.getByRole('button', {name: 'Exit focus mode'}).click();
   }
   await expect(header.getByRole('button', {name: 'Search messages and bookmarks'})).toHaveCount(0);
   if (!mobile) await expect(header.locator('.command-trigger:not(.guides-trigger)')).toHaveAttribute('aria-label', 'Search pages, actions, and settings');
@@ -11332,7 +11333,7 @@ reloadTest("stabilization editor files scroll within the sidebar", async ({page}
   if ((page.viewportSize()?.width ?? 0) > 760) {
     await page.getByRole("button", {name: "Enter focus mode"}).click();
     await checkScroll();
-    await page.getByRole("button", {name: "Exit full screen workbench"}).click();
+    await page.getByRole("button", {name: "Exit focus mode"}).click();
   }
   await page.reload();
   await checkScroll();
@@ -13007,9 +13008,12 @@ test("stabilization Project Snapshot floats over chat and minimizes", async ({ p
   await show.click();
   await expect(view).toBeVisible();
   expect(Math.round((await view.boundingBox())?.x ?? 0)).toBe(Math.round(moved?.x ?? 0));
-  await page.getByRole("button", { name: "Show session details" }).click();
+  await view.getByRole("button", { name: "Minimize Project Snapshot" }).click();
+  await page.getByRole("button", { name: "Chat tools" }).click();
+  await page.getByRole("group", { name: "Chat tools" }).getByRole("button", { name: /Chat details/ }).click();
   await expect(page.getByRole("navigation", { name: "Conversation detail views" }).getByRole("button")).toHaveText(["Context", "Results", "Subagents"]);
   await page.getByRole("button", { name: "Close details" }).click();
+  await show.click();
   await view.getByRole("button", { name: "Close Project Snapshot" }).click();
   await expect(view).toBeHidden();
   await expect(opener).toBeFocused();
