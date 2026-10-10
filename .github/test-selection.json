@@ -1,31 +1,20 @@
 {
-  "change_digest": "40cb803aeec66a8f6c724fa2b839f9f09b090795dcd7e2304cfb6169977b7f3f",
-  "reviewed_by": "Codex review of failed 3.0.3 release browser journeys",
-  "reason": "The selected release jobs found stale Chat tools, Chat details, and focus-control selectors, plus guides targeting actions hidden inside closed menus. A local production check found the floating Project Snapshot covering the menu, so the selected journey minimizes the panel before opening Chat details. The 320px header also had five controls in a four-column grid. The UI opens the appropriate guide menu and gives each mobile header control its own column. The outdated Zero pixel baseline is replaced with terminal visibility and a retained screenshot artifact. The second selection adds only the observed desktop 320px/idle-harness failures, compact conversation switch, and seven real-Core lifecycle failures. One real-Core Code journey exposed a lost draft editor identity on reload, so the project-scoped identity is persisted and that same journey is rerun. Focused browser entries cover these and all eight real-Core guide profiles; guide component tests cover routing and spotlight behavior.",
-  "exclusions": "No Python or native source changes, so those test layers are omitted. Other UI journeys, provider workflows, and full suites are excluded. Mobile browsers are emulated; physical-device evidence is unavailable.",
+  "change_digest": "d1c29ed2f9c458cc6dde2a7210353ca4d1172ac6292db8c4e9a015e73b9aa845",
+  "reviewed_by": "Codex review of failed 3.0.4 release WebKit policy journey",
+  "reason": "The 3.0.4 release preparation failed the project authorization mode journey on wide mobile WebKit after retries because Playwright's direct radio and checkbox control clicks did not leave the controls selected during scrolling. The test now taps the visible label text, which matches the operator interaction, and asserts both resulting states. Run this exact journey on desktop, small mobile Chromium, and wide mobile WebKit.",
+  "exclusions": "Only a Playwright interaction changed. Python, frontend unit, native, unrelated browser journeys, and full suites are excluded. Mobile browsers are emulated; physical-device evidence is unavailable.",
   "expected_tests": {
     "python": 0,
-    "frontend": 14,
+    "frontend": 0,
     "native": 0,
-    "playwright": 66
+    "playwright": 3
   },
   "python": [],
-  "frontend": ["ui/src/guides/guides.test.tsx"],
+  "frontend": [],
   "native": [],
   "playwright": [
-    "entry:conversation-panel-sizing/desktop",
-    "entry:conversation-panel-sizing/compact",
-    "entry:project-snapshot/desktop",
-    "entry:project-snapshot/compact",
-    "entry:editor-files-scroll/desktop",
-    "entry:editor-files-scroll/compact",
-    "area:interactive-guides",
-    "area:workbench-focus",
-    "area:workbench-header",
-    "area:chat-tools-paths",
-    "area:zero-responsive-shell",
-    "area:release-ui-stragglers",
-    "entry:conversation-switch-performance/compact",
-    "area:release-core-lifecycle"
+    "entry:project-runtime-policy/desktop",
+    "entry:project-runtime-policy/mobile-chromium-small",
+    "entry:project-runtime-policy/mobile-webkit-wide"
   ]
 }

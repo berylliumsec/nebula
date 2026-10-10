@@ -3745,9 +3745,12 @@ test("project scope normalizes root URLs and confirms distinct authorization mod
   await expect(page.getByLabel("Allowed domains")).toHaveValue("www.google.com");
   await expect(page.getByLabel("Allowed domains")).toBeDisabled();
 
-  await page.getByRole("radio", {name: /Allow all/}).check();
+  // Tap the visible option text, as an operator does on a phone. WebKit can
+  // hit the small radio's native control while the settings panel scrolls.
+  await page.getByRole("radio", {name: /Allow all/}).locator("..").getByText("Allow all", {exact: true}).click();
   await expect(page.getByRole("radio", {name: /Allow all/})).toBeChecked();
-  await page.getByRole("checkbox", {name: /^Local only Do not send/}).uncheck();
+  await page.getByRole("checkbox", {name: /^Local only Do not send/}).locator("..").getByText("Local only", {exact: true}).click();
+  await expect(page.getByRole("checkbox", {name: /^Local only Do not send/})).not.toBeChecked();
   await page.getByRole("button", {name: "Save scope"}).click();
   const bypassConfirmation = page.getByRole("dialog", {name: "Bypass Nebula permissions for this Project?"});
   await expect(bypassConfirmation).toBeVisible();
