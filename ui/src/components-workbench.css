@@ -526,7 +526,9 @@ kbd { font-size: 11px; }
   .sessions-page.screen-fit .workspace-browser { display: flex; height: 100%; min-height: 0; flex-direction: column; }
   .sessions-page.screen-fit .workspace-browser-layout { min-height: 0; flex: 1 1 auto; }
   .sessions-page.screen-fit .workspace-entry-list { min-height: 0; }
-  .sessions-page.screen-fit .notes-panel { height: 100%; min-height: 0; }
+  .sessions-page.screen-fit .session-layout.notes .session-workspace { display: flex; flex-direction: column; }
+  .sessions-page.screen-fit .session-layout.notes .persistent-notes { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+  .sessions-page.screen-fit .session-layout.notes .notes-panel { flex: 1 1 auto; height: 100%; min-height: 0; }
 }
 .session-toolbar-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 4px; }
 .session-toolbar { column-gap: 8px; }

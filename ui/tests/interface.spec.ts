@@ -7555,7 +7555,7 @@ test("stabilization studio conversation keeps context and thinking readable", as
     return Boolean(viewport && summary.top >= viewport.top - 1 && summary.bottom <= viewport.bottom + 1);
   })).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("studio-thinking.png") });
-  for (const [theme, canvas] of [["zero-dark", "#191b1e"], ["dark", "#1a1c1f"]] as const) {
+  for (const [theme, canvas] of [["zero-dark", "#191b1e"], ["dark", "#0b111a"]] as const) {
     await setTheme(page, theme);
     const colors = await page.evaluate(() => {
       const style = getComputedStyle(document.documentElement);
@@ -7564,7 +7564,7 @@ test("stabilization studio conversation keeps context and thinking readable", as
     expect(colors[0]).toBe(canvas);
     expect(colors[1]).not.toBe("");
     await expect.poll(() => page.locator(".chat-composer").evaluate(element => getComputedStyle(element).backgroundColor))
-      .toBe(theme === "zero-dark" ? "rgb(48, 52, 58)" : "rgb(52, 56, 62)");
+      .toBe(theme === "zero-dark" ? "rgb(48, 52, 58)" : "rgb(28, 42, 57)");
     await page.screenshot({ path: testInfo.outputPath(`studio-${theme}.png`) });
   }
   await setTheme(page, "zero-dark");
@@ -7576,16 +7576,16 @@ test("stabilization studio conversation keeps context and thinking readable", as
   await expect(page.locator(".sessions-page.chat-focus")).toBeVisible();
   await expect(page.locator(".chat-studio-rail")).toBeHidden();
   await expect(page.locator(".app-shell > .side-nav, .app-shell > .mobile-companion-nav")).toBeHidden();
-  await expect(page.locator(".sessions-page.chat-focus > .session-toolbar")).toBeHidden();
+  await expect(page.locator(".sessions-page.chat-focus > .session-toolbar")).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Message the analyst assistant" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Exit full screen workbench" })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Exit focus mode" })).toBeFocused();
   const focusBounds = await page.locator(".sessions-page.chat-focus").evaluate(element => {
     const rect = element.getBoundingClientRect();
     return { left: rect.left, right: innerWidth - rect.right, top: rect.top, bottom: innerHeight - rect.bottom };
   });
   expect(Object.values(focusBounds).every(value => Math.abs(value) <= 1)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("studio-focus.png") });
-  await page.getByRole("button", { name: "Exit full screen workbench" }).click();
+  await page.getByRole("button", { name: "Exit focus mode" }).click();
   await expect(page.locator(".sessions-page.chat-focus")).toHaveCount(0);
   if (testInfo.project.name === "desktop") await expect(page.locator(".chat-studio-rail")).toBeVisible();
   await expect(page.getByRole("button", { name: testInfo.project.name === "desktop" ? "Enter focus mode" : "More workbench views" })).toBeFocused();
@@ -7705,13 +7705,18 @@ test("activity ledger groups repeated work into a compact operator receipt", asy
   await expect(ledger).not.toContainText("item upsert");
   await expect(ledger.locator(".activity-ledger-audit > ol > li")).toHaveCount(36);
   const audit = ledger.locator(".activity-ledger-audit");
-  await expect.poll(async () => audit.evaluate(element => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThan(2);
-  const auditGeometry = await audit.evaluate(element => ({ top: element.scrollTop, height: element.clientHeight }));
-  expect(auditGeometry.top).toBeGreaterThan(0);
-  expect(auditGeometry.height).toBeLessThanOrEqual(440);
+  const auditGeometry = await audit.evaluate(element => ({ height: element.clientHeight, scrollHeight: element.scrollHeight, overflow: getComputedStyle(element).overflowY }));
+  expect(auditGeometry.scrollHeight).toBe(auditGeometry.height);
+  expect(auditGeometry.overflow).toBe("visible");
   expect(await page.locator(".chat-scroll").evaluate(element => element.scrollTop)).toBeGreaterThanOrEqual(chatScrollBefore - 2);
-  expect(await audit.locator("ol > li").first().innerText()).toContain("Saved bounded record 1.");
-  expect(await audit.locator("ol > li").last().innerText()).toContain("Saved bounded record 36.");
+  const firstAction = audit.locator("ol > li").first();
+  const latestAction = audit.locator("ol > li").last();
+  expect(await firstAction.innerText()).toContain("Saved bounded record 1.");
+  expect(await latestAction.innerText()).toContain("Saved bounded record 36.");
+  await firstAction.scrollIntoViewIfNeeded();
+  await expect(firstAction).toBeInViewport();
+  await latestAction.scrollIntoViewIfNeeded();
+  await expect(latestAction).toBeInViewport();
   await expect(ledger.locator(".activity-ledger-audit")).toHaveCSS("padding-left", "12px");
   await expect(ledger.locator(".activity-ledger-audit")).toHaveCSS("padding-right", "12px");
   expect(activityLoads).toBe(1);

@@ -1,18 +1,25 @@
 {
-  "change_digest": "9da99013cd5fa7c1bdf8577cd3365f6031cbc0d69af2c18423dea2a594272593",
-  "reviewed_by": "Codex review of daily stable release source parity and immutable version handling",
-  "reason": "The daily Linux release driver must use an unused version after a failed immutable tag and stop publication if main advances after candidate preparation. The focused release-driver contract file covers those boundaries, dispatches, receipts, artifacts, and failure handling.",
-  "exclusions": "No product UI, Core API, native code, or Playwright catalog changes; frontend, native, browser, and unrelated Python suites are excluded. The external packaging and installation gates still require a new candidate run.",
+  "change_digest": "035952e4be7fa03019bd946d80e90bda4a08a49418158401b594626920ac72bb",
+  "reviewed_by": "Codex review of failed 3.0.1 release UI journeys",
+  "reason": "Notes must fill the desktop Workbench through its persistent wrapper. The activity audit test must verify the deliberate single transcript scroll owner and reachability of first and latest entries. The Studio theme and focus test must assert the current navy Dark palette and visible compact focus toolbar. Component tests cover ledger and notes behavior. Selected Playwright entries cover these journeys on desktop, compact, Android Chromium, and iPhone WebKit, plus focused production LAN real-Core activity reloads.",
+  "exclusions": "No Python or native source changes, so those test layers are omitted. Other UI and browser journeys, unrelated provider workflows, and full suites are excluded. Mobile browser projects are emulated; physical-device evidence is unavailable.",
   "expected_tests": {
-    "python": 56,
-    "frontend": 0,
+    "python": 0,
+    "frontend": 26,
     "native": 0,
-    "playwright": 0
+    "playwright": 21
   },
-  "python": [
-    "tests/test_daily_stable_release.py"
+  "python": [],
+  "frontend": [
+    "ui/src/components/ActivityLedger.test.tsx",
+    "ui/src/components/NotesPanel.test.tsx"
   ],
-  "frontend": [],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "area:activity-ledger",
+    "area:notes-screen-fit",
+    "area:studio-dark-vision",
+    "entry:live-tool-activity/assistant-real-desktop",
+    "entry:live-tool-activity/assistant-real-webkit-430"
+  ]
 }
