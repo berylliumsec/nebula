@@ -1,8 +1,8 @@
 {
-  "change_digest": "c65fe3514bf36b286dbfe5800cc414c33ba29637963c74e755ce511304216ff5",
-  "reviewed_by": "Codex review of the release-live pairing route correction",
-  "reason": "The one changed release-live desktop test pairs through the deployed LAN browser, opens its own disposable project, completes a harness approval, and verifies reconnect. It was collected as one test and run against the installed Core. The test requires explicit live origin and private token and is therefore run locally, not by PR CI.",
-  "exclusions": "No production source changed. CI omits Python, frontend, native, and Playwright because the only changed test needs explicit local release credentials; no full suite is authorized. The local run uses one desktop Chromium test, one worker, no retries, and traces off. Physical mobile device is outside this test correction.",
+  "change_digest": "4992d8622841904e7d9e0df28b8a332bb48e6d87c4329848c28486699b2d6052",
+  "reviewed_by": "Codex review of Nebula agent guidance reorganization",
+  "reason": "Only repository instructions change: AGENTS.md becomes a routing index, existing policy is moved into .codex/rules, and a branch/disposable LAN/PR workflow is added. No product runtime, test harness, or operator UI code changes.",
+  "exclusions": "Python, frontend, native, and Playwright each select zero tests because the diff is documentation-only. No runtime feature, browser journey, build, or LAN instance is applicable; no full suite is authorized.",
   "expected_tests": {
     "python": 0,
     "frontend": 0,
