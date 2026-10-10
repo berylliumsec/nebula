@@ -15444,7 +15444,7 @@ class ChatService:
         session_id = self._session_id(prepared)
         if not session_id or not prepared.engagement_id:
             return
-        session = self.store.get(ChatSession, session_id)
+        session = await asyncio.to_thread(self.store.get, ChatSession, session_id)
         from .chat_naming import should_name, substantive_prompt
 
         if not should_name(session):
@@ -15452,7 +15452,9 @@ class ChatService:
         first_prompt = substantive_prompt(
             [
                 message.content
-                for message in self.session_messages(session_id)
+                for message in await asyncio.to_thread(
+                    self.session_messages, session_id
+                )
                 if message.role == ChatRole.USER
             ]
         )
@@ -15511,11 +15513,12 @@ class ChatService:
                 "metadata": {**session.metadata, "initial_title_state": "failed"}
             }
         for _ in range(3):
-            latest = self.store.get(ChatSession, session.id)
+            latest = await asyncio.to_thread(self.store.get, ChatSession, session.id)
             if not should_name(latest):
                 return
             try:
-                prepared.session = self.store.update(
+                prepared.session = await asyncio.to_thread(
+                    self.store.update,
                     ChatSession,
                     session.id,
                     {

@@ -101,7 +101,7 @@ def test_entries_are_deduplicated_and_stably_ordered():
     assert keys == sorted(set(keys))
 
 
-def test_identical_entries_from_multiple_areas_run_once_and_retain_provenance():
+def test_sharded_core_api_and_full_shell_entries_remain_distinct():
     result = select_plan(
         MANIFEST,
         "base",
@@ -113,8 +113,10 @@ def test_identical_entries_from_multiple_areas_run_once_and_retain_provenance():
     real_core = [
         entry for entry in result["include"] if entry["project"] == "real-core"
     ]
-    assert len(real_core) == 1
-    assert real_core[0]["area"] == "core-api+desktop-shell"
+    assert len(real_core) == 3
+    assert {(entry["area"], entry["shard"]) for entry in real_core} == {
+        ("core-api", "1/2"), ("core-api", "2/2"), ("desktop-shell", "1/1")
+    }
 
 
 def test_deleted_and_renamed_paths_preserve_all_impact_paths():
@@ -276,18 +278,18 @@ def test_catalog_exposes_stable_choices_for_agents_and_humans():
     assert "themes/mobile-webkit" in catalog["entries"]
 
 
-def test_unfiltered_real_core_catalog_entries_require_disposable_runtime():
-    # These entries include cold image preparation. Core alone skips disk
-    # reclamation, rootless Podman and official-image digest pinning.
-    for selector in (
-        "entry:core-api/real-core",
-        "entry:desktop-shell/real-core",
-        "entry:full/real-core",
+def test_unfiltered_real_core_catalog_entries_keep_core_without_kali_build():
+    # The cold Kali build is opt-in outside CI, so unfiltered Core entries do
+    # not require the disposable container runtime.
+    for selector, shards in (
+        ("entry:core-api/real-core", {"1/2", "2/2"}),
+        ("entry:desktop-shell/real-core", {"1/1"}),
+        ("entry:full/real-core", {"1/1"}),
     ):
         entries = selected_entries(MANIFEST, [selector])
-        assert len(entries) == 1
-        entry = entries[0]
-        assert entry["project"] == "real-core"
-        assert entry["test_match"] == "tests/real-core.spec.ts"
-        assert not entry.get("grep")
-        assert entry["runtime"] == "real-core-sandbox"
+        assert {entry["shard"] for entry in entries} == shards
+        for entry in entries:
+            assert entry["project"] == "real-core"
+            assert entry["test_match"] == "tests/real-core.spec.ts"
+            assert not entry.get("grep")
+            assert entry["runtime"] == "real-core"
