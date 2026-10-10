@@ -38,7 +38,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
     needs: validate-admin
     runs-on: ubuntu-22.04
-    environment: desktop-release
+    # This job prepares a candidate; only publication records a deployment.
+    environment:
+      name: desktop-release
+      deployment: false
     timeout-minutes: 360
     steps:
       - name: Check out current main with release history
