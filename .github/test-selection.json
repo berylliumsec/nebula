@@ -1,34 +1,18 @@
 {
-  "change_digest": "e167ee85d1efb0fa6506839080aa329eb124e5a982f38119255abe12b558c2c9",
-  "reviewed_by": "Codex focused diff review for chat companions and imported Work summaries",
-  "reason": "The operator opens Code, Browser, Notes, Terminal, and the existing Side chat from the chat toolbar; companions start at an even split, resize, expand within Assistant, and restore per-chat state. File clicks open Code, Dark uses a navy palette, and Work summary/import survives refresh. Component and Python cases cover state and policy; mocked desktop/mobile browser profiles cover layout and controls; disposable real Core covers persistence and LAN origin.",
-  "exclusions": "No native code changes; native tests omitted. No unrelated UI, backend, or full suites. Mobile Chromium and WebKit are emulated; physical-device evidence is unavailable.",
+  "change_digest": "9da99013cd5fa7c1bdf8577cd3365f6031cbc0d69af2c18423dea2a594272593",
+  "reviewed_by": "Codex review of daily stable release source parity and immutable version handling",
+  "reason": "The daily Linux release driver must use an unused version after a failed immutable tag and stop publication if main advances after candidate preparation. The focused release-driver contract file covers those boundaries, dispatches, receipts, artifacts, and failure handling.",
+  "exclusions": "No product UI, Core API, native code, or Playwright catalog changes; frontend, native, browser, and unrelated Python suites are excluded. The external packaging and installation gates still require a new candidate run.",
   "expected_tests": {
-    "python": 2,
-    "frontend": 50,
+    "python": 56,
+    "frontend": 0,
     "native": 0,
-    "playwright": 28
+    "playwright": 0
   },
-  "python_versions": [
-    "3.11"
-  ],
-  "python_browser": false,
-  "python_node": false,
   "python": [
-    "tests/v3/test_browser_companion.py::test_binding_rejects_other_project_and_survives_store_reopen",
-    "tests/v3/test_browser_companion.py::test_open_scopes_browser_sessions_to_chat_and_promotes_draft"
+    "tests/test_daily_stable_release.py"
   ],
-  "frontend": [
-    "ui/src/components/WorkspacePanel.test.tsx",
-    "ui/src/components/ProviderGoalPanel.test.tsx",
-    "ui/src/state/WorkbenchEditorContext.test.tsx",
-    "ui/src/state/ThemeContext.test.tsx",
-    "ui/src/pages/WorkPage.test.tsx"
-  ],
+  "frontend": [],
   "native": [],
-  "playwright": [
-    "area:chat-companions",
-    "area:side-chat",
-    "area:work-import"
-  ]
+  "playwright": []
 }
