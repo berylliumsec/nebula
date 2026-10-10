@@ -1,16 +1,38 @@
 {
-  "change_digest": "4992d8622841904e7d9e0df28b8a332bb48e6d87c4329848c28486699b2d6052",
-  "reviewed_by": "Codex review of Nebula agent guidance reorganization",
-  "reason": "Only repository instructions change: AGENTS.md becomes a routing index, existing policy is moved into .codex/rules, and a branch/disposable LAN/PR workflow is added. No product runtime, test harness, or operator UI code changes.",
-  "exclusions": "Python, frontend, native, and Playwright each select zero tests because the diff is documentation-only. No runtime feature, browser journey, build, or LAN instance is applicable; no full suite is authorized.",
+  "change_digest": "fc245ef3f08298536bf2be6e4ea516e8ac471459744c6bac65e56c4ced1ae572",
+  "reviewed_by": "Codex focused review of Grok harness deletion",
+  "reason": "Two exact Core API tests cover bounded reference checks and rejection when history still uses a harness. Eighteen collected HarnessSettings component cases cover confirmation, inline conflict, retry, and adjacent settings. Eight catalogued desktop and mobile browser entries exercise conflict, retry, removal, and reachable 44 px actions through Settings. Three real-Core production LAN entries cover the durable conflict and removal through the UI and reload. The changed release-live case was collected to review disposable fixture cleanup.",
+  "exclusions": "No native behavior changed and unrelated suites are excluded. The one release-live case requires an explicit deployed candidate, private token, and release origin, so it is collected but not run in PR CI. Physical-device testing is unavailable; selected mobile browser projects are emulated.",
   "expected_tests": {
-    "python": 0,
-    "frontend": 0,
+    "python": 2,
+    "frontend": 18,
     "native": 0,
-    "playwright": 0
+    "playwright": 11
   },
-  "python": [],
-  "frontend": [],
+  "python_versions": [
+    "3.12"
+  ],
+  "python_browser": false,
+  "python_node": false,
+  "python": [
+    "tests/v3/test_api.py::test_harness_delete_checks_only_entities_that_can_reference_it",
+    "tests/v3/test_api.py::test_harness_delete_preserves_profile_when_session_references_it"
+  ],
+  "frontend": [
+    "ui/src/components/HarnessSettings.test.tsx"
+  ],
   "native": [],
-  "playwright": []
+  "playwright": [
+    "harness-delete/desktop",
+    "harness-delete/compact",
+    "harness-delete/mobile-chromium-small",
+    "harness-delete/mobile-chromium-ledger-390",
+    "harness-delete/mobile-chromium-wide",
+    "harness-delete/mobile-webkit-small",
+    "harness-delete/mobile-webkit",
+    "harness-delete/mobile-webkit-wide",
+    "harness-delete-core/assistant-real-desktop",
+    "harness-delete-core/assistant-real-chromium-390",
+    "harness-delete-core/assistant-real-webkit-390"
+  ]
 }
